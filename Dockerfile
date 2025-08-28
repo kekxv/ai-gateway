@@ -11,11 +11,11 @@ RUN npm install -g pnpm
 # Copy package.json and pnpm-lock.yaml to leverage Docker cache
 COPY package.json pnpm-lock.yaml ./
 
-# Install dependencies
-RUN npx pnpm install --frozen-lockfile
-
 # Copy the rest of the application code
 COPY . .
+
+# Install dependencies
+RUN npx pnpm install --frozen-lockfile
 
 # Build the Next.js application
 RUN npx pnpm build
