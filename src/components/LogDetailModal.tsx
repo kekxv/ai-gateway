@@ -28,8 +28,10 @@ interface LogDetailModalProps {
         name: string;
       };
     };
-    requestBody?: any;
-    responseBody?: any;
+    logDetail?: {
+      requestBody?: any;
+      responseBody?: any;
+    };
   };
   onClose: () => void;
 }
@@ -155,7 +157,7 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose }) => {
             </div>
           </div>
 
-          {log.requestBody && (
+          {log.logDetail?.requestBody && (
             <div className="mb-8">
               <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
                 <svg className="w-5 h-5 mr-2 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -164,12 +166,12 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose }) => {
                 {t('logs.requestBody')}
               </h3>
               <div className="rounded-lg overflow-hidden border border-gray-200">
-                <JsonDisplay data={log.requestBody} />
+                <JsonDisplay data={log.logDetail.requestBody} />
               </div>
             </div>
           )}
 
-          {log.responseBody && (
+          {log.logDetail?.responseBody && (
             <div className="mb-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
                 <svg className="w-5 h-5 mr-2 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -178,7 +180,7 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose }) => {
                 {t('logs.responseBody')}
               </h3>
               <div className="rounded-lg overflow-hidden border border-gray-200">
-                <JsonDisplay data={log.responseBody} />
+                <JsonDisplay data={log.logDetail.responseBody} />
               </div>
             </div>
           )}

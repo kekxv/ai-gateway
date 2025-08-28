@@ -4,7 +4,11 @@ CREATE TABLE "User" (
     "email" TEXT NOT NULL,
     "password" TEXT NOT NULL,
     "role" TEXT NOT NULL DEFAULT 'USER',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "disabled" BOOLEAN NOT NULL DEFAULT false,
+    "validUntil" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "totpSecret" TEXT,
+    "totpEnabled" BOOLEAN NOT NULL DEFAULT false
 );
 
 -- CreateTable
@@ -13,7 +17,10 @@ CREATE TABLE "Provider" (
     "name" TEXT NOT NULL,
     "baseURL" TEXT NOT NULL,
     "apiKey" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "type" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "userId" INTEGER,
+    CONSTRAINT "Provider_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -24,7 +31,9 @@ CREATE TABLE "Channel" (
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
     "providerId" INTEGER NOT NULL,
-    CONSTRAINT "Channel_providerId_fkey" FOREIGN KEY ("providerId") REFERENCES "Provider" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    "userId" INTEGER,
+    CONSTRAINT "Channel_providerId_fkey" FOREIGN KEY ("providerId") REFERENCES "Provider" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "Channel_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -33,7 +42,9 @@ CREATE TABLE "Model" (
     "name" TEXT NOT NULL,
     "description" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "updatedAt" DATETIME NOT NULL,
+    "userId" INTEGER,
+    CONSTRAINT "Model_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -51,6 +62,7 @@ CREATE TABLE "ModelRoute" (
     "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     "modelId" INTEGER NOT NULL,
     "channelId" INTEGER NOT NULL,
+    "weight" INTEGER NOT NULL DEFAULT 1,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "ModelRoute_modelId_fkey" FOREIGN KEY ("modelId") REFERENCES "Model" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "ModelRoute_channelId_fkey" FOREIGN KEY ("channelId") REFERENCES "Channel" ("id") ON DELETE CASCADE ON UPDATE CASCADE
@@ -71,14 +83,25 @@ CREATE TABLE "GatewayApiKey" (
 -- CreateTable
 CREATE TABLE "Log" (
     "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    "model" TEXT NOT NULL,
     "latency" INTEGER NOT NULL,
     "promptTokens" INTEGER NOT NULL DEFAULT 0,
     "completionTokens" INTEGER NOT NULL DEFAULT 0,
     "totalTokens" INTEGER NOT NULL DEFAULT 0,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "apiKeyId" INTEGER NOT NULL,
-    CONSTRAINT "Log_apiKeyId_fkey" FOREIGN KEY ("apiKeyId") REFERENCES "GatewayApiKey" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "modelRouteId" INTEGER NOT NULL,
+    CONSTRAINT "Log_apiKeyId_fkey" FOREIGN KEY ("apiKeyId") REFERENCES "GatewayApiKey" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "Log_modelRouteId_fkey" FOREIGN KEY ("modelRouteId") REFERENCES "ModelRoute" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "LogDetail" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "logId" INTEGER NOT NULL,
+    "requestBody" JSONB,
+    "responseBody" JSONB,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "LogDetail_logId_fkey" FOREIGN KEY ("logId") REFERENCES "Log" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 -- CreateIndex
@@ -94,7 +117,7 @@ CREATE UNIQUE INDEX "Channel_name_key" ON "Channel"("name");
 CREATE UNIQUE INDEX "Model_name_key" ON "Model"("name");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "ModelRoute_modelId_channelId_key" ON "ModelRoute"("modelId", "channelId");
+CREATE UNIQUE INDEX "GatewayApiKey_key_key" ON "GatewayApiKey"("key");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "GatewayApiKey_key_key" ON "GatewayApiKey"("key");
+CREATE UNIQUE INDEX "LogDetail_logId_key" ON "LogDetail"("logId");

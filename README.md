@@ -32,7 +32,7 @@
 - **数据库**: SQLite (通过 Prisma ORM)
 - **语言**: TypeScript
 - **UI**: Tailwind CSS
-- **包管理器**: pnpm
+- **包管理器**: npx pnpm
 
 ## 4. 快速开始 (开发环境)
 

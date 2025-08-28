@@ -2,6 +2,7 @@
   "common": {
     "dashboard": "Dashboard",
     "channels": "Channels",
+    "close": "Close",
     "keys": "Keys",
     "providers": "Providers",
     "models": "Models",

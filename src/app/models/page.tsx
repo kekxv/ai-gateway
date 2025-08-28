@@ -30,7 +30,6 @@ type Model = {
   name: string;
   description: string | null;
   createdAt: string;
-  providerModels: ProviderModel[]; // Keep for now, but will be replaced by modelRoutes for routing
   modelRoutes: ModelRoute[]; // NEW: Array of model routes
 };
 

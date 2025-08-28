@@ -2,6 +2,7 @@
   "common": {
     "dashboard": "仪表盘",
     "channels": "渠道",
+    "close": "关闭",
     "keys": "密钥",
     "providers": "提供商",
     "models": "模型",

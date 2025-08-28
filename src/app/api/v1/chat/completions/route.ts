@@ -143,7 +143,7 @@ export async function POST(request: Request) {
           }
 
           if (totalTokens > 0) {
-            await prisma.log.create({
+            const logEntry = await prisma.log.create({
               data: {
                 latency,
                 promptTokens,
@@ -151,6 +151,11 @@ export async function POST(request: Request) {
                 totalTokens,
                 apiKeyId: dbKey.id,
                 modelRouteId: selectedModelRoute.id,
+              },
+            });
+            await prisma.logDetail.create({
+              data: {
+                logId: logEntry.id,
                 requestBody: requestBody,
               },
             });
@@ -177,7 +182,7 @@ export async function POST(request: Request) {
       // Log the request
       if (responseData.usage) {
         try {
-          await prisma.log.create({
+          const logEntry = await prisma.log.create({
             data: {
               latency,
               promptTokens: responseData.usage.prompt_tokens,
@@ -185,6 +190,11 @@ export async function POST(request: Request) {
               totalTokens: responseData.usage.total_tokens,
               apiKeyId: dbKey.id,
               modelRouteId: selectedModelRoute.id,
+            },
+          });
+          await prisma.logDetail.create({
+            data: {
+              logId: logEntry.id,
               requestBody: requestBody,
               responseBody: responseData,
             },

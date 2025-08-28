@@ -121,6 +121,14 @@ model Log {
   apiKey           GatewayApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
   modelRouteId     Int
   modelRoute       ModelRoute @relation(fields: [modelRouteId], references: [id], onDelete: Cascade)
-  requestBody      Json? // Stores the request body
-  responseBody     Json? // Stores the response body
+  logDetail        LogDetail?
+}
+
+model LogDetail {
+  id           Int      @id @default(autoincrement())
+  logId        Int      @unique // One-to-one relationship with Log
+  log          Log      @relation(fields: [logId], references: [id], onDelete: Cascade)
+  requestBody  Json?
+  responseBody Json?
+  createdAt    DateTime @default(now())
 }

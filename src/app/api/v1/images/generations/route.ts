@@ -85,7 +85,7 @@ export async function POST(request: Request) {
 
     // Log the request (no token usage for image generation)
     try {
-      await prisma.log.create({
+      const logEntry = await prisma.log.create({
         data: {
           latency,
           promptTokens: 0,
@@ -93,6 +93,11 @@ export async function POST(request: Request) {
           totalTokens: 0,
           apiKeyId: dbKey.id,
           modelRouteId: modelRoute.id,
+        },
+      });
+      await prisma.logDetail.create({
+        data: {
+          logId: logEntry.id,
           requestBody: requestBody,
           responseBody: responseData,
         },

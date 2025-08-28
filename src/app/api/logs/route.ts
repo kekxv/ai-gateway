@@ -37,8 +37,12 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
         promptTokens: true,
         completionTokens: true,
         totalTokens: true,
-        requestBody: true,
-        responseBody: true,
+        logDetail: {
+          select: {
+            requestBody: true,
+            responseBody: true,
+          },
+        },
         apiKey: {
           select: {
             name: true,

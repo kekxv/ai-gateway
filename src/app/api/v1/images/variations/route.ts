@@ -93,7 +93,7 @@ export async function POST(request: Request) {
 
     // Log the request
     try {
-      await prisma.log.create({
+      const logEntry = await prisma.log.create({
         data: {
           latency: 0, // TODO: calculate latency
           promptTokens: 0,
@@ -101,6 +101,11 @@ export async function POST(request: Request) {
           totalTokens: 0,
           apiKeyId: dbKey.id,
           modelRouteId: modelRoute.id,
+        },
+      });
+      await prisma.logDetail.create({
+        data: {
+          logId: logEntry.id,
           requestBody: requestBodyToLog,
           responseBody: responseData,
         },

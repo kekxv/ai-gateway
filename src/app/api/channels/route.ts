@@ -4,8 +4,7 @@ import { authMiddleware, AuthenticatedRequest } from '@/lib/auth'; // Import aut
 
 const prisma = new PrismaClient();
 
-// GET /api/channels - Fetches all channels
-export async function GET(request: AuthenticatedRequest) {
+const handleGet = authMiddleware(async (request: AuthenticatedRequest) => {
   try {
     const userId = request.user?.userId;
     const userRole = request.user?.role;
@@ -40,10 +39,9 @@ export async function GET(request: AuthenticatedRequest) {
     console.error("Error fetching channels:", error);
     return NextResponse.json({ error: '获取渠道失败' }, { status: 500 });
   }
-}
+});
 
-// POST /api/channels - Creates a new channel
-export async function POST(request: AuthenticatedRequest) {
+const handlePost = authMiddleware(async (request: AuthenticatedRequest) => {
   try {
     const userId = request.user?.userId; // Get userId from authenticated request
     if (!userId) {
@@ -90,4 +88,6 @@ export async function POST(request: AuthenticatedRequest) {
     }
     return NextResponse.json({ error: '创建渠道失败' }, { status: 500 });
   }
-}
+});
+
+export { handleGet as GET, handlePost as POST };
