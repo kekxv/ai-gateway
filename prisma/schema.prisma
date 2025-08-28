@@ -1,0 +1,126 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  USER
+}
+
+model User {
+  id          Int      @id @default(autoincrement())
+  email       String   @unique
+  password    String
+  role        Role     @default(USER)
+  disabled    Boolean  @default(false)
+  validUntil  DateTime?
+  createdAt   DateTime @default(now())
+  totpSecret  String?
+  totpEnabled Boolean  @default(false)
+  apiKeys     GatewayApiKey[] // Renamed from ApiKey
+  providers   Provider[] // Add this
+  channels    Channel[]  // Add this
+  models      Model[]    // Add this
+}
+
+// Stores provider-level info like the base URL
+model Provider {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique // e.g., "openai", "gemini"
+  baseURL   String
+  apiKey    String?   // Added apiKey to Provider
+  type      String?   // New: e.g., "openai", "gemini", "custom"
+  channels  Channel[]
+  createdAt DateTime  @default(now())
+  providerModels ProviderModel[]
+  userId    Int?
+  user      User?    @relation(fields: [userId], references: [id])
+}
+
+// A specific instance of a provider with a unique API key
+model Channel {
+  id          Int          @id @default(autoincrement())
+  name        String       @unique // e.g., "OpenAI-Primary", "Gemini-Backup-Key"
+  // Removed apiKey from Channel
+  enabled     Boolean      @default(true) // Added enabled field
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  providerId  Int
+  provider    Provider     @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  modelRoutes ModelRoute[]
+  userId    Int?
+  user      User?    @relation(fields: [userId], references: [id])
+}
+
+// New Model entity
+model Model {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique // e.g., "gpt-4o", "gemini-1.5-pro"
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  modelRoutes ModelRoute[]
+  providerModels ProviderModel[]
+  userId    Int?
+  user      User?    @relation(fields: [userId], references: [id])
+}
+
+// Join table for many-to-many relationship between Provider and Model
+model ProviderModel {
+  providerId Int
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Cascade) // Add onDelete: Cascade
+  modelId    Int
+  model      Model    @relation(fields: [modelId], references: [id], onDelete: Cascade) // Add onDelete: Cascade
+
+  @@id([providerId, modelId]) // Composite primary key
+}
+
+// Maps a model to a specific channel for routing
+model ModelRoute {
+  id        Int      @id @default(autoincrement())
+  modelId   Int
+  model     Model    @relation(fields: [modelId], references: [id], onDelete: Cascade) // Add onDelete: Cascade
+  channelId Int
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  weight    Int      @default(1) // New field for load balancing weight
+  createdAt DateTime @default(now())
+  logs      Log[]
+
+  // Removed @@unique([modelId, channelId])
+  // This allows a model to have multiple routes to different channels,
+  // or even multiple routes to the same channel (though that might be redundant without other distinguishing factors)
+}
+
+// Keys for authenticating to this gateway service
+model GatewayApiKey {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique @default(cuid())
+  name      String
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  lastUsed  DateTime?
+  logs      Log[]
+  userId    Int?
+  user      User?    @relation(fields: [userId], references: [id])
+}
+
+// Logs for usage tracking
+model Log {
+  id               Int      @id @default(autoincrement())
+  latency          Int
+  promptTokens     Int      @default(0)
+  completionTokens Int      @default(0)
+  totalTokens      Int      @default(0)
+  createdAt        DateTime @default(now())
+  apiKeyId         Int
+  apiKey           GatewayApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+  modelRouteId     Int
+  modelRoute       ModelRoute @relation(fields: [modelRouteId], references: [id], onDelete: Cascade)
+  requestBody      Json? // Stores the request body
+  responseBody     Json? // Stores the response body
+}
