@@ -94,7 +94,7 @@
 
 点击下方按钮，一键将此项目部署到 Vercel:
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2F<YOUR_GITHUB_USERNAME>%2F<YOUR_REPO_NAME>)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fkekxv%2Fai-gateway)
 
 **注意**: 请将上面的链接替换为您自己的 GitHub 仓库地址。
 
@@ -110,10 +110,10 @@
 1.  **构建 Docker 镜像**: 基于项目根目录下的 `Dockerfile`。
 2.  **推送到 GitHub Container Registry (GHCR)**: 将构建的镜像推送到与您的仓库关联的包注册表中。
 
-镜像将被标记为 `latest` 和当前的 Git SHA，例如 `ghcr.io/your-username/ai-gateway:latest`。
+镜像将被标记为 `latest` 和当前的 Git SHA，例如 `ghcr.io/kekxv/ai-gateway:latest`。
 
 这为您的项目提供了持续集成和部署的基础。
 
 ## 8. 贡献
 
-欢迎贡献！请参阅 `CONTRIBUTING.md` (如果存在) 以获取更多信息。
+欢迎贡献！
