@@ -9,6 +9,7 @@ RUN npm install -g pnpm
 
 # Copy package.json and pnpm-lock.yaml to leverage Docker cache
 COPY package.json pnpm-lock.yaml ./
+COPY prisma ./prisma
 
 # Install dependencies
 RUN npx pnpm install --frozen-lockfile
