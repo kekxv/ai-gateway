@@ -29,7 +29,7 @@ COPY --from=base /app/public ./public
 COPY --from=base /app/.next/static ./public/_next/static
 
 # Set the database URL to point to the dev.db file in the app directory
-ENV DATABASE_URL="file:./dev.db"
+ENV DATABASE_URL="file:/app/ai-gateway.db"
 ENV JWT_SECRET="your_jwt_secret_here"
 
 # Expose the port Next.js runs on
