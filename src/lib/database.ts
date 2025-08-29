@@ -3,7 +3,7 @@ import { open } from 'sqlite';
 import path from 'path';
 import fs from 'fs';
 
-const DB_PATH = path.resolve(process.cwd(), 'dev.db'); // Assuming dev.db in project root
+const DB_PATH = process.env.DATABASE_URL ? process.env.DATABASE_URL.replace('file:', '') : path.resolve(process.cwd(), 'ai-gateway.db');
 
 const schema = `
 PRAGMA foreign_keys = ON;
