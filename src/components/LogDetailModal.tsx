@@ -13,7 +13,7 @@ interface LogDetailModalProps {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
-    apiKey: {
+    apiKey?: {
       name: string;
       user?: {
         email: string;
@@ -98,20 +98,20 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose }) => {
             
             <div className="bg-gray-50 p-4 rounded-lg">
               <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-2">{t('logs.apiKey')}</h3>
-              <p className="text-gray-900">{log.apiKey.name}</p>
+              <p className="text-gray-900">{log.apiKey?.name}</p>
             </div>
             
-            {log.apiKey.user && (
+            {log.apiKey?.user && (
               <>
                 <div className="bg-gray-50 p-4 rounded-lg">
                   <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-2">{t('logs.userAccount')}</h3>
-                  <p className="text-gray-900">{log.apiKey.user.email}</p>
+                  <p className="text-gray-900">{log.apiKey?.user?.email}</p>
                 </div>
                 
                 <div className="bg-gray-50 p-4 rounded-lg">
                   <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-2">{t('users.role')}</h3>
                   <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
-                    {log.apiKey.user.role}
+                    {log.apiKey?.user?.role}
                   </span>
                 </div>
               </>

@@ -94,7 +94,7 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
         userTokenUsage[userName] = {};
         for (let i = 29; i >= 0; i--) {
           const date = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
-          const day = date.toISOString().split('T')[0];
+          const day = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
           userTokenUsage[userName][day] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0 };
         }
       }
@@ -129,14 +129,14 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
     // Initialize last 7 days with correct ordering
     for (let i = 6; i >= 0; i--) {
       const date = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
-      const day = date.toISOString().split('T')[0];
+      const day = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
       weeklyUsage[day] = { totalTokens: 0, requestCount: 0 };
     }
 
     // Initialize last 30 days with correct ordering
     for (let i = 29; i >= 0; i--) {
       const date = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
-      const day = date.toISOString().split('T')[0];
+      const day = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
       monthlyUsage[day] = { totalTokens: 0, requestCount: 0 };
       
       // Initialize token usage over time
@@ -150,7 +150,7 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
       const apiKeyName = log.apiKeyName;
       const userName = log.userEmail || 'Unknown User'; // Get user email
       const date = new Date(log.createdAt);
-      const day = date.toISOString().split('T')[0];
+      const day = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
 
       // Initialize user usage data
       initializeUserUsage(userName);
