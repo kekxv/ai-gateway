@@ -215,6 +215,8 @@
     "deleteFailed": "删除提供商失败"
   },
   "models": {
+    "name": "模型名称",
+    "description": "模型说明",
     "title": "模型管理",
     "addNewModel": "添加新模型",
     "editModel": "编辑模型",

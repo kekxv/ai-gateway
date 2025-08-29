@@ -32,6 +32,7 @@ const handleGet = authMiddleware(async (request: AuthenticatedRequest) => {
       channel.modelRoutes = rawModelRoutes.map((mr: any) => ({
         ...mr,
         model: {
+          id: mr.modelId, // Add this line
           name: mr.model_name,
           description: mr.model_description,
         },

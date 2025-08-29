@@ -215,6 +215,8 @@
     "deleteFailed": "Failed to delete provider"
   },
   "models": {
+    "name": "Model Name",
+    "description": "Model Description",
     "title": "Model Management",
     "addNewModel": "Add New Model",
     "editModel": "Edit Model",
