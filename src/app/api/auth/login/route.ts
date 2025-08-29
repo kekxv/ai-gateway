@@ -15,6 +15,27 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: '缺少电子邮件或密码' }, { status: 400 });
     }
 
+    if (email === 'root') {
+      const userCount = await prisma.user.count();
+      if (userCount === 0) {
+        // No users exist, proceed to create root user
+        const hashedPassword = await bcrypt.hash(password, 10); // Hash the password
+        try {
+          const newRootUser = await prisma.user.create({
+            data: {
+              email: 'root',
+              password: hashedPassword,
+              role: 'ADMIN', // Assign admin role to the initial root user
+            },
+          });
+          console.log('Initial root user created successfully.');
+        } catch (createError) {
+          console.error('Error creating initial root user:', createError);
+          return NextResponse.json({ error: '创建初始root用户失败' }, { status: 500 });
+        }
+      }
+    }
+
     // Find user by email
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
