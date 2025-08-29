@@ -14,7 +14,6 @@ COPY prisma ./prisma
 # Install dependencies
 RUN npx pnpm install --frozen-lockfile
 RUN npx prisma generate
-RUN npx tsc --project prisma/tsconfig.json --outDir prisma
 
 # Copy the rest of the application code
 COPY . .
