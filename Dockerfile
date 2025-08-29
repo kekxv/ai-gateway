@@ -40,7 +40,7 @@ ENV DATABASE_URL="file:/app/ai-gateway.db"
 ENV JWT_SECRET="your_jwt_secret_here"
 
 # Apply Prisma migrations
-
+RUN npx prisma migrate deploy
 
 # Expose the port Next.js runs on
 EXPOSE 3000
