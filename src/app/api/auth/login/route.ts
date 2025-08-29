@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
+
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { authenticator } from 'otplib';
 
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 export async function POST(request: Request) {
   try {
@@ -15,19 +15,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: '缺少电子邮件或密码' }, { status: 400 });
     }
 
+    const db = await getInitializedDb();
+
     if (email === 'root') {
-      const userCount = await prisma.user.count();
+      const userCountResult = await db.get('SELECT COUNT(*) as count FROM User');
+      const userCount = userCountResult.count;
       if (userCount === 0) {
         // No users exist, proceed to create root user
         const hashedPassword = await bcrypt.hash(password, 10); // Hash the password
         try {
-          const newRootUser = await prisma.user.create({
-            data: {
-              email: 'root',
-              password: hashedPassword,
-              role: 'ADMIN', // Assign admin role to the initial root user
-            },
-          });
+          await db.run(
+            'INSERT INTO User (email, password, role) VALUES (?, ?, ?)',
+            'root',
+            hashedPassword,
+            'ADMIN'
+          );
           console.log('Initial root user created successfully.');
         } catch (createError) {
           console.error('Error creating initial root user:', createError);
@@ -37,7 +39,7 @@ export async function POST(request: Request) {
     }
 
     // Find user by email
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await db.get('SELECT * FROM User WHERE email = ?', email);
     if (!user) {
       return NextResponse.json({ error: '无效的凭据' }, { status: 401 });
     }

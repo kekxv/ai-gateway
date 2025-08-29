@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth'; // Import authMiddleware
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 // PUT /api/providers/[id] - Updates a provider
 export const PUT = authMiddleware(async (request: AuthenticatedRequest, context: { params: { id: string } }) => {
@@ -17,7 +15,8 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
     }
 
     // Check ownership or admin role
-    const existingProvider = await prisma.provider.findUnique({ where: { id: id } });
+    const db = await getInitializedDb();
+    const existingProvider = await db.get('SELECT * FROM Provider WHERE id = ?', id);
     if (!existingProvider) {
       return NextResponse.json({ error: '提供商未找到' }, { status: 404 });
     }
@@ -37,27 +36,27 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
       return NextResponse.json({ error: '无权更改提供商所有者' }, { status: 403 });
     }
     if (newUserId !== undefined) {
-      const targetUser = await prisma.user.findUnique({ where: { id: newUserId } });
+      const targetUser = await db.get('SELECT * FROM User WHERE id = ?', newUserId);
       if (!targetUser) {
         return NextResponse.json({ error: '目标用户不存在' }, { status: 400 });
       }
     }
 
-    const updateData: any = {
-      name,
-      baseURL,
-      apiKey,
-      type, // Add type here
-    };
+    const updateFields: string[] = [`name = ?`, `baseURL = ?`, `apiKey = ?`, `type = ?`];
+    const updateValues: any[] = [name, baseURL, apiKey, type];
 
     if (newUserId !== undefined) {
-      updateData.user = { connect: { id: newUserId } };
+      updateFields.push(`userId = ?`);
+      updateValues.push(newUserId);
     }
 
-    const updatedProvider = await prisma.provider.update({
-      where: { id: id },
-      data: updateData,
-    });
+    await db.run(
+      `UPDATE Provider SET ${updateFields.join(', ')} WHERE id = ?`,
+      ...updateValues,
+      id
+    );
+
+    const updatedProvider = await db.get('SELECT * FROM Provider WHERE id = ?', id);
 
     return NextResponse.json(updatedProvider);
   } catch (error) {
@@ -82,7 +81,8 @@ export const DELETE = authMiddleware(async (request: AuthenticatedRequest, conte
     }
 
     // Check ownership or admin role
-    const existingProvider = await prisma.provider.findUnique({ where: { id: id } });
+    const db = await getInitializedDb();
+    const existingProvider = await db.get('SELECT * FROM Provider WHERE id = ?', id);
     if (!existingProvider) {
       return NextResponse.json({ error: '提供商未找到' }, { status: 404 });
     }
@@ -90,9 +90,7 @@ export const DELETE = authMiddleware(async (request: AuthenticatedRequest, conte
       return NextResponse.json({ error: '无权删除此提供商' }, { status: 403 });
     }
 
-    await prisma.provider.delete({
-      where: { id: id },
-    });
+    await db.run('DELETE FROM Provider WHERE id = ?', id);
 
     return NextResponse.json({ message: '提供商删除成功' });
   } catch (error) {

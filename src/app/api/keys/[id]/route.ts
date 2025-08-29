@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import { AuthenticatedRequest } from '@/lib/auth'; // Import authMiddleware
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 // PUT /api/keys/[id] - Updates an API key
 export async function PUT(request: AuthenticatedRequest, context: { params: Promise<{ id: string }> }) {
@@ -17,7 +15,8 @@ export async function PUT(request: AuthenticatedRequest, context: { params: Prom
     }
 
     // Check ownership or admin role
-    const existingApiKey = await prisma.gatewayApiKey.findUnique({ where: { id: id } });
+    const db = await getInitializedDb();
+    const existingApiKey = await db.get('SELECT * FROM GatewayApiKey WHERE id = ?', id);
     if (!existingApiKey) {
       return NextResponse.json({ error: 'API 密钥未找到' }, { status: 404 });
     }
@@ -37,25 +36,27 @@ export async function PUT(request: AuthenticatedRequest, context: { params: Prom
       return NextResponse.json({ error: '无权更改 API 密钥所有者' }, { status: 403 });
     }
     if (newUserId !== undefined) {
-      const targetUser = await prisma.user.findUnique({ where: { id: newUserId } });
+      const targetUser = await db.get('SELECT * FROM User WHERE id = ?', newUserId);
       if (!targetUser) {
         return NextResponse.json({ error: '目标用户不存在' }, { status: 400 });
       }
     }
 
-    const updateData: any = {
-      name,
-      enabled,
-    };
+    const updateFields: string[] = [`name = ?`, `enabled = ?`];
+    const updateValues: any[] = [name, enabled];
 
     if (newUserId !== undefined) {
-      updateData.user = { connect: { id: newUserId } };
+      updateFields.push(`userId = ?`);
+      updateValues.push(newUserId);
     }
 
-    const updatedApiKey = await prisma.gatewayApiKey.update({
-      where: { id: id },
-      data: updateData,
-    });
+    await db.run(
+      `UPDATE GatewayApiKey SET ${updateFields.join(', ')} WHERE id = ?`,
+      ...updateValues,
+      id
+    );
+
+    const updatedApiKey = await db.get('SELECT * FROM GatewayApiKey WHERE id = ?', id);
 
     return NextResponse.json(updatedApiKey);
   } catch (error) {
@@ -77,7 +78,8 @@ export async function DELETE(request: AuthenticatedRequest, context: { params: P
     }
 
     // Check ownership or admin role
-    const existingApiKey = await prisma.gatewayApiKey.findUnique({ where: { id: id } });
+    const db = await getInitializedDb();
+    const existingApiKey = await db.get('SELECT * FROM GatewayApiKey WHERE id = ?', id);
     if (!existingApiKey) {
       return NextResponse.json({ error: 'API 密钥未找到' }, { status: 404 });
     }
@@ -85,9 +87,7 @@ export async function DELETE(request: AuthenticatedRequest, context: { params: P
       return NextResponse.json({ error: '无权删除此 API 密钥' }, { status: 403 });
     }
 
-    await prisma.gatewayApiKey.delete({
-      where: { id: id },
-    });
+    await db.run('DELETE FROM GatewayApiKey WHERE id = ?', id);
 
     return NextResponse.json({ message: 'API 密钥删除成功' });
   } catch (error) {

@@ -1,10 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
-import { PrismaClient } from '@prisma/client';
 import { authenticator } from 'otplib';
 import qrcode from 'qrcode';
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 const SERVICE_NAME = 'AI Gateway';
 
 async function setupTotp(req: AuthenticatedRequest) {
@@ -16,7 +14,8 @@ async function setupTotp(req: AuthenticatedRequest) {
       return NextResponse.json({ error: '令牌中未找到用户' }, { status: 400 });
     }
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const db = await getInitializedDb();
+    const user = await db.get('SELECT * FROM User WHERE id = ?', userId);
     if (!user) {
       return NextResponse.json({ error: '用户未找到' }, { status: 404 });
     }
@@ -29,13 +28,12 @@ async function setupTotp(req: AuthenticatedRequest) {
     const secret = authenticator.generateSecret();
     const otpauth = authenticator.keyuri(userEmail, SERVICE_NAME, secret);
 
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        totpSecret: secret, // 在生产环境中，此密钥应加密存储
-        totpEnabled: false, // 在验证前不启用
-      },
-    });
+    await db.run(
+      'UPDATE User SET totpSecret = ?, totpEnabled = ? WHERE id = ?',
+      secret,
+      false,
+      userId
+    );
 
     const qrCodeDataUrl = await qrcode.toDataURL(otpauth);
 

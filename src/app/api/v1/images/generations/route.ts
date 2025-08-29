@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 export async function POST(request: Request) {
   try {
@@ -11,14 +9,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized: Missing or invalid Authorization header' }, { status: 401 });
     }
     const apiKey = authHeader.split(' ')[1];
-    const dbKey = await prisma.gatewayApiKey.findUnique({ where: { key: apiKey } });
+    const db = await getInitializedDb();
+    const dbKey = await db.get('SELECT * FROM GatewayApiKey WHERE key = ?', apiKey);
 
     if (!dbKey || !dbKey.enabled) {
       return NextResponse.json({ error: 'Unauthorized: Invalid API Key' }, { status: 401 });
     }
 
     // Non-blocking update of lastUsed time
-    prisma.gatewayApiKey.update({ where: { id: dbKey.id }, data: { lastUsed: new Date() } }).catch(console.error);
+    db.run('UPDATE GatewayApiKey SET lastUsed = ? WHERE id = ?', new Date().toISOString(), dbKey.id).catch(console.error);
 
     const requestBody = await request.json();
     const requestedModelName = requestBody.model;
@@ -34,24 +33,27 @@ export async function POST(request: Request) {
     // A simple approach is to have a default image generation channel.
     // For now, we will find the first available channel that has a provider with "dall-e" in the name.
     // This is a temporary solution and should be improved with a more robust routing mechanism.
-    const modelRoute = await prisma.modelRoute.findFirst({
-      where: {
-        model: {
-          name: {
-            contains: 'dall-e',
-          },
+    const modelRoute = await db.get(
+      `SELECT mr.*, m.name as modelName, c.name as channelName, p.name as providerName, p.baseURL, p.apiKey
+       FROM ModelRoute mr
+       JOIN Model m ON mr.modelId = m.id
+       JOIN Channel c ON mr.channelId = c.id
+       JOIN Provider p ON c.providerId = p.id
+       WHERE m.name LIKE ? AND c.enabled = TRUE`,
+      '%dall-e%'
+    );
+
+    if (modelRoute) {
+      modelRoute.model = { name: modelRoute.modelName };
+      modelRoute.channel = {
+        name: modelRoute.channelName,
+        provider: {
+          name: modelRoute.providerName,
+          baseURL: modelRoute.baseURL,
+          apiKey: modelRoute.apiKey,
         },
-        channel: { enabled: true },
-      },
-      include: {
-        channel: {
-          include: {
-            provider: true,
-          },
-        },
-        model: true,
-      },
-    });
+      };
+    }
 
     if (!modelRoute) {
       return NextResponse.json({ error: `No route configured for image generation` }, { status: 404 });
@@ -85,23 +87,23 @@ export async function POST(request: Request) {
 
     // Log the request (no token usage for image generation)
     try {
-      const logEntry = await prisma.log.create({
-        data: {
-          latency,
-          promptTokens: 0,
-          completionTokens: 0,
-          totalTokens: 0,
-          apiKeyId: dbKey.id,
-          modelRouteId: modelRoute.id,
-        },
-      });
-      await prisma.logDetail.create({
-        data: {
-          logId: logEntry.id,
-          requestBody: requestBody,
-          responseBody: responseData,
-        },
-      });
+      const result = await db.run(
+        'INSERT INTO Log (latency, promptTokens, completionTokens, totalTokens, apiKeyId, modelRouteId) VALUES (?, ?, ?, ?, ?, ?)',
+        latency,
+        0,
+        0,
+        0,
+        dbKey.id,
+        modelRoute.id
+      );
+      const logEntryId = result.lastID;
+
+      await db.run(
+        'INSERT INTO LogDetail (logId, requestBody, responseBody) VALUES (?, ?, ?)',
+        logEntryId,
+        JSON.stringify(requestBody),
+        JSON.stringify(responseData)
+      );
     } catch (logError) {
       console.error("Failed to log request:", logError);
       // Don't block the response to the user

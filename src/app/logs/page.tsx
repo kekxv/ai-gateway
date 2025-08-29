@@ -11,7 +11,7 @@ type Log = {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
-  apiKey: {
+  apiKey?: {
     name: string;
     user?: {
       email: string;
@@ -122,10 +122,10 @@ export default function LogsPage() {
               {logs.map((log) => (
                 <tr key={log.id} className="hover:bg-gray-50 transition-colors duration-150">
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{new Date(log.createdAt).toLocaleString()}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.apiKey.name}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.apiKey.user?.email || 'N/A'}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.modelRoute.model.name}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.modelRoute.channel.name}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.apiKey?.name}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.apiKey?.user?.email || 'N/A'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.modelRoute?.model.name}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.modelRoute?.channel.name}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                       {log.latency} ms

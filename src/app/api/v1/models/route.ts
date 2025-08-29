@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 export async function GET(request: Request) {
   try {
@@ -11,23 +9,24 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Unauthorized: Missing or invalid Authorization header' }, { status: 401 });
     }
     const apiKey = authHeader.split(' ')[1];
-    const dbKey = await prisma.gatewayApiKey.findUnique({ where: { key: apiKey } });
+    const db = await getInitializedDb();
+    const dbKey = await db.get('SELECT * FROM GatewayApiKey WHERE key = ?', apiKey);
 
     if (!dbKey || !dbKey.enabled) {
       return NextResponse.json({ error: 'Unauthorized: Invalid API Key' }, { status: 401 });
     }
 
     // Non-blocking update of lastUsed time
-    prisma.gatewayApiKey.update({ where: { id: dbKey.id }, data: { lastUsed: new Date() } }).catch(console.error);
+    db.run('UPDATE GatewayApiKey SET lastUsed = ? WHERE id = ?', new Date().toISOString(), dbKey.id).catch(console.error);
 
-    const models = await prisma.model.findMany();
+    const models = await db.all('SELECT * FROM Model');
 
     const responseData = {
       object: 'list',
-      data: models.map(model => ({
+      data: models.map((model: { id: number; name: string; description: string; createdAt: string; updatedAt: string; userId: number }) => ({
         id: model.name,
         object: 'model',
-        created: Math.floor(model.createdAt.getTime() / 1000),
+        created: Math.floor(new Date(model.createdAt).getTime() / 1000),
         owned_by: 'system',
       })),
     };

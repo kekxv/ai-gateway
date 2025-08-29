@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 async function getCurrentUser(req: AuthenticatedRequest) {
   try {
@@ -11,18 +9,11 @@ async function getCurrentUser(req: AuthenticatedRequest) {
       return NextResponse.json({ error: 'User not found in token' }, { status: 400 });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        role: true,
-        disabled: true,
-        validUntil: true,
-        createdAt: true,
-        totpEnabled: true,
-      },
-    });
+    const db = await getInitializedDb();
+    const user = await db.get(
+      'SELECT id, email, role, disabled, validUntil, createdAt, totpEnabled FROM User WHERE id = ?',
+      userId
+    );
 
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });

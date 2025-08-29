@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 // GET /api/users/[id] - 获取单个用户信息
 export const GET = authMiddleware(async (request: AuthenticatedRequest, context: { params: Promise<{ id: string }> }) => {
@@ -21,17 +19,11 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest, context:
       return NextResponse.json({ error: '无效的用户 ID' }, { status: 400 });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        role: true,
-        disabled: true,
-        validUntil: true,
-        createdAt: true,
-      },
-    });
+    const db = await getInitializedDb();
+    const user = await db.get(
+      'SELECT id, email, role, disabled, validUntil, createdAt FROM User WHERE id = ?',
+      userId
+    );
 
     if (!user) {
       return NextResponse.json({ error: '用户未找到' }, { status: 404 });
@@ -61,9 +53,8 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
     }
 
     // 检查用户是否存在
-    const existingUser = await prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const db = await getInitializedDb();
+    const existingUser = await db.get('SELECT * FROM User WHERE id = ?', userId);
 
     if (!existingUser) {
       return NextResponse.json({ error: '用户未找到' }, { status: 404 });
@@ -72,43 +63,42 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
     const body = await request.json();
     const { email, password, role, disabled, validUntil } = body;
 
-    // 准备更新数据
-    const updateData: any = {
-      role,
-      disabled,
-      validUntil: validUntil ? new Date(validUntil) : null,
-    };
+    const updateFields: string[] = [];
+    const updateValues: any[] = [];
 
-    // 如果提供了新邮箱且与当前邮箱不同，检查是否已存在
     if (email && email !== existingUser.email) {
-      const emailUser = await prisma.user.findUnique({
-        where: { email },
-      });
-
-      if (emailUser) {
-        return NextResponse.json({ error: '邮箱已被其他用户使用' }, { status: 409 });
-      }
-      updateData.email = email;
+      updateFields.push(`email = ?`);
+      updateValues.push(email);
     }
-
-    // 如果提供了新密码，加密后更新
     if (password) {
-      updateData.password = await bcrypt.hash(password, 10);
+      updateFields.push(`password = ?`);
+      updateValues.push(await bcrypt.hash(password, 10));
+    }
+    if (role) {
+      updateFields.push(`role = ?`);
+      updateValues.push(role);
+    }
+    if (disabled !== undefined) {
+      updateFields.push(`disabled = ?`);
+      updateValues.push(disabled);
+    }
+    if (validUntil !== undefined) {
+      updateFields.push(`validUntil = ?`);
+      updateValues.push(validUntil ? new Date(validUntil).toISOString() : null);
     }
 
-    // 更新用户
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data: updateData,
-      select: {
-        id: true,
-        email: true,
-        role: true,
-        disabled: true,
-        validUntil: true,
-        createdAt: true,
-      },
-    });
+    if (updateFields.length > 0) {
+      await db.run(
+        `UPDATE User SET ${updateFields.join(', ')} WHERE id = ?`,
+        ...updateValues,
+        userId
+      );
+    }
+
+    const user = await db.get(
+      'SELECT id, email, role, disabled, validUntil, createdAt FROM User WHERE id = ?',
+      userId
+    );
 
     return NextResponse.json(user, { status: 200 });
   } catch (error) {
@@ -134,18 +124,15 @@ export const DELETE = authMiddleware(async (request: AuthenticatedRequest, conte
     }
 
     // 检查用户是否存在
-    const existingUser = await prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const db = await getInitializedDb();
+    const existingUser = await db.get('SELECT * FROM User WHERE id = ?', userId);
 
     if (!existingUser) {
       return NextResponse.json({ error: '用户未找到' }, { status: 404 });
     }
 
     // 删除用户
-    await prisma.user.delete({
-      where: { id: userId },
-    });
+    await db.run('DELETE FROM User WHERE id = ?', userId);
 
     return NextResponse.json({ message: '用户已删除' }, { status: 200 });
   } catch (error) {

@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth'; // Import authMiddleware
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 // GET /api/providers - Fetches all providers
 export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
@@ -15,15 +13,18 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
       whereClause = { userId: userId };
     }
 
-    const providers = await prisma.provider.findMany({
-      where: whereClause,
-      include: {
-        user: true, // Include the related user data
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+    const db = await getInitializedDb();
+
+    const providers = await db.all(
+      `SELECT * FROM Provider ${userRole !== 'ADMIN' ? 'WHERE userId = ?' : ''} ORDER BY createdAt DESC`,
+      ...(userRole !== 'ADMIN' ? [userId] : [])
+    );
+
+    for (const provider of providers) {
+      if (provider.userId) {
+        provider.user = await db.get('SELECT id, email, role FROM User WHERE id = ?', provider.userId);
+      }
+    }
     return NextResponse.json(providers, {
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -52,17 +53,16 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
       return NextResponse.json({ error: '缺少必填字段' }, { status: 400 });
     }
 
-    const newProvider = await prisma.provider.create({
-      data: {
-        name,
-        baseURL,
-        apiKey,
-        type, // Add type here
-        user: {
-          connect: { id: userId }, // Assign userId via relation
-        },
-      },
-    });
+    const db = await getInitializedDb();
+    const result = await db.run(
+      'INSERT INTO Provider (name, baseURL, apiKey, type, userId) VALUES (?, ?, ?, ?, ?)',
+      name,
+      baseURL,
+      apiKey,
+      type,
+      userId
+    );
+    const newProvider = await db.get('SELECT * FROM Provider WHERE id = ?', result.lastID);
 
     return NextResponse.json(newProvider, { status: 201 });
   } catch (error) {

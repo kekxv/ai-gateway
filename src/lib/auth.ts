@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 export interface AuthenticatedRequest extends NextRequest {
   user?: { userId: number; email: string; role: string };
@@ -27,11 +25,12 @@ export function authMiddleware(handler: ApiHandler, requiredRoles: string[] = []
       const authenticatedRequest = req as AuthenticatedRequest;
       authenticatedRequest.user = decoded;
 
+      const db = await getInitializedDb();
       if (decoded.role !== 'ADMIN') {
-        const user = await prisma.user.findUnique({
-          where: { id: decoded.userId },
-          select: { disabled: true, validUntil: true }
-        });
+        const user = await db.get(
+          'SELECT disabled, validUntil FROM User WHERE id = ?',
+          decoded.userId
+        );
 
         if (user?.disabled) {
           return NextResponse.json({ error: '未授权: 用户已被禁用' }, { status: 401 });

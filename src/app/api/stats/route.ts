@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth'; // Import authMiddleware
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
   try {
@@ -30,53 +28,54 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
       };
     }
 
-    const logs = await prisma.log.findMany({
-      where: logWhereClause, // Apply filtering
-      include: {
-        apiKey: {
-          include: {
-            user: true // Include user info for grouping by user
-          }
-        },
-        modelRoute: {
-          include: {
-            model: true, // Include model to get model.name
-            channel: {
-              include: {
-                provider: true, // Include provider to get provider.name
-              },
-            },
-          },
-        },
-      },
-      orderBy: {
-        createdAt: 'asc' // Order by creation time for time series data
-      }
-    });
+    const db = await getInitializedDb();
+
+    let logQuery = `
+      SELECT
+        l.id, l.latency, l.promptTokens, l.completionTokens, l.totalTokens, l.createdAt,
+        ak.name AS apiKeyName, ak.userId AS apiKeyUserId,
+        u.email AS userEmail, u.role AS userRole,
+        mr.modelId, mr.channelId,
+        m.name AS modelName,
+        c.name AS channelName,
+        p.name AS providerName
+      FROM Log l
+      JOIN GatewayApiKey ak ON l.apiKeyId = ak.id
+      LEFT JOIN User u ON ak.userId = u.id
+      JOIN ModelRoute mr ON l.modelRouteId = mr.id
+      JOIN Model m ON mr.modelId = m.id
+      JOIN Channel c ON mr.channelId = c.id
+      JOIN Provider p ON c.providerId = p.id
+      WHERE l.createdAt >= ?
+    `;
+    const logQueryParams: any[] = [thirtyDaysAgo.toISOString()];
+
+    if (userRole !== 'ADMIN') {
+      logQuery += ` AND ak.userId = ?`;
+      logQueryParams.push(userId);
+    }
+
+    logQuery += ` ORDER BY l.createdAt ASC`;
+
+    const logs = await db.all(logQuery, ...logQueryParams);
 
     // Fetch user statistics - only admins can see this
     let userStats = null;
     if (userRole === 'ADMIN') {
-      const totalUsers = await prisma.user.count();
-      const activeUsers = await prisma.user.count({
-        where: {
-          disabled: false,
-          OR: [
-            { validUntil: null },
-            { validUntil: { gte: new Date() } }
-          ]
-        }
-      });
-      const disabledUsers = await prisma.user.count({
-        where: {
-          disabled: true
-        }
-      });
-      const expiredUsers = await prisma.user.count({
-        where: {
-          validUntil: { lt: new Date() }
-        }
-      });
+      const totalUsersResult = await db.get('SELECT COUNT(*) as count FROM User');
+      const totalUsers = totalUsersResult.count;
+
+      const activeUsersResult = await db.get(
+        `SELECT COUNT(*) as count FROM User WHERE disabled = FALSE AND (validUntil IS NULL OR validUntil >= ?)`,
+        new Date().toISOString()
+      );
+      const activeUsers = activeUsersResult.count;
+
+      const disabledUsersResult = await db.get('SELECT COUNT(*) as count FROM User WHERE disabled = TRUE');
+      const disabledUsers = disabledUsersResult.count;
+
+      const expiredUsersResult = await db.get('SELECT COUNT(*) as count FROM User WHERE validUntil IS NOT NULL AND validUntil < ?', new Date().toISOString());
+      const expiredUsers = expiredUsersResult.count;
       
       userStats = {
         total: totalUsers,
@@ -145,11 +144,11 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
     }
 
     for (const log of logs) {
-      const providerName = log.modelRoute.channel.provider.name;
-      const channelName = log.modelRoute.channel.name;
-      const modelName = log.modelRoute.model.name;
-      const apiKeyName = log.apiKey.name;
-      const userName = log.apiKey.user?.email || 'Unknown User'; // Get user email
+      const providerName = log.providerName;
+      const channelName = log.channelName;
+      const modelName = log.modelName;
+      const apiKeyName = log.apiKeyName;
+      const userName = log.userEmail || 'Unknown User'; // Get user email
       const date = new Date(log.createdAt);
       const day = date.toISOString().split('T')[0];
 

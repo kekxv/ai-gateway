@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth'; // Import authMiddleware and AuthenticatedRequest
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
   try {
@@ -14,21 +12,30 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
     }
 
     // Find a ModelRoute for the given channelId and modelId
-    const modelRoute = await prisma.modelRoute.findFirst({
-      where: {
-        channelId: parseInt(channelId),
-        modelId: parseInt(modelId),
-        channel: { enabled: true }, // Assuming channels have an 'enabled' field
-      },
-      include: {
-        model: true, // Include the related model data
-        channel: {
-          include: {
-            provider: true,
-          },
+    const db = await getInitializedDb();
+
+    const modelRoute = await db.get(
+      `SELECT mr.*, m.name as modelName, c.name as channelName, p.name as providerName, p.baseURL, p.apiKey
+       FROM ModelRoute mr
+       JOIN Model m ON mr.modelId = m.id
+       JOIN Channel c ON mr.channelId = c.id
+       JOIN Provider p ON c.providerId = p.id
+       WHERE mr.channelId = ? AND mr.modelId = ? AND c.enabled = TRUE`,
+      parseInt(channelId),
+      parseInt(modelId)
+    );
+
+    if (modelRoute) {
+      modelRoute.model = { name: modelRoute.modelName };
+      modelRoute.channel = {
+        name: modelRoute.channelName,
+        provider: {
+          name: modelRoute.providerName,
+          baseURL: modelRoute.baseURL,
+          apiKey: modelRoute.apiKey,
         },
-      },
-    });
+      };
+    }
 
     if (!modelRoute) {
       return NextResponse.json({ error: `未找到渠道 ${channelId} 和模型 ${modelId} 的路由` }, { status: 404 });

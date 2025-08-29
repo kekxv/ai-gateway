@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 // GET handler to fetch models from a provider
 export const GET = authMiddleware(async (request: AuthenticatedRequest, context: { params: Promise<{ id: string }> }) => {
@@ -15,9 +13,8 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest, context:
       return NextResponse.json({ error: '无效的提供商 ID' }, { status: 400 });
     }
 
-    const provider = await prisma.provider.findUnique({
-      where: { id: providerId },
-    });
+    const db = await getInitializedDb();
+    const provider = await db.get('SELECT * FROM Provider WHERE id = ?', providerId);
 
     if (!provider) {
       return NextResponse.json({ error: '提供商未找到' }, { status: 404 });

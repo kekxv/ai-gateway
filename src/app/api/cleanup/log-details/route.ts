@@ -1,18 +1,17 @@
 import { NextResponse } from 'next/server';
-import prisma from '@/lib/prisma';
+import { getInitializedDb } from '@/lib/db';
 
 export async function DELETE() {
   try {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const { count } = await prisma.logDetail.deleteMany({
-      where: {
-        createdAt: {
-          lt: thirtyDaysAgo,
-        },
-      },
-    });
+    const db = await getInitializedDb();
+    const result = await db.run(
+      'DELETE FROM LogDetail WHERE createdAt < ?',
+      thirtyDaysAgo.toISOString()
+    );
+    const count = result.changes;
 
     return NextResponse.json({ message: `Deleted ${count} log details older than 30 days.` });
   } catch (error: any) {

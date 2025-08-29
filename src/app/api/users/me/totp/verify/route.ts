@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
-import { PrismaClient } from '@prisma/client';
 import { authenticator } from 'otplib';
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 async function verifyTotp(req: AuthenticatedRequest) {
   try {
@@ -17,9 +15,8 @@ async function verifyTotp(req: AuthenticatedRequest) {
       return NextResponse.json({ error: '必须提供令牌' }, { status: 400 });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const db = await getInitializedDb();
+    const user = await db.get('SELECT * FROM User WHERE id = ?', userId);
 
     if (!user || !user.totpSecret) {
       return NextResponse.json({ error: '该用户尚未设置TOTP' }, { status: 400 });
@@ -35,10 +32,11 @@ async function verifyTotp(req: AuthenticatedRequest) {
       return NextResponse.json({ error: '无效的TOTP令牌' }, { status: 400 });
     }
 
-    await prisma.user.update({
-      where: { id: userId },
-      data: { totpEnabled: true },
-    });
+    await db.run(
+      'UPDATE User SET totpEnabled = ? WHERE id = ?',
+      true,
+      userId
+    );
 
     return NextResponse.json({ message: 'TOTP已成功启用' });
   } catch (error) {

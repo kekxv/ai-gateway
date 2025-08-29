@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 // POST /api/users/[id]/toggle-disabled - 切换用户禁用状态
 export const POST = authMiddleware(async (request: AuthenticatedRequest, context: { params: Promise<{ id: string }> }) => {
@@ -21,30 +19,24 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest, context
     }
 
     // 检查用户是否存在
-    const existingUser = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        disabled: true,
-      },
-    });
+    const db = await getInitializedDb();
+    const existingUser = await db.get(
+      'SELECT id, disabled FROM User WHERE id = ?',
+      userId
+    );
 
     if (!existingUser) {
       return NextResponse.json({ error: '用户未找到' }, { status: 404 });
     }
 
     // 切换禁用状态
-    const updatedUser = await prisma.user.update({
-      where: { id: userId },
-      data: {
-        disabled: !existingUser.disabled,
-      },
-      select: {
-        id: true,
-        email: true,
-        disabled: true,
-      },
-    });
+    const updatedUser = await db.run(
+      'UPDATE User SET disabled = ? WHERE id = ?',
+      !existingUser.disabled,
+      userId
+    );
+    const userAfterUpdate = await db.get('SELECT id, email, disabled FROM User WHERE id = ?', userId);
+    const finalUpdatedUser = userAfterUpdate;
 
     const action = updatedUser.disabled ? '禁用' : '启用';
     return NextResponse.json({ 

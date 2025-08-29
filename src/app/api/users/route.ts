@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 // GET /api/users - 获取用户列表
 export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
@@ -13,19 +11,10 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
       return NextResponse.json({ error: '未授权: 只有管理员可以访问' }, { status: 403 });
     }
 
-    const users = await prisma.user.findMany({
-      select: {
-        id: true,
-        email: true,
-        role: true,
-        disabled: true,
-        validUntil: true,
-        createdAt: true,
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+    const db = await getInitializedDb();
+    const users = await db.all(
+      'SELECT id, email, role, disabled, validUntil, createdAt FROM User ORDER BY createdAt DESC'
+    );
 
     return NextResponse.json(users, { status: 200 });
   } catch (error) {
@@ -51,9 +40,8 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
     }
 
     // 检查用户是否已存在
-    const existingUser = await prisma.user.findUnique({
-      where: { email },
-    });
+    const db = await getInitializedDb();
+    const existingUser = await db.get('SELECT * FROM User WHERE email = ?', email);
 
     if (existingUser) {
       return NextResponse.json({ error: '用户已存在' }, { status: 409 });
@@ -63,23 +51,18 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // 创建用户
-    const user = await prisma.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-        role: role || 'USER',
-        disabled: disabled || false,
-        validUntil: validUntil ? new Date(validUntil) : null,
-      },
-      select: {
-        id: true,
-        email: true,
-        role: true,
-        disabled: true,
-        validUntil: true,
-        createdAt: true,
-      },
-    });
+    const result = await db.run(
+      'INSERT INTO User (email, password, role, disabled, validUntil) VALUES (?, ?, ?, ?, ?)',
+      email,
+      hashedPassword,
+      role || 'USER',
+      disabled || false,
+      validUntil ? new Date(validUntil).toISOString() : null
+    );
+    const user = await db.get(
+      'SELECT id, email, role, disabled, validUntil, createdAt FROM User WHERE id = ?',
+      result.lastID
+    );
 
     return NextResponse.json(user, { status: 201 });
   } catch (error) {

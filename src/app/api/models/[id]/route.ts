@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth'; // Import authMiddleware
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 // PUT /api/models/[id] - Updates a model
 export const PUT = authMiddleware(async (request: AuthenticatedRequest, context: { params: { id: string } }) => {
@@ -17,7 +15,8 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
     }
 
     // Check ownership or admin role
-    const existingModel = await prisma.model.findUnique({ where: { id: id } });
+    const db = await getInitializedDb();
+    const existingModel = await db.get('SELECT * FROM Model WHERE id = ?', id);
     if (!existingModel) {
       return NextResponse.json({ error: '模型未找到' }, { status: 404 });
     }
@@ -33,7 +32,7 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
       return NextResponse.json({ error: '无权更改模型所有者' }, { status: 403 });
     }
     if (newUserId !== undefined) {
-      const targetUser = await prisma.user.findUnique({ where: { id: newUserId } });
+      const targetUser = await db.get('SELECT * FROM User WHERE id = ?', newUserId);
       if (!targetUser) {
         return NextResponse.json({ error: '目标用户不存在' }, { status: 400 });
       }
@@ -41,30 +40,35 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
 
     // --- Start: ModelRoute Management ---
     // 1. Delete all existing ModelRoutes for this model
-    await prisma.modelRoute.deleteMany({
-      where: { modelId: id },
-    });
+    await db.run('DELETE FROM ModelRoute WHERE modelId = ?', id);
 
     // 2. Create new ModelRoutes based on the received array
-    const updateData: any = {
-      name,
-      description,
-      modelRoutes: {
-        create: modelRoutes ? modelRoutes.map((route: { channelId: number, weight: number }) => ({
-          channel: { connect: { id: route.channelId } },
-          weight: route.weight,
-        })) : [],
-      },
-    };
+    const updateFields: string[] = [`name = ?`, `description = ?`, `updatedAt = CURRENT_TIMESTAMP`];
+    const updateValues: any[] = [name, description];
 
     if (newUserId !== undefined) {
-      updateData.user = { connect: { id: newUserId } };
+      updateFields.push(`userId = ?`);
+      updateValues.push(newUserId);
     }
 
-    const updatedModel = await prisma.model.update({
-      where: { id: id },
-      data: updateData,
-    });
+    await db.run(
+      `UPDATE Model SET ${updateFields.join(', ')} WHERE id = ?`,
+      ...updateValues,
+      id
+    );
+
+    if (modelRoutes && modelRoutes.length > 0) {
+      for (const route of modelRoutes) {
+        await db.run(
+          'INSERT INTO ModelRoute (modelId, channelId, weight) VALUES (?, ?, ?)',
+          id,
+          route.channelId,
+          route.weight
+        );
+      }
+    }
+
+    const updatedModel = await db.get('SELECT * FROM Model WHERE id = ?', id);
 
     return NextResponse.json(updatedModel);
   } catch (error) {
@@ -89,7 +93,8 @@ export const DELETE = authMiddleware(async (request: AuthenticatedRequest, conte
     }
 
     // Check ownership or admin role
-    const existingModel = await prisma.model.findUnique({ where: { id: id } });
+    const db = await getInitializedDb();
+    const existingModel = await db.get('SELECT * FROM Model WHERE id = ?', id);
     if (!existingModel) {
       return NextResponse.json({ error: '模型未找到' }, { status: 404 });
     }
@@ -97,9 +102,7 @@ export const DELETE = authMiddleware(async (request: AuthenticatedRequest, conte
       return NextResponse.json({ error: '无权删除此模型' }, { status: 403 });
     }
 
-    await prisma.model.delete({
-      where: { id: id },
-    });
+    await db.run('DELETE FROM Model WHERE id = ?', id);
 
     return NextResponse.json({ message: '模型删除成功' });
   } catch (error) {

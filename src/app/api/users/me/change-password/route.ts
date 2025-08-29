@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 async function changePassword(req: AuthenticatedRequest) {
   try {
@@ -22,9 +20,8 @@ async function changePassword(req: AuthenticatedRequest) {
       return NextResponse.json({ error: '新密码长度至少为8个字符' }, { status: 400 });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const db = await getInitializedDb();
+    const user = await db.get('SELECT * FROM User WHERE id = ?', userId);
 
     if (!user) {
       return NextResponse.json({ error: '用户未找到' }, { status: 404 });
@@ -38,10 +35,11 @@ async function changePassword(req: AuthenticatedRequest) {
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-    await prisma.user.update({
-      where: { id: userId },
-      data: { password: hashedPassword },
-    });
+    await db.run(
+      'UPDATE User SET password = ? WHERE id = ?',
+      hashedPassword,
+      userId
+    );
 
     return NextResponse.json({ message: '密码更新成功' });
   } catch (error) {

@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 // GET /api/models - Fetches all models
 export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
@@ -15,25 +13,30 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
       whereClause = { userId: userId };
     }
 
-    const models = await prisma.model.findMany({
-      where: whereClause,
-      include: {
-        user: true,
-        modelRoutes: { // NEW: Include modelRoutes
-          include: {
-            channel: {
-              include: {
-                provider: true, // Include provider for channel for display purposes in frontend
-              },
-            },
-          },
-        },
-        providerModels: true, // Include providerModels for filtering in frontend
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+    const db = await getInitializedDb();
+
+    const models = await db.all(
+      `SELECT * FROM Model ${userRole !== 'ADMIN' ? 'WHERE userId = ?' : ''} ORDER BY createdAt DESC`,
+      ...(userRole !== 'ADMIN' ? [userId] : [])
+    );
+
+    for (const model of models) {
+      if (model.userId) {
+        model.user = await db.get('SELECT id, email, role FROM User WHERE id = ?', model.userId);
+      }
+      model.modelRoutes = await db.all(
+        `SELECT mr.*, c.name as channelName, p.name as providerName
+         FROM ModelRoute mr
+         JOIN Channel c ON mr.channelId = c.id
+         JOIN Provider p ON c.providerId = p.id
+         WHERE mr.modelId = ?`,
+        model.id
+      );
+      model.providerModels = await db.all(
+        'SELECT * FROM ProviderModel WHERE modelId = ?',
+        model.id
+      );
+    }
     return NextResponse.json(models, {
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -59,39 +62,42 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
     const { models, providerId } = body; // For batch creation from model selection modal
     const { name, description, modelRoutes } = body; // For single model creation from form
 
+    const db = await getInitializedDb();
+
     // Batch creation logic
     if (Array.isArray(models) && providerId) {
       const createdModels = [];
       for (const modelData of models) {
-        const existingModel = await prisma.model.findUnique({
-          where: { name: modelData.name },
-        });
+        const existingModel = await db.get('SELECT * FROM Model WHERE name = ?', modelData.name);
 
         let modelId: number;
 
         if (!existingModel) {
-          const newModel = await prisma.model.create({
-            data: {
-              name: modelData.name,
-              description: modelData.description,
-              user: { connect: { id: userId } },
-            },
-          });
-          modelId = newModel.id;
-          createdModels.push(newModel);
+          const result = await db.run(
+            'INSERT INTO Model (name, description, userId) VALUES (?, ?, ?)',
+            modelData.name,
+            modelData.description,
+            userId
+          );
+          modelId = result.lastID;
+          createdModels.push({ id: modelId, name: modelData.name, description: modelData.description });
         } else {
           modelId = existingModel.id;
         }
 
         // Associate model with the provider if not already associated
-        const existingProviderModel = await prisma.providerModel.findUnique({
-          where: { providerId_modelId: { providerId, modelId } },
-        });
+        const existingProviderModel = await db.get(
+          'SELECT * FROM ProviderModel WHERE providerId = ? AND modelId = ?',
+          providerId,
+          modelId
+        );
 
         if (!existingProviderModel) {
-          await prisma.providerModel.create({
-            data: { providerId, modelId },
-          });
+          await db.run(
+            'INSERT INTO ProviderModel (providerId, modelId) VALUES (?, ?)',
+            providerId,
+            modelId
+          );
         }
       }
       return NextResponse.json({ message: `成功添加 ${createdModels.length} 个新模型`, createdModels }, { status: 201 });
@@ -99,19 +105,25 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
 
     // Single creation logic
     if (name) {
-      const newModel = await prisma.model.create({
-        data: {
-          name,
-          description,
-          user: { connect: { id: userId } },
-          modelRoutes: {
-            create: modelRoutes ? modelRoutes.map((route: { channelId: number, weight: number }) => ({
-              channel: { connect: { id: route.channelId } },
-              weight: route.weight,
-            })) : [],
-          },
-        },
-      });
+      const result = await db.run(
+        'INSERT INTO Model (name, description, userId) VALUES (?, ?, ?)',
+        name,
+        description,
+        userId
+      );
+      const newModelId = result.lastID;
+
+      if (modelRoutes && modelRoutes.length > 0) {
+        for (const route of modelRoutes) {
+          await db.run(
+            'INSERT INTO ModelRoute (modelId, channelId, weight) VALUES (?, ?, ?)',
+            newModelId,
+            route.channelId,
+            route.weight
+          );
+        }
+      }
+      const newModel = await db.get('SELECT * FROM Model WHERE id = ?', newModelId);
       return NextResponse.json(newModel, { status: 201 });
     }
 

@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import { AuthenticatedRequest } from '@/lib/auth'; // Import authMiddleware
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 export async function GET(request: AuthenticatedRequest, context: { params: Promise<{ id: string }> }) {
   try {
@@ -20,17 +18,32 @@ export async function GET(request: AuthenticatedRequest, context: { params: Prom
       whereClause = { ...whereClause, userId: userId };
     }
 
-    const channel = await prisma.channel.findUnique({
-      where: whereClause,
-      include: {
-        provider: true,
-        modelRoutes: {
-          include: {
-            model: true,
-          },
+    const db = await getInitializedDb();
+
+    const channel = await db.get(
+      `SELECT * FROM Channel WHERE id = ? ${userRole !== 'ADMIN' ? 'AND userId = ?' : ''}`,
+      id,
+      ...(userRole !== 'ADMIN' ? [userId] : [])
+    );
+
+    if (channel) {
+      channel.provider = await db.get('SELECT * FROM Provider WHERE id = ?', channel.providerId);
+      const rawModelRoutes = await db.all(
+        `SELECT mr.*, m.name as model_name, m.description as model_description
+         FROM ModelRoute mr
+         JOIN Model m ON mr.modelId = m.id
+         WHERE mr.channelId = ?`,
+        channel.id
+      );
+      // 重新封装 model_name 和 model_description 到 model 对象中
+      channel.modelRoutes = rawModelRoutes.map((mr: any) => ({
+        ...mr,
+        model: {
+          name: mr.model_name,
+          description: mr.model_description,
         },
-      },
-    });
+      }));
+    }
 
     if (!channel) {
       return NextResponse.json({ error: '渠道未找到或无权访问' }, { status: 404 });
@@ -56,7 +69,8 @@ export async function PUT(request: AuthenticatedRequest, context: { params: Prom
     }
 
     // Check ownership or admin role
-    const existingChannel = await prisma.channel.findUnique({ where: { id: id } });
+    const db = await getInitializedDb();
+    const existingChannel = await db.get('SELECT * FROM Channel WHERE id = ?', id);
     if (!existingChannel) {
       return NextResponse.json({ error: '渠道未找到' }, { status: 404 });
     }
@@ -72,9 +86,7 @@ export async function PUT(request: AuthenticatedRequest, context: { params: Prom
     }
 
     // Verify that the providerId exists
-    const provider = await prisma.provider.findUnique({
-      where: { id: providerId },
-    });
+    const provider = await db.get('SELECT * FROM Provider WHERE id = ?', providerId);
 
     if (!provider) {
       return NextResponse.json({ error: '无效的提供商 ID' }, { status: 400 });
@@ -85,46 +97,54 @@ export async function PUT(request: AuthenticatedRequest, context: { params: Prom
       return NextResponse.json({ error: '无权更改渠道所有者' }, { status: 403 });
     }
     if (newUserId !== undefined) {
-      const targetUser = await prisma.user.findUnique({ where: { id: newUserId } });
+      const targetUser = await db.get('SELECT * FROM User WHERE id = ?', newUserId);
       if (!targetUser) {
         return NextResponse.json({ error: '目标用户不存在' }, { status: 400 });
       }
     }
 
-    // Disconnect existing model routes not in the new list
-    await prisma.modelRoute.deleteMany({
-      where: {
-        channelId: id,
-        modelId: { notIn: modelIds || [] },
-      },
-    });
-
-    // Connect new model routes
-    const existingModelRoutes = await prisma.modelRoute.findMany({
-      where: { channelId: id },
-      select: { modelId: true },
-    });
-    const existingModelIds = existingModelRoutes.map(mr => mr.modelId);
-    const modelsToConnect = (modelIds || []).filter((modelId: number) => !existingModelIds.includes(modelId));
-
-    const updateData: any = {
-      name,
-      provider: {
-        connect: { id: providerId },
-      },
-      modelRoutes: {
-        create: modelsToConnect.map((modelId: number) => ({ model: { connect: { id: modelId } } })),
-      },
-    };
-
-    if (newUserId !== undefined) {
-      updateData.user = { connect: { id: newUserId } };
+    if (modelIds && modelIds.length > 0) {
+      await db.run(
+        `DELETE FROM ModelRoute WHERE channelId = ? AND modelId NOT IN (${modelIds.map(() => '?').join(',')})`,
+        id,
+        ...modelIds
+      );
+    } else {
+      // If modelIds is empty or null, delete all model routes for this channel
+      await db.run('DELETE FROM ModelRoute WHERE channelId = ?', id);
     }
 
-    const updatedChannel = await prisma.channel.update({
-      where: { id: id },
-      data: updateData,
-    });
+    // Connect new model routes
+    const existingModelRoutes = await db.all(
+      'SELECT modelId FROM ModelRoute WHERE channelId = ?',
+      id
+    );
+    const existingModelIds = existingModelRoutes.map((mr: { modelId: number }) => mr.modelId);
+    const modelsToConnect = (modelIds || []).filter((modelId: number) => !existingModelIds.includes(modelId));
+
+    const updateFields: string[] = [`name = ?`, `providerId = ?`, `updatedAt = CURRENT_TIMESTAMP`];
+    const updateValues: any[] = [name, providerId];
+
+    if (newUserId !== undefined) {
+      updateFields.push(`userId = ?`);
+      updateValues.push(newUserId);
+    }
+
+    await db.run(
+      `UPDATE Channel SET ${updateFields.join(', ')} WHERE id = ?`,
+      ...updateValues,
+      id
+    );
+
+    for (const modelId of modelsToConnect) {
+      await db.run(
+        'INSERT INTO ModelRoute (modelId, channelId) VALUES (?, ?)',
+        modelId,
+        id
+      );
+    }
+
+    const updatedChannel = await db.get('SELECT * FROM Channel WHERE id = ?', id);
 
     return NextResponse.json(updatedChannel);
   } catch (error) {
@@ -149,7 +169,8 @@ export async function DELETE(request: AuthenticatedRequest, context: { params: P
     }
 
     // Check ownership or admin role
-    const existingChannel = await prisma.channel.findUnique({ where: { id: id } });
+    const db = await getInitializedDb();
+    const existingChannel = await db.get('SELECT * FROM Channel WHERE id = ?', id);
     if (!existingChannel) {
       return NextResponse.json({ error: '渠道未找到' }, { status: 404 });
     }
@@ -157,9 +178,7 @@ export async function DELETE(request: AuthenticatedRequest, context: { params: P
       return NextResponse.json({ error: '无权删除此渠道' }, { status: 403 });
     }
 
-    await prisma.channel.delete({
-      where: { id: id },
-    });
+    await db.run('DELETE FROM Channel WHERE id = ?', id);
 
     return NextResponse.json({ message: '渠道删除成功' });
   } catch (error) {

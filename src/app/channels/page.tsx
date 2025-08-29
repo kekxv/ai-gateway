@@ -421,7 +421,7 @@ export default function ChannelsPage() {
                               key={mr.model.id} 
                               className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800"
                             >
-                              {mr.model.name}
+                              {mr.model?.name}
                             </span>
                           ))}
                         </div>
@@ -489,8 +489,8 @@ export default function ChannelsPage() {
                   >
                     <option value="">{t('channels.selectModel')}</option>
                     {channels.find(c => c.id === testingChannelId)?.modelRoutes.map(mr => (
-                      <option key={mr.model.id} value={mr.model.id}>
-                        {mr.model.name}
+                      <option key={mr.id} value={mr.model.id}>
+                        {mr.model?.name}
                       </option>
                     ))}
                   </select>

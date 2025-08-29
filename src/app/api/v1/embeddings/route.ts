@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 export async function POST(request: Request) {
   try {
@@ -11,14 +9,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized: Missing or invalid Authorization header' }, { status: 401 });
     }
     const apiKey = authHeader.split(' ')[1];
-    const dbKey = await prisma.gatewayApiKey.findUnique({ where: { key: apiKey } });
+    const db = await getInitializedDb();
+    const dbKey = await db.get('SELECT * FROM GatewayApiKey WHERE key = ?', apiKey);
 
     if (!dbKey || !dbKey.enabled) {
       return NextResponse.json({ error: 'Unauthorized: Invalid API Key' }, { status: 401 });
     }
 
     // Non-blocking update of lastUsed time
-    prisma.gatewayApiKey.update({ where: { id: dbKey.id }, data: { lastUsed: new Date() } }).catch(console.error);
+    db.run('UPDATE GatewayApiKey SET lastUsed = ? WHERE id = ?', new Date().toISOString(), dbKey.id).catch(console.error);
 
     const requestBody = await request.json();
     const requestedModelName = requestBody.model;
@@ -28,28 +27,32 @@ export async function POST(request: Request) {
     }
 
     // 2. Find the Model by its name
-    const model = await prisma.model.findUnique({
-      where: { name: requestedModelName },
-    });
+    const model = await db.get('SELECT * FROM Model WHERE name = ?', requestedModelName);
 
     if (!model) {
       return NextResponse.json({ error: `Model '${requestedModelName}' not found` }, { status: 404 });
     }
 
     // 3. Find the ModelRoute for the requested model and an available channel
-    const modelRoute = await prisma.modelRoute.findFirst({
-      where: {
-        modelId: model.id,
-        channel: { enabled: true },
-      },
-      include: {
-        channel: {
-          include: {
-            provider: true,
-          },
+    const modelRoute = await db.get(
+      `SELECT mr.*, c.name as channelName, p.name as providerName, p.baseURL, p.apiKey
+       FROM ModelRoute mr
+       JOIN Channel c ON mr.channelId = c.id
+       JOIN Provider p ON c.providerId = p.id
+       WHERE mr.modelId = ? AND c.enabled = TRUE`,
+      model.id
+    );
+
+    if (modelRoute) {
+      modelRoute.channel = {
+        name: modelRoute.channelName,
+        provider: {
+          name: modelRoute.providerName,
+          baseURL: modelRoute.baseURL,
+          apiKey: modelRoute.apiKey,
         },
-      },
-    });
+      };
+    }
 
     if (!modelRoute) {
       return NextResponse.json({ error: `No route configured for model '${requestedModelName}'` }, { status: 404 });
@@ -84,23 +87,23 @@ export async function POST(request: Request) {
     // Log the request
     if (responseData.usage) {
       try {
-        const logEntry = await prisma.log.create({
-          data: {
-            latency,
-            promptTokens: responseData.usage.prompt_tokens,
-            completionTokens: responseData.usage.completion_tokens,
-            totalTokens: responseData.usage.total_tokens,
-            apiKeyId: dbKey.id,
-            modelRouteId: modelRoute.id,
-          },
-        });
-        await prisma.logDetail.create({
-          data: {
-            logId: logEntry.id,
-            requestBody: requestBody,
-            responseBody: responseData,
-          },
-        });
+        const result = await db.run(
+          'INSERT INTO Log (latency, promptTokens, completionTokens, totalTokens, apiKeyId, modelRouteId) VALUES (?, ?, ?, ?, ?, ?)',
+          latency,
+          responseData.usage.prompt_tokens,
+          responseData.usage.completion_tokens,
+          responseData.usage.total_tokens,
+          dbKey.id,
+          modelRoute.id
+        );
+        const logEntryId = result.lastID;
+
+        await db.run(
+          'INSERT INTO LogDetail (logId, requestBody, responseBody) VALUES (?, ?, ?)',
+          logEntryId,
+          JSON.stringify(requestBody),
+          JSON.stringify(responseData)
+        );
       } catch (logError) {
         console.error("Failed to log request:", logError);
         // Don't block the response to the user

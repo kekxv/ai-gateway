@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth'; // Import authMiddleware
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 const handleGet = authMiddleware(async (request: AuthenticatedRequest) => {
   try {
@@ -14,20 +12,31 @@ const handleGet = authMiddleware(async (request: AuthenticatedRequest) => {
       whereClause = { userId: userId };
     }
 
-    const channels = await prisma.channel.findMany({
-      where: whereClause,
-      include: {
-        provider: true, // Include the related provider data
-        modelRoutes: {
-          include: {
-            model: true, // Include the related model data
-          },
+    const db = await getInitializedDb();
+
+    const channels = await db.all(
+      `SELECT * FROM Channel ${userRole !== 'ADMIN' ? 'WHERE userId = ?' : ''} ORDER BY createdAt DESC`,
+      ...(userRole !== 'ADMIN' ? [userId] : [])
+    );
+
+    for (const channel of channels) {
+      channel.provider = await db.get('SELECT * FROM Provider WHERE id = ?', channel.providerId);
+      const rawModelRoutes = await db.all(
+        `SELECT mr.*, m.name as model_name, m.description as model_description
+         FROM ModelRoute mr
+         JOIN Model m ON mr.modelId = m.id
+         WHERE mr.channelId = ?`,
+        channel.id
+      );
+      // 重新封装 model_name 和 model_description 到 model 对象中
+      channel.modelRoutes = rawModelRoutes.map((mr: any) => ({
+        ...mr,
+        model: {
+          name: mr.model_name,
+          description: mr.model_description,
         },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+      }));
+    }
     return NextResponse.json(channels, {
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -55,29 +64,32 @@ const handlePost = authMiddleware(async (request: AuthenticatedRequest) => {
       return NextResponse.json({ error: '缺少必填字段' }, { status: 400 });
     }
 
-    const provider = await prisma.provider.findUnique({
-      where: { id: providerId },
-    });
+    const db = await getInitializedDb();
+    const provider = await db.get('SELECT * FROM Provider WHERE id = ?', providerId);
 
     if (!provider) {
       return NextResponse.json({ error: '无效的提供商 ID' }, { status: 400 });
     }
 
-    const newChannel = await prisma.channel.create({
-      data: {
-        name,
-        user: {
-          connect: { id: userId }, // Assign userId via relation
-        },
-        // Removed apiKey
-        provider: {
-          connect: { id: providerId },
-        },
-        modelRoutes: {
-          create: modelIds ? modelIds.map((modelId: number) => ({ model: { connect: { id: modelId } } })) : [],
-        },
-      },
-    });
+    const result = await db.run(
+      'INSERT INTO Channel (name, userId, providerId) VALUES (?, ?, ?)',
+      name,
+      userId,
+      providerId
+    );
+    const newChannelId = result.lastID;
+
+    if (modelIds && modelIds.length > 0) {
+      for (const modelId of modelIds) {
+        await db.run(
+          'INSERT INTO ModelRoute (modelId, channelId) VALUES (?, ?)',
+          modelId,
+          newChannelId
+        );
+      }
+    }
+
+    const newChannel = await db.get('SELECT * FROM Channel WHERE id = ?', newChannelId);
 
     return NextResponse.json(newChannel, { status: 201 });
   } catch (error) {

@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
-
-const prisma = new PrismaClient();
+import { getInitializedDb } from '@/lib/db';
 
 async function disableTotp(req: AuthenticatedRequest) {
   try {
@@ -17,9 +15,8 @@ async function disableTotp(req: AuthenticatedRequest) {
       return NextResponse.json({ error: '必须提供密码' }, { status: 400 });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const db = await getInitializedDb();
+    const user = await db.get('SELECT * FROM User WHERE id = ?', userId);
 
     if (!user) {
       return NextResponse.json({ error: '用户未找到' }, { status: 404 });
@@ -35,13 +32,12 @@ async function disableTotp(req: AuthenticatedRequest) {
       return NextResponse.json({ error: '密码无效' }, { status: 401 });
     }
 
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        totpEnabled: false,
-        totpSecret: null,
-      },
-    });
+    await db.run(
+      'UPDATE User SET totpEnabled = ?, totpSecret = ? WHERE id = ?',
+      false,
+      null,
+      userId
+    );
 
     return NextResponse.json({ message: 'TOTP已成功禁用' });
   } catch (error) {
