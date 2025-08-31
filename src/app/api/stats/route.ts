@@ -37,15 +37,13 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
         u.email AS userEmail, u.role AS userRole,
         mr.modelId, mr.channelId,
         m.name AS modelName,
-        c.name AS channelName,
-        p.name AS providerName
+        c.name AS channelName
       FROM Log l
       JOIN GatewayApiKey ak ON l.apiKeyId = ak.id
       LEFT JOIN User u ON ak.userId = u.id
       JOIN ModelRoute mr ON l.modelRouteId = mr.id
       JOIN Model m ON mr.modelId = m.id
       JOIN Channel c ON mr.channelId = c.id
-      JOIN Provider p ON c.providerId = p.id
       WHERE l.createdAt >= ?
     `;
     const logQueryParams: any[] = [thirtyDaysAgo.toISOString()];
@@ -58,6 +56,18 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
     logQuery += ` ORDER BY l.createdAt ASC`;
 
     const logs = await db.all(logQuery, ...logQueryParams);
+
+    // Fetch all channels with their associated providers
+    const allChannels = await db.all(`SELECT id, name FROM Channel`);
+    const channelProvidersMap: Record<number, { id: number; name: string }[]> = {};
+
+    for (const channel of allChannels) {
+      const channelProviders = await db.all(
+        'SELECT cp.providerId, p.name FROM ChannelProvider cp JOIN Provider p ON cp.providerId = p.id WHERE cp.channelId = ?',
+        channel.id
+      );
+      channelProvidersMap[channel.id] = channelProviders.map((cp: any) => ({ id: cp.providerId, name: cp.name }));
+    }
 
     // Fetch user statistics - only admins can see this
     let userStats = null;
@@ -144,7 +154,7 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
     }
 
     for (const log of logs) {
-      const providerName = log.providerName;
+      // const providerName = log.providerName; // Removed
       const channelName = log.channelName;
       const modelName = log.modelName;
       const apiKeyName = log.apiKeyName;
@@ -155,14 +165,17 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
       // Initialize user usage data
       initializeUserUsage(userName);
 
-      // By Provider
-      if (!stats.byProvider[providerName]) {
-        stats.byProvider[providerName] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0 };
+      // By Provider - now iterate through associated providers
+      const associatedProviders = channelProvidersMap[log.channelId] || [];
+      for (const provider of associatedProviders) {
+        if (!stats.byProvider[provider.name]) {
+          stats.byProvider[provider.name] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0 };
+        }
+        stats.byProvider[provider.name].totalTokens += log.totalTokens;
+        stats.byProvider[provider.name].promptTokens += log.promptTokens;
+        stats.byProvider[provider.name].completionTokens += log.completionTokens;
+        stats.byProvider[provider.name].requestCount += 1;
       }
-      stats.byProvider[providerName].totalTokens += log.totalTokens;
-      stats.byProvider[providerName].promptTokens += log.promptTokens;
-      stats.byProvider[providerName].completionTokens += log.completionTokens;
-      stats.byProvider[providerName].requestCount += 1;
 
       // By Channel
       if (!stats.byChannel[channelName]) {

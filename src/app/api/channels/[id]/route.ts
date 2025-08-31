@@ -24,7 +24,23 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest, context:
       return NextResponse.json({error: '渠道未找到或无权访问'}, {status: 404});
     }
 
-    channel.provider = await db.get('SELECT * FROM Provider WHERE id = ?', channel.providerId);
+    const channelProviders = await db.all(
+      'SELECT providerId FROM ChannelProvider WHERE channelId = ?',
+      channel.id
+    );
+    const providerIds = channelProviders.map((cp: any) => cp.providerId);
+
+    if (providerIds.length > 0) {
+      const providers = await db.all(
+        `SELECT *
+         FROM Provider
+         WHERE id IN (${providerIds.map(() => '?').join(',')})`,
+        ...providerIds
+      );
+      channel.providers = providers; // Attach an array of providers
+    } else {
+      channel.providers = [];
+    }
     const rawModelRoutes = await db.all(
       `SELECT mr.*, m.name as model_name, m.description as model_description
        FROM ModelRoute mr
@@ -58,13 +74,15 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
     const userRole = request.user?.role;
 
     const body = await request.json();
-    const {name, providerId, modelIds} = body;
+    const {name, providerIds, modelIds} = body; // Correctly destructure providerIds
 
-    if (!name || !providerId) {
-      return NextResponse.json({error: '缺少必填字段'}, {status: 400});
+
+    if (!name || !providerIds || providerIds.length === 0) { // This is the correct validation
+      console.error('Validation failed: name, providerIds, or providerIds.length is invalid.');
+      return NextResponse.json({error: '缺少必填字段或未选择提供商'}, {status: 400});
     }
 
-    const db = await getInitializedDb();
+    const db = await getInitializedDb(); // <-- Re-introducing this line
 
     // Check if channel exists and user has permission
     let existingChannel;
@@ -78,13 +96,29 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
       return NextResponse.json({error: '渠道未找到或无权修改'}, {status: 404});
     }
 
-    // Update channel
+    // Validate providerIds
+    for (const pId of providerIds) {
+      const providerExists = await db.get('SELECT 1 FROM Provider WHERE id = ?', pId);
+      if (!providerExists) {
+        return NextResponse.json({error: `无效的提供商 ID: ${pId}`}, {status: 400});
+      }
+    }
+
     await db.run(
-      'UPDATE Channel SET name = ?, providerId = ? WHERE id = ?',
+      'UPDATE Channel SET name = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
       name,
-      providerId,
       id
     );
+
+    // Update ChannelProvider join table
+    await db.run('DELETE FROM ChannelProvider WHERE channelId = ?', id);
+    for (const pId of providerIds) {
+      await db.run(
+        'INSERT INTO ChannelProvider (channelId, providerId) VALUES (?, ?)',
+        id,
+        pId
+      );
+    }
 
     // Update ModelRoutes: first delete existing, then insert new ones
     await db.run('DELETE FROM ModelRoute WHERE channelId = ?', id);
@@ -110,7 +144,9 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
   }
 });
 
-export const DELETE = authMiddleware(async (request: AuthenticatedRequest, context: { params: Promise<{ id: string }> }) => {
+export const DELETE = authMiddleware(async (request: AuthenticatedRequest, context: {
+  params: Promise<{ id: string }>
+}) => {
   try {
     const {id} = await context.params;
     const userId = request.user?.userId;

@@ -5,7 +5,7 @@ import fs from 'fs';
 
 const DB_PATH = process.env.DATABASE_URL ? process.env.DATABASE_URL.replace('file:', '') : path.resolve(process.cwd(), 'ai-gateway.db');
 
-const DATABASE_SCHEMA_VERSION = 2;
+const DATABASE_SCHEMA_VERSION = 3;
 
 const schema = `
 PRAGMA foreign_keys = ON;
@@ -54,7 +54,6 @@ CREATE TABLE IF NOT EXISTS Model (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT UNIQUE NOT NULL,
   description TEXT,
-  alias TEXT, -- New alias column
   createdAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
   updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
   userId INTEGER,
@@ -126,6 +125,48 @@ const migrations = [
     name: 'add_alias_to_model',
     up: `ALTER TABLE Model ADD COLUMN alias TEXT;`,
   },
+  {
+    version: 3,
+    name: 'add_channel_provider_many_to_many',
+    up: `
+      CREATE TABLE IF NOT EXISTS ChannelProvider (
+        channelId INTEGER NOT NULL,
+        providerId INTEGER NOT NULL,
+        PRIMARY KEY (channelId, providerId),
+        FOREIGN KEY (channelId) REFERENCES Channel(id) ON DELETE CASCADE,
+        FOREIGN KEY (providerId) REFERENCES Provider(id) ON DELETE CASCADE
+      );
+
+      -- Optional: Migrate existing data if needed.
+      -- INSERT INTO ChannelProvider (channelId, providerId)
+      -- SELECT id, providerId FROM Channel WHERE providerId IS NOT NULL;
+
+      CREATE TEMPORARY TABLE Channel_backup(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        enabled BOOLEAN DEFAULT TRUE NOT NULL,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        userId INTEGER
+      );
+
+      INSERT INTO Channel_backup SELECT id, name, enabled, createdAt, updatedAt, userId FROM Channel;
+      DROP TABLE Channel;
+
+      CREATE TABLE Channel (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        enabled BOOLEAN DEFAULT TRUE NOT NULL,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        userId INTEGER,
+        FOREIGN KEY (userId) REFERENCES User(id) ON DELETE SET NULL
+      );
+
+      INSERT INTO Channel SELECT id, name, enabled, createdAt, updatedAt, userId FROM Channel_backup;
+      DROP TABLE Channel_backup;
+    `,
+  },
   // Add future migrations here
 ];
 
@@ -184,7 +225,7 @@ export async function initializeDatabase() {
   if (!dbExists) {
     console.log('Database file not found, initializing base schema...');
     await dbInstance.exec(schema);
-    await dbInstance.run('INSERT INTO SchemaVersion (version) VALUES (?)', DATABASE_SCHEMA_VERSION);
+    await dbInstance.run('INSERT INTO SchemaVersion (version) VALUES (?)', 0);
     console.log('Database schema initialized to version', DATABASE_SCHEMA_VERSION);
   }
 

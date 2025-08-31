@@ -20,7 +20,21 @@ const handleGet = authMiddleware(async (request: AuthenticatedRequest) => {
     );
 
     for (const channel of channels) {
-      channel.provider = await db.get('SELECT * FROM Provider WHERE id = ?', channel.providerId);
+      const channelProviders = await db.all(
+        'SELECT providerId FROM ChannelProvider WHERE channelId = ?',
+        channel.id
+      );
+      const providerIds = channelProviders.map((cp: any) => cp.providerId);
+
+      if (providerIds.length > 0) {
+        const providers = await db.all(
+          `SELECT * FROM Provider WHERE id IN (${providerIds.map(() => '?').join(',')})`,
+          ...providerIds
+        );
+        channel.providers = providers; // Attach an array of providers
+      } else {
+        channel.providers = [];
+      }
       const rawModelRoutes = await db.all(
         `SELECT mr.*, m.name as model_name, m.description as model_description, m.alias as model_alias
          FROM ModelRoute mr
@@ -60,26 +74,37 @@ const handlePost = authMiddleware(async (request: AuthenticatedRequest) => {
     }
 
     const body = await request.json();
-    const { name, providerId, modelIds } = body;
+    const { name, providerIds, modelIds } = body;
 
-    if (!name || !providerId) {
-      return NextResponse.json({ error: '缺少必填字段' }, { status: 400 });
+    if (!name || !providerIds || providerIds.length === 0) {
+      return NextResponse.json({ error: '缺少必填字段或未选择提供商' }, { status: 400 });
     }
 
     const db = await getInitializedDb();
-    const provider = await db.get('SELECT * FROM Provider WHERE id = ?', providerId);
 
-    if (!provider) {
-      return NextResponse.json({ error: '无效的提供商 ID' }, { status: 400 });
+    // Validate providerIds
+    for (const pId of providerIds) {
+      const providerExists = await db.get('SELECT 1 FROM Provider WHERE id = ?', pId);
+      if (!providerExists) {
+        return NextResponse.json({ error: `无效的提供商 ID: ${pId}` }, { status: 400 });
+      }
     }
 
     const result = await db.run(
-      'INSERT INTO Channel (name, userId, providerId) VALUES (?, ?, ?)',
+      'INSERT INTO Channel (name, userId) VALUES (?, ?)',
       name,
-      userId,
-      providerId
+      userId
     );
     const newChannelId = result.lastID;
+
+    // Insert into ChannelProvider join table
+    for (const pId of providerIds) {
+      await db.run(
+        'INSERT INTO ChannelProvider (channelId, providerId) VALUES (?, ?)',
+        newChannelId,
+        pId
+      );
+    }
 
     if (modelIds && modelIds.length > 0) {
       for (const modelId of modelIds) {

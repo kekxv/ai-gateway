@@ -15,31 +15,43 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
     const db = await getInitializedDb();
 
     const modelRoute = await db.get(
-      `SELECT mr.*, m.name as modelName, c.name as channelName, p.name as providerName, p.baseURL, p.apiKey
+      `SELECT mr.*, m.name as modelName, c.name as channelName
        FROM ModelRoute mr
        JOIN Model m ON mr.modelId = m.id
        JOIN Channel c ON mr.channelId = c.id
-       JOIN Provider p ON c.providerId = p.id
        WHERE mr.channelId = ? AND mr.modelId = ? AND c.enabled = TRUE`,
       parseInt(channelId),
       parseInt(modelId)
     );
 
-    if (modelRoute) {
-      modelRoute.model = { name: modelRoute.modelName };
-      modelRoute.channel = {
-        name: modelRoute.channelName,
-        provider: {
-          name: modelRoute.providerName,
-          baseURL: modelRoute.baseURL,
-          apiKey: modelRoute.apiKey,
-        },
-      };
-    }
-
     if (!modelRoute) {
       return NextResponse.json({ error: `未找到渠道 ${channelId} 和模型 ${modelId} 的路由` }, { status: 404 });
     }
+
+    // Fetch one provider associated with the channel for testing
+    const channelProvider = await db.get(
+      `SELECT cp.providerId, p.name, p.baseURL, p.apiKey
+       FROM ChannelProvider cp
+       JOIN Provider p ON cp.providerId = p.id
+       WHERE cp.channelId = ?
+       ORDER BY cp.providerId LIMIT 1`, // Pick one provider for testing
+      parseInt(channelId)
+    );
+
+    if (!channelProvider) {
+      return NextResponse.json({ error: `渠道 ${channelId} 没有关联的提供商` }, { status: 404 });
+    }
+
+    // Attach provider details to modelRoute.channel
+    modelRoute.model = { name: modelRoute.modelName };
+    modelRoute.channel = {
+      name: modelRoute.channelName,
+      provider: {
+        name: channelProvider.name,
+        baseURL: channelProvider.baseURL,
+        apiKey: channelProvider.apiKey,
+      },
+    };
 
     const { channel } = modelRoute;
     const { provider } = channel;

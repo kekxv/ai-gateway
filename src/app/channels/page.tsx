@@ -35,8 +35,7 @@ type ModelRoute = {
 type Channel = {
   id: number;
   name: string;
-  providerId: number;
-  provider: Provider; // Nested provider object
+  providers: Provider[]; // New: Array of providers
   modelRoutes: ModelRoute[]; // Include model routes
   // Removed apiKey
 };
@@ -46,7 +45,7 @@ export default function ChannelsPage() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [allModels, setAllModels] = useState<Model[]>([]); // All models fetched
   const [filteredModels, setFilteredModels] = useState<Model[]>([]); // Models filtered by selected provider
-  const [newChannel, setNewChannel] = useState({ name: '', providerId: '' }); // Removed apiKey
+  const [newChannel, setNewChannel] = useState({ name: '', providerIds: [] as number[] }); // Changed providerId to providerIds
   const [selectedModelIds, setSelectedModelIds] = useState<number[]>([]);
   const [editingChannel, setEditingChannel] = useState<Channel | null>(null);
   const [loading, setLoading] = useState(true);
@@ -106,23 +105,35 @@ export default function ChannelsPage() {
     fetchData(token);
   }, [fetchData, router]);
 
-  // Filter models based on selected provider
+  // Filter models based on selected provider(s)
   useEffect(() => {
-    const currentProviderId = editingChannel ? editingChannel.providerId : parseInt(newChannel.providerId, 10);
-    if (currentProviderId) {
-      const modelsForProvider = allModels.filter(model => 
-        model.providerModels && model.providerModels.some(pm => pm.providerId === currentProviderId)
-      );
-      setFilteredModels(modelsForProvider);
-    } else {
+    const selectedProviderIds = editingChannel
+      ? editingChannel.providers.map(p => p.id)
+      : (newChannel.providerIds || []); // Ensure it's an array even if somehow undefined
+
+    if (selectedProviderIds.length === 0) { // Simplified check
       setFilteredModels([]);
+      return;
     }
-  }, [newChannel.providerId, editingChannel, allModels]);
+      const modelsForSelectedProviders: Model[] = [];
+      const seenModelIds = new Set<number>();
+
+      allModels.forEach(model => {
+        model.providerModels.forEach(pm => {
+          if (selectedProviderIds.includes(pm.providerId) && !seenModelIds.has(model.id)) {
+            modelsForSelectedProviders.push(model);
+            seenModelIds.add(model.id);
+          }
+        });
+      });
+      setFilteredModels(modelsForSelectedProviders);
+  }, [newChannel.providerIds, editingChannel, allModels]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    if (editingChannel) {
-      setEditingChannel(prev => ({ ...prev!, [name]: value }));
+    if (name === 'providerIds') {
+      const options = Array.from((e.target as HTMLSelectElement).selectedOptions).map(option => parseInt(option.value, 10));
+      setNewChannel(prev => ({ ...prev, providerIds: options }));
     } else {
       setNewChannel(prev => ({ ...prev, [name]: value }));
     }
@@ -135,7 +146,11 @@ export default function ChannelsPage() {
 
   const handleEdit = (channel: Channel) => {
     setEditingChannel(channel);
-    setNewChannel({ name: channel.name, providerId: String(channel.providerId) });
+    // Populate newChannel with existing channel data for editing
+    setNewChannel({
+      name: channel.name,
+      providerIds: channel.providers.map(p => p.id) // Set providerIds from existing channel's providers
+    });
     setSelectedModelIds(channel.modelRoutes.map(mr => mr.modelId));
   };
 
@@ -152,17 +167,11 @@ export default function ChannelsPage() {
     try {
       const method = editingChannel ? 'PUT' : 'POST';
       const url = editingChannel ? `/api/channels/${editingChannel.id}` : '/api/channels';
-      const body = editingChannel ? 
-        { 
-          name: editingChannel.name, 
-          providerId: parseInt(String(editingChannel.providerId), 10), 
-          modelIds: selectedModelIds 
-        } : 
-        { 
-          name: newChannel.name, 
-          providerId: parseInt(newChannel.providerId, 10), 
-          modelIds: selectedModelIds 
-        };
+      const body = {
+        name: newChannel.name, // Always use newChannel.name
+        providerIds: newChannel.providerIds, // Always use newChannel.providerIds
+        modelIds: selectedModelIds
+      };
 
       const response = await fetch(url, {
         method,
@@ -183,7 +192,7 @@ export default function ChannelsPage() {
       }
 
       // Clear form and refetch data
-      setNewChannel({ name: '', providerId: '' });
+      setNewChannel({ name: '', providerIds: [] as number[] });
       setSelectedModelIds([]); // Clear selected models
       setEditingChannel(null); // Clear editing state
       fetchData(token);
@@ -314,7 +323,7 @@ export default function ChannelsPage() {
                   id="channelName"
                   type="text"
                   name="name"
-                  value={editingChannel ? editingChannel.name : newChannel.name}
+                  value={newChannel.name}
                   onChange={handleInputChange}
                   placeholder={t('channels.descriptiveName')}
                   className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
@@ -323,16 +332,17 @@ export default function ChannelsPage() {
                 <p className="text-xs text-gray-500 mt-1">{t('channels.descriptiveName')}</p>
               </div>
               <div>
-                <label htmlFor="providerId" className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="providerIds" className="block text-sm font-medium text-gray-700 mb-1">
                   {t('channels.provider')}
                 </label>
                 <div className="relative">
                   <select
-                    id="providerId"
-                    name="providerId"
-                    value={editingChannel ? editingChannel.providerId : newChannel.providerId}
+                    id="providerIds"
+                    name="providerIds"
+                    multiple // Added multiple attribute
+                    value={(newChannel.providerIds || []).map(String)}
                     onChange={handleInputChange}
-                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2 h-32" // Increased height for multi-select
                     required
                   >
                     <option value="" disabled>{t('channels.selectProvider')}</option>
@@ -404,12 +414,20 @@ export default function ChannelsPage() {
                   <div className="flex-1 min-w-0">
                     <h3 className="text-lg font-medium text-gray-900 truncate">{channel.name}</h3>
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-500">
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
-                        {channel.provider?.name}
-                      </span>
-                      <span className="font-mono text-xs bg-gray-100 px-2 py-1 rounded">
-                        {channel.provider?.baseURL}
-                      </span>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-500">
+                      {channel.providers.map(provider => (
+                        <span key={provider.id} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                          {provider.name}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-500">
+                      {channel.providers.map(provider => (
+                        <span key={provider.id} className="font-mono text-xs bg-gray-100 px-2 py-1 rounded">
+                          {provider.baseURL}
+                        </span>
+                      ))}
+                    </div>
                     </div>
                     {channel.modelRoutes.length > 0 && (
                       <div className="mt-3">
@@ -473,7 +491,7 @@ export default function ChannelsPage() {
                   <option value="">{t('channels.selectChannel')}</option>
                   {channels.map(channel => (
                     <option key={channel.id} value={channel.id}>
-                      {channel.name} ({channel.provider?.name})
+                      {channel.name} ({channel.providers.map(p => p.name).join(', ')})
                     </option>
                   ))}
                 </select>

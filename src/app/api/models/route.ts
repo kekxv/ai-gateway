@@ -8,11 +8,6 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
     const userId = request.user?.userId;
     const userRole = request.user?.role;
 
-    let whereClause = {};
-    if (userRole !== 'ADMIN') {
-      whereClause = { userId: userId };
-    }
-
     const db = await getInitializedDb();
 
     const models = await db.all(
@@ -24,14 +19,25 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
       if (model.userId) {
         model.user = await db.get('SELECT id, email, role FROM User WHERE id = ?', model.userId);
       }
-      model.modelRoutes = await db.all(
-        `SELECT mr.*, c.name as channelName, p.name as providerName
+      const rawModelRoutes = await db.all(
+        `SELECT mr.*, c.name as channelName
          FROM ModelRoute mr
          JOIN Channel c ON mr.channelId = c.id
-         JOIN Provider p ON c.providerId = p.id
          WHERE mr.modelId = ?`,
         model.id
       );
+
+      model.modelRoutes = [];
+      for (const mr of rawModelRoutes) {
+        const channelProviders = await db.all(
+          'SELECT cp.providerId, p.name FROM ChannelProvider cp JOIN Provider p ON cp.providerId = p.id WHERE cp.channelId = ?',
+          mr.channelId
+        );
+        model.modelRoutes.push({
+          ...mr,
+          providers: channelProviders.map((cp: any) => ({ id: cp.providerId, name: cp.name })) // Attach providers
+        });
+      }
       model.providerModels = await db.all(
         'SELECT * FROM ProviderModel WHERE modelId = ?',
         model.id
