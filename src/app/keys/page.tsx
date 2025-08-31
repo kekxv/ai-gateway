@@ -90,11 +90,8 @@ export default function ApiKeysPage() {
       if (name === 'bindToAllChannels') {
         setEditingKey(prev => ({ ...prev!, bindToAllChannels: checked }));
       } else if (name === 'selectedChannelIds') {
-        const options = Array.from((e.target as HTMLSelectElement).selectedOptions).map(option => parseInt(option.value, 10));
-        setEditingKey(prev => ({
-          ...prev!,
-          channels: options.map(id => ({ id, name: channels.find(c => c.id === id)?.name || '' }))
-        }));
+        // This won't be used anymore as we handle channel selection differently
+        return;
       } else {
         setEditingKey(prev => ({ ...prev!, [name]: type === 'checkbox' ? checked : value }));
       }
@@ -103,8 +100,8 @@ export default function ApiKeysPage() {
       if (name === 'bindToAllChannels') {
         setNewKeyForm(prev => ({ ...prev, bindToAllChannels: checked }));
       } else if (name === 'selectedChannelIds') {
-        const options = Array.from((e.target as HTMLSelectElement).selectedOptions).map(option => parseInt(option.value, 10));
-        setNewKeyForm(prev => ({ ...prev, selectedChannelIds: options }));
+        // This won't be used anymore as we handle channel selection differently
+        return;
       } else {
         setNewKeyForm(prev => ({ ...prev, [name]: value }));
       }
@@ -297,26 +294,88 @@ export default function ApiKeysPage() {
             {/* New: Channel multi-select, conditionally rendered/disabled */}
             {!(editingKey ? editingKey.bindToAllChannels : newKeyForm.bindToAllChannels) && (
               <div>
-                <label htmlFor="selectedChannelIds" className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
                   {t('keys.selectChannels')}
                 </label>
-                <div className="relative">
-                  <select
-                    id="selectedChannelIds"
-                    name="selectedChannelIds"
-                    multiple
-                    value={editingKey ? editingKey.channels?.map(c => String(c.id)) : newKeyForm.selectedChannelIds.map(String)}
-                    onChange={handleInputChange}
-                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2 h-32"
-                  >
-                    {channels.map(channel => (
-                      <option key={channel.id} value={channel.id}>
-                        {channel.name}
-                      </option>
-                    ))}
-                  </select>
+                <div className="border border-gray-200 rounded-xl p-3 bg-gray-50 max-h-48 overflow-y-auto">
+                  {channels.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {channels.map(channel => (
+                        <div 
+                          key={channel.id} 
+                          className={`flex items-center p-3 rounded-lg cursor-pointer transition-all duration-150 ${
+                            editingKey 
+                              ? editingKey.channels?.some(c => c.id === channel.id)
+                                ? 'bg-purple-100 border border-purple-300'
+                                : 'bg-white border border-gray-200 hover:bg-gray-50'
+                              : newKeyForm.selectedChannelIds.includes(channel.id)
+                                ? 'bg-purple-100 border border-purple-300'
+                                : 'bg-white border border-gray-200 hover:bg-gray-50'
+                          }`}
+                          onClick={() => {
+                            const currentIds = editingKey 
+                              ? editingKey.channels?.map(c => c.id) || [] 
+                              : newKeyForm.selectedChannelIds;
+                              
+                            const newChannelIds = currentIds.includes(channel.id)
+                              ? currentIds.filter(id => id !== channel.id)
+                              : [...currentIds, channel.id];
+                              
+                            if (editingKey) {
+                              setEditingKey(prev => ({
+                                ...prev!,
+                                channels: newChannelIds.map(id => ({ 
+                                  id, 
+                                  name: channels.find(c => c.id === id)?.name || '' 
+                                }))
+                              }));
+                            } else {
+                              setNewKeyForm(prev => ({ ...prev, selectedChannelIds: newChannelIds }));
+                            }
+                          }}
+                        >
+                          <div className={`w-5 h-5 rounded-full border flex items-center justify-center mr-3 ${
+                            editingKey 
+                              ? editingKey.channels?.some(c => c.id === channel.id)
+                                ? 'border-purple-500 bg-purple-500'
+                                : 'border-gray-300'
+                              : newKeyForm.selectedChannelIds.includes(channel.id)
+                                ? 'border-purple-500 bg-purple-500'
+                                : 'border-gray-300'
+                          }`}>
+                            {(editingKey 
+                              ? editingKey.channels?.some(c => c.id === channel.id)
+                              : newKeyForm.selectedChannelIds.includes(channel.id)) && (
+                              <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                              </svg>
+                            )}
+                          </div>
+                          <span className="text-sm font-medium text-gray-800">{channel.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-6">
+                      <svg className="mx-auto h-8 w-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <p className="mt-2 text-sm text-gray-500">
+                        {t('keys.noChannelsAvailable')}
+                      </p>
+                      <a 
+                        href="/channels" 
+                        className="mt-2 inline-flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-500"
+                      >
+                        {t('keys.addChannelFirst')}
+                        <svg className="ml-1 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+                        </svg>
+                      </a>
+                    </div>
+                  )}
                 </div>
-                <p className="text-xs text-gray-500 mt-1">{t('keys.selectChannelsDescription')}</p>
+                <p className="text-xs text-gray-500 mt-2">{t('keys.selectChannelsDescription')}</p>
               </div>
             )}
 

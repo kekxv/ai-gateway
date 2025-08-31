@@ -246,24 +246,50 @@ export default function ProvidersPage() {
               <p className="text-xs text-gray-500 mt-1">{t('providers.apiKeyDescription')}</p>
             </div>
             <div>
-              <label htmlFor="providerType" className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
                 {t('providers.type')}
               </label>
-              <div className="relative">
-                <select 
-                  id="providerType" 
-                  name="type" 
-                  value={editingProvider ? editingProvider.type || 'openai' : newProvider.type} 
-                  onChange={handleInputChange} 
-                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2" 
-                  required
-                >
-                  <option value="openai">OpenAI</option>
-                  <option value="gemini">Gemini</option>
-                  <option value="custom">{t('providers.custom')}</option>
-                </select>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {[
+                  { value: 'openai', label: 'OpenAI', icon: '🤖' },
+                  { value: 'gemini', label: 'Gemini', icon: '✨' },
+                  { value: 'custom', label: t('providers.custom'), icon: '🔧' }
+                ].map((type) => (
+                  <div 
+                    key={type.value}
+                    onClick={() => handleInputChange({ 
+                      target: { 
+                        name: 'type', 
+                        value: type.value 
+                      } 
+                    } as React.ChangeEvent<HTMLInputElement>)}
+                    className={`border rounded-xl p-4 cursor-pointer transition-all duration-200 ease-in-out transform hover:scale-[1.02] ${
+                      (editingProvider ? editingProvider.type || 'openai' : newProvider.type) === type.value
+                        ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-200 shadow-sm'
+                        : 'border-gray-200 hover:border-indigo-300 hover:bg-gray-50 shadow-sm'
+                    }`}
+                  >
+                    <div className="flex items-center">
+                      <span className="text-lg mr-3">{type.icon}</span>
+                      <div>
+                        <div className={`w-5 h-5 rounded-full border mr-3 inline-flex items-center justify-center ${
+                          (editingProvider ? editingProvider.type || 'openai' : newProvider.type) === type.value
+                            ? 'border-indigo-500 bg-indigo-500'
+                            : 'border-gray-300'
+                        }`}>
+                          {(editingProvider ? editingProvider.type || 'openai' : newProvider.type) === type.value && (
+                            <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </div>
+                        <span className="text-sm font-medium text-gray-800">{type.label}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-              <p className="text-xs text-gray-500 mt-1">{t('providers.typeDescription')}</p>
+              <p className="text-xs text-gray-500 mt-2">{t('providers.typeDescription')}</p>
             </div>
             <div className="flex items-center">
               <input

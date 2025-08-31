@@ -133,6 +133,10 @@
     "descriptiveName": "Give your channel a descriptive name",
     "selectMultipleModels": "Hold Ctrl (Windows) or Command (Mac) to select multiple models",
     "addChannel": "Add Channel",
+    "noProvidersAvailable": "No providers available. Please add a provider first.",
+    "addProviderFirst": "Add Provider First",
+    "noModelsForSelectedProviders": "No models available for the selected providers.",
+    "selectProviderFirst": "Please select a provider first to see available models.",
     "updateChannel": "Update Channel",
     "cancel": "Cancel",
     "existingChannels": "Existing Channels",
@@ -187,7 +191,10 @@
     "bindToAllChannels": "Bind To All Channels",
     "bindToAllChannelsDescription": "Bind To All Channels",
     "selectChannels": "Select Channels",
-    "selectChannelsDescription": "Select Channels Description"
+    "selectChannelsDescription": "Select Channels Description",
+    "noChannelsAvailable": "No channels available. Please add a channel first.",
+    "addChannelFirst": "Add Channel First",
+    "allChannels": "All Channels"
   },
   "providers": {
     "title": "Provider Management",

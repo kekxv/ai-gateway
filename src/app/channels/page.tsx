@@ -132,16 +132,11 @@ export default function ChannelsPage() {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     if (name === 'providerIds') {
-      const options = Array.from((e.target as HTMLSelectElement).selectedOptions).map(option => parseInt(option.value, 10));
-      setNewChannel(prev => ({ ...prev, providerIds: options }));
+      // This won't be used anymore as we handle provider selection differently
+      return;
     } else {
       setNewChannel(prev => ({ ...prev, [name]: value }));
     }
-  };
-
-  const handleModelSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const options = Array.from(e.target.selectedOptions).map(option => parseInt(option.value, 10));
-    setSelectedModelIds(options);
   };
 
   const handleEdit = (channel: Channel) => {
@@ -314,69 +309,134 @@ export default function ChannelsPage() {
         </div>
         <div className="p-6">
           <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label htmlFor="channelName" className="block text-sm font-medium text-gray-700 mb-1">
-                  {t('channels.channelName')}
-                </label>
-                <input
-                  id="channelName"
-                  type="text"
-                  name="name"
-                  value={newChannel.name}
-                  onChange={handleInputChange}
-                  placeholder={t('channels.descriptiveName')}
-                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
-                  required
-                />
-                <p className="text-xs text-gray-500 mt-1">{t('channels.descriptiveName')}</p>
-              </div>
-              <div>
-                <label htmlFor="providerIds" className="block text-sm font-medium text-gray-700 mb-1">
-                  {t('channels.provider')}
-                </label>
-                <div className="relative">
-                  <select
-                    id="providerIds"
-                    name="providerIds"
-                    multiple // Added multiple attribute
-                    value={(newChannel.providerIds || []).map(String)}
-                    onChange={handleInputChange}
-                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2 h-32" // Increased height for multi-select
-                    required
-                  >
-                    <option value="" disabled>{t('channels.selectProvider')}</option>
+            <div>
+              <label htmlFor="channelName" className="block text-sm font-medium text-gray-700 mb-1">
+                {t('channels.channelName')}
+              </label>
+              <input
+                id="channelName"
+                type="text"
+                name="name"
+                value={newChannel.name}
+                onChange={handleInputChange}
+                placeholder={t('channels.descriptiveName')}
+                className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
+                required
+              />
+              <p className="text-xs text-gray-500 mt-1">{t('channels.descriptiveName')}</p>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                {t('channels.provider')}
+              </label>
+              <div className="border border-gray-200 rounded-xl p-3 bg-gray-50 max-h-48 overflow-y-auto">
+                {providers.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {providers.map(provider => (
-                      <option key={provider.id} value={provider.id}>
-                        {provider.name}
-                      </option>
+                      <div 
+                        key={provider.id} 
+                        className={`flex items-center p-3 rounded-lg cursor-pointer transition-all duration-150 ${
+                          newChannel.providerIds.includes(provider.id)
+                            ? 'bg-indigo-100 border border-indigo-300'
+                            : 'bg-white border border-gray-200 hover:bg-gray-50'
+                        }`}
+                        onClick={() => {
+                          const newProviderIds = newChannel.providerIds.includes(provider.id)
+                            ? newChannel.providerIds.filter(id => id !== provider.id)
+                            : [...newChannel.providerIds, provider.id];
+                          setNewChannel(prev => ({ ...prev, providerIds: newProviderIds }));
+                        }}
+                      >
+                        <div className={`w-5 h-5 rounded-full border flex items-center justify-center mr-3 ${
+                          newChannel.providerIds.includes(provider.id)
+                            ? 'border-indigo-500 bg-indigo-500'
+                            : 'border-gray-300'
+                        }`}>
+                          {newChannel.providerIds.includes(provider.id) && (
+                            <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </div>
+                        <span className="text-sm font-medium text-gray-800">{provider.name}</span>
+                      </div>
                     ))}
-                  </select>
-                </div>
-                <p className="text-xs text-gray-500 mt-1">{t('channels.selectProviderDescription')}</p>
+                  </div>
+                ) : (
+                  <div className="text-center py-6">
+                    <svg className="mx-auto h-8 w-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p className="mt-2 text-sm text-gray-500">
+                      {t('channels.noProvidersAvailable')}
+                    </p>
+                    <a 
+                      href="/providers" 
+                      className="mt-2 inline-flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-500"
+                    >
+                      {t('channels.addProviderFirst')}
+                      <svg className="ml-1 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+                      </svg>
+                    </a>
+                  </div>
+                )}
               </div>
+              <p className="text-xs text-gray-500 mt-2">{t('channels.selectProviderDescription')}</p>
             </div>
 
             <div>
-              <label htmlFor="models" className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
                 {t('channels.allowedModels')}
               </label>
-              <div className="relative">
-                <select
-                  id="models"
-                  multiple
-                  value={selectedModelIds.map(String)}
-                  onChange={handleModelSelectChange}
-                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2 h-40"
-                >
-                  {filteredModels.map(model => (
-                    <option key={model.id} value={model.id}>
-                      {model.name}
-                    </option>
-                  ))}
-                </select>
+              <div className="border border-gray-200 rounded-xl p-3 bg-gray-50 max-h-48 overflow-y-auto">
+                {filteredModels.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {filteredModels.map(model => (
+                      <div 
+                        key={model.id} 
+                        className={`flex items-center p-3 rounded-lg cursor-pointer transition-all duration-150 ${
+                          selectedModelIds.includes(model.id)
+                            ? 'bg-green-100 border border-green-300'
+                            : 'bg-white border border-gray-200 hover:bg-gray-50'
+                        }`}
+                        onClick={() => {
+                          const newSelectedModelIds = selectedModelIds.includes(model.id)
+                            ? selectedModelIds.filter(id => id !== model.id)
+                            : [...selectedModelIds, model.id];
+                          setSelectedModelIds(newSelectedModelIds);
+                        }}
+                      >
+                        <div className={`w-5 h-5 rounded-full border flex items-center justify-center mr-3 ${
+                          selectedModelIds.includes(model.id)
+                            ? 'border-green-500 bg-green-500'
+                            : 'border-gray-300'
+                        }`}>
+                          {selectedModelIds.includes(model.id) && (
+                            <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </div>
+                        <span className="text-sm font-medium text-gray-800">{model.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-6">
+                    <svg className="mx-auto h-8 w-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p className="mt-2 text-sm text-gray-500">
+                      {newChannel.providerIds.length > 0 
+                        ? t('channels.noModelsForSelectedProviders') 
+                        : t('channels.selectProviderFirst')}
+                    </p>
+                  </div>
+                )}
               </div>
-              <p className="text-xs text-gray-500 mt-1">{t('channels.selectMultipleModels')}</p>
+              <p className="text-xs text-gray-500 mt-2">{t('channels.selectMultipleModels')}</p>
             </div>
 
             <div className="flex justify-end space-x-3">

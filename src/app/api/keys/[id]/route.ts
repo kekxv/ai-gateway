@@ -76,6 +76,23 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
       }
     }
 
+    // Fetch the updated API key
+    const updatedApiKey = await db.get(`
+      SELECT 
+        gak.*, 
+        u.email as userEmail,
+        CASE 
+          WHEN gak.bindToAllChannels = 1 THEN 'all'
+          ELSE GROUP_CONCAT(c.id || ':' || c.name)
+        END as channelsInfo
+      FROM GatewayApiKey gak
+      LEFT JOIN User u ON gak.userId = u.id
+      LEFT JOIN GatewayApiKeyChannel gakc ON gak.id = gakc.apiKeyId
+      LEFT JOIN Channel c ON gakc.channelId = c.id
+      WHERE gak.id = ?
+      GROUP BY gak.id
+    `, id);
+
     return NextResponse.json(updatedApiKey);
   } catch (error) {
     console.error("Error updating API key:", error);

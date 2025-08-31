@@ -76,7 +76,7 @@ export async function POST(request: Request) {
     }
 
     // Filter out routes that had no associated provider
-    const finalEligibleModelRoutes = eligibleModelRoutes.filter(route => route.channel !== null);
+    const finalEligibleModelRoutes = eligibleModelRoutes.filter((route: any) => route.channel !== null);
 
     if (finalEligibleModelRoutes.length === 0) {
       return NextResponse.json({ error: `No enabled routes configured for model '${originalRequestedModelName}'` }, { status: 404 });
