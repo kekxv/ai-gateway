@@ -25,7 +25,7 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
     }
 
     const body = await request.json();
-    const { name, description, modelRoutes, newUserId } = body; // UPDATED: modelRoutes instead of providerIds
+    const { name, description, alias, modelRoutes, newUserId } = body; // UPDATED: added alias
 
     // Validate newUserId if provided and user is admin
     if (newUserId !== undefined && userRole !== 'ADMIN') {
@@ -43,8 +43,8 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
     await db.run('DELETE FROM ModelRoute WHERE modelId = ?', id);
 
     // 2. Create new ModelRoutes based on the received array
-    const updateFields: string[] = [`name = ?`, `description = ?`, `updatedAt = CURRENT_TIMESTAMP`];
-    const updateValues: any[] = [name, description];
+    const updateFields: string[] = [`name = ?`, `description = ?`, `alias = ?`, `updatedAt = CURRENT_TIMESTAMP`];
+    const updateValues: any[] = [name, description, alias || null];
 
     if (newUserId !== undefined) {
       updateFields.push(`userId = ?`);

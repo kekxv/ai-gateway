@@ -243,7 +243,10 @@
     "selectChannel": "选择渠道",
     "weightPlaceholder": "权重",
     "addRoute": "添加路由",
-    "routes": "路由"
+    "routes": "路由",
+    "alias": "别名",
+    "aliasPlaceholder": "可选的短名称",
+    "aliasDescription": "用于此模型的短名称或别名，例如：gpt4"
   },
   "users": {
     "title": "用户管理",

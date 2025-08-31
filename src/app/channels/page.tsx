@@ -21,6 +21,7 @@ type Model = {
   id: number;
   name: string;
   description: string | null;
+  alias?: string | null; // Add alias field
   providerModels: ProviderModel[]; // Include providerModels
 };
 
@@ -417,11 +418,14 @@ export default function ChannelsPage() {
                         </p>
                         <div className="flex flex-wrap gap-1">
                           {channel.modelRoutes.map(mr => (
-                            <span 
+                            <span
                               key={mr.model.id} 
                               className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800"
                             >
                               {mr.model?.name}
+                              {mr.model?.alias && (
+                                <span className="ml-1 text-green-600">({mr.model.alias})</span>
+                              )}
                             </span>
                           ))}
                         </div>

@@ -22,19 +22,20 @@ const handleGet = authMiddleware(async (request: AuthenticatedRequest) => {
     for (const channel of channels) {
       channel.provider = await db.get('SELECT * FROM Provider WHERE id = ?', channel.providerId);
       const rawModelRoutes = await db.all(
-        `SELECT mr.*, m.name as model_name, m.description as model_description
+        `SELECT mr.*, m.name as model_name, m.description as model_description, m.alias as model_alias
          FROM ModelRoute mr
          JOIN Model m ON mr.modelId = m.id
          WHERE mr.channelId = ?`,
         channel.id
       );
-      // 重新封装 model_name 和 model_description 到 model 对象中
+      // 重新封装 model_name, model_description 和 model_alias 到 model 对象中
       channel.modelRoutes = rawModelRoutes.map((mr: any) => ({
         ...mr,
         model: {
           id: mr.modelId, // Add this line
           name: mr.model_name,
           description: mr.model_description,
+          alias: mr.model_alias,
         },
       }));
     }

@@ -5,7 +5,7 @@ import fs from 'fs';
 
 const DB_PATH = process.env.DATABASE_URL ? process.env.DATABASE_URL.replace('file:', '') : path.resolve(process.cwd(), 'ai-gateway.db');
 
-const DATABASE_SCHEMA_VERSION = 1;
+const DATABASE_SCHEMA_VERSION = 2;
 
 const schema = `
 PRAGMA foreign_keys = ON;
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS Provider (
 CREATE TABLE IF NOT EXISTS Channel (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT UNIQUE NOT NULL,
-  enabled BOOLEAN DEFAULT TRUE NOT NULL,
+  enabled BOOLEAN DEFAULT TRUE NOTNULL,
   createdAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
   updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
   providerId INTEGER NOT NULL,
@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS Model (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT UNIQUE NOT NULL,
   description TEXT,
+  alias TEXT, -- New alias column
   createdAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
   updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
   userId INTEGER,
@@ -120,6 +121,11 @@ const migrations = [
     version: 1,
     name: 'add_autoLoadModels_to_provider',
     up: `ALTER TABLE Provider ADD COLUMN autoLoadModels BOOLEAN DEFAULT FALSE NOT NULL;`,
+  },
+  {
+    version: 2,
+    name: 'add_alias_to_model',
+    up: `ALTER TABLE Model ADD COLUMN alias TEXT;`,
   },
   // Add future migrations here
 ];

@@ -60,7 +60,7 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
 
     const body = await request.json();
     const { models, providerId } = body; // For batch creation from model selection modal
-    const { name, description, modelRoutes } = body; // For single model creation from form
+    const { name, description, alias, modelRoutes } = body; // For single model creation from form, added alias
 
     const db = await getInitializedDb();
 
@@ -74,13 +74,14 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
 
         if (!existingModel) {
           const result = await db.run(
-            'INSERT INTO Model (name, description, userId) VALUES (?, ?, ?)',
+            'INSERT INTO Model (name, description, alias, userId) VALUES (?, ?, ?, ?)', // Added alias
             modelData.name,
             modelData.description,
+            modelData.alias || null, // Use alias from modelData or null
             userId
           );
           modelId = result.lastID;
-          createdModels.push({ id: modelId, name: modelData.name, description: modelData.description });
+          createdModels.push({ id: modelId, name: modelData.name, description: modelData.description, alias: modelData.alias });
         } else {
           modelId = existingModel.id;
         }
@@ -106,9 +107,10 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
     // Single creation logic
     if (name) {
       const result = await db.run(
-        'INSERT INTO Model (name, description, userId) VALUES (?, ?, ?)',
+        'INSERT INTO Model (name, description, alias, userId) VALUES (?, ?, ?, ?)', // Added alias
         name,
         description,
+        alias || null, // Use alias from body or null
         userId
       );
       const newModelId = result.lastID;

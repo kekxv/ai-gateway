@@ -20,19 +20,22 @@ export async function POST(request: Request) {
     db.run('UPDATE GatewayApiKey SET lastUsed = ? WHERE id = ?', new Date().toISOString(), dbKey.id).catch(console.error);
 
     const requestBody = await request.json();
-    const requestedModelName = requestBody.model;
+    const originalRequestedModelName = requestBody.model; // Store the original requested model name
     const streamRequested = requestBody.stream === true; // Check for stream flag
 
-    if (!requestedModelName) {
+    if (!originalRequestedModelName) {
       return NextResponse.json({ error: 'Missing \'model\' in request body' }, { status: 400 });
     }
 
-    // 2. Find the Model by its name
-    const model = await db.get('SELECT * FROM Model WHERE name = ?', requestedModelName);
+    // 2. Find the Model by its name or alias
+    const model = await db.get('SELECT * FROM Model WHERE name = ? OR alias = ?', originalRequestedModelName, originalRequestedModelName);
 
     if (!model) {
-      return NextResponse.json({ error: `Model '${requestedModelName}' not found` }, { status: 404 });
+      return NextResponse.json({ error: `Model '${originalRequestedModelName}' not found` }, { status: 404 });
     }
+
+    // IMPORTANT: Use the actual model name from the DB for upstream request
+    const upstreamRequestBody = { ...requestBody, model: model.name };
 
     // 3. Find all eligible ModelRoutes for the requested model
     const eligibleModelRoutes = await db.all(
@@ -56,7 +59,7 @@ export async function POST(request: Request) {
     }
 
     if (eligibleModelRoutes.length === 0) {
-      return NextResponse.json({ error: `No enabled routes configured for model '${requestedModelName}'` }, { status: 404 });
+      return NextResponse.json({ error: `No enabled routes configured for model '${originalRequestedModelName}'` }, { status: 404 });
     }
 
     // Implement weighted random selection
@@ -94,7 +97,7 @@ export async function POST(request: Request) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${channel.provider.apiKey}`,
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify(upstreamRequestBody),
     };
 
     if (streamRequested) {

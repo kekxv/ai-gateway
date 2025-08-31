@@ -238,7 +238,10 @@
     "fetchFailed": "Failed to fetch data",
     "createFailed": "Failed to create model",
     "updateFailed": "Failed to update model",
-    "deleteFailed": "Failed to delete model"
+    "deleteFailed": "Failed to delete model",
+    "alias": "Alias",
+    "aliasPlaceholder": "Optional short name",
+    "aliasDescription": "A short name or alias for this model, e.g., gpt4"
   },
   "users": {
     "title": "User Management",

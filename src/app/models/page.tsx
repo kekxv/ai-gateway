@@ -29,6 +29,7 @@ type Model = {
   id: number;
   name: string;
   description: string | null;
+  alias: string | null; // New alias field
   createdAt: string;
   modelRoutes: ModelRoute[]; // NEW: Array of model routes
 };
@@ -37,7 +38,7 @@ export default function ModelsPage() {
   const [models, setModels] = useState<Model[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]); // New state for all available providers
   const [channels, setChannels] = useState<Channel[]>([]); // NEW state for all available channels
-  const [newModel, setNewModel] = useState({ name: '', description: '' });
+  const [newModel, setNewModel] = useState({ name: '', description: '', alias: '' });
   const [editingModel, setEditingModel] = useState<Model | null>(null);
   const [editingModelRoutes, setEditingModelRoutes] = useState<ModelRoute[]>([]); // NEW state for managing routes
   const [loading, setLoading] = useState(true);
@@ -102,7 +103,7 @@ export default function ModelsPage() {
 
   const handleEdit = (model: Model) => {
     setEditingModel(model);
-    setNewModel({ name: model.name, description: model.description || '' });
+    setNewModel({ name: model.name, description: model.description || '', alias: model.alias || '' });
     // Populate editingModelRoutes with existing routes, ensuring channel data is available
     setEditingModelRoutes(model.modelRoutes.map(route => ({
       ...route,
@@ -127,10 +128,12 @@ export default function ModelsPage() {
         {
           name: editingModel.name,
           description: editingModel.description,
+          alias: editingModel.alias, // Include alias
           modelRoutes: editingModelRoutes.map(route => ({ channelId: route.channelId, weight: route.weight })) // Send only necessary data
         } : 
         {
           ...newModel,
+          alias: newModel.alias, // Include alias
           modelRoutes: editingModelRoutes.map(route => ({ channelId: route.channelId, weight: route.weight }))
         };
 
@@ -152,7 +155,7 @@ export default function ModelsPage() {
         throw new Error(errorData.error || (editingModel ? t('models.updateFailed') : t('models.createFailed')));
       }
 
-      setNewModel({ name: '', description: '' });
+      setNewModel({ name: '', description: '', alias: '' }); // Clear alias
       setEditingModelRoutes([]); // Clear routes
       setEditingModel(null);
       fetchModelsAndProviders(token);
@@ -257,6 +260,21 @@ export default function ModelsPage() {
                 rows={3}
                 className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
               />
+            </div>
+            <div>
+              <label htmlFor="modelAlias" className="block text-sm font-medium text-gray-700 mb-1">
+                {t('models.alias')}
+              </label>
+              <input
+                id="modelAlias"
+                type="text"
+                name="alias"
+                value={editingModel ? editingModel.alias || '' : newModel.alias}
+                onChange={handleInputChange}
+                placeholder={t('models.aliasPlaceholder')}
+                className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
+              />
+              <p className="text-xs text-gray-500 mt-1">{t('models.aliasDescription')}</p>
             </div>
 
             {/* Model Route Management */}
@@ -364,7 +382,14 @@ export default function ModelsPage() {
             {models.map(model => (
               <div key={model.id} className="flex flex-col p-4 border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-all duration-200">
                 <div className="flex-1 min-w-0 mb-4">
-                  <h3 className="text-lg font-medium text-gray-900 truncate mb-1">{model.name}</h3>
+                  <h3 className="text-lg font-medium text-gray-900 truncate mb-1">
+                    {model.name}
+                    {model.alias && (
+                      <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                        {t('models.alias')}: {model.alias}
+                      </span>
+                    )}
+                  </h3>
                   {model.description && <p className="text-sm text-gray-500 line-clamp-2">{model.description}</p>}
                 </div>
                 
