@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
 import { getInitializedDb } from '@/lib/db';
+import { getJwtSecret } from '@/lib/settings';
 
 export interface AuthenticatedRequest extends NextRequest {
   user?: { userId: number; email: string; role: string };
@@ -20,7 +21,8 @@ export function authMiddleware(handler: ApiHandler, requiredRoles: string[] = []
     const token = authHeader.split(' ')[1];
 
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret') as { userId: number; email: string; role: string };
+      const jwtSecret = await getJwtSecret();
+      const decoded = jwt.verify(token, jwtSecret) as { userId: number; email: string; role: string };
       
       const authenticatedRequest = req as AuthenticatedRequest;
       authenticatedRequest.user = decoded;

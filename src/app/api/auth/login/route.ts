@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import { authenticator } from 'otplib';
 
 import { getInitializedDb } from '@/lib/db';
+import { getJwtSecret } from '@/lib/settings';
 
 export async function POST(request: Request) {
   try {
@@ -75,9 +76,10 @@ export async function POST(request: Request) {
     }
 
     // Generate JWT token
+    const jwtSecret = await getJwtSecret();
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET || 'your_jwt_secret', // Use environment variable for secret
+      jwtSecret,
       { expiresIn: '8h' } // More user-friendly expiration
     );
 

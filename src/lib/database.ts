@@ -5,7 +5,7 @@ import fs from 'fs';
 
 const DB_PATH = process.env.DATABASE_URL ? process.env.DATABASE_URL.replace('file:', '') : path.resolve(process.cwd(), 'ai-gateway.db');
 
-const DATABASE_SCHEMA_VERSION = 4;
+const DATABASE_SCHEMA_VERSION = 5;
 
 const schema = `
 PRAGMA foreign_keys = ON;
@@ -182,6 +182,11 @@ const migrations = [
       );
     `,
   },
+  {
+    version: 5,
+    name: 'create table settings',
+    up: `CREATE TABLE IF NOT EXISTS Settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+  },
   // Add future migrations here
 ];
 
@@ -248,5 +253,29 @@ export async function initializeDatabase() {
   // will determine if any migrations need to be applied based on the SchemaVersion table.
   await runMigrations(dbInstance);
 
+  // Initialize JWT_SECRET if not already set
+  await initializeJwtSecret(dbInstance);
+
   return dbInstance;
+}
+
+async function initializeJwtSecret(db: any) {
+  try {
+    // Check if JWT_SECRET already exists in the database
+    const existingSecret = await db.get('SELECT value FROM Settings WHERE key = ?', 'JWT_SECRET');
+    
+    if (!existingSecret) {
+      // Generate a new random JWT_SECRET
+      const crypto = await import('crypto');
+      const newSecret = crypto.randomBytes(64).toString('hex');
+      
+      // Store it in the database
+      await db.run('INSERT INTO Settings (key, value) VALUES (?, ?)', 'JWT_SECRET', newSecret);
+      console.log('Generated and stored new JWT_SECRET in database');
+    } else {
+      console.log('JWT_SECRET already exists in database');
+    }
+  } catch (error) {
+    console.error('Error initializing JWT_SECRET:', error);
+  }
 }
