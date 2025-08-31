@@ -183,7 +183,11 @@
     "fetchFailed": "获取 API 密钥失败",
     "createFailed": "创建 API 密钥失败",
     "updateFailed": "更新 API 密钥失败",
-    "deleteFailed": "删除 API 密钥失败"
+    "deleteFailed": "删除 API 密钥失败",
+    "bindToAllChannels": "绑定所有渠道",
+    "bindToAllChannelsDescription": "绑定所有渠道",
+    "selectChannels": "选择渠道",
+    "selectChannelsDescription": "选择渠道"
   },
   "providers": {
     "title": "提供商管理",

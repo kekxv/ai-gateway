@@ -5,7 +5,7 @@ import fs from 'fs';
 
 const DB_PATH = process.env.DATABASE_URL ? process.env.DATABASE_URL.replace('file:', '') : path.resolve(process.cwd(), 'ai-gateway.db');
 
-const DATABASE_SCHEMA_VERSION = 3;
+const DATABASE_SCHEMA_VERSION = 4;
 
 const schema = `
 PRAGMA foreign_keys = ON;
@@ -165,6 +165,21 @@ const migrations = [
 
       INSERT INTO Channel SELECT id, name, enabled, createdAt, updatedAt, userId FROM Channel_backup;
       DROP TABLE Channel_backup;
+    `,
+  },
+  {
+    version: 4,
+    name: 'add_api_key_channel_binding',
+    up: `
+      ALTER TABLE GatewayApiKey ADD COLUMN bindToAllChannels BOOLEAN DEFAULT FALSE NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS GatewayApiKeyChannel (
+        apiKeyId INTEGER NOT NULL,
+        channelId INTEGER NOT NULL,
+        PRIMARY KEY (apiKeyId, channelId),
+        FOREIGN KEY (apiKeyId) REFERENCES GatewayApiKey(id) ON DELETE CASCADE,
+        FOREIGN KEY (channelId) REFERENCES Channel(id) ON DELETE CASCADE
+      );
     `,
   },
   // Add future migrations here

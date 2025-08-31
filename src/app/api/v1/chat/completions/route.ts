@@ -39,39 +39,59 @@ export async function POST(request: Request) {
 
     // 3. Find all eligible ModelRoutes for the requested model
     const eligibleModelRoutes = await db.all(
-      `SELECT mr.*, c.name as channelName, p.name as providerName, p.baseURL, p.apiKey
+      `SELECT mr.*, c.name as channelName
        FROM ModelRoute mr
        JOIN Channel c ON mr.channelId = c.id
-       JOIN Provider p ON c.providerId = p.id
        WHERE mr.modelId = ? AND c.enabled = TRUE`,
       model.id
     );
 
+    // For each eligible ModelRoute, fetch one associated provider
     for (const route of eligibleModelRoutes) {
+      const channelProvider = await db.get(
+        `SELECT cp.providerId, p.name, p.baseURL, p.apiKey
+         FROM ChannelProvider cp
+         JOIN Provider p ON cp.providerId = p.id
+         WHERE cp.channelId = ?
+         ORDER BY cp.providerId LIMIT 1`, // Pick one provider for routing
+        route.channelId
+      );
+
+      if (!channelProvider) {
+        // If a channel has no associated provider, this route is not truly eligible
+        // We could filter it out or return an error. For now, let's skip it.
+        console.warn(`Channel ${route.channelId} has no associated provider. Skipping route.`);
+        route.channel = null; // Mark as ineligible
+        continue;
+      }
+
       route.channel = {
         name: route.channelName,
         provider: {
-          name: route.providerName,
-          baseURL: route.baseURL,
-          apiKey: route.apiKey,
+          name: channelProvider.name,
+          baseURL: channelProvider.baseURL,
+          apiKey: channelProvider.apiKey,
         },
       };
     }
 
-    if (eligibleModelRoutes.length === 0) {
+    // Filter out routes that had no associated provider
+    const finalEligibleModelRoutes = eligibleModelRoutes.filter(route => route.channel !== null);
+
+    if (finalEligibleModelRoutes.length === 0) {
       return NextResponse.json({ error: `No enabled routes configured for model '${originalRequestedModelName}'` }, { status: 404 });
     }
 
     // Implement weighted random selection
     let totalWeight = 0;
-    for (const route of eligibleModelRoutes) {
+    for (const route of finalEligibleModelRoutes) { // Use finalEligibleModelRoutes
       totalWeight += route.weight;
     }
 
     let randomWeight = Math.random() * totalWeight;
     let selectedModelRoute = null;
 
-    for (const route of eligibleModelRoutes) {
+    for (const route of finalEligibleModelRoutes) { // Use finalEligibleModelRoutes
       randomWeight -= route.weight;
       if (randomWeight <= 0) {
         selectedModelRoute = route;
@@ -80,9 +100,21 @@ export async function POST(request: Request) {
     }
 
     if (!selectedModelRoute) {
-      // Fallback in case of floating point issues or if all weights are 0 (though we should prevent that)
-      selectedModelRoute = eligibleModelRoutes[0];
+      selectedModelRoute = finalEligibleModelRoutes[0];
     }
+
+    // --- NEW: API Key Channel Permission Check ---
+    if (!dbKey.bindToAllChannels) {
+      const apiKeyChannel = await db.get(
+        'SELECT 1 FROM GatewayApiKeyChannel WHERE apiKeyId = ? AND channelId = ?',
+        dbKey.id,
+        selectedModelRoute.channel.id
+      );
+      if (!apiKeyChannel) {
+        return NextResponse.json({ error: `Unauthorized: API Key not bound to channel '${selectedModelRoute.channel.name}'` }, { status: 403 });
+      }
+    }
+    // --- END NEW ---
 
     const { channel } = selectedModelRoute;
     const { provider } = channel;

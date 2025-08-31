@@ -24,7 +24,7 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
     }
 
     const body = await request.json();
-    const {name, enabled, newUserId} = body; // Added newUserId
+    const {name, enabled, newUserId, bindToAllChannels, channelIds} = body; // Added bindToAllChannels and channelIds
 
     if (!name) {
       return NextResponse.json({error: '缺少必填字段: 名称'}, {status: 400});
@@ -41,8 +41,8 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
       }
     }
 
-    const updateFields: string[] = [`name = ?`, `enabled = ?`];
-    const updateValues: any[] = [name, enabled];
+    const updateFields: string[] = [`name = ?`, `enabled = ?`, `bindToAllChannels = ?`]; // Added bindToAllChannels
+    const updateValues: any[] = [name, enabled, bindToAllChannels || false]; // Added bindToAllChannels
 
     if (newUserId !== undefined) {
       updateFields.push(`userId = ?`);
@@ -57,7 +57,24 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
       id
     );
 
-    const updatedApiKey = await db.get('SELECT * FROM GatewayApiKey WHERE id = ?', id);
+    // Update GatewayApiKeyChannel associations
+    await db.run('DELETE FROM GatewayApiKeyChannel WHERE apiKeyId = ?', id); // Clear existing associations
+
+    if (!bindToAllChannels && channelIds && channelIds.length > 0) {
+      for (const channelId of channelIds) {
+        // Optional: Validate channelId exists
+        const channelExists = await db.get('SELECT 1 FROM Channel WHERE id = ?', channelId);
+        if (!channelExists) {
+          console.warn(`Channel ID ${channelId} not found for API key ${id}. Skipping association.`);
+          continue;
+        }
+        await db.run(
+          'INSERT INTO GatewayApiKeyChannel (apiKeyId, channelId) VALUES (?, ?)',
+          id,
+          channelId
+        );
+      }
+    }
 
     return NextResponse.json(updatedApiKey);
   } catch (error) {
@@ -86,6 +103,9 @@ export const DELETE = authMiddleware(async (request: AuthenticatedRequest, conte
     if (userRole !== 'ADMIN' && existingApiKey.userId !== userId) {
       return NextResponse.json({error: '无权删除此 API 密钥'}, {status: 403});
     }
+
+    // Delete associated GatewayApiKeyChannel entries first
+    await db.run('DELETE FROM GatewayApiKeyChannel WHERE apiKeyId = ?', id);
 
     await db.run('DELETE FROM GatewayApiKey WHERE id = ?', id);
 

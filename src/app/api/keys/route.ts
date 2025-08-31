@@ -24,6 +24,19 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
       if (apiKey.userId) {
         apiKey.user = await db.get('SELECT id, email, role FROM User WHERE id = ?', apiKey.userId);
       }
+      // Fetch associated channels if not bound to all channels
+      if (!apiKey.bindToAllChannels) {
+        const associatedChannels = await db.all(
+          `SELECT gac.channelId, c.name
+           FROM GatewayApiKeyChannel gac
+           JOIN Channel c ON gac.channelId = c.id
+           WHERE gac.apiKeyId = ?`,
+          apiKey.id
+        );
+        apiKey.channels = associatedChannels.map((ac: any) => ({ id: ac.channelId, name: ac.name }));
+      } else {
+        apiKey.channels = []; // Or a special flag indicating all channels
+      }
     }
     return NextResponse.json(apiKeys, {
       headers: {
@@ -49,7 +62,7 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
     }
 
     const body = await request.json();
-    const { name } = body;
+    const { name, bindToAllChannels, channelIds } = body; // Added bindToAllChannels and channelIds
 
     if (!name) {
       return NextResponse.json({ error: '缺少必填字段: 名称' }, { status: 400 });
@@ -58,12 +71,32 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
     const db = await getInitializedDb();
     const newKey = uuidv4(); // Generate a new UUID for the key
     const result = await db.run(
-      'INSERT INTO GatewayApiKey (name, userId, key) VALUES (?, ?, ?)',
+      'INSERT INTO GatewayApiKey (name, userId, key, bindToAllChannels) VALUES (?, ?, ?, ?)', // Added bindToAllChannels
       name,
       userId,
-      newKey
+      newKey,
+      bindToAllChannels || false // Default to false if not provided
     );
-    const newApiKey = await db.get('SELECT * FROM GatewayApiKey WHERE id = ?', result.lastID);
+    const newApiKeyId = result.lastID;
+
+    // If not binding to all channels, associate with specific channels
+    if (!bindToAllChannels && channelIds && channelIds.length > 0) {
+      for (const channelId of channelIds) {
+        // Optional: Validate channelId exists
+        const channelExists = await db.get('SELECT 1 FROM Channel WHERE id = ?', channelId);
+        if (!channelExists) {
+          console.warn(`Channel ID ${channelId} not found for API key ${newApiKeyId}. Skipping association.`);
+          continue;
+        }
+        await db.run(
+          'INSERT INTO GatewayApiKeyChannel (apiKeyId, channelId) VALUES (?, ?)',
+          newApiKeyId,
+          channelId
+        );
+      }
+    }
+
+    const newApiKey = await db.get('SELECT * FROM GatewayApiKey WHERE id = ?', newApiKeyId);
 
     return NextResponse.json(newApiKey, { status: 201 });
   } catch (error) {

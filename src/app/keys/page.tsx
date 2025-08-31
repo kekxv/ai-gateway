@@ -11,11 +11,24 @@ type GatewayApiKey = {
   key: string;
   enabled: boolean; // Add enabled field for editing
   createdAt: string;
+  bindToAllChannels: boolean; // New field
+  channels?: Channel[]; // New field, optional as it might not always be loaded or present if bindToAllChannels is true
+};
+
+// Need Channel type definition as well, can reuse from channels page or define here
+type Channel = {
+  id: number;
+  name: string;
 };
 
 export default function ApiKeysPage() {
   const [apiKeys, setApiKeys] = useState<GatewayApiKey[]>([]);
-  const [newKeyName, setNewKeyName] = useState('');
+  const [channels, setChannels] = useState<Channel[]>([]); // New state to store all channels
+  const [newKeyForm, setNewKeyForm] = useState({ // Combined state for new key form
+    name: '',
+    bindToAllChannels: false,
+    selectedChannelIds: [] as number[],
+  });
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState<GatewayApiKey | null>(null); // State for editing
   const [loading, setLoading] = useState(true);
@@ -26,26 +39,37 @@ export default function ApiKeysPage() {
   const fetchApiKeys = useCallback(async (token: string) => {
     try {
       setLoading(true);
-      const response = await fetch('/api/keys', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-      if (!response.ok) {
-        if (response.status === 401) {
+      const [keysResponse, channelsResponse] = await Promise.all([
+        fetch('/api/keys', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        }),
+        fetch('/api/channels', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        }),
+      ]);
+
+      if (!keysResponse.ok || !channelsResponse.ok) {
+        if (keysResponse.status === 401 || channelsResponse.status === 401) {
           router.push('/login');
           return;
         }
         throw new Error(t('keys.fetchFailed'));
       }
-      const data = await response.json();
-      setApiKeys(data);
+      const keysData = await keysResponse.json();
+      const channelsData = await channelsResponse.json();
+
+      setApiKeys(keysData);
+      setChannels(channelsData); // Set channels state
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.unknownError'));
     } finally {
       setLoading(false);
     }
-  }, [router, t]); // router is a dependency of fetchApiKeys
+  }, [router, t]);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -56,12 +80,34 @@ export default function ApiKeysPage() {
     fetchApiKeys(token);
   }, [fetchApiKeys, router]);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-expect-error
     const { name, value, type, checked } = e.target;
+
     if (editingKey) {
-      setEditingKey(prev => ({ ...prev!, [name]: type === 'checkbox' ? checked : value }));
+      // Handle editingKey state
+      if (name === 'bindToAllChannels') {
+        setEditingKey(prev => ({ ...prev!, bindToAllChannels: checked }));
+      } else if (name === 'selectedChannelIds') {
+        const options = Array.from((e.target as HTMLSelectElement).selectedOptions).map(option => parseInt(option.value, 10));
+        setEditingKey(prev => ({
+          ...prev!,
+          channels: options.map(id => ({ id, name: channels.find(c => c.id === id)?.name || '' }))
+        }));
+      } else {
+        setEditingKey(prev => ({ ...prev!, [name]: type === 'checkbox' ? checked : value }));
+      }
     } else {
-      setNewKeyName(value);
+      // Handle newKeyForm state
+      if (name === 'bindToAllChannels') {
+        setNewKeyForm(prev => ({ ...prev, bindToAllChannels: checked }));
+      } else if (name === 'selectedChannelIds') {
+        const options = Array.from((e.target as HTMLSelectElement).selectedOptions).map(option => parseInt(option.value, 10));
+        setNewKeyForm(prev => ({ ...prev, selectedChannelIds: options }));
+      } else {
+        setNewKeyForm(prev => ({ ...prev, [name]: value }));
+      }
     }
   };
 
@@ -79,7 +125,16 @@ export default function ApiKeysPage() {
     try {
       const method = editingKey ? 'PUT' : 'POST';
       const url = editingKey ? `/api/keys/${editingKey.id}` : '/api/keys';
-      const body = editingKey ? { name: editingKey.name, enabled: editingKey.enabled } : { name: newKeyName };
+      const body = editingKey ? {
+        name: editingKey.name,
+        enabled: editingKey.enabled,
+        bindToAllChannels: editingKey.bindToAllChannels,
+        channelIds: editingKey.bindToAllChannels ? [] : (editingKey.channels?.map(c => c.id) || [])
+      } : {
+        name: newKeyForm.name,
+        bindToAllChannels: newKeyForm.bindToAllChannels,
+        channelIds: newKeyForm.bindToAllChannels ? [] : newKeyForm.selectedChannelIds
+      };
 
       const response = await fetch(url, {
         method,
@@ -103,7 +158,7 @@ export default function ApiKeysPage() {
         const createdKey = await response.json();
         setNewlyCreatedKey(createdKey.key);
       }
-      setNewKeyName('');
+      setNewKeyForm({ name: '', bindToAllChannels: false, selectedChannelIds: [] }); // Reset form
       setEditingKey(null); // Clear editing state
       fetchApiKeys(token); // Refetch to show the new/updated key in the list
     } catch (err) {
@@ -212,7 +267,7 @@ export default function ApiKeysPage() {
                 id="keyName"
                 type="text"
                 name="name"
-                value={editingKey ? editingKey.name : newKeyName}
+                value={editingKey ? editingKey.name : newKeyForm.name}
                 onChange={handleInputChange}
                 placeholder={t('keys.namePlaceholder')}
                 className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
@@ -220,6 +275,50 @@ export default function ApiKeysPage() {
               />
               <p className="text-xs text-gray-500 mt-1">{t('keys.nameDescription')}</p>
             </div>
+
+            {/* New: Bind to all channels checkbox */}
+            <div>
+              <div className="flex items-center">
+                <input
+                  id="bindToAllChannels"
+                  type="checkbox"
+                  name="bindToAllChannels"
+                  checked={editingKey ? editingKey.bindToAllChannels : newKeyForm.bindToAllChannels}
+                  onChange={handleInputChange}
+                  className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                />
+                <label htmlFor="bindToAllChannels" className="ml-2 block text-sm text-gray-900">
+                  {t('keys.bindToAllChannels')}
+                </label>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">{t('keys.bindToAllChannelsDescription')}</p>
+            </div>
+
+            {/* New: Channel multi-select, conditionally rendered/disabled */}
+            {!(editingKey ? editingKey.bindToAllChannels : newKeyForm.bindToAllChannels) && (
+              <div>
+                <label htmlFor="selectedChannelIds" className="block text-sm font-medium text-gray-700 mb-1">
+                  {t('keys.selectChannels')}
+                </label>
+                <div className="relative">
+                  <select
+                    id="selectedChannelIds"
+                    name="selectedChannelIds"
+                    multiple
+                    value={editingKey ? editingKey.channels?.map(c => String(c.id)) : newKeyForm.selectedChannelIds.map(String)}
+                    onChange={handleInputChange}
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2 h-32"
+                  >
+                    {channels.map(channel => (
+                      <option key={channel.id} value={channel.id}>
+                        {channel.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">{t('keys.selectChannelsDescription')}</p>
+              </div>
+            )}
 
             {editingKey && (
               <div className="flex items-center">
@@ -305,6 +404,22 @@ export default function ApiKeysPage() {
                       }`}>
                         {apiKey.enabled ? t('keys.enabled') : t('keys.disabled')}
                       </span>
+                      {/* New: Display channel binding */}
+                      {apiKey.bindToAllChannels ? (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          {t('keys.allChannels')}
+                        </span>
+                      ) : (
+                        apiKey.channels && apiKey.channels.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {apiKey.channels.map(channel => (
+                              <span key={channel.id} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                                {channel.name}
+                              </span>
+                            ))}
+                          </div>
+                        )
+                      )}
                     </div>
                     <p className="mt-2 text-sm text-gray-500">
                       {t('keys.createdAt')}: {new Date(apiKey.createdAt).toLocaleString()}

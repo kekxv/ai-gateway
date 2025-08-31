@@ -183,7 +183,11 @@
     "fetchFailed": "Failed to fetch API keys",
     "createFailed": "Failed to create API key",
     "updateFailed": "Failed to update API key",
-    "deleteFailed": "Failed to delete API key"
+    "deleteFailed": "Failed to delete API key",
+    "bindToAllChannels": "Bind To All Channels",
+    "bindToAllChannelsDescription": "Bind To All Channels",
+    "selectChannels": "Select Channels",
+    "selectChannelsDescription": "Select Channels Description"
   },
   "providers": {
     "title": "Provider Management",
