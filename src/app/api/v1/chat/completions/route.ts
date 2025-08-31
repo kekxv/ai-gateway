@@ -150,6 +150,7 @@ export async function POST(request: Request) {
 
       // Asynchronously process the log stream
       (async () => {
+        let accumulatedContent = '';
         let promptTokens = 0;
         let completionTokens = 0;
         let totalTokens = 0;
@@ -169,6 +170,13 @@ export async function POST(request: Request) {
               if (jsonStr.trim() === '[DONE]') continue;
               try {
                 const jsonObj = JSON.parse(jsonStr);
+                if (jsonObj.choices && jsonObj.choices[0] && jsonObj.choices[0].delta) {
+                  const content = jsonObj.choices[0].delta.content;
+                  if (content) {
+                    accumulatedContent += content;
+                  }
+                }
+                // Usage information typically comes in the last message of the stream
                 if (jsonObj.usage) {
                   promptTokens = jsonObj.usage.prompt_tokens || 0;
                   completionTokens = jsonObj.usage.completion_tokens || 0;
@@ -180,26 +188,94 @@ export async function POST(request: Request) {
             }
           }
 
-          if (totalTokens > 0) {
+          // Format response to match non-streaming format for logging
+          const formattedResponse = {
+            id: 'log-' + Date.now(), // Generate a unique ID for logging
+            object: 'chat.completion',
+            created: Math.floor(Date.now() / 1000),
+            model: requestBody.model,
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: 'assistant',
+                  content: accumulatedContent
+                },
+                finish_reason: 'stop'
+              }
+            ],
+            usage: {
+              prompt_tokens: promptTokens,
+              completion_tokens: completionTokens,
+              total_tokens: totalTokens
+            }
+          };
+
+          // Log the complete request with formatted response
+          const result = await db.run(
+            'INSERT INTO Log (latency, promptTokens, completionTokens, totalTokens, apiKeyId, modelRouteId) VALUES (?, ?, ?, ?, ?, ?)',
+            latency,
+            promptTokens,
+            completionTokens,
+            totalTokens,
+            dbKey.id,
+            selectedModelRoute.id
+          );
+          const logEntryId = result.lastID;
+
+          await db.run(
+            'INSERT INTO LogDetail (logId, requestBody, responseBody) VALUES (?, ?, ?)',
+            logEntryId,
+            JSON.stringify(requestBody),
+            JSON.stringify(formattedResponse)
+          );
+        } catch (logError) {
+          console.error("Failed to log streaming request:", logError);
+          // Even if we fail to parse the stream, still log the basic request info
+          try {
+            // Format minimal response for logging
+            const minimalResponse = {
+              id: 'log-' + Date.now(),
+              object: 'chat.completion',
+              created: Math.floor(Date.now() / 1000),
+              model: requestBody.model,
+              choices: [
+                {
+                  index: 0,
+                  message: {
+                    role: 'assistant',
+                    content: accumulatedContent // Still include accumulated content
+                  },
+                  finish_reason: 'stop'
+                }
+              ],
+              usage: {
+                prompt_tokens: promptTokens || 0,
+                completion_tokens: completionTokens || 0,
+                total_tokens: totalTokens || 0
+              }
+            };
+
             const result = await db.run(
               'INSERT INTO Log (latency, promptTokens, completionTokens, totalTokens, apiKeyId, modelRouteId) VALUES (?, ?, ?, ?, ?, ?)',
               latency,
-              promptTokens,
-              completionTokens,
-              totalTokens,
+              promptTokens || 0,
+              completionTokens || 0,
+              totalTokens || 0,
               dbKey.id,
               selectedModelRoute.id
             );
             const logEntryId = result.lastID;
 
             await db.run(
-              'INSERT INTO LogDetail (logId, requestBody) VALUES (?, ?)',
+              'INSERT INTO LogDetail (logId, requestBody, responseBody) VALUES (?, ?, ?)',
               logEntryId,
-              JSON.stringify(requestBody)
+              JSON.stringify(requestBody),
+              JSON.stringify(minimalResponse)
             );
+          } catch (fallbackError) {
+            console.error("Failed to log streaming request (fallback):", fallbackError);
           }
-        } catch (logError) {
-          console.error("Failed to log streaming request:", logError);
         }
       })();
 
