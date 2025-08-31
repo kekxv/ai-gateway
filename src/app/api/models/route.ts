@@ -2,6 +2,127 @@ import { NextResponse } from 'next/server';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
 import { getInitializedDb } from '@/lib/db';
 
+// Function to sync models from providers with autoLoadModels enabled
+async function syncProviderModels(db: any) {
+  try {
+    // Get all providers with autoLoadModels enabled
+    const providers = await db.all('SELECT * FROM Provider WHERE autoLoadModels = 1');
+    
+    let totalNewModels = 0;
+    let totalLinkedModels = 0;
+    
+    for (const provider of providers) {
+      try {
+        let modelsToFetch: { id: string; name: string; description?: string }[] = [];
+
+        // Replicate model fetching logic from load-models/route.ts
+        if (provider.type?.toLowerCase() === 'openai') {
+          const openaiResponse = await fetch(`${provider.baseURL}/models`, {
+            headers: {
+              'Authorization': `Bearer ${provider.apiKey}`,
+            },
+          });
+
+          const openaiRawText = await openaiResponse.text();
+          if (!openaiResponse.ok) {
+            console.error(`Failed to fetch models from OpenAI provider ${provider.id}: ${openaiRawText}`);
+            continue;
+          }
+
+          try {
+            const openaiData = JSON.parse(openaiRawText);
+            modelsToFetch = openaiData.data.map((model: any) => ({
+              id: model.id,
+              name: model.id,
+              description: model.object,
+            }));
+          } catch (e) {
+            console.error(`Failed to parse OpenAI model data for provider ${provider.id}:`, e);
+            continue;
+          }
+
+        } else if (provider.type?.toLowerCase() === 'gemini') {
+          const apiKey = provider.apiKey || '';
+          const geminiResponse = await fetch(`${provider.baseURL}/v1beta/models`, {
+            headers: {
+              'x-goog-api-key': apiKey,
+            },
+          });
+
+          if (!geminiResponse.ok) {
+            const errorText = await geminiResponse.text();
+            console.error(`Failed to fetch models from Gemini provider ${provider.id}: ${errorText}`);
+            continue;
+          }
+
+          const geminiData = await geminiResponse.json();
+          modelsToFetch = geminiData.models.map((model: any) => ({
+            id: model.name,
+            name: model.displayName || model.name,
+            description: model.description,
+          }));
+
+        } else {
+          console.warn(`Unsupported provider type for auto-loading: ${provider.type}`);
+          continue;
+        }
+
+        // Compare and update database
+        let newModelsCount = 0;
+        let updatedProviderModelsCount = 0;
+
+        for (const fetchedModel of modelsToFetch) {
+          // Check if Model exists
+          let existingModel = await db.get('SELECT * FROM Model WHERE name = ?', fetchedModel.name);
+
+          if (!existingModel) {
+            // Create new Model entry if it doesn't exist
+            const result = await db.run(
+              'INSERT INTO Model (name, description) VALUES (?, ?)',
+              fetchedModel.name,
+              fetchedModel.description || null
+            );
+            existingModel = await db.get('SELECT * FROM Model WHERE id = ?', result.lastID);
+            newModelsCount++;
+          }
+
+          // Check if ProviderModel exists for this provider and model
+          const existingProviderModel = await db.get(
+            'SELECT * FROM ProviderModel WHERE providerId = ? AND modelId = ?',
+            provider.id,
+            existingModel.id
+          );
+
+          if (!existingProviderModel) {
+            // Create new ProviderModel entry if it doesn't exist
+            await db.run(
+              'INSERT INTO ProviderModel (providerId, modelId) VALUES (?, ?)',
+              provider.id,
+              existingModel.id
+            );
+            updatedProviderModelsCount++;
+          }
+        }
+        
+        totalNewModels += newModelsCount;
+        totalLinkedModels += updatedProviderModelsCount;
+        
+        if (newModelsCount > 0 || updatedProviderModelsCount > 0) {
+          console.log(`Auto-synced provider ${provider.id}: ${newModelsCount} new models, ${updatedProviderModelsCount} linked models`);
+        }
+      } catch (error) {
+        console.error(`Error syncing models for provider ${provider.id}:`, error);
+      }
+    }
+    
+    if (totalNewModels > 0 || totalLinkedModels > 0) {
+      console.log(`Auto-sync completed: ${totalNewModels} new models, ${totalLinkedModels} linked models`);
+    }
+  } catch (error) {
+    console.error("Error in auto-sync process:", error);
+  }
+}
+
 // GET /api/models - Fetches all models
 export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
   try {
@@ -9,6 +130,9 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
     const userRole = request.user?.role;
 
     const db = await getInitializedDb();
+
+    // Auto-sync models from providers with autoLoadModels enabled
+    await syncProviderModels(db);
 
     const models = await db.all(
       `SELECT * FROM Model ${userRole !== 'ADMIN' ? 'WHERE userId = ?' : ''} ORDER BY createdAt DESC`,
