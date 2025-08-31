@@ -212,7 +212,10 @@
     "modelsAdded": "模型已成功添加！",
     "createFailed": "创建提供商失败",
     "updateFailed": "更新提供商失败",
-    "deleteFailed": "删除提供商失败"
+    "deleteFailed": "删除提供商失败",
+    "autoLoadModels": "自动加载模型",
+    "autoLoadModelsDescription": "启用后，系统将自动从该供应商加载可用模型。",
+    "autoLoadModelsEnabled": "自动加载已启用"
   },
   "models": {
     "name": "模型名称",

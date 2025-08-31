@@ -11,6 +11,7 @@ type Provider = {
   baseURL: string;
   apiKey: string;
   type?: string;
+  autoLoadModels?: boolean;
 };
 
 export default function ProvidersPage() {
@@ -18,13 +19,13 @@ export default function ProvidersPage() {
   const { t } = useTranslation('common');
 
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [newProvider, setNewProvider] = useState({ name: '', baseURL: '', apiKey: '', type: 'openai' });
+  const [newProvider, setNewProvider] = useState({ name: '', baseURL: '', apiKey: '', type: 'openai', autoLoadModels: false });
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false); // State for modal visibility
   const [selectedProviderId, setSelectedProviderId] = useState<number | null>(null); // State for the selected provider
-  const [notification, setNotification] = useState<string | null>(null);
+  const [notification, setNotification, ] = useState<string | null>(null);
 
   const fetchProviders = useCallback(async (token: string) => {
     try {
@@ -55,18 +56,20 @@ export default function ProvidersPage() {
   }, [fetchProviders, router]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const { name, value } = e.target;
-    const providerData = { name, value };
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-expect-error
+    const { name, value, type, checked } = e.target;
+    const inputValue = type === 'checkbox' ? checked : value;
     if (editingProvider) {
-      setEditingProvider(prev => ({ ...prev!, [name]: value }));
+      setEditingProvider(prev => ({ ...prev!, [name]: inputValue }));
     } else {
-      setNewProvider(prev => ({ ...prev, [name]: value }));
+      setNewProvider(prev => ({ ...prev, [name]: inputValue }));
     }
   };
 
   const handleEdit = (provider: Provider) => {
     setEditingProvider(provider);
-    setNewProvider({ name: provider.name, baseURL: provider.baseURL, apiKey: provider.apiKey, type: provider.type || 'openai' });
+    setNewProvider({ name: provider.name, baseURL: provider.baseURL, apiKey: provider.apiKey, type: provider.type || 'openai', autoLoadModels: provider.autoLoadModels || false });
   };
 
   const handleSubmit = async (e: FormEvent) => {
@@ -82,7 +85,7 @@ export default function ProvidersPage() {
       const method = editingProvider ? 'PUT' : 'POST';
       const url = editingProvider ? `/api/providers/${editingProvider.id}` : '/api/providers';
       const body = editingProvider ? 
-        { name: editingProvider.name, baseURL: editingProvider.baseURL, apiKey: editingProvider.apiKey, type: editingProvider.type } :
+        { name: editingProvider.name, baseURL: editingProvider.baseURL, apiKey: editingProvider.apiKey, type: editingProvider.type, autoLoadModels: editingProvider.autoLoadModels } :
         newProvider;
 
       const response = await fetch(url, {
@@ -96,7 +99,7 @@ export default function ProvidersPage() {
         throw new Error(errorData.error || (editingProvider ? t('providers.updateFailed') : t('providers.createFailed')));
       }
 
-      setNewProvider({ name: '', baseURL: '', apiKey: '', type: 'openai' });
+      setNewProvider({ name: '', baseURL: '', apiKey: '', type: 'openai', autoLoadModels: false });
       setEditingProvider(null);
       fetchProviders(token);
     } catch (err) {
@@ -262,6 +265,20 @@ export default function ProvidersPage() {
               </div>
               <p className="text-xs text-gray-500 mt-1">{t('providers.typeDescription')}</p>
             </div>
+            <div className="flex items-center">
+              <input
+                id="autoLoadModels"
+                type="checkbox"
+                name="autoLoadModels"
+                checked={editingProvider ? editingProvider.autoLoadModels : newProvider.autoLoadModels}
+                onChange={handleInputChange}
+                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+              />
+              <label htmlFor="autoLoadModels" className="ml-2 block text-sm text-gray-900">
+                {t('providers.autoLoadModels')}
+              </label>
+              <p className="text-xs text-gray-500 ml-2">{t('providers.autoLoadModelsDescription')}</p>
+            </div>
             <div className="flex justify-end space-x-3">
               {editingProvider && (
                 <button 
@@ -302,6 +319,11 @@ export default function ProvidersPage() {
                       <span className="font-mono text-xs bg-gray-100 px-2 py-1 rounded">
                         {provider.baseURL}
                       </span>
+                      {provider.autoLoadModels && (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                          {t('providers.autoLoadModelsEnabled')}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex space-x-2 ml-4">

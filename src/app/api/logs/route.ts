@@ -80,8 +80,8 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
         },
       },
     }));
-    console.log(`Total logs: ${totalLogs}, Limit: ${limit}`); // Add console.log
-    console.log('Logs data sent to frontend:', JSON.stringify(formattedLogs, null, 2)); // Add this line
+    // console.log(`Total logs: ${totalLogs}, Limit: ${limit}`); // Add console.log
+    // console.log('Logs data sent to frontend:', JSON.stringify(formattedLogs, null, 2)); // Add this line
 
     return NextResponse.json({
       logs: formattedLogs, // Use formattedLogs here

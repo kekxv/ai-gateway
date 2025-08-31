@@ -1,25 +1,24 @@
-import { initializeDatabase, getDb as getDbInstance } from './database';
+import { initializeDatabase } from './database';
 
 declare global {
-  var __db: any; // Use a different global variable name to avoid conflicts
+  var __dbPromise: Promise<any>; // Use a promise to ensure it's only initialized once
 }
 
 const globalForDb = global as typeof globalThis & {
-  __db?: any;
+  __dbPromise?: Promise<any>;
 };
 
-let db: any;
-
-if (process.env.NODE_ENV === 'production') {
-  db = initializeDatabase(); // In production, initialize directly
-} else {
-  if (!globalForDb.__db) {
-    globalForDb.__db = initializeDatabase(); // In development, use global to prevent multiple initializations
+export async function getInitializedDb(): Promise<any> {
+  if (process.env.NODE_ENV === 'production') {
+    if (!globalForDb.__dbPromise) {
+      globalForDb.__dbPromise = initializeDatabase();
+    }
+    return await globalForDb.__dbPromise;
+  } else {
+    // In development, use global to prevent multiple initializations across hot reloads
+    if (!globalForDb.__dbPromise) {
+      globalForDb.__dbPromise = initializeDatabase();
+    }
+    return await globalForDb.__dbPromise;
   }
-  db = globalForDb.__db;
-}
-
-// Export a function that returns the awaited db instance
-export async function getInitializedDb() {
-  return await db;
 }

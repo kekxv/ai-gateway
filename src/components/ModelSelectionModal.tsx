@@ -112,12 +112,28 @@ export default function ModelSelectionModal({ providerId, onClose, onModelsAdded
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+    <div className="fixed inset-0 bg-gray-900 bg-opacity-30 backdrop-blur-md flex justify-center items-center z-50">
       <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-2xl w-full max-h-[90vh] flex flex-col">
-        <h2 className="text-2xl font-bold mb-6 text-gray-800">选择要添加的模型</h2>
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-2xl font-bold text-gray-800">选择要添加的模型</h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 transition-colors"
+            aria-label="Close"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
         
         {loading && <p className="text-gray-600">正在加载模型列表...</p>}
-        {error && <p className="text-red-600">错误: {error}</p>}
+        {error && (
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
+            <strong className="font-bold">错误!</strong>
+            <span className="block sm:inline"> {error}</span>
+          </div>
+        )}
 
         {!loading && !error && (
           <>
@@ -157,7 +173,6 @@ export default function ModelSelectionModal({ providerId, onClose, onModelsAdded
               <button 
                 onClick={onClose} 
                 className="px-6 py-2 border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-100 transition shadow-sm"
-                disabled={saving}
               >
                 取消
               </button>

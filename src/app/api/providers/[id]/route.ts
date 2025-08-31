@@ -25,7 +25,7 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
     }
 
     const body = await request.json();
-    const { name, baseURL, apiKey, newUserId, type } = body; // Added newUserId, type
+    const { name, baseURL, apiKey, newUserId, type, autoLoadModels } = body; // Added newUserId, type, autoLoadModels
 
     if (!name || !baseURL) { // apiKey is now optional
       return NextResponse.json({ error: '缺少必填字段' }, { status: 400 });
@@ -42,8 +42,8 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
       }
     }
 
-    const updateFields: string[] = [`name = ?`, `baseURL = ?`, `apiKey = ?`, `type = ?`];
-    const updateValues: any[] = [name, baseURL, apiKey, type];
+    const updateFields: string[] = [`name = ?`, `baseURL = ?`, `apiKey = ?`, `type = ?`, `autoLoadModels = ?`];
+    const updateValues: any[] = [name, baseURL, apiKey, type, autoLoadModels];
 
     if (newUserId !== undefined) {
       updateFields.push(`userId = ?`);

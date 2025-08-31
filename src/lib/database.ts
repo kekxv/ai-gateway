@@ -5,8 +5,15 @@ import fs from 'fs';
 
 const DB_PATH = process.env.DATABASE_URL ? process.env.DATABASE_URL.replace('file:', '') : path.resolve(process.cwd(), 'ai-gateway.db');
 
+const DATABASE_SCHEMA_VERSION = 1;
+
 const schema = `
 PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS SchemaVersion (
+  version INTEGER PRIMARY KEY,
+  appliedAt DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE IF NOT EXISTS User (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,6 +33,7 @@ CREATE TABLE IF NOT EXISTS Provider (
   baseURL TEXT NOT NULL,
   apiKey TEXT,
   type TEXT,
+  autoLoadModels BOOLEAN DEFAULT FALSE NOT NULL,
   createdAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
   userId INTEGER,
   FOREIGN KEY (userId) REFERENCES User(id) ON DELETE SET NULL
@@ -107,6 +115,59 @@ CREATE TABLE IF NOT EXISTS LogDetail (
 
 let dbInstance: any;
 
+const migrations = [
+  {
+    version: 1,
+    name: 'add_autoLoadModels_to_provider',
+    up: `ALTER TABLE Provider ADD COLUMN autoLoadModels BOOLEAN DEFAULT FALSE NOT NULL;`,
+  },
+  // Add future migrations here
+];
+
+async function runMigrations(db: any) {
+  console.log('Ensuring SchemaVersion table exists...');
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS SchemaVersion (
+      version INTEGER PRIMARY KEY,
+      appliedAt DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  console.log('SchemaVersion table check complete.');
+
+  let currentVersion = 0;
+  try {
+    const versionRow = await db.get('SELECT version FROM SchemaVersion ORDER BY version DESC LIMIT 1');
+    if (versionRow) {
+      currentVersion = versionRow.version;
+      console.log('Found existing database version:', currentVersion);
+    } else {
+      console.log('No existing schema version found in database. Assuming version 0.');
+    }
+  } catch (e) {
+    console.warn('Could not read schema version, assuming 0. Error:', e);
+    currentVersion = 0;
+  }
+
+  console.log('Current database version for migration check:', currentVersion);
+
+  let migrationsApplied = 0;
+  for (const migration of migrations) {
+    if (migration.version > currentVersion) {
+      console.log(`Applying migration v${migration.version}: ${migration.name}...`);
+      await db.exec(migration.up);
+      await db.run('INSERT INTO SchemaVersion (version) VALUES (?)', migration.version);
+      console.log(`Migration v${migration.version} (${migration.name}) applied successfully.`);
+      migrationsApplied++;
+    }
+  }
+  if (migrationsApplied > 0) {
+    console.log(`Successfully applied ${migrationsApplied} new migrations.`);
+  } else {
+    console.log('No new migrations to apply.');
+  }
+  console.log('Database migration check complete.');
+}
+
 export async function initializeDatabase() {
   const dbExists = fs.existsSync(DB_PATH);
 
@@ -116,19 +177,15 @@ export async function initializeDatabase() {
   });
 
   if (!dbExists) {
-    console.log('Database file not found, initializing schema...');
+    console.log('Database file not found, initializing base schema...');
     await dbInstance.exec(schema);
-    console.log('Database schema initialized.');
-  } else {
-    console.log('Database file found, skipping schema initialization.');
+    await dbInstance.run('INSERT INTO SchemaVersion (version) VALUES (?)', DATABASE_SCHEMA_VERSION);
+    console.log('Database schema initialized to version', DATABASE_SCHEMA_VERSION);
   }
 
-  return dbInstance;
-}
+  // Always run migrations after opening the database. The runMigrations function itself
+  // will determine if any migrations need to be applied based on the SchemaVersion table.
+  await runMigrations(dbInstance);
 
-export function getDb() {
-  if (!dbInstance) {
-    throw new Error('Database not initialized. Call initializeDatabase() first.');
-  }
   return dbInstance;
 }

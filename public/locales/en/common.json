@@ -212,7 +212,10 @@
     "modelsAdded": "Models successfully added!",
     "createFailed": "Failed to create provider",
     "updateFailed": "Failed to update provider",
-    "deleteFailed": "Failed to delete provider"
+    "deleteFailed": "Failed to delete provider",
+    "autoLoadModels": "Auto Load Models",
+    "autoLoadModelsDescription": "If enabled, the system will automatically load available models from this provider.",
+    "autoLoadModelsEnabled": "Auto Load Enabled"
   },
   "models": {
     "name": "Model Name",

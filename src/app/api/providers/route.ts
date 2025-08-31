@@ -47,7 +47,7 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
     }
 
     const body = await request.json();
-    const { name, baseURL, apiKey, type } = body;
+    const { name, baseURL, apiKey, type, autoLoadModels } = body;
 
     if (!name || !baseURL) { // apiKey is now optional
       return NextResponse.json({ error: '缺少必填字段' }, { status: 400 });
@@ -55,11 +55,12 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
 
     const db = await getInitializedDb();
     const result = await db.run(
-      'INSERT INTO Provider (name, baseURL, apiKey, type, userId) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO Provider (name, baseURL, apiKey, type, autoLoadModels, userId) VALUES (?, ?, ?, ?, ?, ?)',
       name,
       baseURL,
       apiKey,
       type,
+      autoLoadModels,
       userId
     );
     const newProvider = await db.get('SELECT * FROM Provider WHERE id = ?', result.lastID);
