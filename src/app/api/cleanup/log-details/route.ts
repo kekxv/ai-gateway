@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
+import { authMiddleware } from '@/lib/auth'; // Import authMiddleware
 import { getInitializedDb } from '@/lib/db';
 
-export async function DELETE() {
+export const DELETE = authMiddleware(async () => {
   try {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
@@ -18,4 +19,4 @@ export async function DELETE() {
     console.error('Error cleaning up log details:', error);
     return NextResponse.json({ message: 'Error cleaning up log details.', error: error.message }, { status: 500 });
   }
-}
+}, ['ADMIN']);
