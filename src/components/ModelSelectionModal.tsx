@@ -151,19 +151,23 @@ export default function ModelSelectionModal({ providerId, onClose, onModelsAdded
               <span className="text-gray-500">已选择 {selectedModels.size} / {models.length}</span>
             </div>
 
-            <div className="overflow-y-auto flex-grow">
+            <div className="overflow-y-auto flex-grow grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-2">
               {models.map(model => (
-                <div key={model.id} className="flex items-center p-3 hover:bg-gray-50 rounded-lg">
+                <div 
+                  key={model.id} 
+                  className={`flex flex-col items-start p-4 border rounded-lg shadow-sm hover:shadow-md transition-all duration-200 cursor-pointer relative ${selectedModels.has(model.name) ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}
+                  onClick={() => handleSelectModel(model.name)}
+                >
                   <input
                     type="checkbox"
                     id={`model-${model.id}`}
-                    className="h-5 w-5 rounded text-blue-600 focus:ring-blue-500 border-gray-300 shadow-sm"
+                    className="absolute top-3 right-3 h-5 w-5 rounded text-blue-600 focus:ring-blue-500 border-gray-300 shadow-sm pointer-events-none"
                     checked={selectedModels.has(model.name)}
-                    onChange={() => handleSelectModel(model.name)}
+                    readOnly // Prevent direct interaction, handled by div onClick
                   />
-                  <label htmlFor={`model-${model.id}`} className="ml-4 flex-grow">
-                    <p className="font-semibold text-gray-800">{model.name}</p>
-                    {model.description && <p className="text-sm text-gray-500">{model.description}</p>}
+                  <label htmlFor={`model-${model.id}`} className="flex-grow w-full pr-8">
+                    <p className="font-semibold text-gray-800 text-lg mb-1">{model.name}</p>
+                    {model.description && <p className="text-sm text-gray-500 line-clamp-2">{model.description}</p>}
                   </label>
                 </div>
               ))}
