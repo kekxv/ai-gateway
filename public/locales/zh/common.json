@@ -133,6 +133,10 @@
     "descriptiveName": "为您的渠道起一个描述性的名称",
     "selectMultipleModels": "按住 Ctrl (Windows) 或 Command (Mac) 选择多个模型",
     "addChannel": "添加渠道",
+    "noProvidersAvailable": "暂无可用提供商。请先添加一个提供商。",
+    "addProviderFirst": "先添加提供商",
+    "noModelsForSelectedProviders": "所选提供商暂无可用模型。",
+    "selectProviderFirst": "请先选择一个提供商以查看可用模型。",
     "updateChannel": "更新渠道",
     "cancel": "取消",
     "existingChannels": "现有渠道",
@@ -187,7 +191,10 @@
     "bindToAllChannels": "绑定所有渠道",
     "bindToAllChannelsDescription": "绑定所有渠道",
     "selectChannels": "选择渠道",
-    "selectChannelsDescription": "选择渠道"
+    "selectChannelsDescription": "选择渠道",
+    "noChannelsAvailable": "暂无可用渠道。请先添加一个渠道。",
+    "addChannelFirst": "先添加渠道",
+    "allChannels": "所有渠道"
   },
   "providers": {
     "title": "提供商管理",
