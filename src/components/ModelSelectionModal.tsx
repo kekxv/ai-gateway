@@ -156,16 +156,15 @@ export default function ModelSelectionModal({ providerId, onClose, onModelsAdded
                 <div 
                   key={model.id} 
                   className={`flex flex-col items-start p-4 border rounded-lg shadow-sm hover:shadow-md transition-all duration-200 cursor-pointer relative ${selectedModels.has(model.name) ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}
-                  onClick={() => handleSelectModel(model.name)}
                 >
                   <input
                     type="checkbox"
                     id={`model-${model.id}`}
-                    className="absolute top-3 right-3 h-5 w-5 rounded text-blue-600 focus:ring-blue-500 border-gray-300 shadow-sm pointer-events-none"
+                    className="absolute top-3 right-3 h-5 w-5 rounded text-blue-600 focus:ring-blue-500 border-gray-300 shadow-sm"
                     checked={selectedModels.has(model.name)}
-                    readOnly // Prevent direct interaction, handled by div onClick
+                    onChange={() => handleSelectModel(model.name)} // Handle change directly on checkbox
                   />
-                  <label htmlFor={`model-${model.id}`} className="flex-grow w-full pr-8">
+                  <label htmlFor={`model-${model.id}`} className="flex-grow w-full pr-8 cursor-pointer">
                     <p className="font-semibold text-gray-800 text-lg mb-1">{model.name}</p>
                     {model.description && <p className="text-sm text-gray-500 line-clamp-2">{model.description}</p>}
                   </label>
