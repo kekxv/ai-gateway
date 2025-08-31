@@ -162,10 +162,14 @@ export default function ChannelsPage() {
     try {
       const method = editingChannel ? 'PUT' : 'POST';
       const url = editingChannel ? `/api/channels/${editingChannel.id}` : '/api/channels';
+      
+      // Filter out any non-numeric IDs (in case we have string identifiers for alias models)
+      const modelIds = selectedModelIds.filter(id => typeof id === 'number');
+
       const body = {
-        name: newChannel.name, // Always use newChannel.name
-        providerIds: newChannel.providerIds, // Always use newChannel.providerIds
-        modelIds: selectedModelIds
+        name: newChannel.name,
+        providerIds: newChannel.providerIds,
+        modelIds: modelIds
       };
 
       const response = await fetch(url, {
@@ -419,7 +423,12 @@ export default function ChannelsPage() {
                             </svg>
                           )}
                         </div>
-                        <span className="text-sm font-medium text-gray-800">{model.name}</span>
+                        <div>
+                          <span className="text-sm font-medium text-gray-800">{model.name}</span>
+                          {model.alias && (
+                            <span className="block text-xs text-gray-500">{t('models.alias')}: {model.alias}</span>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>

@@ -21,14 +21,30 @@ export async function GET(request: Request) {
 
     const models = await db.all('SELECT * FROM Model');
 
-    const responseData = {
-      object: 'list',
-      data: models.map((model: { id: number; name: string; description: string; createdAt: string; updatedAt: string; userId: number }) => ({
+    const modelData = [];
+    for (const model of models) {
+      // Add the original model
+      modelData.push({
         id: model.name,
         object: 'model',
         created: Math.floor(new Date(model.createdAt).getTime() / 1000),
         owned_by: 'system',
-      })),
+      });
+      
+      // If the model has an alias, add it as a separate entry
+      if (model.alias && model.alias.trim() !== '') {
+        modelData.push({
+          id: model.alias,
+          object: 'model',
+          created: Math.floor(new Date(model.createdAt).getTime() / 1000),
+          owned_by: 'system',
+        });
+      }
+    }
+
+    const responseData = {
+      object: 'list',
+      data: modelData,
     };
 
     return NextResponse.json(responseData, {
