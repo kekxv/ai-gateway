@@ -303,7 +303,7 @@ export default function ModelsPage() {
                         <option value="">{t('models.selectChannel')}</option>
                         {channels.map(channel => (
                           <option key={channel.id} value={channel.id}>
-                            {channel.name} ({channel.provider.name})
+                            {channel.name} ({channel.provider?.name || 'Unknown Provider'})
                           </option>
                         ))}
                       </select>
