@@ -2,7 +2,6 @@
 
 import { useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { useTranslation } from 'react-i18next';
 
 export default function LoginPage() {

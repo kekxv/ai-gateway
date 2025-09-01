@@ -1,7 +1,6 @@
 'use client';
 
 import { I18nextProvider } from 'react-i18next';
-import { appWithTranslation } from 'next-i18next';
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import common_zh from '../../public/locales/zh/common.json';

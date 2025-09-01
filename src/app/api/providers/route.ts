@@ -8,11 +8,6 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
     const userId = request.user?.userId;
     const userRole = request.user?.role;
 
-    let whereClause = {};
-    if (userRole !== 'ADMIN') {
-      whereClause = { userId: userId };
-    }
-
     const db = await getInitializedDb();
 
     const providers = await db.all(
