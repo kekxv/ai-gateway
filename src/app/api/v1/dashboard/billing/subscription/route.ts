@@ -37,7 +37,7 @@ export async function GET(request: Request) {
       plan: 'free', // Default plan
       status: user.validUntil && new Date() > new Date(user.validUntil) ? 'expired' : 'active',
       currentPeriodEnd: user.validUntil ? new Date(user.validUntil).toISOString() : null,
-      balance: user.balance ? user.balance / 10000 : 0, // Convert from internal unit to display unit
+      balance: user.balance !== undefined && user.balance !== null ? user.balance / 10000 : 0, // Convert from internal unit to display unit
       createdAt: user.createdAt,
     };
 
