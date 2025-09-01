@@ -14,11 +14,13 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
 
     const db = await getInitializedDb();
 
-    let query = `SELECT l.*, ld.requestBody, ld.responseBody, ak.name as apiKeyName, ak.userId as apiKeyUserId, u.email as userEmail, u.role as userRole
+    let query = `SELECT l.*, ld.requestBody, ld.responseBody, ak.name as apiKeyName, ak.userId as apiKeyUserId, u.email as userEmail, u.role as userRole, c.id as ownerChannelId, c.name as ownerChannelName, cu.email as ownerChannelUserEmail
                  FROM Log l
                  LEFT JOIN LogDetail ld ON l.id = ld.logId
                  JOIN GatewayApiKey ak ON l.apiKeyId = ak.id
-                 LEFT JOIN User u ON ak.userId = u.id`;
+                 LEFT JOIN User u ON ak.userId = u.id
+                 LEFT JOIN Channel c ON l.ownerChannelId = c.id
+                 LEFT JOIN User cu ON l.ownerChannelUserId = cu.id`;
 
     let countQuery = `SELECT COUNT(*) as count FROM Log l JOIN GatewayApiKey ak ON l.apiKeyId = ak.id`;
 
@@ -61,6 +63,13 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
       } : undefined,
       modelName: log.modelName,
       providerName: log.providerName,
+      ownerChannel: log.ownerChannelId ? {
+        id: log.ownerChannelId,
+        name: log.ownerChannelName,
+        user: log.ownerChannelUserEmail ? {
+          email: log.ownerChannelUserEmail
+        } : undefined
+      } : undefined
     }));
 
     return NextResponse.json({

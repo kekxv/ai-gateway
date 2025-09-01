@@ -186,6 +186,10 @@ export async function POST(request: Request) {
           // Calculate cost
           const totalCost = Math.round(((promptTokens / 1000) * model.inputTokenPrice + (completionTokens / 1000) * model.outputTokenPrice)); // Round to nearest integer (cents)
 
+          // Initialize channel owner variables
+          let ownerChannelId = null;
+          let ownerChannelUserId = null;
+
           // Only check balance and deduct if cost is greater than 0
           if (totalCost > 0) {
             // Fetch user again to get latest balance (important for concurrency)
@@ -196,14 +200,77 @@ export async function POST(request: Request) {
               // A more robust solution might involve rolling back the request or marking user as negative.
               console.error(`User ${dbKey.userId} has insufficient balance (${currentUser?.balance}) for cost ${totalCost}.`);
             } else {
-              // Deduct cost from user's balance
-              await db.run('UPDATE User SET balance = balance - ? WHERE id = ?', totalCost, dbKey.userId);
+              // Deduct cost from user's balance only if they are not the channel owner
+              let shouldDeduct = true;
+              
+              // Check if the model route is associated with a shared channel
+              // Find the channel that allows this model and is associated with the API key
+              if (!dbKey.bindToAllChannels) {
+                const apiKeyChannels = await db.all(
+                  'SELECT channelId FROM GatewayApiKeyChannel WHERE apiKeyId = ?',
+                  dbKey.id
+                );
+                const allowedChannelIds = apiKeyChannels.map((gac: any) => gac.channelId);
+                
+                if (allowedChannelIds.length > 0) {
+                  const channelModel = await db.get(
+                    `SELECT c.id as channelId, c.userId as channelUserId, c.shared as channelShared
+                     FROM Channel c
+                     JOIN ChannelAllowedModel cam ON c.id = cam.channelId
+                     WHERE cam.modelId = ? AND c.id IN (${allowedChannelIds.map(() => '?').join(',')}) AND c.shared = 1
+                     LIMIT 1`,
+                    model.id,
+                    ...allowedChannelIds
+                  );
+                  
+                  if (channelModel) {
+                    ownerChannelId = channelModel.channelId;
+                    ownerChannelUserId = channelModel.channelUserId;
+                    
+                    // If user is the channel owner, don't deduct balance
+                    if (ownerChannelUserId === dbKey.userId) {
+                      shouldDeduct = false;
+                    }
+                  }
+                }
+              } else {
+                // When bound to all channels, check if there's a shared channel that allows this model
+                const channelModel = await db.get(
+                  `SELECT c.id as channelId, c.userId as channelUserId, c.shared as channelShared
+                   FROM Channel c
+                   JOIN ChannelAllowedModel cam ON c.id = cam.channelId
+                   WHERE cam.modelId = ? AND c.shared = 1
+                   LIMIT 1`,
+                  model.id
+                );
+                
+                if (channelModel) {
+                  ownerChannelId = channelModel.channelId;
+                  ownerChannelUserId = channelModel.channelUserId;
+                  
+                  // If user is the channel owner, don't deduct balance
+                  if (ownerChannelUserId === dbKey.userId) {
+                    shouldDeduct = false;
+                  }
+                }
+              }
+              
+              // Deduct cost from user's balance if they are not the channel owner
+              if (shouldDeduct) {
+                await db.run('UPDATE User SET balance = balance - ? WHERE id = ?', totalCost, dbKey.userId);
+              }
+              
+              // If we found a shared channel and user is not the owner, distribute the cost
+              if (ownerChannelId && ownerChannelUserId && ownerChannelUserId !== dbKey.userId) {
+                // Add cost to channel owner's balance
+                await db.run('UPDATE User SET balance = balance + ? WHERE id = ?', totalCost, ownerChannelUserId);
+              }
             }
           }
 
           const result = await db.run(
-            'INSERT INTO Log (latency, promptTokens, completionTokens, totalTokens, apiKeyId, modelName, providerName, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-            latency, promptTokens, completionTokens, totalTokens, dbKey.id, model.name, selectedRoute.providerName, totalCost
+            'INSERT INTO Log (latency, promptTokens, completionTokens, totalTokens, apiKeyId, modelName, providerName, cost, ownerChannelId, ownerChannelUserId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            latency, promptTokens, completionTokens, totalTokens, dbKey.id, model.name, selectedRoute.providerName, totalCost, ownerChannelId, ownerChannelUserId
           );
           const logEntryId = result.lastID;
 
@@ -232,6 +299,10 @@ export async function POST(request: Request) {
           // Calculate cost
           const totalCost = Math.round(((responseData.usage.prompt_tokens / 1000) * model.inputTokenPrice + (responseData.usage.completion_tokens / 1000) * model.outputTokenPrice)); // Round to nearest integer (cents)
 
+          // Initialize channel owner variables
+          let ownerChannelId = null;
+          let ownerChannelUserId = null;
+
           // Only check balance and deduct if cost is greater than 0
           if (totalCost > 0) {
             // Fetch user again to get latest balance (important for concurrency)
@@ -239,14 +310,77 @@ export async function POST(request: Request) {
             if (!currentUser || currentUser.balance < totalCost) {
               console.error(`User ${dbKey.userId} has insufficient balance (${currentUser?.balance}) for cost ${totalCost}.`);
             } else {
-              // Deduct cost from user's balance
-              await db.run('UPDATE User SET balance = balance - ? WHERE id = ?', totalCost, dbKey.userId);
+              // Deduct cost from user's balance only if they are not the channel owner
+              let shouldDeduct = true;
+              
+              // Check if the model route is associated with a shared channel
+              // Find the channel that allows this model and is associated with the API key
+              if (!dbKey.bindToAllChannels) {
+                const apiKeyChannels = await db.all(
+                  'SELECT channelId FROM GatewayApiKeyChannel WHERE apiKeyId = ?',
+                  dbKey.id
+                );
+                const allowedChannelIds = apiKeyChannels.map((gac: any) => gac.channelId);
+                
+                if (allowedChannelIds.length > 0) {
+                  const channelModel = await db.get(
+                    `SELECT c.id as channelId, c.userId as channelUserId, c.shared as channelShared
+                     FROM Channel c
+                     JOIN ChannelAllowedModel cam ON c.id = cam.channelId
+                     WHERE cam.modelId = ? AND c.id IN (${allowedChannelIds.map(() => '?').join(',')}) AND c.shared = 1
+                     LIMIT 1`,
+                    model.id,
+                    ...allowedChannelIds
+                  );
+                  
+                  if (channelModel) {
+                    ownerChannelId = channelModel.channelId;
+                    ownerChannelUserId = channelModel.channelUserId;
+                    
+                    // If user is the channel owner, don't deduct balance
+                    if (ownerChannelUserId === dbKey.userId) {
+                      shouldDeduct = false;
+                    }
+                  }
+                }
+              } else {
+                // When bound to all channels, check if there's a shared channel that allows this model
+                const channelModel = await db.get(
+                  `SELECT c.id as channelId, c.userId as channelUserId, c.shared as channelShared
+                   FROM Channel c
+                   JOIN ChannelAllowedModel cam ON c.id = cam.channelId
+                   WHERE cam.modelId = ? AND c.shared = 1
+                   LIMIT 1`,
+                  model.id
+                );
+                
+                if (channelModel) {
+                  ownerChannelId = channelModel.channelId;
+                  ownerChannelUserId = channelModel.channelUserId;
+                  
+                  // If user is the channel owner, don't deduct balance
+                  if (ownerChannelUserId === dbKey.userId) {
+                    shouldDeduct = false;
+                  }
+                }
+              }
+              
+              // Deduct cost from user's balance if they are not the channel owner
+              if (shouldDeduct) {
+                await db.run('UPDATE User SET balance = balance - ? WHERE id = ?', totalCost, dbKey.userId);
+              }
+              
+              // If we found a shared channel and user is not the owner, distribute the cost
+              if (ownerChannelId && ownerChannelUserId && ownerChannelUserId !== dbKey.userId) {
+                // Add cost to channel owner's balance
+                await db.run('UPDATE User SET balance = balance + ? WHERE id = ?', totalCost, ownerChannelUserId);
+              }
             }
           }
 
           const result = await db.run(
-            'INSERT INTO Log (latency, promptTokens, completionTokens, totalTokens, apiKeyId, modelName, providerName, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-            latency, responseData.usage.prompt_tokens, responseData.usage.completion_tokens, responseData.usage.total_tokens, dbKey.id, model.name, selectedRoute.providerName, totalCost
+            'INSERT INTO Log (latency, promptTokens, completionTokens, totalTokens, apiKeyId, modelName, providerName, cost, ownerChannelId, ownerChannelUserId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            latency, responseData.usage.prompt_tokens, responseData.usage.completion_tokens, responseData.usage.total_tokens, dbKey.id, model.name, selectedRoute.providerName, totalCost, ownerChannelId, ownerChannelUserId
           );
           const logEntryId = result.lastID;
 

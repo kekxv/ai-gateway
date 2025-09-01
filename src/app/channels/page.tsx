@@ -153,7 +153,7 @@ export default function ChannelsPage() {
         throw new Error(errorData.error || (editingChannel ? '更新渠道失败' : '创建渠道失败'));
       }
 
-      setNewChannel({ name: '', providerIds: [] });
+      setNewChannel({ name: '', providerIds: [], shared: false });
       setSelectedModelIds([]);
       setEditingChannel(null);
       fetchData(token);

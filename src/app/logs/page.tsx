@@ -23,6 +23,13 @@ type Log = {
   providerName: string;
   requestBody?: any;
   responseBody?: any;
+  ownerChannel?: {
+    id: number;
+    name: string;
+    user?: {
+      email: string;
+    };
+  };
 };
 
 export default function LogsPage() {
@@ -112,6 +119,7 @@ export default function LogsPage() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('logs.completionTokens')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('logs.totalTokens')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('logs.cost')}</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('logs.channel')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('common.details')}</th>
               </tr>
             </thead>
@@ -132,6 +140,16 @@ export default function LogsPage() {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.completionTokens}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{log.totalTokens}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">¥{(log.cost / 10000).toFixed(4)}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {log.ownerChannel ? (
+                      <div>
+                        <div>{log.ownerChannel.name}</div>
+                        <div className="text-xs text-gray-500">Owner: {log.ownerChannel.user?.email || 'N/A'}</div>
+                      </div>
+                    ) : (
+                      'N/A'
+                    )}
+                  </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm">
                     <button
                       onClick={() => handleViewDetails(log)}

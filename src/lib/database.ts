@@ -5,7 +5,7 @@ import fs from 'fs';
 
 const DB_PATH = process.env.DATABASE_URL ? process.env.DATABASE_URL.replace('file:', '') : path.resolve(process.cwd(), 'ai-gateway.db');
 
-const DATABASE_SCHEMA_VERSION = 10;
+const DATABASE_SCHEMA_VERSION = 11;
 
 const schema = `
 PRAGMA foreign_keys = ON;
@@ -306,6 +306,20 @@ const migrations = [
       BEGIN TRANSACTION;
 
       ALTER TABLE Channel ADD COLUMN shared BOOLEAN DEFAULT FALSE NOT NULL;
+
+      COMMIT;
+      PRAGMA foreign_keys=on;
+    `,
+  },
+  {
+    version: 11,
+    name: 'add_owner_channel_to_log',
+    up: `
+      PRAGMA foreign_keys=off;
+      BEGIN TRANSACTION;
+
+      ALTER TABLE Log ADD COLUMN ownerChannelId INTEGER;
+      ALTER TABLE Log ADD COLUMN ownerChannelUserId INTEGER;
 
       COMMIT;
       PRAGMA foreign_keys=on;

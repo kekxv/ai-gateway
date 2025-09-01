@@ -13,6 +13,7 @@ interface LogDetailModalProps {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    cost: number;
     apiKey?: {
       name: string;
       user?: {
@@ -25,6 +26,13 @@ interface LogDetailModalProps {
     logDetail?: {
       requestBody?: any;
       responseBody?: any;
+    };
+    ownerChannel?: {
+      id: number;
+      name: string;
+      user?: {
+        email: string;
+      };
     };
   };
   onClose: () => void;
@@ -127,6 +135,21 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose }) => {
                 {log.latency} ms
               </span>
             </div>
+            
+            <div className="bg-gray-50 p-4 rounded-lg">
+              <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-2">{t('logs.cost')}</h3>
+              <p className="text-gray-900 font-semibold">¥{(log.cost / 10000).toFixed(4)}</p>
+            </div>
+            
+            {log.ownerChannel && (
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-2">{t('logs.channel')}</h3>
+                <p className="text-gray-900">{log.ownerChannel.name}</p>
+                {log.ownerChannel.user && (
+                  <p className="text-gray-500 text-sm">Owner: {log.ownerChannel.user.email}</p>
+                )}
+              </div>
+            )}
             
             <div className="bg-gray-50 p-4 rounded-lg">
               <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-2">{t('logs.totalTokens')}</h3>
