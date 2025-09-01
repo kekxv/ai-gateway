@@ -23,7 +23,9 @@
     "actions": "Actions",
     "unknownError": "An unknown error occurred",
     "remove": "remove",
-    "delete": "delete"
+    "delete": "delete",
+    "cancel": "cancel",
+    "update": "update"
   },
   "login": {
     "title": "Login",
@@ -39,7 +41,7 @@
     "subtitle": "Manage your account settings and track your usage.",
     "tabs": {
       "security": "Security",
-      "usage": "Token Usage"
+      "billingAndUsage": "Billing and Usage"
     },
     "security": {
       "title": "Security Settings",
@@ -96,6 +98,14 @@
         "model": "Model",
         "tokens": "Total Tokens"
       }
+    },
+    "billing": {
+      "title": "Billing Information",
+      "currentBalance": "Current Balance"
+    },
+    "billingAndUsage": {
+      "title": "Billing and Usage",
+      "description": "Manage your billing information and track your token usage."
     }
   },
   "dashboard": {
@@ -118,8 +128,9 @@
     "name": "Name",
     "promptTokens": "Prompt Tokens",
     "completionTokens": "Completion Tokens",
-    "totalTokens": "Total Tokens",
-    "requestCount": "Request Count"
+    "requestCount": "Request Count",
+    "cost": "Cost",
+    "totalCost": "Total Cost"
   },
   "channels": {
     "title": "Channel Management",
@@ -154,7 +165,10 @@
     "testing": "Testing...",
     "testSuccess": "Test completed successfully!",
     "createFailed": "Failed to create channel",
-    "updateFailed": "Failed to update channel"
+    "updateFailed": "Failed to update channel",
+    "shareChannel": "Share Channel",
+    "shareChannelDescription": "When shared, other users can use this channel but cannot modify it or see the key",
+    "shared": "Shared"
   },
   "keys": {
     "title": "API Key Management",
@@ -188,6 +202,13 @@
     "createFailed": "Failed to create API key",
     "updateFailed": "Failed to update API key",
     "deleteFailed": "Failed to delete API key",
+    "disableConfirm": "Are you sure you want to disable this API key?",
+    "disableFailed": "Failed to disable API key",
+    "enableConfirm": "Are you sure you want to enable this API key?",
+    "enableFailed": "Failed to enable API key",
+    "keyNotFound": "API key not found",
+    "disable": "Disable",
+    "enable": "Enable",
     "bindToAllChannels": "Bind To All Channels",
     "bindToAllChannelsDescription": "Bind To All Channels",
     "selectChannels": "Select Channels",
@@ -252,7 +273,17 @@
     "deleteFailed": "Failed to delete model",
     "alias": "Alias",
     "aliasPlaceholder": "Optional short name",
-    "aliasDescription": "A short name or alias for this model, e.g., gpt4"
+    "aliasDescription": "A short name or alias for this model, e.g., gpt4",
+    "inputTokenPrice": "Input Token Price",
+    "outputTokenPrice": "Output Token Price",
+    "pricePerThousandTokens": "per 1K tokens",
+    "modelRoutes": "Model Routes",
+    "channelSelectionDescription": "Select one or more channels for this model. You can set a weight for each channel to control routing distribution.",
+    "noChannelsAvailable": "No channels available. Please create a channel first.",
+    "noProviders": "No providers assigned",
+    "weight": "Weight",
+    "routes": "Routes",
+    "providerSelectionDescription": "Selection Model Routes"
   },
   "users": {
     "title": "User Management",
@@ -276,7 +307,10 @@
     "delete": "Delete",
     "optional": "Optional",
     "disableUser": "Disable User",
-    "deleteConfirm": "Are you sure you want to delete this user?"
+    "deleteConfirm": "Are you sure you want to delete this user?",
+    "balance": "Balance",
+    "adjustBalance": "Adjust Balance",
+    "newBalance": "New Balance"
   },
   "logs": {
     "title": "Usage Logs",
@@ -293,7 +327,8 @@
     "requestBody": "Request Body",
     "responseBody": "Response Body",
     "viewDetails": "View Details",
-    "userAccount": "User Account"
+    "userAccount": "User Account",
+    "cost": "Cost"
   },
   "home": {
     "title": "Your Intelligent AI Service Gateway",

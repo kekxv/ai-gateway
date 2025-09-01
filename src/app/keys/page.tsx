@@ -163,8 +163,9 @@ export default function ApiKeysPage() {
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm(t('keys.deleteConfirm'))) return;
+  const handleToggleEnabled = async (id: number, currentEnabledStatus: boolean) => {
+    const action = currentEnabledStatus ? 'disable' : 'enable';
+    if (!confirm(t(`keys.${action}Confirm`))) return;
 
     const token = localStorage.getItem('token');
     if (!token) {
@@ -173,11 +174,23 @@ export default function ApiKeysPage() {
     }
 
     try {
+      const apiKeyToUpdate = apiKeys.find(key => key.id === id);
+      if (!apiKeyToUpdate) {
+        throw new Error(t('keys.keyNotFound'));
+      }
+
       const response = await fetch(`/api/keys/${id}`, {
-        method: 'DELETE',
+        method: 'PUT',
         headers: {
+          'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
+        body: JSON.stringify({
+          ...apiKeyToUpdate,
+          enabled: !currentEnabledStatus,
+          // Ensure channels are sent correctly for the PUT endpoint
+          channelIds: apiKeyToUpdate.bindToAllChannels ? [] : (apiKeyToUpdate.channels?.map(c => c.id) || [])
+        }),
       });
 
       if (!response.ok) {
@@ -186,7 +199,7 @@ export default function ApiKeysPage() {
           router.push('/login');
           return;
         }
-        throw new Error(errorData.error || t('keys.deleteFailed'));
+        throw new Error(errorData.error || t(`keys.${action}Failed`));
       }
 
       fetchApiKeys(token);
@@ -492,10 +505,14 @@ export default function ApiKeysPage() {
                       {t('keys.edit')}
                     </button>
                     <button 
-                      onClick={() => handleDelete(apiKey.id)}
-                      className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                      onClick={() => handleToggleEnabled(apiKey.id, apiKey.enabled)}
+                      className={`inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md ${
+                        apiKey.enabled
+                          ? 'text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500'
+                          : 'text-green-700 bg-green-100 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500'
+                      }`}
                     >
-                      {t('keys.delete')}
+                      {apiKey.enabled ? t('keys.disable') : t('keys.enable')}
                     </button>
                   </div>
                 </div>

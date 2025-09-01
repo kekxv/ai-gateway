@@ -101,6 +101,14 @@ async function syncProviderModels(db: any) {
               existingModel.id
             );
             updatedProviderModelsCount++;
+
+            // NEW: Also create a ModelRoute entry with default weight 1
+            await db.run(
+              'INSERT OR IGNORE INTO ModelRoute (modelId, providerId, weight) VALUES (?, ?, ?)',
+              existingModel.id,
+              provider.id,
+              1 // Default weight
+            );
           }
         }
         
@@ -143,25 +151,7 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
       if (model.userId) {
         model.user = await db.get('SELECT id, email, role FROM User WHERE id = ?', model.userId);
       }
-      const rawModelRoutes = await db.all(
-        `SELECT mr.*, c.name as channelName
-         FROM ModelRoute mr
-         JOIN Channel c ON mr.channelId = c.id
-         WHERE mr.modelId = ?`,
-        model.id
-      );
-
-      model.modelRoutes = [];
-      for (const mr of rawModelRoutes) {
-        const channelProviders = await db.all(
-          'SELECT cp.providerId, p.name FROM ChannelProvider cp JOIN Provider p ON cp.providerId = p.id WHERE cp.channelId = ?',
-          mr.channelId
-        );
-        model.modelRoutes.push({
-          ...mr,
-          providers: channelProviders.map((cp: any) => ({ id: cp.providerId, name: cp.name })) // Attach providers
-        });
-      }
+      model.modelRoutes = await db.all('SELECT * FROM ModelRoute WHERE modelId = ?', model.id);
       model.providerModels = await db.all(
         'SELECT * FROM ProviderModel WHERE modelId = ?',
         model.id
@@ -189,8 +179,7 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
     }
 
     const body = await request.json();
-    const { models, providerId } = body; // For batch creation from model selection modal
-    const { name, description, alias, modelRoutes } = body; // For single model creation from form, added alias
+    const { models, providerId, name, description, alias, modelRoutes, inputTokenPrice, outputTokenPrice } = body;
 
     const db = await getInitializedDb();
 
@@ -204,10 +193,12 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
 
         if (!existingModel) {
           const result = await db.run(
-            'INSERT INTO Model (name, description, alias, userId) VALUES (?, ?, ?, ?)', // Added alias
+            'INSERT INTO Model (name, description, alias, inputTokenPrice, outputTokenPrice, userId) VALUES (?, ?, ?, ?, ?, ?)', // Added alias and pricing
             modelData.name,
             modelData.description,
-            modelData.alias || null, // Use alias from modelData or null
+            modelData.alias || null,
+            0, // Default inputTokenPrice
+            0, // Default outputTokenPrice
             userId
           );
           modelId = result.lastID;
@@ -237,10 +228,12 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
     // Single creation logic
     if (name) {
       const result = await db.run(
-        'INSERT INTO Model (name, description, alias, userId) VALUES (?, ?, ?, ?)', // Added alias
+        'INSERT INTO Model (name, description, alias, inputTokenPrice, outputTokenPrice, userId) VALUES (?, ?, ?, ?, ?, ?)', // Added alias and pricing
         name,
         description,
         alias || null, // Use alias from body or null
+        inputTokenPrice,
+        outputTokenPrice,
         userId
       );
       const newModelId = result.lastID;
@@ -248,9 +241,9 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
       if (modelRoutes && modelRoutes.length > 0) {
         for (const route of modelRoutes) {
           await db.run(
-            'INSERT INTO ModelRoute (modelId, channelId, weight) VALUES (?, ?, ?)',
+            'INSERT INTO ModelRoute (modelId, providerId, weight) VALUES (?, ?, ?)',
             newModelId,
-            route.channelId,
+            route.providerId,
             route.weight
           );
         }

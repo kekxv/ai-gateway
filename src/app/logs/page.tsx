@@ -11,6 +11,7 @@ type Log = {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  cost: number;
   apiKey?: {
     name: string;
     user?: {
@@ -18,14 +19,8 @@ type Log = {
       role: string;
     };
   };
-  modelRoute: {
-    model: {
-      name: string;
-    };
-    channel: {
-      name: string;
-    };
-  };
+  modelName: string;
+  providerName: string;
   requestBody?: any;
   responseBody?: any;
 };
@@ -58,7 +53,8 @@ export default function LogsPage() {
           },
         });
         if (!response.ok) {
-          throw new Error('Failed to fetch logs');
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to fetch logs');
         }
         const data = await response.json();
         setLogs(data.logs);
@@ -110,11 +106,12 @@ export default function LogsPage() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('logs.apiKey')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('logs.userAccount')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('logs.model')}</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('logs.channel')}</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('logs.provider')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('logs.latency')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('logs.promptTokens')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('logs.completionTokens')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('logs.totalTokens')}</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('logs.cost')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('common.details')}</th>
               </tr>
             </thead>
@@ -124,8 +121,8 @@ export default function LogsPage() {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{new Date(log.createdAt).toLocaleString()}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.apiKey?.name}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.apiKey?.user?.email || 'N/A'}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.modelRoute?.model.name}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.modelRoute?.channel.name}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.modelName}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.providerName}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                       {log.latency} ms
@@ -134,6 +131,7 @@ export default function LogsPage() {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.promptTokens}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.completionTokens}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{log.totalTokens}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">¥{(log.cost / 10000).toFixed(4)}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm">
                     <button
                       onClick={() => handleViewDetails(log)}

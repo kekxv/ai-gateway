@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect, FormEvent, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
-import { useTranslation } from 'react-i18next';
+import {useState, useEffect, FormEvent, useCallback} from 'react';
+import {useRouter} from 'next/navigation';
+import {useTranslation} from 'react-i18next';
 
 type Provider = {
   id: number;
@@ -10,18 +10,10 @@ type Provider = {
   baseURL: string;
 };
 
-type Channel = {
-  id: number;
-  name: string;
-  providerId: number;
-  provider: Provider; // Include provider for display
-  enabled: boolean;
-};
-
 type ModelRoute = {
   id?: number; // Optional for new routes
-  channelId: number;
-  channel?: Channel; // Include channel for display
+  providerId: number;
+  provider?: Provider;
   weight: number;
 };
 
@@ -29,22 +21,29 @@ type Model = {
   id: number;
   name: string;
   description: string | null;
-  alias: string | null; // New alias field
+  alias: string | null;
   createdAt: string;
-  modelRoutes: ModelRoute[]; // NEW: Array of model routes
+  inputTokenPrice: number;
+  outputTokenPrice: number;
+  modelRoutes: ModelRoute[];
 };
 
 export default function ModelsPage() {
   const [models, setModels] = useState<Model[]>([]);
-  const [providers, setProviders] = useState<Provider[]>([]); // New state for all available providers
-  const [channels, setChannels] = useState<Channel[]>([]); // NEW state for all available channels
-  const [newModel, setNewModel] = useState({ name: '', description: '', alias: '' });
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [newModel, setNewModel] = useState({
+    name: '',
+    description: '',
+    alias: '',
+    inputTokenPrice: 0,
+    outputTokenPrice: 0
+  });
   const [editingModel, setEditingModel] = useState<Model | null>(null);
-  const [editingModelRoutes, setEditingModelRoutes] = useState<ModelRoute[]>([]); // NEW state for managing routes
+  const [editingModelRoutes, setEditingModelRoutes] = useState<ModelRoute[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
-  const { t } = useTranslation('common');
+  const {t} = useTranslation('common');
 
   const fetchModelsAndProviders = useCallback(async (token: string) => {
     try {
@@ -54,14 +53,13 @@ export default function ModelsPage() {
         'Authorization': `Bearer ${token}`,
       };
 
-      const [modelsResponse, providersResponse, channelsResponse] = await Promise.all([
-        fetch('/api/models', { headers }),
-        fetch('/api/providers', { headers }),
-        fetch('/api/channels', { headers }), // NEW
+      const [modelsResponse, providersResponse] = await Promise.all([
+        fetch('/api/models', {headers}),
+        fetch('/api/providers', {headers}),
       ]);
 
-      if (!modelsResponse.ok || !providersResponse.ok || !channelsResponse.ok) {
-        if (modelsResponse.status === 401 || providersResponse.status === 401 || channelsResponse.status === 401) {
+      if (!modelsResponse.ok || !providersResponse.ok) {
+        if (modelsResponse.status === 401 || providersResponse.status === 401) {
           router.push('/login');
           return;
         }
@@ -70,11 +68,8 @@ export default function ModelsPage() {
 
       const modelsData = await modelsResponse.json();
       const providersData = await providersResponse.json();
-      const channelsData = await channelsResponse.json(); // NEW
-      
       setModels(modelsData);
       setProviders(providersData);
-      setChannels(channelsData);
 
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.unknownError'));
@@ -93,21 +88,26 @@ export default function ModelsPage() {
   }, [fetchModelsAndProviders, router]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const { name, value } = e.target;
+    const {name, value, type} = e.target;
+    const newValue = type === 'number' ? parseFloat(value) : value; // Parse number inputs
     if (editingModel) {
-      setEditingModel(prev => ({ ...prev!, [name]: value }));
+      setEditingModel(prev => ({...prev!, [name]: newValue}));
     } else {
-      setNewModel(prev => ({ ...prev, [name]: value }));
+      setNewModel(prev => ({...prev, [name]: newValue}));
     }
   };
 
   const handleEdit = (model: Model) => {
     setEditingModel(model);
-    setNewModel({ name: model.name, description: model.description || '', alias: model.alias || '' });
-    // Populate editingModelRoutes with existing routes, ensuring channel data is available
+    setNewModel({
+      name: model.name,
+      description: model.description || '',
+      alias: model.alias || '',
+      inputTokenPrice: model.inputTokenPrice, // Keep in 厘
+      outputTokenPrice: model.outputTokenPrice // Keep in 厘
+    });
     setEditingModelRoutes(model.modelRoutes.map(route => ({
       ...route,
-      channel: channels.find(c => c.id === route.channelId) // Ensure channel object is present for display
     })));
   };
 
@@ -124,17 +124,21 @@ export default function ModelsPage() {
     try {
       const method = editingModel ? 'PUT' : 'POST';
       const url = editingModel ? `/api/models/${editingModel.id}` : '/api/models';
-      const body = editingModel ? 
+      const body = editingModel ?
         {
           name: editingModel.name,
           description: editingModel.description,
-          alias: editingModel.alias, // Include alias
-          modelRoutes: editingModelRoutes.map(route => ({ channelId: route.channelId, weight: route.weight })) // Send only necessary data
-        } : 
+          alias: editingModel.alias,
+          inputTokenPrice: editingModel.inputTokenPrice, // Keep in 厘
+          outputTokenPrice: editingModel.outputTokenPrice, // Keep in 厘
+          modelRoutes: editingModelRoutes.map(route => ({providerId: route.providerId, weight: route.weight}))
+        } :
         {
           ...newModel,
-          alias: newModel.alias, // Include alias
-          modelRoutes: editingModelRoutes.map(route => ({ channelId: route.channelId, weight: route.weight }))
+          alias: newModel.alias,
+          inputTokenPrice: newModel.inputTokenPrice, // Keep in 厘
+          outputTokenPrice: newModel.outputTokenPrice, // Keep in 厘
+          modelRoutes: editingModelRoutes.map(route => ({providerId: route.providerId, weight: route.weight}))
         };
 
       const response = await fetch(url, {
@@ -155,8 +159,8 @@ export default function ModelsPage() {
         throw new Error(errorData.error || (editingModel ? t('models.updateFailed') : t('models.createFailed')));
       }
 
-      setNewModel({ name: '', description: '', alias: '' }); // Clear alias
-      setEditingModelRoutes([]); // Clear routes
+      setNewModel({name: '', description: '', alias: '', inputTokenPrice: 0, outputTokenPrice: 0});
+      setEditingModelRoutes([]);
       setEditingModel(null);
       fetchModelsAndProviders(token);
     } catch (err) {
@@ -277,91 +281,138 @@ export default function ModelsPage() {
               <p className="text-xs text-gray-500 mt-1">{t('models.aliasDescription')}</p>
             </div>
 
-            {/* Model Route Management */}
+            {/* New: Pricing Fields */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label htmlFor="inputTokenPrice" className="block text-sm font-medium text-gray-700 mb-1">
+                  {t('models.inputTokenPrice')} ({t('models.pricePerThousandTokens')} - 厘)
+                </label>
+                <input
+                  id="inputTokenPrice"
+                  type="number"
+                  name="inputTokenPrice"
+                  value={editingModel ? editingModel.inputTokenPrice : newModel.inputTokenPrice}
+                  onChange={handleInputChange}
+                  placeholder="0.00"
+                  step="0.01"
+                  min="0"
+                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor="outputTokenPrice" className="block text-sm font-medium text-gray-700 mb-1">
+                  {t('models.outputTokenPrice')} ({t('models.pricePerThousandTokens')} - 厘)
+                </label>
+                <input
+                  id="outputTokenPrice"
+                  type="number"
+                  name="outputTokenPrice"
+                  value={editingModel ? editingModel.outputTokenPrice : newModel.outputTokenPrice}
+                  onChange={handleInputChange}
+                  placeholder="0.00"
+                  step="0.01"
+                  min="0"
+                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Model Route Management - Provider Selection with Weight */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 {t('models.modelRoutes')}
               </label>
-              <div className="space-y-3">
-                {editingModelRoutes.map((route, index) => (
-                  <div key={index} className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg">
-                    <div className="flex-grow">
-                      <select
-                        value={route.channelId}
-                        onChange={(e) => {
-                          const newChannelId = parseInt(e.target.value, 10);
-                          const updatedRoutes = [...editingModelRoutes];
-                          updatedRoutes[index] = {
-                            ...updatedRoutes[index],
-                            channelId: newChannelId,
-                            channel: channels.find(c => c.id === newChannelId) // Update channel object
-                          };
-                          setEditingModelRoutes(updatedRoutes);
+              <p className="text-sm text-gray-500 mb-3">{t('models.providerSelectionDescription')}</p>
+
+              {providers.length === 0 ? (
+                <div className="text-center py-4 bg-gray-50 rounded-lg">
+                  <p className="text-gray-500">{t('models.noProvidersAvailable')}</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {providers.map(provider => {
+                    const existingRouteIndex = editingModelRoutes.findIndex(route => route.providerId === provider.id);
+                    const isSelected = existingRouteIndex !== -1;
+                    const weight = isSelected ? editingModelRoutes[existingRouteIndex].weight : 1;
+
+                    return (
+                      <div
+                        key={provider.id}
+                        className={`border rounded-lg p-4 cursor-pointer transition-all duration-200 ${
+                          isSelected
+                            ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-100'
+                            : 'border-gray-200 hover:border-indigo-300 hover:bg-gray-50'
+                        }`}
+                        onClick={() => {
+                          if (isSelected) {
+                            const updatedRoutes = editingModelRoutes.filter(route => route.providerId !== provider.id);
+                            setEditingModelRoutes(updatedRoutes);
+                          } else {
+                            setEditingModelRoutes([...editingModelRoutes, {providerId: provider.id, weight: 1}]);
+                          }
                         }}
-                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
                       >
-                        <option value="">{t('models.selectChannel')}</option>
-                        {channels.map(channel => (
-                          <option key={channel.id} value={channel.id}>
-                            {channel.name} ({channel.provider?.name || 'Unknown Provider'})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="w-24">
-                      <input
-                        type="number"
-                        value={route.weight}
-                        onChange={(e) => {
-                          const newWeight = parseInt(e.target.value, 10);
-                          const updatedRoutes = [...editingModelRoutes];
-                          updatedRoutes[index] = { ...updatedRoutes[index], weight: newWeight };
-                          setEditingModelRoutes(updatedRoutes);
-                        }}
-                        placeholder={t('models.weightPlaceholder')}
-                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
-                        min="1"
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const updatedRoutes = editingModelRoutes.filter((_, i) => i !== index);
-                        setEditingModelRoutes(updatedRoutes);
-                      }}
-                      className="inline-flex items-center p-2 border border-transparent rounded-md text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
-                    >
-                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <button
-                type="button"
-                onClick={() => setEditingModelRoutes([...editingModelRoutes, { channelId: 0, weight: 1 }])}
-                className="mt-3 inline-flex items-center px-3 py-2 border border-dashed border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-              >
-                <svg className="-ml-1 mr-1 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                </svg>
-                {t('models.addRoute')}
-              </button>
+                        <div className="flex items-start">
+                          <div
+                            className={`flex-shrink-0 w-5 h-5 rounded-full border flex items-center justify-center mt-0.5 ${
+                              isSelected
+                                ? 'border-indigo-500 bg-indigo-500'
+                                : 'border-gray-300'
+                            }`}>
+                            {isSelected && (
+                              <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"/>
+                              </svg>
+                            )}
+                          </div>
+                          <div className="ml-3 flex-1">
+                            <h4 className="text-sm font-medium text-gray-900">{provider.name}</h4>
+                          </div>
+                        </div>
+
+                        {isSelected && (
+                          <div className="mt-3 flex items-center">
+                            <label className="text-xs font-medium text-gray-700 mr-2">{t('models.weight')}:</label>
+                            <input
+                              type="number"
+                              value={weight}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                const newWeight = parseInt(e.target.value, 10) || 1;
+                                const updatedRoutes = [...editingModelRoutes];
+                                const index = updatedRoutes.findIndex(route => route.providerId === provider.id);
+                                if (index !== -1) {
+                                  updatedRoutes[index] = {...updatedRoutes[index], weight: newWeight};
+                                  setEditingModelRoutes(updatedRoutes);
+                                }
+                              }}
+                              className="w-16 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border p-1"
+                              min="1"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end space-x-3">
               {editingModel && (
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   onClick={() => setEditingModel(null)}
                   className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                 >
                   {t('models.cancelEdit')}
                 </button>
               )}
-              <button 
-                type="submit" 
+              <button
+                type="submit"
                 className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
               >
                 {editingModel ? t('models.updateModel') : t('models.addModel')}
@@ -380,7 +431,8 @@ export default function ModelsPage() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden p-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {models.map(model => (
-              <div key={model.id} className="flex flex-col p-4 border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-all duration-200">
+              <div key={model.id}
+                   className="flex flex-col p-4 border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-all duration-200">
                 <div className="flex-1 min-w-0 mb-4">
                   <h3 className="text-lg font-medium text-gray-900 truncate mb-1">
                     {model.name}
@@ -391,38 +443,45 @@ export default function ModelsPage() {
                     )}
                   </h3>
                   {model.description && <p className="text-sm text-gray-500 line-clamp-2">{model.description}</p>}
+                  <div className="mt-2 text-sm text-gray-600">
+                    <p>Input Price: {model.inputTokenPrice}/1K</p>
+                    <p>Output Price: {model.outputTokenPrice}/1K</p>
+                  </div>
                 </div>
-                
+
                 {model.modelRoutes.length > 0 && (
                   <div className="mb-4">
                     <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
                       {t('models.routes')}
                     </p>
                     <div className="flex flex-wrap gap-1">
-                      {model.modelRoutes.map(mr => (
-                        <span 
-                          key={mr.channelId} 
-                          className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800"
-                        >
-                          {mr.channel?.name || 'N/A'} (W: {mr.weight})
-                        </span>
-                      ))}
+                      {model.modelRoutes.map(mr => {
+                        const provider = providers.find(p => p.id === mr.providerId);
+                        return (
+                          <span
+                            key={mr.providerId}
+                            className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800"
+                          >
+                            {provider?.name || 'N/A'} (W: {mr.weight})
+                          </span>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
-                
+
                 <p className="text-xs text-gray-500 mt-auto">
                   {t('models.createdAt')}: {new Date(model.createdAt).toLocaleString()}
                 </p>
 
                 <div className="flex space-x-2 mt-4 pt-4 border-t border-gray-100">
-                  <button 
+                  <button
                     onClick={() => handleEdit(model)}
                     className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-indigo-700 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                   >
                     {t('models.edit')}
                   </button>
-                  <button 
+                  <button
                     onClick={() => handleDelete(model.id)}
                     className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
                   >

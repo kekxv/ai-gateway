@@ -11,6 +11,7 @@ type User = {
   disabled: boolean;
   validUntil: string | null;
   createdAt: string;
+  balance: number;
 };
 
 export default function UsersPage() {
@@ -25,6 +26,8 @@ export default function UsersPage() {
     disabled: false,
     validUntil: '',
   });
+  const [editingUserBalance, setEditingUserBalance] = useState<User | null>(null);
+  const [newBalanceInput, setNewBalanceInput] = useState<number>(0);
   const router = useRouter();
   const { t } = useTranslation('common');
 
@@ -152,6 +155,39 @@ export default function UsersPage() {
       }
       
       fetchUsers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An unknown error occurred');
+    }
+  };
+
+  const handleAdjustBalance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingUserBalance) return;
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`/api/users/${editingUserBalance.id}/balance`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ amount: Math.round(newBalanceInput * 10000) }), // Convert to 厘
+      });
+
+      if (response.status === 401) {
+        router.push('/login');
+        return;
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to adjust balance');
+      }
+
+      setEditingUserBalance(null); // Close modal
+      setNewBalanceInput(0); // Reset input
+      fetchUsers(); // Refetch users to update balance
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unknown error occurred');
     }
@@ -300,6 +336,7 @@ export default function UsersPage() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.status')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.validUntil')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.createdAt')}</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.balance')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('common.actions')}</th>
               </tr>
             </thead>
@@ -334,6 +371,9 @@ export default function UsersPage() {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                     {new Date(user.createdAt).toLocaleDateString()}
                   </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    ¥{(user.balance / 10000).toFixed(4)}
+                  </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                     <button
                       onClick={() => handleToggleDisabled(user.id)}
@@ -344,6 +384,12 @@ export default function UsersPage() {
                       }`}
                     >
                       {user.disabled ? t('users.enable') : t('users.disable')}
+                    </button>
+                    <button
+                      onClick={() => setEditingUserBalance(user)}
+                      className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-blue-700 bg-blue-100 hover:bg-blue-200 mr-2"
+                    >
+                      {t('users.adjustBalance')}
                     </button>
                     <button
                       onClick={() => handleDeleteUser(user.id)}
@@ -358,6 +404,51 @@ export default function UsersPage() {
           </table>
         </div>
       </div>
+
+      {/* Adjust Balance Modal */}
+      {editingUserBalance && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+              <h2 className="text-xl font-semibold text-gray-900">{t('users.adjustBalance')}</h2>
+              <button onClick={() => setEditingUserBalance(null)} className="text-gray-400 hover:text-gray-500">
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <form onSubmit={handleAdjustBalance} className="p-6">
+              <div className="mb-4">
+                <label htmlFor="balance" className="block text-sm font-medium text-gray-700 mb-1">
+                  {t('users.newBalance')} (¥)
+                </label>
+                <input
+                  type="number"
+                  id="balance"
+                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
+                  value={newBalanceInput}
+                  onChange={(e) => setNewBalanceInput(parseFloat(e.target.value))}
+                  step="0.01"
+                  required
+                />
+              </div>
+              <div className="flex justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setEditingUserBalance(null)}
+                  className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                >
+                  {t('common.cancel')}
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700"
+                >
+                  {t('common.update')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

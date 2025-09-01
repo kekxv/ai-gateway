@@ -13,7 +13,7 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
 
     const db = await getInitializedDb();
     const users = await db.all(
-      'SELECT id, email, role, disabled, validUntil, createdAt FROM User ORDER BY createdAt DESC'
+      'SELECT id, email, role, disabled, validUntil, createdAt, balance FROM User ORDER BY createdAt DESC'
     );
 
     return NextResponse.json(users, { status: 200 });

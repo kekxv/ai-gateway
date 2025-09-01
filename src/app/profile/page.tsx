@@ -2,18 +2,12 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import dynamic from 'next/dynamic';
 import SecuritySettings from '@/components/SecuritySettings';
-
-// Dynamically import the TokenUsageStats component to avoid SSR issues with recharts
-const TokenUsageStats = dynamic(() => import('@/components/TokenUsageStats'), {
-  ssr: false,
-  loading: () => <p>Loading stats...</p>,
-});
+import BillingAndUsage from '@/components/BillingAndUsage';
 
 const ProfilePage = () => {
   const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState('security');
+  const [activeTab, setActiveTab] = useState('billingAndUsage');
 
   return (
     <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
@@ -35,20 +29,20 @@ const ProfilePage = () => {
               {t('profile.tabs.security', 'Security')}
             </button>
             <button
-              onClick={() => setActiveTab('usage')}
-              className={`${ activeTab === 'usage'
+              onClick={() => setActiveTab('billingAndUsage')}
+              className={`${ activeTab === 'billingAndUsage'
                   ? 'border-blue-500 text-blue-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
             >
-              {t('profile.tabs.usage', 'Token Usage')}
+              {t('profile.tabs.billingAndUsage', 'Billing and Usage')}
             </button>
           </nav>
         </div>
 
         <div>
           {activeTab === 'security' && <SecuritySettings />}
-          {activeTab === 'usage' && <TokenUsageStats />}
+          {activeTab === 'billingAndUsage' && <BillingAndUsage />}
         </div>
       </main>
     </div>

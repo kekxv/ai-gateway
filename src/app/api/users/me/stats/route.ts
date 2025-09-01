@@ -40,14 +40,14 @@ async function getUserStats(req: AuthenticatedRequest) {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     const dailyUsageResult = await db.all(
-      `SELECT strftime('%Y-%m-%d', datetime(createdAt / 1000, 'unixepoch')) as date, SUM(totalTokens) as total
+      `SELECT strftime('%Y-%m-%d', createdAt) as date, SUM(totalTokens) as total
        FROM Log
        WHERE apiKeyId IN (${apiKeyIds.map(() => '?').join(',')})
-       AND createdAt >= ?
+       AND datetime(createdAt) >= datetime(?)
        GROUP BY date
        ORDER BY date ASC`,
       ...apiKeyIds,
-      thirtyDaysAgo.getTime()
+      thirtyDaysAgo.toISOString()
     );
 
     const dailyUsage = dailyUsageResult.reduce((acc: Record<string, number>, curr: { date: string; total: number }) => {
@@ -57,38 +57,25 @@ async function getUserStats(req: AuthenticatedRequest) {
 
     // 3. Get usage per model
     const usageByModelResult = await db.all(
-      `SELECT modelRouteId, SUM(totalTokens) as totalTokens
+      `SELECT modelName, SUM(totalTokens) as totalTokens, SUM(cost) as totalCost
        FROM Log
        WHERE apiKeyId IN (${apiKeyIds.map(() => '?').join(',')})
-       GROUP BY modelRouteId`,
+       GROUP BY modelName`,
       ...apiKeyIds
     );
 
-    const modelRouteIds = usageByModelResult.map((item: { modelRouteId: number; totalTokens: number }) => item.modelRouteId);
-    const modelRoutes = await db.all(
-      `SELECT id, modelId FROM ModelRoute WHERE id IN (${modelRouteIds.map(() => '?').join(',')})`,
-      ...modelRouteIds
-    );
-
-    const modelIdToNameMap: Record<number, string> = {};
-    for (const route of modelRoutes) {
-      const model = await db.get('SELECT name FROM Model WHERE id = ?', route.modelId);
-      if (model) {
-        modelIdToNameMap[route.id] = model.name;
-      }
-    }
-
-    const usageByModel = usageByModelResult.map((item: { modelRouteId: number; totalTokens: number }) => ({
-      modelName: modelIdToNameMap[item.modelRouteId] || '未知模型',
+    const usageByModel = usageByModelResult.map((item: { modelName: string; totalTokens: number; totalCost: number }) => ({
+      modelName: item.modelName || '未知模型',
       totalTokens: item.totalTokens || 0,
+      totalCost: item.totalCost || 0,
     })).sort((a: { modelName: string; totalTokens: number }, b: { modelName: string; totalTokens: number }) => b.totalTokens - a.totalTokens); // Sort by most used
 
 
     return NextResponse.json({
       totalUsage: {
-        promptTokens: totalUsage._sum.promptTokens || 0,
-        completionTokens: totalUsage._sum.completionTokens || 0,
-        totalTokens: totalUsage._sum.totalTokens || 0,
+        promptTokens: totalUsage?.promptTokens || 0,
+        completionTokens: totalUsage?.completionTokens || 0,
+        totalTokens: totalUsage?.totalTokens || 0,
       },
       dailyUsage,
       usageByModel,

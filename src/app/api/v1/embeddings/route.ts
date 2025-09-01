@@ -16,97 +16,136 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized: Invalid API Key' }, { status: 401 });
     }
 
-    // Non-blocking update of lastUsed time
     db.run('UPDATE GatewayApiKey SET lastUsed = ? WHERE id = ?', new Date().toISOString(), dbKey.id).catch(console.error);
 
     const requestBody = await request.json();
-    const requestedModelName = requestBody.model;
+    const originalRequestedModelName = requestBody.model;
 
-    if (!requestedModelName) {
-      return NextResponse.json({ error: 'Missing \'model\' in request body' }, { status: 400 });
+    if (!originalRequestedModelName) {
+      return NextResponse.json({ error: "Missing 'model' in request body" }, { status: 400 });
     }
 
-    // 2. Find the Model by its name
-    const model = await db.get('SELECT * FROM Model WHERE name = ?', requestedModelName);
-
+    const model = await db.get('SELECT * FROM Model WHERE name = ? OR alias = ?', originalRequestedModelName, originalRequestedModelName);
     if (!model) {
-      return NextResponse.json({ error: `Model '${requestedModelName}' not found` }, { status: 404 });
+      return NextResponse.json({ error: `Model '${originalRequestedModelName}' not found` }, { status: 404 });
     }
 
-    // 3. Find the ModelRoute for the requested model and an available channel
-    const modelRoute = await db.get(
-      `SELECT mr.*, c.name as channelName, p.name as providerName, p.baseURL, p.apiKey
+    const upstreamRequestBody = { ...requestBody, model: model.name };
+
+    const eligibleModelRoutes = await db.all(
+      `SELECT mr.id, mr.weight, mr.modelId, p.id as providerId, p.name as providerName, p.baseURL, p.apiKey
        FROM ModelRoute mr
-       JOIN Channel c ON mr.channelId = c.id
-       JOIN Provider p ON c.providerId = p.id
-       WHERE mr.modelId = ? AND c.enabled = TRUE`,
+       JOIN Provider p ON mr.providerId = p.id
+       WHERE mr.modelId = ?`,
       model.id
     );
 
-    if (modelRoute) {
-      modelRoute.channel = {
-        name: modelRoute.channelName,
-        provider: {
-          name: modelRoute.providerName,
-          baseURL: modelRoute.baseURL,
-          apiKey: modelRoute.apiKey,
-        },
-      };
+    if (eligibleModelRoutes.length === 0) {
+      return NextResponse.json({ error: `No enabled routes configured for model '${originalRequestedModelName}'` }, { status: 404 });
     }
 
-    if (!modelRoute) {
-      return NextResponse.json({ error: `No route configured for model '${requestedModelName}'` }, { status: 404 });
+    let totalWeight = 0;
+    for (const route of eligibleModelRoutes) {
+      totalWeight += route.weight;
+    }
+    let randomWeight = Math.random() * totalWeight;
+    let selectedRoute = null;
+    for (const route of eligibleModelRoutes) {
+      randomWeight -= route.weight;
+      if (randomWeight <= 0) {
+        selectedRoute = route;
+        break;
+      }
+    }
+    if (!selectedRoute) {
+      selectedRoute = eligibleModelRoutes[0];
     }
 
-    const { channel } = modelRoute;
-    const { provider } = channel;
+    // 5. API Key Permission Check (adapted for new channel rules)
+    if (!dbKey.bindToAllChannels) {
+      const requestedModelId = model.id;
 
-    // 4. Forward the request to the upstream provider
-    const targetUrl = `${provider.baseURL}/embeddings`;
+      const apiKeyChannels = await db.all(
+        'SELECT channelId FROM GatewayApiKeyChannel WHERE apiKeyId = ?',
+        dbKey.id
+      );
+      const allowedChannelIds = apiKeyChannels.map((gac: any) => gac.channelId);
+
+      if (allowedChannelIds.length === 0) {
+        return NextResponse.json({ error: `Unauthorized: API Key is not bound to any channels.` }, { status: 403 });
+      }
+
+      const modelAllowed = await db.get(
+        `SELECT 1 FROM ChannelAllowedModel WHERE modelId = ? AND channelId IN (${allowedChannelIds.map(() => '?').join(',')})`,
+        requestedModelId,
+        ...allowedChannelIds
+      );
+
+      if (!modelAllowed) {
+        return NextResponse.json({ error: `Unauthorized: API Key does not have permission for the requested model.` }, { status: 403 });
+      }
+    }
+
+    // 6. Billing Check (Initial)
+    const user = await db.get('SELECT * FROM User WHERE id = ?', dbKey.userId);
+    if (!user) {
+      return NextResponse.json({ error: 'User not found for API Key' }, { status: 500 });
+    }
+
+    // If model has a cost, check if user has positive balance
+    if ((model.inputTokenPrice > 0 || model.outputTokenPrice > 0) && user.balance <= 0) {
+      return NextResponse.json({ error: 'Insufficient balance. Please top up your account.' }, { status: 403 });
+    }
+
+    const targetUrl = `${selectedRoute.baseURL}/embeddings`;
     const startTime = Date.now();
 
     const fetchOptions: RequestInit = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${channel.provider.apiKey}`,
+        'Authorization': `Bearer ${selectedRoute.apiKey}`,
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify(upstreamRequestBody),
     };
 
     const upstreamResponse = await fetch(targetUrl, fetchOptions);
     const latency = Date.now() - startTime;
 
-    // 5. Handle response
     if (!upstreamResponse.ok) {
       const errorData = await upstreamResponse.json();
-      return NextResponse.json({ error: `上游服务错误: ${errorData.message || upstreamResponse.statusText}` }, { status: upstreamResponse.status});
+      return NextResponse.json({ error: `Upstream service error: ${errorData.error?.message || upstreamResponse.statusText}` }, { status: upstreamResponse.status });
     }
     const responseData = await upstreamResponse.json();
 
-    // Log the request
     if (responseData.usage) {
       try {
+        // Calculate cost
+        const totalCost = Math.round(((responseData.usage.prompt_tokens / 1000) * model.inputTokenPrice + (responseData.usage.completion_tokens / 1000) * model.outputTokenPrice)); // Round to nearest integer (cents)
+
+        // Only check balance and deduct if cost is greater than 0
+        if (totalCost > 0) {
+          // Fetch user again to get latest balance (important for concurrency)
+          const currentUser = await db.get('SELECT balance FROM User WHERE id = ?', dbKey.userId); // Use dbKey.userId
+          if (!currentUser || currentUser.balance < totalCost) {
+            console.error(`User ${dbKey.userId} has insufficient balance (${currentUser?.balance}) for cost ${totalCost}.`);
+          } else {
+            // Deduct cost from user's balance
+            await db.run('UPDATE User SET balance = balance - ? WHERE id = ?', totalCost, dbKey.userId);
+          }
+        }
+
         const result = await db.run(
-          'INSERT INTO Log (latency, promptTokens, completionTokens, totalTokens, apiKeyId, modelRouteId) VALUES (?, ?, ?, ?, ?, ?)',
-          latency,
-          responseData.usage.prompt_tokens,
-          responseData.usage.completion_tokens,
-          responseData.usage.total_tokens,
-          dbKey.id,
-          modelRoute.id
+          'INSERT INTO Log (latency, promptTokens, completionTokens, totalTokens, apiKeyId, modelName, providerName, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          latency, responseData.usage.prompt_tokens, responseData.usage.completion_tokens, responseData.usage.total_tokens, dbKey.id, model.name, selectedRoute.providerName, totalCost
         );
         const logEntryId = result.lastID;
-
         await db.run(
           'INSERT INTO LogDetail (logId, requestBody, responseBody) VALUES (?, ?, ?)',
-          logEntryId,
-          JSON.stringify(requestBody),
-          JSON.stringify(responseData)
+          logEntryId, JSON.stringify(requestBody), JSON.stringify(responseData)
         );
       } catch (logError) {
         console.error("Failed to log request:", logError);
-        // Don't block the response to the user
       }
     }
 

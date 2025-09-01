@@ -1,5 +1,5 @@
 import {NextResponse} from 'next/server';
-import {authMiddleware, AuthenticatedRequest} from '@/lib/auth'; // Import authMiddleware
+import {authMiddleware, AuthenticatedRequest} from '@/lib/auth';
 import {getInitializedDb} from '@/lib/db';
 
 export const GET = authMiddleware(async (request: AuthenticatedRequest, context: {
@@ -17,7 +17,8 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest, context:
     if (userRole === 'ADMIN') {
       channel = await db.get('SELECT * FROM Channel WHERE id = ?', id);
     } else {
-      channel = await db.get('SELECT * FROM Channel WHERE id = ? AND userId = ?', id, userId);
+      // Regular users can access their own channels or shared channels
+      channel = await db.get('SELECT * FROM Channel WHERE id = ? AND (userId = ? OR shared = 1)', id, userId);
     }
 
     if (!channel) {
@@ -37,25 +38,19 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest, context:
          WHERE id IN (${providerIds.map(() => '?').join(',')})`,
         ...providerIds
       );
-      channel.providers = providers; // Attach an array of providers
+      channel.providers = providers;
     } else {
       channel.providers = [];
     }
-    const rawModelRoutes = await db.all(
-      `SELECT mr.*, m.name as model_name, m.description as model_description
-       FROM ModelRoute mr
-              JOIN Model m ON mr.modelId = m.id
-       WHERE mr.channelId = ?`,
+
+    const allowedModels = await db.all(
+      `SELECT m.id, m.name, m.alias
+       FROM Model m
+       JOIN ChannelAllowedModel cam ON m.id = cam.modelId
+       WHERE cam.channelId = ?`,
       channel.id
     );
-    channel.modelRoutes = rawModelRoutes.map((mr: any) => ({
-      ...mr,
-      model: {
-        id: mr.modelId,
-        name: mr.model_name,
-        description: mr.model_description,
-      },
-    }));
+    channel.models = allowedModels;
 
     return NextResponse.json(channel);
   } catch (error) {
@@ -74,17 +69,14 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
     const userRole = request.user?.role;
 
     const body = await request.json();
-    const {name, providerIds, modelIds} = body; // Correctly destructure providerIds
+    const {name, providerIds, modelIds, shared} = body;
 
-
-    if (!name || !providerIds || providerIds.length === 0) { // This is the correct validation
-      console.error('Validation failed: name, providerIds, or providerIds.length is invalid.');
+    if (!name || !providerIds || providerIds.length === 0) {
       return NextResponse.json({error: '缺少必填字段或未选择提供商'}, {status: 400});
     }
 
-    const db = await getInitializedDb(); // <-- Re-introducing this line
+    const db = await getInitializedDb();
 
-    // Check if channel exists and user has permission
     let existingChannel;
     if (userRole === 'ADMIN') {
       existingChannel = await db.get('SELECT * FROM Channel WHERE id = ?', id);
@@ -96,7 +88,11 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
       return NextResponse.json({error: '渠道未找到或无权修改'}, {status: 404});
     }
 
-    // Validate providerIds
+    // Check if user is trying to modify a shared channel they don't own
+    if (existingChannel.shared && existingChannel.userId !== userId && userRole !== 'ADMIN') {
+      return NextResponse.json({error: '无权修改共享渠道'}, {status: 403});
+    }
+
     for (const pId of providerIds) {
       const providerExists = await db.get('SELECT 1 FROM Provider WHERE id = ?', pId);
       if (!providerExists) {
@@ -105,12 +101,12 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
     }
 
     await db.run(
-      'UPDATE Channel SET name = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+      'UPDATE Channel SET name = ?, shared = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
       name,
+      shared !== undefined ? shared : existingChannel.shared,
       id
     );
 
-    // Update ChannelProvider join table
     await db.run('DELETE FROM ChannelProvider WHERE channelId = ?', id);
     for (const pId of providerIds) {
       await db.run(
@@ -120,14 +116,14 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
       );
     }
 
-    // Update ModelRoutes: first delete existing, then insert new ones
-    await db.run('DELETE FROM ModelRoute WHERE channelId = ?', id);
+    // Update ChannelAllowedModel
+    await db.run('DELETE FROM ChannelAllowedModel WHERE channelId = ?', id);
     if (modelIds && modelIds.length > 0) {
       for (const modelId of modelIds) {
         await db.run(
-          'INSERT INTO ModelRoute (modelId, channelId) VALUES (?, ?)',
-          modelId,
-          id
+          'INSERT INTO ChannelAllowedModel (channelId, modelId) VALUES (?, ?)',
+          id,
+          modelId
         );
       }
     }
@@ -154,7 +150,6 @@ export const DELETE = authMiddleware(async (request: AuthenticatedRequest, conte
 
     const db = await getInitializedDb();
 
-    // Check if channel exists and user has permission
     let existingChannel;
     if (userRole === 'ADMIN') {
       existingChannel = await db.get('SELECT * FROM Channel WHERE id = ?', id);
@@ -166,10 +161,6 @@ export const DELETE = authMiddleware(async (request: AuthenticatedRequest, conte
       return NextResponse.json({error: '渠道未找到或无权删除'}, {status: 404});
     }
 
-    // Delete associated ModelRoutes first
-    await db.run('DELETE FROM ModelRoute WHERE channelId = ?', id);
-
-    // Delete channel
     await db.run('DELETE FROM Channel WHERE id = ?', id);
 
     return NextResponse.json({message: '渠道删除成功'});

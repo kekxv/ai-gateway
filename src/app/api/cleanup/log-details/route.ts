@@ -1,22 +1,28 @@
 import { NextResponse } from 'next/server';
-import { authMiddleware } from '@/lib/auth'; // Import authMiddleware
+import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
 import { getInitializedDb } from '@/lib/db';
 
-export const DELETE = authMiddleware(async () => {
+export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
   try {
+    const userRole = request.user?.role;
+
+    if (userRole !== 'ADMIN') {
+      return NextResponse.json({ error: 'Unauthorized: Only administrators can perform this action.' }, { status: 403 });
+    }
+
+    const db = await getInitializedDb();
+
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const db = await getInitializedDb();
     const result = await db.run(
       'DELETE FROM LogDetail WHERE createdAt < ?',
       thirtyDaysAgo.toISOString()
     );
-    const count = result.changes;
 
-    return NextResponse.json({ message: `Deleted ${count} log details older than 30 days.` });
-  } catch (error: any) {
-    console.error('Error cleaning up log details:', error);
-    return NextResponse.json({ message: 'Error cleaning up log details.', error: error.message }, { status: 500 });
+    return NextResponse.json({ message: `Successfully deleted ${result.changes} log details older than 30 days.` });
+  } catch (error) {
+    console.error("Error deleting old log details:", error);
+    return NextResponse.json({ error: 'An internal server error occurred during cleanup.' }, { status: 500 });
   }
-}, ['ADMIN']);
+});

@@ -7,17 +7,19 @@ const handleGet = authMiddleware(async (request: AuthenticatedRequest) => {
     const userId = request.user?.userId;
     const userRole = request.user?.role;
 
-    let whereClause = {};
-    if (userRole !== 'ADMIN') {
-      whereClause = { userId: userId };
-    }
-
     const db = await getInitializedDb();
 
-    const channels = await db.all(
-      `SELECT * FROM Channel ${userRole !== 'ADMIN' ? 'WHERE userId = ?' : ''} ORDER BY createdAt DESC`,
-      ...(userRole !== 'ADMIN' ? [userId] : [])
-    );
+    let channels;
+    if (userRole === 'ADMIN') {
+      // Admins see all channels
+      channels = await db.all('SELECT * FROM Channel ORDER BY createdAt DESC');
+    } else {
+      // Regular users see their own channels and shared channels
+      channels = await db.all(
+        'SELECT * FROM Channel WHERE userId = ? OR shared = 1 ORDER BY createdAt DESC',
+        userId
+      );
+    }
 
     for (const channel of channels) {
       const channelProviders = await db.all(
@@ -31,27 +33,19 @@ const handleGet = authMiddleware(async (request: AuthenticatedRequest) => {
           `SELECT * FROM Provider WHERE id IN (${providerIds.map(() => '?').join(',')})`,
           ...providerIds
         );
-        channel.providers = providers; // Attach an array of providers
+        channel.providers = providers;
       } else {
         channel.providers = [];
       }
-      const rawModelRoutes = await db.all(
-        `SELECT mr.*, m.name as model_name, m.description as model_description, m.alias as model_alias
-         FROM ModelRoute mr
-         JOIN Model m ON mr.modelId = m.id
-         WHERE mr.channelId = ?`,
+
+      const allowedModels = await db.all(
+        `SELECT m.id, m.name, m.alias
+         FROM Model m
+         JOIN ChannelAllowedModel cam ON m.id = cam.modelId
+         WHERE cam.channelId = ?`,
         channel.id
       );
-      // 重新封装 model_name, model_description 和 model_alias 到 model 对象中
-      channel.modelRoutes = rawModelRoutes.map((mr: any) => ({
-        ...mr,
-        model: {
-          id: mr.modelId, // Add this line
-          name: mr.model_name,
-          description: mr.model_description,
-          alias: mr.model_alias,
-        },
-      }));
+      channel.models = allowedModels;
     }
     return NextResponse.json(channels, {
       headers: {
@@ -68,13 +62,13 @@ const handleGet = authMiddleware(async (request: AuthenticatedRequest) => {
 
 const handlePost = authMiddleware(async (request: AuthenticatedRequest) => {
   try {
-    const userId = request.user?.userId; // Get userId from authenticated request
+    const userId = request.user?.userId;
     if (!userId) {
       return NextResponse.json({ error: '未授权: 用户ID缺失' }, { status: 401 });
     }
 
     const body = await request.json();
-    const { name, providerIds, modelIds } = body;
+    const { name, providerIds, modelIds, shared } = body;
 
     if (!name || !providerIds || providerIds.length === 0) {
       return NextResponse.json({ error: '缺少必填字段或未选择提供商' }, { status: 400 });
@@ -82,7 +76,6 @@ const handlePost = authMiddleware(async (request: AuthenticatedRequest) => {
 
     const db = await getInitializedDb();
 
-    // Validate providerIds
     for (const pId of providerIds) {
       const providerExists = await db.get('SELECT 1 FROM Provider WHERE id = ?', pId);
       if (!providerExists) {
@@ -91,13 +84,13 @@ const handlePost = authMiddleware(async (request: AuthenticatedRequest) => {
     }
 
     const result = await db.run(
-      'INSERT INTO Channel (name, userId) VALUES (?, ?)',
+      'INSERT INTO Channel (name, userId, shared) VALUES (?, ?, ?)',
       name,
-      userId
+      userId,
+      shared || false
     );
     const newChannelId = result.lastID;
 
-    // Insert into ChannelProvider join table
     for (const pId of providerIds) {
       await db.run(
         'INSERT INTO ChannelProvider (channelId, providerId) VALUES (?, ?)',
@@ -109,9 +102,9 @@ const handlePost = authMiddleware(async (request: AuthenticatedRequest) => {
     if (modelIds && modelIds.length > 0) {
       for (const modelId of modelIds) {
         await db.run(
-          'INSERT INTO ModelRoute (modelId, channelId) VALUES (?, ?)',
-          modelId,
-          newChannelId
+          'INSERT OR IGNORE INTO ChannelAllowedModel (channelId, modelId) VALUES (?, ?)',
+          newChannelId,
+          modelId
         );
       }
     }
@@ -121,7 +114,6 @@ const handlePost = authMiddleware(async (request: AuthenticatedRequest) => {
     return NextResponse.json(newChannel, { status: 201 });
   } catch (error) {
     console.error("Error creating channel:", error);
-    // Prisma unique constraint violation code
     if (error instanceof Error && 'code' in error && (error as { code: string }).code === 'P2002') {
          return NextResponse.json({ error: '此名称的渠道已存在' }, { status: 409 });
     }

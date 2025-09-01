@@ -6,17 +6,17 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import { useTranslation } from 'react-i18next';
 
 type StatsData = {
-  byProvider: Record<string, { totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number }>;
-  byChannel: Record<string, { totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number }>;
-  byModel: Record<string, { totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number }>;
-  byApiKey: Record<string, { totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number }>;
+  byProvider: Record<string, { totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number; cost: number }>;
+  byModel: Record<string, { totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number; cost: number }>;
+  byApiKey: Record<string, { totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number; cost: number }>;
   dailyUsage: { date: string; totalTokens: number; requestCount: number }[];
   weeklyUsage: { date: string; totalTokens: number; requestCount: number }[];
   monthlyUsage: { date: string; totalTokens: number; requestCount: number }[];
   userStats?: { total: number; active: number; disabled: number; expired: number };
   tokenUsageOverTime: { date: string; totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number }[];
   userTokenUsageOverTime: { userName: string; data: { date: string; totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number }[] }[];
-  byUser?: Record<string, { totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number }>;
+  byUser?: Record<string, { totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number; cost: number }>;
+  totalCost: number;
 };
 
 const StatCard = ({ title, value, icon, color }: { title: string; value: string | number; icon: React.ReactNode; color?: string }) => (
@@ -253,7 +253,7 @@ export default function DashboardPage() {
     </div>
   );
 
-  const renderStatsTable = (title: string, data: Record<string, { totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number }>, showUserEmail: boolean = false) => (
+  const renderStatsTable = (title: string, data: Record<string, { totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number; cost: number }>, showUserEmail: boolean = false) => (
     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
       <h2 className="text-xl font-semibold text-gray-800 mb-4">{title}</h2>
       <div className="overflow-x-auto">
@@ -265,6 +265,7 @@ export default function DashboardPage() {
               <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 uppercase tracking-wider">{t('dashboard.completionTokens')}</th>
               <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 uppercase tracking-wider">{t('dashboard.totalTokens')}</th>
               <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 uppercase tracking-wider">{t('dashboard.requestCount')}</th>
+              <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 uppercase tracking-wider">{t('dashboard.cost')}</th> {/* New Cost column */}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -275,6 +276,7 @@ export default function DashboardPage() {
                 <td className="px-4 py-3 text-sm text-gray-700">{values.completionTokens.toLocaleString()}</td>
                 <td className="px-4 py-3 text-sm font-semibold text-gray-900">{values.totalTokens.toLocaleString()}</td>
                 <td className="px-4 py-3 text-sm text-gray-700">{values.requestCount.toLocaleString()}</td>
+                <td className="px-4 py-3 text-sm text-gray-700">¥{(values.cost / 10000).toFixed(4)}</td> {/* Display cost */}
               </tr>
             ))}
           </tbody>
@@ -321,17 +323,17 @@ export default function DashboardPage() {
           icon={<span className="text-purple-600">🪙</span>} 
           color="bg-purple-50" 
         />
-        <StatCard 
-          title={t('dashboard.providers')} 
-          value={totalProviders} 
-          icon={<span className="text-amber-600">📦</span>} 
-          color="bg-amber-50" 
+        <StatCard
+          title={t('dashboard.totalCost')} // New StatCard for total cost
+          value={`¥${(stats.totalCost / 10000).toFixed(4)}`}
+          icon={<span className="text-green-600">💰</span>}
+          color="bg-green-50"
         />
         <StatCard 
-          title={t('dashboard.models')} 
-          value={totalModels} 
-          icon={<span className="text-emerald-600">🧠</span>} 
-          color="bg-emerald-50" 
+          title={`${t('dashboard.providers')} / ${t('dashboard.models')}`}
+          value={`${totalProviders} / ${totalModels}`}
+          icon={<span className="text-amber-600">📦</span>}
+          color="bg-amber-50" 
         />
       </div>
 
@@ -356,7 +358,6 @@ export default function DashboardPage() {
       {/* Stats tables */}
       <div className="space-y-8">
         {renderStatsTable(t('dashboard.byProvider'), stats.byProvider)}
-        {renderStatsTable(t('dashboard.byChannel'), stats.byChannel)}
         {renderStatsTable(t('dashboard.byModel'), stats.byModel)}
         {renderStatsTable(t('dashboard.byApiKey'), stats.byApiKey)}
         {stats.byUser && renderStatsTable(t('dashboard.byUser'), stats.byUser, true)}

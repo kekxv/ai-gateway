@@ -5,7 +5,7 @@ import fs from 'fs';
 
 const DB_PATH = process.env.DATABASE_URL ? process.env.DATABASE_URL.replace('file:', '') : path.resolve(process.cwd(), 'ai-gateway.db');
 
-const DATABASE_SCHEMA_VERSION = 5;
+const DATABASE_SCHEMA_VERSION = 10;
 
 const schema = `
 PRAGMA foreign_keys = ON;
@@ -184,8 +184,132 @@ const migrations = [
   },
   {
     version: 5,
-    name: 'create table settings',
+    name: 'add_table_settings',
     up: `CREATE TABLE IF NOT EXISTS Settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+  },
+  {
+    version: 6,
+    name: 'associate_model_routes_with_providers_non_destructive',
+    up: `
+      PRAGMA foreign_keys=off;
+      BEGIN TRANSACTION;
+
+      -- Add a temporary providerId column
+      ALTER TABLE ModelRoute ADD COLUMN providerId INTEGER;
+
+      -- Populate the new providerId column, choosing the provider with the lowest ID if a channel has multiple.
+      UPDATE ModelRoute
+      SET providerId = (
+        SELECT MIN(providerId)
+        FROM ChannelProvider
+        WHERE ChannelProvider.channelId = ModelRoute.channelId
+      )
+      WHERE EXISTS (
+        SELECT 1
+        FROM ChannelProvider
+        WHERE ChannelProvider.channelId = ModelRoute.channelId
+      );
+
+      -- Create the new table with the correct schema
+      CREATE TABLE ModelRoute_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        modelId INTEGER NOT NULL,
+        providerId INTEGER NOT NULL,
+        weight INTEGER DEFAULT 1 NOT NULL,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        FOREIGN KEY (modelId) REFERENCES Model(id) ON DELETE CASCADE,
+        FOREIGN KEY (providerId) REFERENCES Provider(id) ON DELETE CASCADE
+      );
+
+      -- Copy data, preserving IDs. Only migrate routes where a provider could be found.
+      INSERT INTO ModelRoute_new (id, modelId, providerId, weight, createdAt)
+      SELECT id, modelId, providerId, weight, createdAt
+      FROM ModelRoute
+      WHERE providerId IS NOT NULL;
+
+      -- Drop the old table
+      DROP TABLE ModelRoute;
+
+      -- Rename the new table to the original name
+      ALTER TABLE ModelRoute_new RENAME TO ModelRoute;
+
+      COMMIT;
+      PRAGMA foreign_keys=on;
+    `,
+  },
+  {
+    version: 7,
+    name: 'create_channel_allowed_model_table',
+    up: `
+      CREATE TABLE IF NOT EXISTS ChannelAllowedModel (
+        channelId INTEGER NOT NULL,
+        modelId INTEGER NOT NULL,
+        PRIMARY KEY (channelId, modelId),
+        FOREIGN KEY (channelId) REFERENCES Channel(id) ON DELETE CASCADE,
+        FOREIGN KEY (modelId) REFERENCES Model(id) ON DELETE CASCADE
+      );
+    `,
+  },
+  {
+    version: 8,
+    name: 'add_model_and_provider_to_log_and_remove_modelRouteId',
+    up: `
+      PRAGMA foreign_keys=off;
+      BEGIN TRANSACTION;
+
+      CREATE TABLE Log_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        latency INTEGER NOT NULL,
+        promptTokens INTEGER DEFAULT 0 NOT NULL,
+        completionTokens INTEGER DEFAULT 0 NOT NULL,
+        totalTokens INTEGER DEFAULT 0 NOT NULL,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        apiKeyId INTEGER NOT NULL,
+        modelName TEXT,
+        providerName TEXT,
+        FOREIGN KEY (apiKeyId) REFERENCES GatewayApiKey(id) ON DELETE CASCADE
+      );
+
+      INSERT INTO Log_new (id, latency, promptTokens, completionTokens, totalTokens, createdAt, apiKeyId)
+      SELECT id, latency, promptTokens, completionTokens, totalTokens, createdAt, apiKeyId
+      FROM Log;
+
+      DROP TABLE Log;
+
+      ALTER TABLE Log_new RENAME TO Log;
+
+      COMMIT;
+      PRAGMA foreign_keys=on;
+    `,
+  },
+  {
+    version: 9,
+    name: 'add_billing_fields',
+    up: `
+      PRAGMA foreign_keys=off;
+      BEGIN TRANSACTION;
+
+      ALTER TABLE User ADD COLUMN balance INTEGER DEFAULT 0 NOT NULL;
+      ALTER TABLE Model ADD COLUMN inputTokenPrice INTEGER DEFAULT 0 NOT NULL;
+      ALTER TABLE Model ADD COLUMN outputTokenPrice INTEGER DEFAULT 0 NOT NULL;
+      ALTER TABLE Log ADD COLUMN cost INTEGER DEFAULT 0 NOT NULL;
+
+      COMMIT;
+      PRAGMA foreign_keys=on;
+    `,
+  },
+  {
+    version: 10,
+    name: 'add_shared_to_channel',
+    up: `
+      PRAGMA foreign_keys=off;
+      BEGIN TRANSACTION;
+
+      ALTER TABLE Channel ADD COLUMN shared BOOLEAN DEFAULT FALSE NOT NULL;
+
+      COMMIT;
+      PRAGMA foreign_keys=on;
+    `,
   },
   // Add future migrations here
 ];

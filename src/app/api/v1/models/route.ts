@@ -19,34 +19,33 @@ export async function GET(request: Request) {
     // Non-blocking update of lastUsed time
     db.run('UPDATE GatewayApiKey SET lastUsed = ? WHERE id = ?', new Date().toISOString(), dbKey.id).catch(console.error);
 
-    // Get models associated with channels linked to this API key
     let models;
     if (dbKey.bindToAllChannels) {
-      // If API key is bound to all channels, return all models
+      // If key can access all channels, return all models explicitly allowed in any channel
       models = await db.all(`
-        SELECT DISTINCT m.* 
+        SELECT DISTINCT m.*
         FROM Model m
-        JOIN ProviderModel pm ON m.id = pm.modelId
-        JOIN ModelRoute mr ON m.id = mr.modelId
-        JOIN Channel c ON mr.channelId = c.id
-        WHERE c.enabled = 1
+        JOIN ChannelAllowedModel cam ON m.id = cam.modelId
       `);
     } else {
-      // If API key is bound to specific channels, return only models from those channels
+      // If key is bound to specific channels, return models allowed in those channels
       models = await db.all(`
-        SELECT DISTINCT m.* 
+        SELECT DISTINCT m.*
         FROM Model m
-        JOIN ProviderModel pm ON m.id = pm.modelId
-        JOIN ModelRoute mr ON m.id = mr.modelId
-        JOIN Channel c ON mr.channelId = c.id
-        JOIN GatewayApiKeyChannel gakc ON c.id = gakc.channelId
-        WHERE gakc.apiKeyId = ? AND c.enabled = 1
+        WHERE m.id IN (
+          SELECT cam.modelId
+          FROM ChannelAllowedModel cam
+          WHERE cam.channelId IN (
+            SELECT gac.channelId
+            FROM GatewayApiKeyChannel gac
+            WHERE gac.apiKeyId = ?
+          )
+        )
       `, dbKey.id);
     }
 
     const modelData = [];
     for (const model of models) {
-      // Add the original model
       modelData.push({
         id: model.name,
         object: 'model',
@@ -54,7 +53,6 @@ export async function GET(request: Request) {
         owned_by: 'system',
       });
       
-      // If the model has an alias, add it as a separate entry
       if (model.alias && model.alias.trim() !== '') {
         modelData.push({
           id: model.alias,

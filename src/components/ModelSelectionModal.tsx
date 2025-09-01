@@ -20,6 +20,7 @@ export default function ModelSelectionModal({ providerId, onClose, onModelsAdded
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
 
   const fetchModels = useCallback(async () => {
     setLoading(true);
@@ -69,10 +70,14 @@ export default function ModelSelectionModal({ providerId, onClose, onModelsAdded
   };
 
   const handleSelectAll = () => {
-    if (selectedModels.size === models.length) {
+    const modelsToSelect = models.filter(model =>
+      model.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (model.description && model.description.toLowerCase().includes(searchTerm.toLowerCase()))
+    );
+    if (selectedModels.size === modelsToSelect.length) {
       setSelectedModels(new Set());
     } else {
-      setSelectedModels(new Set(models.map(m => m.name)));
+      setSelectedModels(new Set(modelsToSelect.map(m => m.name)));
     }
   };
 
@@ -111,9 +116,14 @@ export default function ModelSelectionModal({ providerId, onClose, onModelsAdded
     }
   };
 
+  const filteredModels = models.filter(model =>
+    model.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (model.description && model.description.toLowerCase().includes(searchTerm.toLowerCase()))
+  );
+
   return (
     <div className="fixed inset-0 bg-gray-900 bg-opacity-30 backdrop-blur-md flex justify-center items-center z-50">
-      <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-2xl w-full max-h-[90vh] flex flex-col">
+      <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-4xl w-full max-h-[90vh] flex flex-col">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold text-gray-800">选择要添加的模型</h2>
           <button
@@ -137,22 +147,29 @@ export default function ModelSelectionModal({ providerId, onClose, onModelsAdded
 
         {!loading && !error && (
           <>
+            <input
+              type="text"
+              placeholder="搜索模型..."
+              className="w-full p-2 border border-gray-300 rounded-md mb-4"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
             <div className="border-b pb-4 mb-4 flex justify-between items-center">
               <div className="flex items-center">
                 <input
                   type="checkbox"
                   id="select-all"
                   className="h-5 w-5 rounded text-blue-600 focus:ring-blue-500 border-gray-300 shadow-sm"
-                  checked={models.length > 0 && selectedModels.size === models.length}
+                  checked={filteredModels.length > 0 && selectedModels.size === filteredModels.length}
                   onChange={handleSelectAll}
                 />
                 <label htmlFor="select-all" className="ml-3 text-lg font-medium text-gray-700">全选</label>
               </div>
-              <span className="text-gray-500">已选择 {selectedModels.size} / {models.length}</span>
+              <span className="text-gray-500">已选择 {selectedModels.size} / {filteredModels.length}</span>
             </div>
 
             <div className="overflow-y-auto flex-grow grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-2">
-              {models.map(model => (
+              {filteredModels.map(model => (
                 <div 
                   key={model.id} 
                   className={`flex flex-col items-start p-4 border rounded-lg shadow-sm hover:shadow-md transition-all duration-200 cursor-pointer relative ${selectedModels.has(model.name) ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}
@@ -162,7 +179,7 @@ export default function ModelSelectionModal({ providerId, onClose, onModelsAdded
                     id={`model-${model.id}`}
                     className="absolute top-3 right-3 h-5 w-5 rounded text-blue-600 focus:ring-blue-500 border-gray-300 shadow-sm"
                     checked={selectedModels.has(model.name)}
-                    onChange={() => handleSelectModel(model.name)} // Handle change directly on checkbox
+                    onChange={() => handleSelectModel(model.name)} 
                   />
                   <label htmlFor={`model-${model.id}`} className="flex-grow w-full pr-8 cursor-pointer">
                     <p className="font-semibold text-gray-800 text-lg mb-1">{model.name}</p>

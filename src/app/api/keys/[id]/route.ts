@@ -100,7 +100,7 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
   }
 });
 
-// DELETE /api/keys/[id] - Deletes an API key
+// DELETE /api/keys/[id] - Disables an API key instead of deleting it
 export const DELETE = authMiddleware(async (request: AuthenticatedRequest, context: { params: Promise<{ id: string }> }) => {
   try {
     const {id} = await context.params;
@@ -118,17 +118,15 @@ export const DELETE = authMiddleware(async (request: AuthenticatedRequest, conte
       return NextResponse.json({error: 'API 密钥未找到'}, {status: 404});
     }
     if (userRole !== 'ADMIN' && existingApiKey.userId !== userId) {
-      return NextResponse.json({error: '无权删除此 API 密钥'}, {status: 403});
+      return NextResponse.json({error: '无权禁用此 API 密钥'}, {status: 403});
     }
 
-    // Delete associated GatewayApiKeyChannel entries first
-    await db.run('DELETE FROM GatewayApiKeyChannel WHERE apiKeyId = ?', id);
+    // Disable the API key instead of deleting it
+    await db.run('UPDATE GatewayApiKey SET enabled = FALSE WHERE id = ?', id);
 
-    await db.run('DELETE FROM GatewayApiKey WHERE id = ?', id);
-
-    return NextResponse.json({message: 'API 密钥删除成功'});
+    return NextResponse.json({message: 'API 密钥已禁用'});
   } catch (error) {
-    console.error("Error deleting API key:", error);
-    return NextResponse.json({error: '删除 API 密钥失败'}, {status: 500});
+    console.error("Error disabling API key:", error);
+    return NextResponse.json({error: '禁用 API 密钥失败'}, {status: 500});
   }
 });

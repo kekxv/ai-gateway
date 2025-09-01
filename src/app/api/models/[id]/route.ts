@@ -1,112 +1,137 @@
-import { NextResponse } from 'next/server';
-import { authMiddleware, AuthenticatedRequest } from '@/lib/auth'; // Import authMiddleware
-import { getInitializedDb } from '@/lib/db';
+import {NextResponse} from 'next/server';
+import {authMiddleware, AuthenticatedRequest} from '@/lib/auth';
+import {getInitializedDb} from '@/lib/db';
 
-// PUT /api/models/[id] - Updates a model
-export const PUT = authMiddleware(async (request: AuthenticatedRequest, context: { params: { id: string } }) => {
+// GET /api/models/:id - Fetches a single model
+export const GET = authMiddleware(async (request: AuthenticatedRequest, {params}: {
+  params: Promise<{ id: string }>
+}) => {
+  const {id} = await params; // Correctly destructure id from params
   try {
-    const { id: paramId } = await context.params;
-    const id = parseInt(paramId);
     const userId = request.user?.userId;
     const userRole = request.user?.role;
-
-    if (isNaN(id)) {
-      return NextResponse.json({ error: '缺少模型 ID 或无效的 ID' }, { status: 400 });
-    }
-
-    // Check ownership or admin role
     const db = await getInitializedDb();
-    const existingModel = await db.get('SELECT * FROM Model WHERE id = ?', id);
-    if (!existingModel) {
-      return NextResponse.json({ error: '模型未找到' }, { status: 404 });
-    }
-    if (userRole !== 'ADMIN' && existingModel.userId !== userId) {
-      return NextResponse.json({ error: '无权更新此模型' }, { status: 403 });
-    }
 
-    const body = await request.json();
-    const { name, description, alias, modelRoutes, newUserId } = body; // UPDATED: added alias
+    const model = await db.get(
+      `SELECT *
+       FROM Model
+       WHERE id = ? ${userRole !== 'ADMIN' ? 'AND userId = ?' : ''}`,
+      id,
+      ...(userRole !== 'ADMIN' ? [userId] : [])
+    );
 
-    // Validate newUserId if provided and user is admin
-    if (newUserId !== undefined && userRole !== 'ADMIN') {
-      return NextResponse.json({ error: '无权更改模型所有者' }, { status: 403 });
-    }
-    if (newUserId !== undefined) {
-      const targetUser = await db.get('SELECT * FROM User WHERE id = ?', newUserId);
-      if (!targetUser) {
-        return NextResponse.json({ error: '目标用户不存在' }, { status: 400 });
-      }
+    if (!model) {
+      return NextResponse.json({error: '模型未找到'}, {status: 404});
     }
 
-    // --- Start: ModelRoute Management ---
-    // 1. Delete all existing ModelRoutes for this model
-    await db.run('DELETE FROM ModelRoute WHERE modelId = ?', id);
-
-    // 2. Create new ModelRoutes based on the received array
-    const updateFields: string[] = [`name = ?`, `description = ?`, `alias = ?`, `updatedAt = CURRENT_TIMESTAMP`];
-    const updateValues: any[] = [name, description, alias || null];
-
-    if (newUserId !== undefined) {
-      updateFields.push(`userId = ?`);
-      updateValues.push(newUserId);
+    if (model.userId) {
+      model.user = await db.get('SELECT id, email, role FROM User WHERE id = ?', model.userId);
     }
 
-    await db.run(
-      `UPDATE Model SET ${updateFields.join(', ')} WHERE id = ?`,
-      ...updateValues,
+    model.modelRoutes = await db.all('SELECT * FROM ModelRoute WHERE modelId = ?', id);
+
+    model.providerModels = await db.all(
+      'SELECT * FROM ProviderModel WHERE modelId = ?',
       id
     );
 
+    return NextResponse.json(model);
+  } catch (error) {
+    console.error(`Error fetching model ${id}:`, error);
+    return NextResponse.json({error: '获取模型失败'}, {status: 500});
+  }
+});
+
+// PUT /api/models/:id - Updates a model
+export const PUT = authMiddleware(async (request: AuthenticatedRequest, {params}: {
+  params: Promise<{ id: string }>
+}) => {
+  const {id} = await params; // Correctly destructure id from params
+  try {
+    const userId = request.user?.userId;
+    const userRole = request.user?.role;
+    const body = await request.json();
+    const {name, description, alias, modelRoutes, inputTokenPrice, outputTokenPrice} = body;
+
+    const db = await getInitializedDb();
+
+    // Check if the model exists and belongs to the user if not an admin
+    const existingModel = await db.get(
+      `SELECT *
+       FROM Model
+       WHERE id = ? ${userRole !== 'ADMIN' ? 'AND userId = ?' : ''}`,
+      id, // Use id
+      ...(userRole !== 'ADMIN' ? [userId] : [])
+    );
+
+    if (!existingModel) {
+      return NextResponse.json({error: '模型未找到或无权访问'}, {status: 404});
+    }
+
+    await db.run(
+      'UPDATE Model SET name = ?, description = ?, alias = ?, inputTokenPrice = ?, outputTokenPrice = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+      name,
+      description,
+      alias,
+      inputTokenPrice,
+      outputTokenPrice,
+      id
+    );
+
+    // Update model routes
+    await db.run('DELETE FROM ModelRoute WHERE modelId = ?', id); // Use id
     if (modelRoutes && modelRoutes.length > 0) {
       for (const route of modelRoutes) {
         await db.run(
-          'INSERT INTO ModelRoute (modelId, channelId, weight) VALUES (?, ?, ?)',
-          id,
-          route.channelId,
+          'INSERT INTO ModelRoute (modelId, providerId, weight) VALUES (?, ?, ?)',
+          id, // Use id
+          route.providerId,
           route.weight
         );
       }
     }
 
-    const updatedModel = await db.get('SELECT * FROM Model WHERE id = ?', id);
-
+    const updatedModel = await db.get('SELECT * FROM Model WHERE id = ?', id); // Use id
     return NextResponse.json(updatedModel);
   } catch (error) {
-    console.error("Error updating model:", error);
+    console.error(`Error updating model ${id}:`, error); // Keep params.id for logging
     if (error instanceof Error && 'code' in error && (error as { code: string }).code === 'P2002') {
-      return NextResponse.json({ error: '此名称的模型已存在' }, { status: 409 });
+      return NextResponse.json({error: '模型名称已存在'}, {status: 409});
     }
-    return NextResponse.json({ error: '更新模型失败' }, { status: 500 });
+    return NextResponse.json({error: '更新模型失败'}, {status: 500});
   }
 });
 
-// DELETE /api/models/[id] - Deletes a model
-export const DELETE = authMiddleware(async (request: AuthenticatedRequest, context: { params: { id: string } }) => {
+// DELETE /api/models/:id - Deletes a model
+export const DELETE = authMiddleware(async (request: AuthenticatedRequest, {params}: {
+  params: Promise<{ id: string }>
+}) => {
+  const {id} = await params; // Correctly destructure id from params
   try {
-    const { id: paramId } = await context.params;
-    const id = parseInt(paramId);
     const userId = request.user?.userId;
     const userRole = request.user?.role;
-
-    if (isNaN(id)) {
-      return NextResponse.json({ error: '缺少模型 ID 或无效的 ID' }, { status: 400 });
-    }
-
-    // Check ownership or admin role
     const db = await getInitializedDb();
-    const existingModel = await db.get('SELECT * FROM Model WHERE id = ?', id);
+
+    // Check if the model exists and belongs to the user if not an admin
+    const existingModel = await db.get(
+      `SELECT *
+       FROM Model
+       WHERE id = ? ${userRole !== 'ADMIN' ? 'AND userId = ?' : ''}`,
+      id, // Use id
+      ...(userRole !== 'ADMIN' ? [userId] : [])
+    );
+
     if (!existingModel) {
-      return NextResponse.json({ error: '模型未找到' }, { status: 404 });
-    }
-    if (userRole !== 'ADMIN' && existingModel.userId !== userId) {
-      return NextResponse.json({ error: '无权删除此模型' }, { status: 403 });
+      return NextResponse.json({error: '模型未找到或无权访问'}, {status: 404});
     }
 
-    await db.run('DELETE FROM Model WHERE id = ?', id);
+    // The database schema is set up with ON DELETE CASCADE for ModelRoute and ProviderModel,
+    // so they will be deleted automatically when the model is deleted.
+    await db.run('DELETE FROM Model WHERE id = ?', id); // Use id
 
-    return NextResponse.json({ message: '模型删除成功' });
+    return NextResponse.json({message: '模型已成功删除'});
   } catch (error) {
-    console.error("Error deleting model:", error);
-    return NextResponse.json({ error: '删除模型失败' }, { status: 500 });
+    console.error(`Error deleting model ${id}:`, error);
+    return NextResponse.json({error: '删除模型失败'}, {status: 500});
   }
 });

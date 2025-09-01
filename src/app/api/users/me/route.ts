@@ -11,7 +11,7 @@ async function getCurrentUser(req: AuthenticatedRequest) {
 
     const db = await getInitializedDb();
     const user = await db.get(
-      'SELECT id, email, role, disabled, validUntil, createdAt, totpEnabled FROM User WHERE id = ?',
+      'SELECT id, email, role, disabled, validUntil, createdAt, totpEnabled, balance FROM User WHERE id = ?',
       userId
     );
 

@@ -23,7 +23,9 @@
     "actions": "操作",
     "unknownError": "发生未知错误",
     "remove": "移除",
-    "delete": "删除"
+    "delete": "删除",
+    "cancel": "取消",
+    "update": "更新"
   },
   "login": {
     "title": "登录",
@@ -39,7 +41,7 @@
     "subtitle": "管理您的账户设置并跟踪您的使用情况。",
     "tabs": {
       "security": "安全设置",
-      "usage": "Token 使用量"
+      "billingAndUsage": "账单和使用量"
     },
     "security": {
       "title": "安全设置",
@@ -96,6 +98,14 @@
         "model": "模型",
         "tokens": "总 Token"
       }
+    },
+    "billing": {
+      "title": "账单信息",
+      "currentBalance": "当前余额"
+    },
+    "billingAndUsage": {
+      "title": "账单和使用量",
+      "description": "管理您的账单信息并跟踪您的 Token 使用情况。"
     }
   },
   "dashboard": {
@@ -118,8 +128,9 @@
     "name": "名称",
     "promptTokens": "Prompt Tokens",
     "completionTokens": "Completion Tokens",
-    "totalTokens": "总Tokens",
-    "requestCount": "请求次数"
+    "requestCount": "请求次数",
+    "cost": "费用",
+    "totalCost": "总费用"
   },
   "channels": {
     "title": "渠道管理",
@@ -154,7 +165,10 @@
     "testing": "测试中...",
     "testSuccess": "测试成功完成！",
     "createFailed": "创建渠道失败",
-    "updateFailed": "更新渠道失败"
+    "updateFailed": "更新渠道失败",
+    "shareChannel": "共享渠道",
+    "shareChannelDescription": "共享后，其他用户可以使用此渠道，但不能修改它或查看密钥",
+    "shared": "共享"
   },
   "keys": {
     "title": "API密钥管理",
@@ -188,6 +202,13 @@
     "createFailed": "创建 API 密钥失败",
     "updateFailed": "更新 API 密钥失败",
     "deleteFailed": "删除 API 密钥失败",
+    "disableConfirm": "确定要禁用此 API 密钥吗？",
+    "disableFailed": "禁用 API 密钥失败",
+    "enableConfirm": "确定要启用此 API 密钥吗？",
+    "enableFailed": "启用 API 密钥失败",
+    "keyNotFound": "API 密钥未找到",
+    "disable": "禁用",
+    "enable": "启用",
     "bindToAllChannels": "绑定所有渠道",
     "bindToAllChannelsDescription": "绑定所有渠道",
     "selectChannels": "选择渠道",
@@ -250,14 +271,19 @@
     "createFailed": "创建模型失败",
     "updateFailed": "更新模型失败",
     "deleteFailed": "删除模型失败",
+    "inputTokenPrice": "输入token价格",
+    "outputTokenPrice": "输出token价格",
+    "pricePerThousandTokens": "每 1K tokens (厘)",
     "modelRoutes": "模型路由",
-    "selectChannel": "选择渠道",
-    "weightPlaceholder": "权重",
-    "addRoute": "添加路由",
+    "channelSelectionDescription": "为该模型选择一个或多个渠道。您可以为每个渠道设置权重以控制路由分配。",
+    "noChannelsAvailable": "暂无可用渠道。请先创建一个渠道。",
+    "noProviders": "未分配提供商",
+    "weight": "权重",
     "routes": "路由",
     "alias": "别名",
     "aliasPlaceholder": "可选的短名称",
-    "aliasDescription": "用于此模型的短名称或别名，例如：gpt4"
+    "aliasDescription": "用于此模型的短名称或别名，例如：gpt4",
+    "providerSelectionDescription": "请选择模型"
   },
   "users": {
     "title": "用户管理",
@@ -281,7 +307,10 @@
     "delete": "删除",
     "optional": "可选",
     "disableUser": "禁用用户",
-    "deleteConfirm": "确定要删除这个用户吗？"
+    "deleteConfirm": "确定要删除这个用户吗？",
+    "balance": "余额",
+    "adjustBalance": "调整余额",
+    "newBalance": "新余额"
   },
   "logs": {
     "title": "使用日志",
@@ -298,7 +327,8 @@
     "requestBody": "请求体",
     "responseBody": "响应体",
     "viewDetails": "查看详情",
-    "userAccount": "用户账号"
+    "userAccount": "用户账号",
+    "cost": "费用"
   },
   "home": {
     "title": "您的智能 AI 服务网关",

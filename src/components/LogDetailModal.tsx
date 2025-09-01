@@ -20,14 +20,8 @@ interface LogDetailModalProps {
         role: string;
       };
     };
-    modelRoute: {
-      model: {
-        name: string;
-      };
-      channel: {
-        name: string;
-      };
-    };
+    modelName: string;
+    providerName: string;
     logDetail?: {
       requestBody?: any;
       responseBody?: any;
@@ -119,12 +113,12 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose }) => {
             
             <div className="bg-gray-50 p-4 rounded-lg">
               <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-2">{t('logs.model')}</h3>
-              <p className="text-gray-900">{log.modelRoute.model.name}</p>
+              <p className="text-gray-900">{log.modelName}</p>
             </div>
             
             <div className="bg-gray-50 p-4 rounded-lg">
-              <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-2">{t('logs.channel')}</h3>
-              <p className="text-gray-900">{log.modelRoute.channel.name}</p>
+              <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-2">{t('logs.provider')}</h3>
+              <p className="text-gray-900">{log.providerName}</p>
             </div>
             
             <div className="bg-gray-50 p-4 rounded-lg">

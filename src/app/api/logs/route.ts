@@ -12,25 +12,13 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
     const userId = request.user?.userId;
     const userRole = request.user?.role;
 
-    let whereClause: any = {};
-    if (userRole !== 'ADMIN') {
-      whereClause = {
-        apiKey: {
-          userId: userId,
-        },
-      };
-    }
-
     const db = await getInitializedDb();
 
-    let query = `SELECT l.*, ld.requestBody, ld.responseBody, ak.name as apiKeyName, ak.userId as apiKeyUserId, u.email as userEmail, u.role as userRole, mr.modelId, mr.channelId, m.name as modelName, c.name as channelName
+    let query = `SELECT l.*, ld.requestBody, ld.responseBody, ak.name as apiKeyName, ak.userId as apiKeyUserId, u.email as userEmail, u.role as userRole
                  FROM Log l
                  LEFT JOIN LogDetail ld ON l.id = ld.logId
                  JOIN GatewayApiKey ak ON l.apiKeyId = ak.id
-                 LEFT JOIN User u ON ak.userId = u.id
-                 JOIN ModelRoute mr ON l.modelRouteId = mr.id
-                 JOIN Model m ON mr.modelId = m.id
-                 JOIN Channel c ON mr.channelId = c.id`;
+                 LEFT JOIN User u ON ak.userId = u.id`;
 
     let countQuery = `SELECT COUNT(*) as count FROM Log l JOIN GatewayApiKey ak ON l.apiKeyId = ak.id`;
 
@@ -52,7 +40,6 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
     const totalLogsResult = await db.get(countQuery, ...countQueryParams);
     const totalLogs = totalLogsResult.count;
 
-    // Manually structure the data to match Prisma's output format
     const formattedLogs = logs.map((log: any) => ({
       id: log.id,
       createdAt: log.createdAt,
@@ -60,6 +47,7 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
       promptTokens: log.promptTokens,
       completionTokens: log.completionTokens,
       totalTokens: log.totalTokens,
+      cost: log.cost, // Add this line
       logDetail: (log.requestBody || log.responseBody) ? {
         requestBody: log.requestBody,
         responseBody: log.responseBody,
@@ -69,22 +57,14 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
         user: log.userEmail ? {
           email: log.userEmail,
           role: log.userRole,
-        } : undefined, // 如果没有用户，设置为 undefined
-      } : undefined, // 如果没有 apiKeyName，设置为 undefined
-      modelRoute: {
-        model: {
-          name: log.modelName,
-        },
-        channel: {
-          name: log.channelName,
-        },
-      },
+        } : undefined,
+      } : undefined,
+      modelName: log.modelName,
+      providerName: log.providerName,
     }));
-    // console.log(`Total logs: ${totalLogs}, Limit: ${limit}`); // Add console.log
-    // console.log('Logs data sent to frontend:', JSON.stringify(formattedLogs, null, 2)); // Add this line
 
     return NextResponse.json({
-      logs: formattedLogs, // Use formattedLogs here
+      logs: formattedLogs,
       totalPages: Math.ceil(totalLogs / limit),
       currentPage: page,
     }, {

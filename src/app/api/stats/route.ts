@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authMiddleware, AuthenticatedRequest } from '@/lib/auth'; // Import authMiddleware
+import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
 import { getInitializedDb } from '@/lib/db';
 
 export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
@@ -12,38 +12,18 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
     const userId = request.user?.userId;
     const userRole = request.user?.role;
 
-    let logWhereClause: any = {
-      createdAt: {
-        gte: thirtyDaysAgo, // Fetch logs from the last 30 days for more comprehensive stats
-      },
-    };
-
-    if (userRole !== 'ADMIN') {
-      // For non-admin users, filter logs by their API keys
-      logWhereClause = {
-        ...logWhereClause,
-        apiKey: {
-          userId: userId,
-        },
-      };
-    }
-
     const db = await getInitializedDb();
 
     let logQuery = `
       SELECT
-        l.id, l.latency, l.promptTokens, l.completionTokens, l.totalTokens, l.createdAt,
+        l.id, l.latency, l.promptTokens, l.completionTokens, l.totalTokens, l.createdAt, l.cost,
         ak.name AS apiKeyName, ak.userId AS apiKeyUserId,
         u.email AS userEmail, u.role AS userRole,
-        mr.modelId, mr.channelId,
-        m.name AS modelName,
-        c.name AS channelName
+        l.modelName,
+        l.providerName
       FROM Log l
       JOIN GatewayApiKey ak ON l.apiKeyId = ak.id
       LEFT JOIN User u ON ak.userId = u.id
-      JOIN ModelRoute mr ON l.modelRouteId = mr.id
-      JOIN Model m ON mr.modelId = m.id
-      JOIN Channel c ON mr.channelId = c.id
       WHERE l.createdAt >= ?
     `;
     const logQueryParams: any[] = [thirtyDaysAgo.toISOString()];
@@ -57,19 +37,6 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
 
     const logs = await db.all(logQuery, ...logQueryParams);
 
-    // Fetch all channels with their associated providers
-    const allChannels = await db.all(`SELECT id, name FROM Channel`);
-    const channelProvidersMap: Record<number, { id: number; name: string }[]> = {};
-
-    for (const channel of allChannels) {
-      const channelProviders = await db.all(
-        'SELECT cp.providerId, p.name FROM ChannelProvider cp JOIN Provider p ON cp.providerId = p.id WHERE cp.channelId = ?',
-        channel.id
-      );
-      channelProvidersMap[channel.id] = channelProviders.map((cp: any) => ({ id: cp.providerId, name: cp.name }));
-    }
-
-    // Fetch user statistics - only admins can see this
     let userStats = null;
     if (userRole === 'ADMIN') {
       const totalUsersResult = await db.get('SELECT COUNT(*) as count FROM User');
@@ -95,10 +62,8 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
       };
     }
 
-    // Group logs by user for charting
     const userTokenUsage: Record<string, Record<string, { totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number }>> = {};
     
-    // Initialize last 30 days for each user
     const initializeUserUsage = (userName: string) => {
       if (!userTokenUsage[userName]) {
         userTokenUsage[userName] = {};
@@ -112,16 +77,16 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
 
     const stats: any = {
       byProvider: {},
-      byChannel: {},
       byModel: {},
       byApiKey: {},
-      byUser: {}, // Add user stats
+      byUser: {},
       dailyUsage: [],
       weeklyUsage: [],
       monthlyUsage: [],
-      userStats, // Add user statistics
-      tokenUsageOverTime: [], // Add token usage over time data
-      userTokenUsageOverTime: {} // Add user-specific token usage over time data
+      userStats,
+      tokenUsageOverTime: [],
+      userTokenUsageOverTime: {},
+      totalCost: 0, // Initialize totalCost
     };
 
     const dailyUsage: Record<string, { totalTokens: number; requestCount: number }> = {};
@@ -129,93 +94,81 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
     const monthlyUsage: Record<string, { totalTokens: number; requestCount: number }> = {};
     const tokenUsageOverTime: Record<string, { totalTokens: number; promptTokens: number; completionTokens: number; requestCount: number }> = {};
 
-    // Initialize last 24 hours with correct ordering
     for (let i = 23; i >= 0; i--) {
       const date = new Date(now.getTime() - i * 60 * 60 * 1000);
       const hour = `${date.getHours()}:00`;
       dailyUsage[hour] = { totalTokens: 0, requestCount: 0 };
     }
 
-    // Initialize last 7 days with correct ordering
     for (let i = 6; i >= 0; i--) {
       const date = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
       const day = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
       weeklyUsage[day] = { totalTokens: 0, requestCount: 0 };
     }
 
-    // Initialize last 30 days with correct ordering
     for (let i = 29; i >= 0; i--) {
       const date = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
       const day = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
       monthlyUsage[day] = { totalTokens: 0, requestCount: 0 };
-      
-      // Initialize token usage over time
       tokenUsageOverTime[day] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0 };
     }
 
     for (const log of logs) {
-      // const providerName = log.providerName; // Removed
-      const channelName = log.channelName;
+      const providerName = log.providerName;
       const modelName = log.modelName;
       const apiKeyName = log.apiKeyName;
-      const userName = log.userEmail || 'Unknown User'; // Get user email
+      const userName = log.userEmail || 'Unknown User';
       const date = new Date(log.createdAt);
       const day = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
 
-      // Initialize user usage data
       initializeUserUsage(userName);
 
-      // By Provider - now iterate through associated providers
-      const associatedProviders = channelProvidersMap[log.channelId] || [];
-      for (const provider of associatedProviders) {
-        if (!stats.byProvider[provider.name]) {
-          stats.byProvider[provider.name] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0 };
+      stats.totalCost += log.cost; // Accumulate total cost
+
+      if (providerName) {
+        if (!stats.byProvider[providerName]) {
+          stats.byProvider[providerName] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0, cost: 0 }; // Add cost
         }
-        stats.byProvider[provider.name].totalTokens += log.totalTokens;
-        stats.byProvider[provider.name].promptTokens += log.promptTokens;
-        stats.byProvider[provider.name].completionTokens += log.completionTokens;
-        stats.byProvider[provider.name].requestCount += 1;
+        stats.byProvider[providerName].totalTokens += log.totalTokens;
+        stats.byProvider[providerName].promptTokens += log.promptTokens;
+        stats.byProvider[providerName].completionTokens += log.completionTokens;
+        stats.byProvider[providerName].requestCount += 1;
+        stats.byProvider[providerName].cost += log.cost; // Add cost
       }
 
-      // By Channel
-      if (!stats.byChannel[channelName]) {
-        stats.byChannel[channelName] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0 };
+      if (modelName) {
+        if (!stats.byModel[modelName]) {
+          stats.byModel[modelName] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0, cost: 0 }; // Add cost
+        }
+        stats.byModel[modelName].totalTokens += log.totalTokens;
+        stats.byModel[modelName].promptTokens += log.promptTokens;
+        stats.byModel[modelName].completionTokens += log.completionTokens;
+        stats.byModel[modelName].requestCount += 1;
+        stats.byModel[modelName].cost += log.cost; // Add cost
       }
-      stats.byChannel[channelName].totalTokens += log.totalTokens;
-      stats.byChannel[channelName].promptTokens += log.promptTokens;
-      stats.byChannel[channelName].completionTokens += log.completionTokens;
-      stats.byChannel[channelName].requestCount += 1;
 
-      // By Model
-      if (!stats.byModel[modelName]) {
-        stats.byModel[modelName] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0 };
+      if (apiKeyName) {
+        if (!stats.byApiKey[apiKeyName]) {
+          stats.byApiKey[apiKeyName] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0, cost: 0 }; // Add cost
+        }
+        stats.byApiKey[apiKeyName].totalTokens += log.totalTokens;
+        stats.byApiKey[apiKeyName].promptTokens += log.promptTokens;
+        stats.byApiKey[apiKeyName].completionTokens += log.completionTokens;
+        stats.byApiKey[apiKeyName].requestCount += 1;
+        stats.byApiKey[apiKeyName].cost += log.cost; // Add cost
       }
-      stats.byModel[modelName].totalTokens += log.totalTokens;
-      stats.byModel[modelName].promptTokens += log.promptTokens;
-      stats.byModel[modelName].completionTokens += log.completionTokens;
-      stats.byModel[modelName].requestCount += 1;
 
-      // By ApiKey
-      if (!stats.byApiKey[apiKeyName]) {
-        stats.byApiKey[apiKeyName] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0 };
-      }
-      stats.byApiKey[apiKeyName].totalTokens += log.totalTokens;
-      stats.byApiKey[apiKeyName].promptTokens += log.promptTokens;
-      stats.byApiKey[apiKeyName].completionTokens += log.completionTokens;
-      stats.byApiKey[apiKeyName].requestCount += 1;
-
-      // By User (only for admin users)
-      if (userRole === 'ADMIN') {
+      if (userRole === 'ADMIN' && userName) {
         if (!stats.byUser[userName]) {
-          stats.byUser[userName] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0 };
+          stats.byUser[userName] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0, cost: 0 }; // Add cost
         }
         stats.byUser[userName].totalTokens += log.totalTokens;
         stats.byUser[userName].promptTokens += log.promptTokens;
         stats.byUser[userName].completionTokens += log.completionTokens;
         stats.byUser[userName].requestCount += 1;
+        stats.byUser[userName].cost += log.cost; // Add cost
       }
 
-      // Daily Usage (last 24 hours)
       if (date >= twentyFourHoursAgo) {
         const hour = `${date.getHours()}:00`;
         if (dailyUsage[hour]) {
@@ -224,13 +177,11 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
         }
       }
 
-      // Weekly Usage (last 7 days)
       if (weeklyUsage[day]) {
         weeklyUsage[day].totalTokens += log.totalTokens;
         weeklyUsage[day].requestCount += 1;
       }
 
-      // Monthly Usage (last 30 days) and Token Usage Over Time
       if (monthlyUsage[day]) {
         monthlyUsage[day].totalTokens += log.totalTokens;
         monthlyUsage[day].requestCount += 1;
@@ -240,7 +191,6 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
         tokenUsageOverTime[day].completionTokens += log.completionTokens;
         tokenUsageOverTime[day].requestCount += 1;
         
-        // User-specific token usage
         userTokenUsage[userName][day].totalTokens += log.totalTokens;
         userTokenUsage[userName][day].promptTokens += log.promptTokens;
         userTokenUsage[userName][day].completionTokens += log.completionTokens;
@@ -253,7 +203,6 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
     stats.monthlyUsage = Object.entries(monthlyUsage).map(([date, data]) => ({ date, ...data }));
     stats.tokenUsageOverTime = Object.entries(tokenUsageOverTime).map(([date, data]) => ({ date, ...data }));
     
-    // Convert userTokenUsage to array format for easier consumption
     stats.userTokenUsageOverTime = Object.entries(userTokenUsage).map(([userName, usageData]) => ({
       userName,
       data: Object.entries(usageData).map(([date, data]) => ({ date, ...data }))
