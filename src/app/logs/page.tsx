@@ -21,8 +21,6 @@ type Log = {
   };
   modelName: string;
   providerName: string;
-  requestBody?: any;
-  responseBody?: any;
   ownerChannel?: {
     id: number;
     name: string;
@@ -32,17 +30,49 @@ type Log = {
   };
 };
 
+type DetailedLog = Log & {
+  logDetail?: {
+    requestBody?: any;
+    responseBody?: any;
+  };
+};
+
 export default function LogsPage() {
   const [logs, setLogs] = useState<Log[]>([]);
   const [totalPages, setTotalPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedLog, setSelectedLog] = useState<Log | null>(null);
+  const [selectedLog, setSelectedLog] = useState<DetailedLog | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const { t } = useTranslation('common');
 
-  const handleViewDetails = (log: Log) => {
-    setSelectedLog(log);
+  const handleViewDetails = async (log: Log) => {
+    // Set the basic log data first to show the modal
+    setSelectedLog(log as DetailedLog);
+    setDetailLoading(true);
+    
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`/api/logs/${log.id}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch log details');
+      }
+      
+      const detailedLog = await response.json();
+      setSelectedLog(detailedLog);
+    } catch (err) {
+      console.error('Error fetching log details:', err);
+      // Keep the basic log data if fetching details fails
+    } finally {
+      setDetailLoading(false);
+    }
   };
 
   const handleCloseModal = () => {
@@ -126,7 +156,7 @@ export default function LogsPage() {
             <tbody className="bg-white divide-y divide-gray-100">
               {logs.map((log) => (
                 <tr key={log.id} className="hover:bg-gray-50 transition-colors duration-150">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{new Date(log.createdAt).toLocaleString()}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.createdAt}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.apiKey?.name}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.apiKey?.user?.email || 'N/A'}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.modelName}</td>
@@ -198,7 +228,7 @@ export default function LogsPage() {
       </div>
 
       {selectedLog && (
-        <LogDetailModal log={selectedLog} onClose={handleCloseModal} />
+        <LogDetailModal log={selectedLog} onClose={handleCloseModal} loading={detailLoading} />
       )}
     </main>
   );

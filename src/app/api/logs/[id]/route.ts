@@ -1,48 +1,38 @@
 import { NextResponse } from 'next/server';
-import { authMiddleware, AuthenticatedRequest } from '@/lib/auth'; // Import authMiddleware
+import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
 import { getInitializedDb } from '@/lib/db';
 import { formatTimeWithTimezone } from '@/lib/timeUtils';
 
-export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
-  const { searchParams } = new URL(request.url);
-  const page = parseInt(searchParams.get('page') || '1', 10);
-  const limit = parseInt(searchParams.get('limit') || '10', 10);
-  const skip = (page - 1) * limit;
-
+export const GET = authMiddleware(async (request: AuthenticatedRequest, { params }: { params: { id: string } }) => {
   try {
     const userId = request.user?.userId;
     const userRole = request.user?.role;
 
     const db = await getInitializedDb();
 
-    let query = `SELECT l.*, ak.name as apiKeyName, ak.userId as apiKeyUserId, u.email as userEmail, u.role as userRole, c.id as ownerChannelId, c.name as ownerChannelName, cu.email as ownerChannelUserEmail
+    let query = `SELECT l.*, ld.requestBody, ld.responseBody, ak.name as apiKeyName, ak.userId as apiKeyUserId, u.email as userEmail, u.role as userRole, c.id as ownerChannelId, c.name as ownerChannelName, cu.email as ownerChannelUserEmail
                  FROM Log l
+                 LEFT JOIN LogDetail ld ON l.id = ld.logId
                  JOIN GatewayApiKey ak ON l.apiKeyId = ak.id
                  LEFT JOIN User u ON ak.userId = u.id
                  LEFT JOIN Channel c ON l.ownerChannelId = c.id
-                 LEFT JOIN User cu ON l.ownerChannelUserId = cu.id`;
+                 LEFT JOIN User cu ON l.ownerChannelUserId = cu.id
+                 WHERE l.id = ?`;
 
-    let countQuery = `SELECT COUNT(*) as count FROM Log l JOIN GatewayApiKey ak ON l.apiKeyId = ak.id`;
-
-    const queryParams: any[] = [];
-    const countQueryParams: any[] = [];
+    const queryParams: any[] = [params.id];
 
     if (userRole !== 'ADMIN') {
-      query += ` WHERE ak.userId = ?`;
-      countQuery += ` WHERE ak.userId = ?`;
+      query += ` AND ak.userId = ?`;
       queryParams.push(userId);
-      countQueryParams.push(userId);
     }
 
-    query += ` ORDER BY l.createdAt DESC LIMIT ? OFFSET ?`;
-    queryParams.push(limit, skip);
+    const log = await db.get(query, ...queryParams);
 
-    const logs = await db.all(query, ...queryParams);
+    if (!log) {
+      return NextResponse.json({ error: 'Log not found' }, { status: 404 });
+    }
 
-    const totalLogsResult = await db.get(countQuery, ...countQueryParams);
-    const totalLogs = totalLogsResult.count;
-
-    const formattedLogs = logs.map((log: any) => ({
+    const formattedLog = {
       id: log.id,
       createdAt: formatTimeWithTimezone(log.createdAt),
       latency: log.latency,
@@ -50,6 +40,10 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
       completionTokens: log.completionTokens,
       totalTokens: log.totalTokens,
       cost: log.cost,
+      logDetail: (log.requestBody || log.responseBody) ? {
+        requestBody: log.requestBody,
+        responseBody: log.responseBody,
+      } : null,
       apiKey: log.apiKeyName ? {
         name: log.apiKeyName,
         user: log.userEmail ? {
@@ -66,13 +60,9 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
           email: log.ownerChannelUserEmail
         } : undefined
       } : undefined
-    }));
+    };
 
-    return NextResponse.json({
-      logs: formattedLogs,
-      totalPages: Math.ceil(totalLogs / limit),
-      currentPage: page,
-    }, {
+    return NextResponse.json(formattedLog, {
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
         'Pragma': 'no-cache',
@@ -80,7 +70,7 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
       },
     });
   } catch (error) {
-    console.error("Error fetching logs:", error);
+    console.error("Error fetching log details:", error);
     return NextResponse.json({ error: 'An internal server error occurred.' }, { status: 500 });
   }
 });

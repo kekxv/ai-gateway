@@ -36,6 +36,7 @@ interface LogDetailModalProps {
     };
   };
   onClose: () => void;
+  loading?: boolean;
 }
 
 const JsonDisplay: React.FC<{ data: any }> = ({ data }) => {
@@ -69,7 +70,15 @@ const JsonDisplay: React.FC<{ data: any }> = ({ data }) => {
   );
 };
 
-const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose }) => {
+const LoadingSkeleton: React.FC = () => (
+  <div className="animate-pulse space-y-4">
+    <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+    <div className="h-4 bg-gray-200 rounded"></div>
+    <div className="h-4 bg-gray-200 rounded w-5/6"></div>
+  </div>
+);
+
+const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose, loading }) => {
   const { t } = useTranslation('common');
 
   return (
@@ -95,7 +104,7 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose }) => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
             <div className="bg-gray-50 p-4 rounded-lg">
               <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-2">{t('logs.timestamp')}</h3>
-              <p className="text-gray-900">{new Date(log.createdAt).toLocaleString()}</p>
+              <p className="text-gray-900">{log.createdAt}</p>
             </div>
             
             <div className="bg-gray-50 p-4 rounded-lg">
@@ -174,32 +183,62 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose }) => {
             </div>
           </div>
 
-          {log.logDetail?.requestBody && (
-            <div className="mb-8">
-              <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
-                <svg className="w-5 h-5 mr-2 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
-                </svg>
-                {t('logs.requestBody')}
-              </h3>
-              <div className="rounded-lg overflow-hidden border border-gray-200">
-                <JsonDisplay data={log.logDetail.requestBody} />
+          {loading ? (
+            <div className="space-y-8">
+              <div className="mb-8">
+                <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
+                  <svg className="w-5 h-5 mr-2 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                  </svg>
+                  {t('logs.requestBody')}
+                </h3>
+                <div className="rounded-lg overflow-hidden border border-gray-200 p-4">
+                  <LoadingSkeleton />
+                </div>
               </div>
-            </div>
-          )}
 
-          {log.logDetail?.responseBody && (
-            <div className="mb-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
-                <svg className="w-5 h-5 mr-2 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
-                </svg>
-                {t('logs.responseBody')}
-              </h3>
-              <div className="rounded-lg overflow-hidden border border-gray-200">
-                <JsonDisplay data={log.logDetail.responseBody} />
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
+                  <svg className="w-5 h-5 mr-2 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                  </svg>
+                  {t('logs.responseBody')}
+                </h3>
+                <div className="rounded-lg overflow-hidden border border-gray-200 p-4">
+                  <LoadingSkeleton />
+                </div>
               </div>
             </div>
+          ) : (
+            <>
+              {log.logDetail?.requestBody && (
+                <div className="mb-8">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
+                    <svg className="w-5 h-5 mr-2 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                    </svg>
+                    {t('logs.requestBody')}
+                  </h3>
+                  <div className="rounded-lg overflow-hidden border border-gray-200">
+                    <JsonDisplay data={log.logDetail.requestBody} />
+                  </div>
+                </div>
+              )}
+
+              {log.logDetail?.responseBody && (
+                <div className="mb-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
+                    <svg className="w-5 h-5 mr-2 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                    </svg>
+                    {t('logs.responseBody')}
+                  </h3>
+                  <div className="rounded-lg overflow-hidden border border-gray-200">
+                    <JsonDisplay data={log.logDetail.responseBody} />
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
