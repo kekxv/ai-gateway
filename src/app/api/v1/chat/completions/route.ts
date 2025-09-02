@@ -152,6 +152,23 @@ export async function POST(request: Request) {
             if (done) break;
 
             const chunk = decoder.decode(value, { stream: true });
+            // Check if the chunk contains an error
+            if (chunk.includes('"error"')) {
+              // This might be an error message from the upstream service
+              const lines = chunk.split('\n').filter(line => line.startsWith('data: '));
+              for (const line of lines) {
+                const jsonStr = line.substring(6);
+                if (jsonStr.trim() === '[DONE]') continue;
+                try {
+                  const jsonObj = JSON.parse(jsonStr);
+                  if (jsonObj.error) {
+                    console.error("Upstream service error in stream:", jsonObj.error);
+                    // We'll continue processing for logging purposes, but the client will see the error
+                  }
+                } catch (e) {}
+              }
+            }
+
             const lines = chunk.split('\n').filter(line => line.startsWith('data: '));
 
             for (const line of lines) {
@@ -289,8 +306,22 @@ export async function POST(request: Request) {
       });
     } else {
       if (!upstreamResponse.ok) {
-        const errorData = await upstreamResponse.json();
-        return NextResponse.json({ error: `Upstream service error: ${errorData.error?.message || upstreamResponse.statusText}` }, { status: upstreamResponse.status});
+        const errorText = await upstreamResponse.text();
+        let errorMessage = "Upstream service error: Provider returned error";
+        
+        try {
+          const errorData = JSON.parse(errorText);
+          if (errorData.error && errorData.error.message) {
+            errorMessage = `Upstream service error: ${errorData.error.message}`;
+          }
+        } catch (e) {
+          // If parsing fails, use the raw text if it's not empty
+          if (errorText.trim()) {
+            errorMessage = `Upstream service error: ${errorText}`;
+          }
+        }
+        
+        return NextResponse.json({ error: errorMessage }, { status: upstreamResponse.status });
       }
       const responseData = await upstreamResponse.json();
 

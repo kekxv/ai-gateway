@@ -107,6 +107,46 @@ export default function ModelSelectionModal({ providerId, onClose, onModelsAdded
         throw new Error(errData.error || '保存模型失败');
       }
 
+      // After saving models, also ensure ModelRoute entries exist for each model
+      // This ensures that models are properly associated with the provider for routing
+      const result = await response.json();
+      
+      // For each selected model, ensure there's a ModelRoute entry for this provider
+      for (const modelData of modelsToSave) {
+        // Check if this model already exists in the database
+        const modelCheckResponse = await fetch(`/api/models?name=${encodeURIComponent(modelData.name)}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+        
+        if (modelCheckResponse.ok) {
+          const modelCheckResult = await modelCheckResponse.json();
+          if (modelCheckResult && modelCheckResult.length > 0) {
+            const existingModel = modelCheckResult[0];
+            
+            // Create a ModelRoute for this model and provider if it doesn't exist
+            await fetch('/api/model-routes', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                modelId: existingModel.id,
+                providerId: providerId,
+                weight: 1
+              }),
+            }).catch(err => {
+              // Ignore conflict errors (route already exists)
+              if (err.message !== '该模型路由已存在') {
+                throw err;
+              }
+            });
+          }
+        }
+      }
+
       onModelsAdded();
       onClose();
     } catch (err) {

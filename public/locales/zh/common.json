@@ -150,6 +150,8 @@
     "selectProviderFirst": "请先选择一个提供商以查看可用模型。",
     "updateChannel": "更新渠道",
     "cancel": "取消",
+    "selectAll": "全选",
+    "deselectAll": "取消全选",
     "existingChannels": "现有渠道",
     "edit": "编辑",
     "delete": "删除",

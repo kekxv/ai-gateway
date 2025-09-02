@@ -102,7 +102,7 @@ async function syncProviderModels(db: any) {
             );
             updatedProviderModelsCount++;
 
-            // NEW: Also create a ModelRoute entry with default weight 1
+            // Also create a ModelRoute entry with default weight 1
             await db.run(
               'INSERT OR IGNORE INTO ModelRoute (modelId, providerId, weight) VALUES (?, ?, ?)',
               existingModel.id,
@@ -137,15 +137,30 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
     const userId = request.user?.userId;
     const userRole = request.user?.role;
 
+    // Get query parameters
+    const { searchParams } = new URL(request.url);
+    const name = searchParams.get('name');
+
     const db = await getInitializedDb();
 
     // Auto-sync models from providers with autoLoadModels enabled
     await syncProviderModels(db);
 
-    const models = await db.all(
-      `SELECT * FROM Model ${userRole !== 'ADMIN' ? 'WHERE userId = ?' : ''} ORDER BY createdAt DESC`,
-      ...(userRole !== 'ADMIN' ? [userId] : [])
-    );
+    let models;
+    if (name) {
+      // Fetch a specific model by name
+      models = await db.all(
+        `SELECT * FROM Model WHERE name = ? ${userRole !== 'ADMIN' ? 'AND userId = ?' : ''}`,
+        name,
+        ...(userRole !== 'ADMIN' ? [userId] : [])
+      );
+    } else {
+      // Fetch all models
+      models = await db.all(
+        `SELECT * FROM Model ${userRole !== 'ADMIN' ? 'WHERE userId = ?' : ''} ORDER BY createdAt DESC`,
+        ...(userRole !== 'ADMIN' ? [userId] : [])
+      );
+    }
 
     for (const model of models) {
       if (model.userId) {

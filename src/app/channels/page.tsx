@@ -217,7 +217,32 @@ export default function ChannelsPage() {
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">{t('channels.allowedModels')}</label>
+              <div className="flex justify-between items-center mb-1">
+                <label className="block text-sm font-medium text-gray-700">{t('channels.allowedModels')}</label>
+                {filteredModels.length > 0 && (
+                  <button 
+                    type="button"
+                    className="text-xs text-indigo-600 hover:text-indigo-800"
+                    onClick={() => {
+                      // Check if all models are selected
+                      const allSelected = filteredModels.every(model => selectedModelIds.includes(model.id));
+                      if (allSelected) {
+                        // Deselect all
+                        const newSelectedModelIds = selectedModelIds.filter(id => !filteredModels.some(model => model.id === id));
+                        setSelectedModelIds(newSelectedModelIds);
+                      } else {
+                        // Select all
+                        const newSelectedModelIds = [...new Set([...selectedModelIds, ...filteredModels.map(model => model.id)])];
+                        setSelectedModelIds(newSelectedModelIds);
+                      }
+                    }}
+                  >
+                    {filteredModels.every(model => selectedModelIds.includes(model.id)) 
+                      ? t('channels.deselectAll') 
+                      : t('channels.selectAll')}
+                  </button>
+                )}
+              </div>
               <div className="border border-gray-200 rounded-xl p-3 bg-gray-50 max-h-48 overflow-y-auto">
                 {filteredModels.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -270,7 +295,7 @@ export default function ChannelsPage() {
                       {channel.providers.map(provider => (
                         <span key={provider.id} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">{provider.name}</span>
                       ))}
-                      {channel.shared && (
+                      {!!channel.shared && (
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">{t('channels.shared')}</span>
                       )}
                     </div>

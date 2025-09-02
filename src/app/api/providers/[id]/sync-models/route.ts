@@ -114,6 +114,14 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest, context
           existingModel.id
         );
         updatedProviderModelsCount++;
+
+        // Also create a ModelRoute entry with default weight 1
+        await db.run(
+          'INSERT OR IGNORE INTO ModelRoute (modelId, providerId, weight) VALUES (?, ?, ?)',
+          existingModel.id,
+          providerId,
+          1 // Default weight
+        );
       }
     }
 

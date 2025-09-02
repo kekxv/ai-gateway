@@ -345,7 +345,7 @@ export default function ProvidersPage() {
                       <span className="font-mono text-xs bg-gray-100 px-2 py-1 rounded">
                         {provider.baseURL}
                       </span>
-                      {provider.autoLoadModels && (
+                      {!!provider.autoLoadModels && (
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
                           {t('providers.autoLoadModelsEnabled')}
                         </span>

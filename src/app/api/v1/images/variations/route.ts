@@ -120,8 +120,22 @@ export async function POST(request: Request) {
     const latency = Date.now() - startTime;
 
     if (!upstreamResponse.ok) {
-      const errorData = await upstreamResponse.json();
-      return NextResponse.json({ error: `Upstream service error: ${errorData.error?.message || upstreamResponse.statusText}` }, { status: upstreamResponse.status });
+      const errorText = await upstreamResponse.text();
+      let errorMessage = "Upstream service error: Provider returned error";
+      
+      try {
+        const errorData = JSON.parse(errorText);
+        if (errorData.error && errorData.error.message) {
+          errorMessage = `Upstream service error: ${errorData.error.message}`;
+        }
+      } catch (e) {
+        // If parsing fails, use the raw text if it's not empty
+        if (errorText.trim()) {
+          errorMessage = `Upstream service error: ${errorText}`;
+        }
+      }
+      
+      return NextResponse.json({ error: errorMessage }, { status: upstreamResponse.status });
     }
     const responseData = await upstreamResponse.json();
 

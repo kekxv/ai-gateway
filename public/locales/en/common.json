@@ -150,6 +150,8 @@
     "selectProviderFirst": "Please select a provider first to see available models.",
     "updateChannel": "Update Channel",
     "cancel": "Cancel",
+    "selectAll": "Select All",
+    "deselectAll": "Deselect All",
     "existingChannels": "Existing Channels",
     "edit": "Edit",
     "delete": "Delete",
