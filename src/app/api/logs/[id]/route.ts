@@ -3,7 +3,7 @@ import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
 import { getInitializedDb } from '@/lib/db';
 import { formatTimeWithTimezone } from '@/lib/timeUtils';
 
-export const GET = authMiddleware(async (request: AuthenticatedRequest, { params }: { params: { id: string } }) => {
+export const GET = authMiddleware(async (request: AuthenticatedRequest, { params }: { params: Promise<{ id: string }> }) => {
   try {
     const userId = request.user?.userId;
     const userRole = request.user?.role;
@@ -19,7 +19,7 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest, { params
                  LEFT JOIN User cu ON l.ownerChannelUserId = cu.id
                  WHERE l.id = ?`;
 
-    const queryParams: any[] = [params.id];
+    const queryParams: any[] = [(await params).id];
 
     if (userRole !== 'ADMIN') {
       query += ` AND ak.userId = ?`;

@@ -2,9 +2,9 @@ import { NextResponse } from 'next/server';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
 import { getInitializedDb } from '@/lib/db';
 
-export const POST = authMiddleware(async (request: AuthenticatedRequest, context: { params: { id: string } }) => {
+export const POST = authMiddleware(async (request: AuthenticatedRequest, context: { params: Promise<{ id: string }> }) => {
   try {
-    const { id } = context.params;
+    const { id } = await context.params;
     const providerId = parseInt(id, 10);
     const userId = request.user?.userId;
     const userRole = request.user?.role;

@@ -3,7 +3,7 @@ import { authMiddleware, AuthenticatedRequest } from '@/lib/auth'; // Import aut
 import { getInitializedDb } from '@/lib/db';
 
 // PUT /api/providers/[id] - Updates a provider
-export const PUT = authMiddleware(async (request: AuthenticatedRequest, context: { params: { id: string } }) => {
+export const PUT = authMiddleware(async (request: AuthenticatedRequest, context: { params: Promise<{ id: string }> }) => {
   try {
     const { id: paramId } = await context.params;
     const id = parseInt(paramId);
@@ -69,7 +69,7 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
 });
 
 // DELETE /api/providers/[id] - Deletes a provider
-export const DELETE = authMiddleware(async (request: AuthenticatedRequest, context: { params: { id: string } }) => {
+export const DELETE = authMiddleware(async (request: AuthenticatedRequest, context: { params: Promise<{ id: string }> }) => {
   try {
     const { id: paramId } = await context.params;
     const id = parseInt(paramId);
