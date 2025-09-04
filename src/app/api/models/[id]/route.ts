@@ -48,46 +48,61 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, {params}
 }) => {
   const {id} = await params; // Correctly destructure id from params
   try {
-    const userId = request.user?.userId;
-    const userRole = request.user?.role;
-    const body = await request.json();
-    const {name, description, alias, modelRoutes, inputTokenPrice, outputTokenPrice} = body;
-
     const db = await getInitializedDb();
+    const body = await request.json();
+    const { name, description, alias, modelRoutes, inputTokenPrice, outputTokenPrice } = body;
 
-    // Check if the model exists and belongs to the user if not an admin
-    const existingModel = await db.get(
-      `SELECT *
-       FROM Model
-       WHERE id = ? ${userRole !== 'ADMIN' ? 'AND userId = ?' : ''}`,
-      id, // Use id
-      ...(userRole !== 'ADMIN' ? [userId] : [])
-    );
+    // Dynamically build update fields and values
+    const updateFields: string[] = [];
+    const updateValues: any[] = [];
 
-    if (!existingModel) {
-      return NextResponse.json({error: '模型未找到或无权访问'}, {status: 404});
+    if (name !== undefined) {
+      updateFields.push('name = ?');
+      updateValues.push(name);
+    }
+    if (description !== undefined) {
+      updateFields.push('description = ?');
+      updateValues.push(description);
+    }
+    if (alias !== undefined) {
+      updateFields.push('alias = ?');
+      updateValues.push(alias);
+    }
+    if (inputTokenPrice !== undefined) {
+      updateFields.push('inputTokenPrice = ?');
+      updateValues.push(inputTokenPrice);
+    }
+    if (outputTokenPrice !== undefined) {
+      updateFields.push('outputTokenPrice = ?');
+      updateValues.push(outputTokenPrice);
+    }
+
+    // Always update updatedAt timestamp
+    updateFields.push('updatedAt = CURRENT_TIMESTAMP');
+
+    if (updateFields.length === 0) {
+      return NextResponse.json({ error: '没有提供要更新的字段' }, { status: 400 });
     }
 
     await db.run(
-      'UPDATE Model SET name = ?, description = ?, alias = ?, inputTokenPrice = ?, outputTokenPrice = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
-      name,
-      description,
-      alias,
-      inputTokenPrice,
-      outputTokenPrice,
+      `UPDATE Model SET ${updateFields.join(', ')} WHERE id = ?`,
+      ...updateValues,
       id
     );
 
-    // Update model routes
-    await db.run('DELETE FROM ModelRoute WHERE modelId = ?', id); // Use id
-    if (modelRoutes && modelRoutes.length > 0) {
-      for (const route of modelRoutes) {
-        await db.run(
-          'INSERT INTO ModelRoute (modelId, providerId, weight) VALUES (?, ?, ?)',
-          id, // Use id
-          route.providerId,
-          route.weight
-        );
+    // Update model routes only if modelRoutes is explicitly provided in the body
+    if (modelRoutes !== undefined) {
+      await db.run('DELETE FROM ModelRoute WHERE modelId = ?', id);
+      if (modelRoutes && modelRoutes.length > 0) {
+        for (const route of modelRoutes) {
+          await db.run(
+            'INSERT INTO ModelRoute (modelId, providerId, weight, disabled) VALUES (?, ?, ?, ?)',
+            id,
+            route.providerId,
+            route.weight,
+            route.disabled === true // Ensure it's a boolean
+          );
+        }
       }
     }
 

@@ -11,7 +11,7 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest) => {
     const db = await getInitializedDb();
 
     const providers = await db.all(
-      `SELECT * FROM Provider ${userRole !== 'ADMIN' ? 'WHERE userId = ?' : ''} ORDER BY createdAt DESC`,
+      `SELECT *, disabled FROM Provider ${userRole !== 'ADMIN' ? 'WHERE userId = ? AND disabled = FALSE' : ''} ORDER BY createdAt DESC`,
       ...(userRole !== 'ADMIN' ? [userId] : [])
     );
 
@@ -42,7 +42,7 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
     }
 
     const body = await request.json();
-    const { name, baseURL, apiKey, type, autoLoadModels } = body;
+    const { name, baseURL, apiKey, type, autoLoadModels, disabled } = body;
 
     if (!name || !baseURL) { // apiKey is now optional
       return NextResponse.json({ error: '缺少必填字段' }, { status: 400 });
@@ -50,13 +50,14 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
 
     const db = await getInitializedDb();
     const result = await db.run(
-      'INSERT INTO Provider (name, baseURL, apiKey, type, autoLoadModels, userId) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO Provider (name, baseURL, apiKey, type, autoLoadModels, userId, disabled) VALUES (?, ?, ?, ?, ?, ?, ?)',
       name,
       baseURL,
       apiKey,
       type,
       autoLoadModels,
-      userId
+      userId,
+      disabled === true // Ensure it's a boolean
     );
     const newProvider = await db.get('SELECT * FROM Provider WHERE id = ?', result.lastID);
 

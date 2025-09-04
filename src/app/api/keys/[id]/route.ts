@@ -24,7 +24,7 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
     }
 
     const body = await request.json();
-    const {name, enabled, newUserId, bindToAllChannels, channelIds} = body; // Added bindToAllChannels and channelIds
+    const {name, enabled, newUserId, bindToAllChannels, channelIds, logDetails} = body; // Added logDetails
 
     if (!name) {
       return NextResponse.json({error: '缺少必填字段: 名称'}, {status: 400});
@@ -41,8 +41,8 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
       }
     }
 
-    const updateFields: string[] = [`name = ?`, `enabled = ?`, `bindToAllChannels = ?`]; // Added bindToAllChannels
-    const updateValues: any[] = [name, enabled, bindToAllChannels || false]; // Added bindToAllChannels
+    const updateFields: string[] = [`name = ?`, `enabled = ?`, `bindToAllChannels = ?`, `logDetails = ?`]; // Added logDetails
+    const updateValues: any[] = [name, enabled, bindToAllChannels || false, logDetails]; // Added logDetails
 
     if (newUserId !== undefined) {
       updateFields.push(`userId = ?`);

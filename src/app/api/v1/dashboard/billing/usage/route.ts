@@ -1,32 +1,21 @@
-import { NextResponse } from 'next/server';
-import { getInitializedDb } from '@/lib/db';
+import {NextResponse} from 'next/server';
+import {getInitializedDb} from '@/lib/db';
+import {authenticateRequest} from '../../../_lib/gateway-helpers';
 
 export async function GET(request: Request) {
   try {
-    // 1. Authenticate the request using API key
-    const authHeader = request.headers.get('Authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Unauthorized: Missing or invalid Authorization header' }, { status: 401 });
-    }
-    const apiKey = authHeader.split(' ')[1];
     const db = await getInitializedDb();
-    const dbKey = await db.get('SELECT * FROM GatewayApiKey WHERE key = ?', apiKey);
 
-    if (!dbKey || !dbKey.enabled) {
-      return NextResponse.json({ error: 'Unauthorized: Invalid API Key' }, { status: 401 });
-    }
-
-    // Non-blocking update of lastUsed time
-    db.run('UPDATE GatewayApiKey SET lastUsed = ? WHERE id = ?', new Date().toISOString(), dbKey.id).catch(console.error);
+    const {apiKeyData: dbKey, errorResponse: authError} = await authenticateRequest(request as any, db);
+    if (authError) return authError;
 
     // Get usage info for this specific API key
     // 1. Get total token usage and cost for this API key
     const totalUsage = await db.get(
-      `SELECT 
-         SUM(promptTokens) as promptTokens, 
-         SUM(completionTokens) as completionTokens, 
-         SUM(totalTokens) as totalTokens,
-         SUM(cost) as totalCost
+      `SELECT SUM(promptTokens)     as     promptTokens,
+              SUM(completionTokens) as completionTokens,
+              SUM(totalTokens)      as      totalTokens,
+              SUM(cost)             as             totalCost
        FROM Log
        WHERE apiKeyId = ?`,
       dbKey.id
@@ -37,20 +26,23 @@ export async function GET(request: Request) {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     const dailyUsageResult = await db.all(
-      `SELECT 
-         strftime('%Y-%m-%d', createdAt) as date, 
+      `SELECT strftime('%Y-%m-%d', createdAt) as date, 
          SUM(totalTokens) as totalTokens,
          SUM(cost) as totalCost
        FROM Log
        WHERE apiKeyId = ?
-       AND datetime(createdAt) >= datetime(?)
+         AND datetime(createdAt) >= datetime(?)
        GROUP BY date
        ORDER BY date ASC`,
       dbKey.id,
       thirtyDaysAgo.toISOString()
     );
 
-    const dailyUsage = dailyUsageResult.reduce((acc: Record<string, { tokens: number; cost: number }>, curr: { date: string; totalTokens: number; totalCost: number }) => {
+    const dailyUsage = dailyUsageResult.reduce((acc: Record<string, { tokens: number; cost: number }>, curr: {
+      date: string;
+      totalTokens: number;
+      totalCost: number
+    }) => {
       acc[curr.date] = {
         tokens: Number(curr.totalTokens) || 0,
         cost: Number(curr.totalCost) || 0
@@ -60,10 +52,9 @@ export async function GET(request: Request) {
 
     // 3. Get usage per model for this API key
     const usageByModelResult = await db.all(
-      `SELECT 
-         modelName, 
-         SUM(totalTokens) as totalTokens, 
-         SUM(cost) as totalCost
+      `SELECT modelName,
+              SUM(totalTokens) as totalTokens,
+              SUM(cost)        as totalCost
        FROM Log
        WHERE apiKeyId = ?
        GROUP BY modelName
@@ -71,7 +62,11 @@ export async function GET(request: Request) {
       dbKey.id
     );
 
-    const usageByModel = usageByModelResult.map((item: { modelName: string; totalTokens: number; totalCost: number }) => ({
+    const usageByModel = usageByModelResult.map((item: {
+      modelName: string;
+      totalTokens: number;
+      totalCost: number
+    }) => ({
       modelName: item.modelName || 'Unknown Model',
       totalTokens: item.totalTokens || 0,
       totalCost: item.totalCost || 0,
@@ -89,6 +84,6 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     console.error('Failed to get usage info:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json({error: 'Internal Server Error'}, {status: 500});
   }
 }

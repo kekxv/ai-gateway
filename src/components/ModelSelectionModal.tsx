@@ -109,8 +109,7 @@ export default function ModelSelectionModal({ providerId, onClose, onModelsAdded
 
       // After saving models, also ensure ModelRoute entries exist for each model
       // This ensures that models are properly associated with the provider for routing
-      const result = await response.json();
-      
+
       // For each selected model, ensure there's a ModelRoute entry for this provider
       for (const modelData of modelsToSave) {
         // Check if this model already exists in the database

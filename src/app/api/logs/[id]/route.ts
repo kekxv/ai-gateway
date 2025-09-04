@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
 import { getInitializedDb } from '@/lib/db';
 import { formatTimeWithTimezone } from '@/lib/timeUtils';
+import { gunzipSync } from 'zlib';
 
 export const GET = authMiddleware(async (request: AuthenticatedRequest, { params }: { params: Promise<{ id: string }> }) => {
   try {
@@ -41,8 +42,8 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest, { params
       totalTokens: log.totalTokens,
       cost: log.cost,
       logDetail: (log.requestBody || log.responseBody) ? {
-        requestBody: log.requestBody,
-        responseBody: log.responseBody,
+        requestBody: log.requestBody ? (Buffer.isBuffer(log.requestBody) ? gunzipSync(log.requestBody).toString() : log.requestBody) : null,
+        responseBody: log.responseBody ? (Buffer.isBuffer(log.responseBody) ? gunzipSync(log.responseBody).toString() : log.responseBody) : null,
       } : null,
       apiKey: log.apiKeyName ? {
         name: log.apiKeyName,

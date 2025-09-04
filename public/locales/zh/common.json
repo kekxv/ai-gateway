@@ -25,7 +25,9 @@
     "remove": "移除",
     "delete": "删除",
     "cancel": "取消",
-    "update": "更新"
+    "update": "更新",
+    "disable": "禁用",
+    "enable": "启用"
   },
   "login": {
     "title": "登录",
@@ -217,7 +219,11 @@
     "selectChannelsDescription": "选择渠道",
     "noChannelsAvailable": "暂无可用渠道。请先添加一个渠道。",
     "addChannelFirst": "先添加渠道",
-    "allChannels": "所有渠道"
+    "allChannels": "所有渠道",
+    "logDetails": "记录请求/响应详情",
+    "logDetailsDescription": "如果启用，此 API 密钥的详细请求和响应体将被记录。禁用以保护隐私或节省存储空间。",
+    "logDetailsEnabled": "已记录详情",
+    "logDetailsDisabled": "未记录详情"
   },
   "providers": {
     "title": "提供商管理",
@@ -249,7 +255,13 @@
     "deleteFailed": "删除提供商失败",
     "autoLoadModels": "自动加载模型",
     "autoLoadModelsDescription": "启用后，系统将自动从该供应商加载可用模型。",
-    "autoLoadModelsEnabled": "自动加载已启用"
+    "autoLoadModelsEnabled": "自动加载已启用",
+    "disabled": "已禁用",
+    "disabledDescription": "启用后，此提供商将不会用于路由请求。",
+    "enableConfirm": "确定要启用此提供商吗？",
+    "disableConfirm": "确定要禁用此提供商吗？",
+    "enableFailed": "启用提供商失败",
+    "disableFailed": "禁用提供商失败"
   },
   "models": {
     "name": "模型名称",
@@ -285,7 +297,16 @@
     "alias": "别名",
     "aliasPlaceholder": "可选的短名称",
     "aliasDescription": "用于此模型的短名称或别名，例如：gpt4",
-    "providerSelectionDescription": "请选择模型"
+    "providerSelectionDescription": "请选择模型",
+    "disabled": "已禁用",
+    "disabledDescription": "启用后，此模型将不会用于路由请求。",
+    "enableConfirm": "确定要启用此模型吗？",
+    "disableConfirm": "确定要禁用此模型吗？",
+    "enableFailed": "启用模型失败",
+    "disableFailed": "禁用模型失败",
+    "searchModels": "搜索模型",
+    "filterByProvider": "按供应商筛选",
+    "allProviders": "所有供应商"
   },
   "users": {
     "title": "用户管理",
@@ -330,7 +351,8 @@
     "responseBody": "响应体",
     "viewDetails": "查看详情",
     "userAccount": "用户账号",
-    "cost": "费用"
+    "cost": "费用",
+    "noDataAvailable": "数据已经清理"
   },
   "home": {
     "title": "您的智能 AI 服务网关",

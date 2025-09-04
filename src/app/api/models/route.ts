@@ -6,7 +6,7 @@ import { getInitializedDb } from '@/lib/db';
 async function syncProviderModels(db: any) {
   try {
     // Get all providers with autoLoadModels enabled
-    const providers = await db.all('SELECT * FROM Provider WHERE autoLoadModels = 1');
+    const providers = await db.all('SELECT * FROM Provider WHERE autoLoadModels = 1 AND disabled = FALSE');
     
     let totalNewModels = 0;
     let totalLinkedModels = 0;

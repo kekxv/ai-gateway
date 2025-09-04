@@ -10,6 +10,7 @@ type GatewayApiKey = {
   name: string;
   key: string;
   enabled: boolean; // Add enabled field for editing
+  logDetails: boolean; // New field
   createdAt: string;
   bindToAllChannels: boolean; // New field
   channels?: Channel[]; // New field, optional as it might not always be loaded or present if bindToAllChannels is true
@@ -27,6 +28,7 @@ export default function ApiKeysPage() {
   const [newKeyForm, setNewKeyForm] = useState({ // Combined state for new key form
     name: '',
     bindToAllChannels: false,
+    logDetails: true, // New field
     selectedChannelIds: [] as number[],
   });
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
@@ -89,6 +91,8 @@ export default function ApiKeysPage() {
       // Handle editingKey state
       if (name === 'bindToAllChannels') {
         setEditingKey(prev => ({ ...prev!, bindToAllChannels: checked }));
+      } else if (name === 'logDetails') {
+        setEditingKey(prev => ({ ...prev!, logDetails: checked }));
       } else if (name === 'selectedChannelIds') {
         // This won't be used anymore as we handle channel selection differently
         return;
@@ -99,6 +103,8 @@ export default function ApiKeysPage() {
       // Handle newKeyForm state
       if (name === 'bindToAllChannels') {
         setNewKeyForm(prev => ({ ...prev, bindToAllChannels: checked }));
+      } else if (name === 'logDetails') {
+        setNewKeyForm(prev => ({ ...prev, logDetails: checked }));
       } else if (name === 'selectedChannelIds') {
         // This won't be used anymore as we handle channel selection differently
         return;
@@ -126,10 +132,12 @@ export default function ApiKeysPage() {
         name: editingKey.name,
         enabled: editingKey.enabled,
         bindToAllChannels: editingKey.bindToAllChannels,
+        logDetails: editingKey.logDetails, // New field
         channelIds: editingKey.bindToAllChannels ? [] : (editingKey.channels?.map(c => c.id) || [])
       } : {
         name: newKeyForm.name,
         bindToAllChannels: newKeyForm.bindToAllChannels,
+        logDetails: newKeyForm.logDetails, // New field
         channelIds: newKeyForm.bindToAllChannels ? [] : newKeyForm.selectedChannelIds
       };
 
@@ -155,7 +163,7 @@ export default function ApiKeysPage() {
         const createdKey = await response.json();
         setNewlyCreatedKey(createdKey.key);
       }
-      setNewKeyForm({ name: '', bindToAllChannels: false, selectedChannelIds: [] }); // Reset form
+      setNewKeyForm({ name: '', bindToAllChannels: false, logDetails: true, selectedChannelIds: [] }); // Reset form
       setEditingKey(null); // Clear editing state
       fetchApiKeys(token); // Refetch to show the new/updated key in the list
     } catch (err) {
@@ -188,6 +196,7 @@ export default function ApiKeysPage() {
         body: JSON.stringify({
           ...apiKeyToUpdate,
           enabled: !currentEnabledStatus,
+          logDetails: apiKeyToUpdate.logDetails, // Ensure logDetails is sent
           // Ensure channels are sent correctly for the PUT endpoint
           channelIds: apiKeyToUpdate.bindToAllChannels ? [] : (apiKeyToUpdate.channels?.map(c => c.id) || [])
         }),
@@ -409,6 +418,22 @@ export default function ApiKeysPage() {
               </div>
             )}
 
+            {/* New: Log Details checkbox */}
+            <div className="flex items-center">
+              <input
+                id="logDetails"
+                type="checkbox"
+                name="logDetails"
+                checked={editingKey ? editingKey.logDetails : newKeyForm.logDetails}
+                onChange={handleInputChange}
+                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+              />
+              <label htmlFor="logDetails" className="ml-2 block text-sm text-gray-900">
+                {t('keys.logDetails')}
+              </label>
+              <p className="text-xs text-gray-500 mt-1 ml-2">{t('keys.logDetailsDescription')}</p>
+            </div>
+
             <div className="flex justify-end space-x-3">
               {editingKey && (
                 <button 
@@ -475,6 +500,13 @@ export default function ApiKeysPage() {
                           : 'bg-red-100 text-red-800'
                       }`}>
                         {apiKey.enabled ? t('keys.enabled') : t('keys.disabled')}
+                      </span>
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                        apiKey.logDetails
+                          ? 'bg-indigo-100 text-indigo-800'
+                          : 'bg-yellow-100 text-yellow-800'
+                      }`}>
+                        {apiKey.logDetails ? t('keys.logDetailsEnabled') : t('keys.logDetailsDisabled')}
                       </span>
                       {/* New: Display channel binding */}
                       {apiKey.bindToAllChannels ? (

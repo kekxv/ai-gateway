@@ -57,7 +57,7 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
     }
 
     const body = await request.json();
-    const { name, bindToAllChannels, channelIds } = body; // Added bindToAllChannels and channelIds
+    const { name, bindToAllChannels, channelIds, logDetails } = body; // Added logDetails
 
     if (!name) {
       return NextResponse.json({ error: '缺少必填字段: 名称' }, { status: 400 });
@@ -66,11 +66,12 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
     const db = await getInitializedDb();
     const newKey = uuidv4(); // Generate a new UUID for the key
     const result = await db.run(
-      'INSERT INTO GatewayApiKey (name, userId, key, bindToAllChannels) VALUES (?, ?, ?, ?)', // Added bindToAllChannels
+      'INSERT INTO GatewayApiKey (name, userId, key, bindToAllChannels, logDetails) VALUES (?, ?, ?, ?, ?)', // Added logDetails
       name,
       userId,
       newKey,
-      bindToAllChannels || false // Default to false if not provided
+      bindToAllChannels || false, // Default to false if not provided
+      logDetails // Use the provided logDetails value
     );
     const newApiKeyId = result.lastID;
 

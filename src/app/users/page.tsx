@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { useTranslation } from 'react-i18next';
+import {useState, useEffect, useCallback} from 'react';
+import {useRouter} from 'next/navigation';
+import {useTranslation} from 'react-i18next';
 
 type User = {
   id: number;
@@ -29,13 +29,10 @@ export default function UsersPage() {
   const [editingUserBalance, setEditingUserBalance] = useState<User | null>(null);
   const [newBalanceInput, setNewBalanceInput] = useState<number>(0);
   const router = useRouter();
-  const { t } = useTranslation('common');
+  const {t} = useTranslation('common');
 
-  useEffect(() => {
-    fetchUsers();
-  }, []);
 
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     try {
       const token = localStorage.getItem('token');
       const response = await fetch('/api/users', {
@@ -43,16 +40,16 @@ export default function UsersPage() {
           'Authorization': `Bearer ${token}`,
         },
       });
-      
+
       if (response.status === 401) {
         router.push('/login');
         return;
       }
-      
+
       if (!response.ok) {
         throw new Error('Failed to fetch users');
       }
-      
+
       const data = await response.json();
       setUsers(data);
     } catch (err) {
@@ -60,11 +57,15 @@ export default function UsersPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [router]);
+
+  useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     try {
       const token = localStorage.getItem('token');
       const response = await fetch('/api/users', {
@@ -78,17 +79,17 @@ export default function UsersPage() {
           validUntil: newUser.validUntil || null,
         }),
       });
-      
+
       if (response.status === 401) {
         router.push('/login');
         return;
       }
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to create user');
       }
-      
+
       // Reset form and refresh user list
       setNewUser({
         email: '',
@@ -113,17 +114,17 @@ export default function UsersPage() {
           'Authorization': `Bearer ${token}`,
         },
       });
-      
+
       if (response.status === 401) {
         router.push('/login');
         return;
       }
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to toggle user status');
       }
-      
+
       fetchUsers();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unknown error occurred');
@@ -134,7 +135,7 @@ export default function UsersPage() {
     if (!confirm(t('users.deleteConfirm'))) {
       return;
     }
-    
+
     try {
       const token = localStorage.getItem('token');
       const response = await fetch(`/api/users/${userId}`, {
@@ -143,17 +144,17 @@ export default function UsersPage() {
           'Authorization': `Bearer ${token}`,
         },
       });
-      
+
       if (response.status === 401) {
         router.push('/login');
         return;
       }
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to delete user');
       }
-      
+
       fetchUsers();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unknown error occurred');
@@ -172,7 +173,7 @@ export default function UsersPage() {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ amount: Math.round(newBalanceInput * 10000) }), // Convert to 厘
+        body: JSON.stringify({amount: Math.round(newBalanceInput * 10000)}), // Convert to 厘
       });
 
       if (response.status === 401) {
@@ -226,7 +227,7 @@ export default function UsersPage() {
           className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
         >
           <svg className="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
           </svg>
           {showCreateForm ? t('users.cancel') : t('users.addNewUser')}
         </button>
@@ -249,7 +250,7 @@ export default function UsersPage() {
                     id="email"
                     className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
                     value={newUser.email}
-                    onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+                    onChange={(e) => setNewUser({...newUser, email: e.target.value})}
                     required
                   />
                 </div>
@@ -262,7 +263,7 @@ export default function UsersPage() {
                     id="password"
                     className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
                     value={newUser.password}
-                    onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                    onChange={(e) => setNewUser({...newUser, password: e.target.value})}
                     required
                   />
                 </div>
@@ -275,7 +276,7 @@ export default function UsersPage() {
                       id="role"
                       className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
                       value={newUser.role}
-                      onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
+                      onChange={(e) => setNewUser({...newUser, role: e.target.value})}
                     >
                       <option value="USER">{t('users.user')}</option>
                       <option value="ADMIN">{t('users.admin')}</option>
@@ -291,7 +292,7 @@ export default function UsersPage() {
                     id="validUntil"
                     className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
                     value={newUser.validUntil}
-                    onChange={(e) => setNewUser({ ...newUser, validUntil: e.target.value })}
+                    onChange={(e) => setNewUser({...newUser, validUntil: e.target.value})}
                   />
                 </div>
               </div>
@@ -302,7 +303,7 @@ export default function UsersPage() {
                     type="checkbox"
                     className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
                     checked={newUser.disabled}
-                    onChange={(e) => setNewUser({ ...newUser, disabled: e.target.checked })}
+                    onChange={(e) => setNewUser({...newUser, disabled: e.target.checked})}
                   />
                   <label htmlFor="disabled" className="ml-2 block text-sm text-gray-900">
                     {t('users.disableUser')}
@@ -329,77 +330,84 @@ export default function UsersPage() {
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-100">
             <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.email')}</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.role')}</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.status')}</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.validUntil')}</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.createdAt')}</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.balance')}</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('common.actions')}</th>
-              </tr>
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+              <th
+                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.email')}</th>
+              <th
+                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.role')}</th>
+              <th
+                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.status')}</th>
+              <th
+                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.validUntil')}</th>
+              <th
+                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.createdAt')}</th>
+              <th
+                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('users.balance')}</th>
+              <th
+                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('common.actions')}</th>
+            </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-100">
-              {users.map((user) => (
-                <tr key={user.id} className="hover:bg-gray-50 transition-colors duration-150">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{user.id}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{user.email}</td>
-                  <td className="px-6 py-4 whitespace-nowrap">
+            {users.map((user) => (
+              <tr key={user.id} className="hover:bg-gray-50 transition-colors duration-150">
+                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{user.id}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{user.email}</td>
+                <td className="px-6 py-4 whitespace-nowrap">
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      user.role === 'ADMIN' 
-                        ? 'bg-purple-100 text-purple-800' 
+                      user.role === 'ADMIN'
+                        ? 'bg-purple-100 text-purple-800'
                         : 'bg-green-100 text-green-800'
                     }`}>
                       {user.role === 'ADMIN' ? t('users.admin') : t('users.user')}
                     </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap">
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      user.disabled 
-                        ? 'bg-red-100 text-red-800' 
+                      user.disabled
+                        ? 'bg-red-100 text-red-800'
                         : 'bg-green-100 text-green-800'
                     }`}>
                       {user.disabled ? t('users.disabled') : t('users.active')}
                     </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {user.validUntil ? new Date(user.validUntil).toLocaleDateString() : (
-                      <span className="text-gray-500">{t('users.permanent')}</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {new Date(user.createdAt).toLocaleDateString()}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    ¥{(user.balance / 10000).toFixed(4)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                    <button
-                      onClick={() => handleToggleDisabled(user.id)}
-                      className={`inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md mr-2 ${
-                        user.disabled
-                          ? 'text-green-700 bg-green-100 hover:bg-green-200'
-                          : 'text-yellow-700 bg-yellow-100 hover:bg-yellow-200'
-                      }`}
-                    >
-                      {user.disabled ? t('users.enable') : t('users.disable')}
-                    </button>
-                    <button
-                      onClick={() => setEditingUserBalance(user)}
-                      className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-blue-700 bg-blue-100 hover:bg-blue-200 mr-2"
-                    >
-                      {t('users.adjustBalance')}
-                    </button>
-                    <button
-                      onClick={() => handleDeleteUser(user.id)}
-                      className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200"
-                    >
-                      {t('users.delete')}
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                  {user.validUntil ? new Date(user.validUntil).toLocaleDateString() : (
+                    <span className="text-gray-500">{t('users.permanent')}</span>
+                  )}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                  {new Date(user.createdAt).toLocaleDateString()}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                  ¥{(user.balance / 10000).toFixed(4)}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                  <button
+                    onClick={() => handleToggleDisabled(user.id)}
+                    className={`inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md mr-2 ${
+                      user.disabled
+                        ? 'text-green-700 bg-green-100 hover:bg-green-200'
+                        : 'text-yellow-700 bg-yellow-100 hover:bg-yellow-200'
+                    }`}
+                  >
+                    {user.disabled ? t('users.enable') : t('users.disable')}
+                  </button>
+                  <button
+                    onClick={() => setEditingUserBalance(user)}
+                    className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-blue-700 bg-blue-100 hover:bg-blue-200 mr-2"
+                  >
+                    {t('users.adjustBalance')}
+                  </button>
+                  <button
+                    onClick={() => handleDeleteUser(user.id)}
+                    className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200"
+                  >
+                    {t('users.delete')}
+                  </button>
+                </td>
+              </tr>
+            ))}
             </tbody>
           </table>
         </div>
@@ -412,7 +420,9 @@ export default function UsersPage() {
             <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
               <h2 className="text-xl font-semibold text-gray-900">{t('users.adjustBalance')}</h2>
               <button onClick={() => setEditingUserBalance(null)} className="text-gray-400 hover:text-gray-500">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
               </button>
             </div>
             <form onSubmit={handleAdjustBalance} className="p-6">

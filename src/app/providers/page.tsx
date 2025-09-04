@@ -12,6 +12,7 @@ type Provider = {
   apiKey: string;
   type?: string;
   autoLoadModels?: boolean;
+  disabled?: boolean;
 };
 
 export default function ProvidersPage() {
@@ -19,7 +20,7 @@ export default function ProvidersPage() {
   const { t } = useTranslation('common');
 
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [newProvider, setNewProvider] = useState({ name: '', baseURL: '', apiKey: '', type: 'openai', autoLoadModels: false });
+  const [newProvider, setNewProvider] = useState({ name: '', baseURL: '', apiKey: '', type: 'openai', autoLoadModels: false, disabled: false });
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +70,7 @@ export default function ProvidersPage() {
 
   const handleEdit = (provider: Provider) => {
     setEditingProvider(provider);
-    setNewProvider({ name: provider.name, baseURL: provider.baseURL, apiKey: provider.apiKey, type: provider.type || 'openai', autoLoadModels: provider.autoLoadModels || false });
+    setNewProvider({ name: provider.name, baseURL: provider.baseURL, apiKey: provider.apiKey, type: provider.type || 'openai', autoLoadModels: provider.autoLoadModels || false, disabled: provider.disabled || false });
   };
 
   const handleSubmit = async (e: FormEvent) => {
@@ -85,7 +86,7 @@ export default function ProvidersPage() {
       const method = editingProvider ? 'PUT' : 'POST';
       const url = editingProvider ? `/api/providers/${editingProvider.id}` : '/api/providers';
       const body = editingProvider ? 
-        { name: editingProvider.name, baseURL: editingProvider.baseURL, apiKey: editingProvider.apiKey, type: editingProvider.type, autoLoadModels: editingProvider.autoLoadModels } :
+        { name: editingProvider.name, baseURL: editingProvider.baseURL, apiKey: editingProvider.apiKey, type: editingProvider.type, autoLoadModels: editingProvider.autoLoadModels, disabled: editingProvider.disabled } :
         newProvider;
 
       const response = await fetch(url, {
@@ -99,7 +100,7 @@ export default function ProvidersPage() {
         throw new Error(errorData.error || (editingProvider ? t('providers.updateFailed') : t('providers.createFailed')));
       }
 
-      setNewProvider({ name: '', baseURL: '', apiKey: '', type: 'openai', autoLoadModels: false });
+      setNewProvider({ name: '', baseURL: '', apiKey: '', type: 'openai', autoLoadModels: false, disabled: false });
       setEditingProvider(null);
       fetchProviders(token);
     } catch (err) {
@@ -146,6 +147,33 @@ export default function ProvidersPage() {
     setTimeout(() => setNotification(null), 3000); // Hide notification after 3 seconds
     const token = localStorage.getItem('token');
     if (token) fetchProviders(token); // Refresh provider data if needed
+  };
+
+  const handleToggleDisabled = async (id: number, currentDisabledStatus: boolean) => {
+    const confirmMessage = currentDisabledStatus ? t('providers.enableConfirm') : t('providers.disableConfirm');
+    if (!confirm(confirmMessage)) return;
+
+    const token = localStorage.getItem('token');
+    if (!token) {
+      router.push('/login');
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/providers/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ disabled: !currentDisabledStatus }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || (currentDisabledStatus ? t('providers.enableFailed') : t('providers.disableFailed')));
+      }
+      fetchProviders(token);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '发生未知错误');
+    }
   };
 
   if (loading) {
@@ -305,6 +333,20 @@ export default function ProvidersPage() {
               </label>
               <p className="text-xs text-gray-500 ml-2">{t('providers.autoLoadModelsDescription')}</p>
             </div>
+            <div className="flex items-center">
+              <input
+                id="disabled"
+                type="checkbox"
+                name="disabled"
+                checked={editingProvider ? editingProvider.disabled : newProvider.disabled}
+                onChange={handleInputChange}
+                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+              />
+              <label htmlFor="disabled" className="ml-2 block text-sm text-gray-900">
+                {t('providers.disabled')}
+              </label>
+              <p className="text-xs text-gray-500 ml-2">{t('providers.disabledDescription')}</p>
+            </div>
             <div className="flex justify-end space-x-3">
               {editingProvider && (
                 <button 
@@ -350,6 +392,11 @@ export default function ProvidersPage() {
                           {t('providers.autoLoadModelsEnabled')}
                         </span>
                       )}
+                      {!!provider.disabled && (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                          {t('providers.disabled')}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex space-x-2 ml-4">
@@ -370,6 +417,12 @@ export default function ProvidersPage() {
                       className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-green-700 bg-green-100 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
                     >
                       {t('providers.loadModels')}
+                    </button>
+                    <button 
+                      onClick={() => handleToggleDisabled(provider.id, !!provider.disabled)}
+                      className={`inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md ${provider.disabled ? 'text-green-700 bg-green-100 hover:bg-green-200' : 'text-yellow-700 bg-yellow-100 hover:bg-yellow-200'} focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-current`}
+                    >
+                      {provider.disabled ? t('common.enable') : t('common.disable')}
                     </button>
                   </div>
                 </div>

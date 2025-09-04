@@ -15,6 +15,7 @@ type ModelRoute = {
   providerId: number;
   provider?: Provider;
   weight: number;
+  disabled?: boolean;
 };
 
 type Model = {
@@ -42,6 +43,8 @@ export default function ModelsPage() {
   const [editingModelRoutes, setEditingModelRoutes] = useState<ModelRoute[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedProviderId, setSelectedProviderId] = useState<number | null>(null);
   const router = useRouter();
   const {t} = useTranslation('common');
 
@@ -108,6 +111,7 @@ export default function ModelsPage() {
     });
     setEditingModelRoutes(model.modelRoutes.map(route => ({
       ...route,
+      disabled: route.disabled || false // Copy disabled status for each route
     })));
   };
 
@@ -131,14 +135,22 @@ export default function ModelsPage() {
           alias: editingModel.alias,
           inputTokenPrice: editingModel.inputTokenPrice, // Keep in 厘
           outputTokenPrice: editingModel.outputTokenPrice, // Keep in 厘
-          modelRoutes: editingModelRoutes.map(route => ({providerId: route.providerId, weight: route.weight}))
+          modelRoutes: editingModelRoutes.map(route => ({
+            providerId: route.providerId,
+            weight: route.weight,
+            disabled: route.disabled
+          })),
         } :
         {
           ...newModel,
           alias: newModel.alias,
           inputTokenPrice: newModel.inputTokenPrice, // Keep in 厘
           outputTokenPrice: newModel.outputTokenPrice, // Keep in 厘
-          modelRoutes: editingModelRoutes.map(route => ({providerId: route.providerId, weight: route.weight}))
+          modelRoutes: editingModelRoutes.map(route => ({
+            providerId: route.providerId,
+            weight: route.weight,
+            disabled: route.disabled
+          })),
         };
 
       const response = await fetch(url, {
@@ -392,6 +404,29 @@ export default function ModelsPage() {
                               className="w-16 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border p-1"
                               min="1"
                             />
+                            <div className="ml-4 flex items-center">
+                              <input
+                                id={`route-disabled-${provider.id}`}
+                                type="checkbox"
+                                name="disabled"
+                                checked={editingModelRoutes[existingRouteIndex]?.disabled || false}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  const newDisabledStatus = e.target.checked;
+                                  const updatedRoutes = [...editingModelRoutes];
+                                  const index = updatedRoutes.findIndex(route => route.providerId === provider.id);
+                                  if (index !== -1) {
+                                    updatedRoutes[index] = {...updatedRoutes[index], disabled: newDisabledStatus};
+                                    setEditingModelRoutes(updatedRoutes);
+                                  }
+                                }}
+                                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                              />
+                              <label htmlFor={`route-disabled-${provider.id}`}
+                                     className="ml-2 block text-sm text-gray-900">
+                                {t('models.disabled')}
+                              </label>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -428,29 +463,78 @@ export default function ModelsPage() {
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-semibold text-gray-900">{t('models.existingModels')}</h2>
         </div>
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden p-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {models.map(model => (
+        <div className="mb-4">
+          <input
+            type="text"
+            placeholder={t('models.searchModels')}
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
+          />
+        </div>
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            {t('models.filterByProvider')}
+          </label>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+            {/* "All Providers" card */}
+            <div
+              className={`border rounded-lg p-2 cursor-pointer transition-all duration-200 text-center
+                ${selectedProviderId === null ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-100' : 'border-gray-200 hover:border-indigo-300 hover:bg-gray-50'}`}
+              onClick={() => setSelectedProviderId(null)}
+            >
+              <h4 className="text-xs font-medium text-gray-900">{t('models.allProviders')}</h4>
+            </div>
+
+            {/* Provider cards */}
+            {providers.map(provider => (
+              <div
+                key={provider.id}
+                className={`border rounded-lg p-2 cursor-pointer transition-all duration-200 text-center
+                  ${selectedProviderId === provider.id ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-100' : 'border-gray-200 hover:border-indigo-300 hover:bg-gray-50'}`}
+                onClick={() => setSelectedProviderId(provider.id)}
+              >
+                <h4 className="text-xs font-medium text-gray-900">{provider.name}</h4>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden p-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {models.filter(model => {
+              const matchesSearchTerm = (
+                model.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                (model.alias && model.alias.toLowerCase().includes(searchTerm.toLowerCase())) ||
+                (model.description && model.description.toLowerCase().includes(searchTerm.toLowerCase()))
+              );
+
+              const matchesProvider = (
+                selectedProviderId === null ||
+                model.modelRoutes.some(route => route.providerId === selectedProviderId)
+              );
+
+              return matchesSearchTerm && matchesProvider;
+            }).map(model => (
               <div key={model.id}
-                   className="flex flex-col p-4 border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-all duration-200">
-                <div className="flex-1 min-w-0 mb-4">
+                   className="flex flex-col p-3 border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-all duration-200">
+                <div className="flex-1 min-w-0 mb-2">
                   <h3 className="text-lg font-medium text-gray-900 truncate mb-1">
                     {model.name}
                     {model.alias && (
-                      <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                      <span className="ml-2 px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                         {t('models.alias')}: {model.alias}
                       </span>
                     )}
                   </h3>
-                  {model.description && <p className="text-sm text-gray-500 line-clamp-2">{model.description}</p>}
-                  <div className="mt-2 text-sm text-gray-600">
+                  {model.description && <p className="text-xs text-gray-500 line-clamp-2">{model.description}</p>}
+                  <div className="mt-1 text-sm text-gray-600">
                     <p>Input Price: {model.inputTokenPrice}/1K</p>
                     <p>Output Price: {model.outputTokenPrice}/1K</p>
                   </div>
                 </div>
 
                 {model.modelRoutes.length > 0 && (
-                  <div className="mb-4">
+                  <div className="mb-2">
                     <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
                       {t('models.routes')}
                     </p>
@@ -460,9 +544,9 @@ export default function ModelsPage() {
                         return (
                           <span
                             key={mr.providerId}
-                            className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800"
+                            className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${mr.disabled ? 'bg-red-100 text-red-800' : 'bg-indigo-100 text-indigo-800'}`}
                           >
-                            {provider?.name || 'N/A'} (W: {mr.weight})
+                            {provider?.name || 'N/A'} (W: {mr.weight}){(!!mr.disabled) && ' (Disabled)'}
                           </span>
                         );
                       })}
@@ -474,7 +558,7 @@ export default function ModelsPage() {
                   {t('models.createdAt')}: {new Date(model.createdAt).toLocaleString()}
                 </p>
 
-                <div className="flex space-x-2 mt-4 pt-4 border-t border-gray-100">
+                <div className="flex space-x-2 mt-3 pt-3 border-t border-gray-100">
                   <button
                     onClick={() => handleEdit(model)}
                     className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-indigo-700 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"

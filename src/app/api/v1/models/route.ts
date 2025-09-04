@@ -1,23 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getInitializedDb } from '@/lib/db';
+import { authenticateRequest } from '../_lib/gateway-helpers';
 
 export async function GET(request: Request) {
   try {
-    // 1. Authenticate the request
-    const authHeader = request.headers.get('Authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Unauthorized: Missing or invalid Authorization header' }, { status: 401 });
-    }
-    const apiKey = authHeader.split(' ')[1];
     const db = await getInitializedDb();
-    const dbKey = await db.get('SELECT * FROM GatewayApiKey WHERE key = ?', apiKey);
 
-    if (!dbKey || !dbKey.enabled) {
-      return NextResponse.json({ error: 'Unauthorized: Invalid API Key' }, { status: 401 });
-    }
-
-    // Non-blocking update of lastUsed time
-    db.run('UPDATE GatewayApiKey SET lastUsed = ? WHERE id = ?', new Date().toISOString(), dbKey.id).catch(console.error);
+    const { apiKeyData: dbKey, errorResponse: authError } = await authenticateRequest(request as any, db);
+    if (authError) return authError;
 
     let models;
     if (dbKey.bindToAllChannels) {

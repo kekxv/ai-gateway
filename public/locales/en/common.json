@@ -25,7 +25,9 @@
     "remove": "remove",
     "delete": "delete",
     "cancel": "cancel",
-    "update": "update"
+    "update": "update",
+    "disable": "disable",
+    "enable": "enable"
   },
   "login": {
     "title": "Login",
@@ -217,7 +219,11 @@
     "selectChannelsDescription": "Select Channels Description",
     "noChannelsAvailable": "No channels available. Please add a channel first.",
     "addChannelFirst": "Add Channel First",
-    "allChannels": "All Channels"
+    "allChannels": "All Channels",
+    "logDetails": "Log Request/Response Details",
+    "logDetailsDescription": "If enabled, detailed request and response bodies will be logged for this API key. Disable for privacy or to save storage.",
+    "logDetailsEnabled": "Logging Details",
+    "logDetailsDisabled": "Not Logging Details"
   },
   "providers": {
     "title": "Provider Management",
@@ -249,7 +255,13 @@
     "deleteFailed": "Failed to delete provider",
     "autoLoadModels": "Auto Load Models",
     "autoLoadModelsDescription": "If enabled, the system will automatically load available models from this provider.",
-    "autoLoadModelsEnabled": "Auto Load Enabled"
+    "autoLoadModelsEnabled": "Auto Load Enabled",
+    "disabled": "Disabled",
+    "disabledDescription": "If enabled, this provider will not be used for routing requests.",
+    "enableConfirm": "Are you sure you want to enable this provider?",
+    "disableConfirm": "Are you sure you want to disable this provider?",
+    "enableFailed": "Failed to enable provider",
+    "disableFailed": "Failed to disable provider"
   },
   "models": {
     "name": "Model Name",
@@ -285,7 +297,16 @@
     "noProviders": "No providers assigned",
     "weight": "Weight",
     "routes": "Routes",
-    "providerSelectionDescription": "Selection Model Routes"
+    "providerSelectionDescription": "Selection Model Routes",
+    "disabled": "Disabled",
+    "disabledDescription": "If enabled, this model will not be used for routing requests.",
+    "enableConfirm": "Are you sure you want to enable this model?",
+    "disableConfirm": "Are you sure you want to disable this model?",
+    "enableFailed": "Failed to enable model",
+    "disableFailed": "Failed to disable model",
+    "searchModels": "Search Models",
+    "filterByProvider": "Filter by Provider",
+    "allProviders": "All Providers"
   },
   "users": {
     "title": "User Management",
@@ -330,7 +351,8 @@
     "responseBody": "Response Body",
     "viewDetails": "View Details",
     "userAccount": "User Account",
-    "cost": "Cost"
+    "cost": "Cost",
+    "noDataAvailable": "No Data Available"
   },
   "home": {
     "title": "Your Intelligent AI Service Gateway",

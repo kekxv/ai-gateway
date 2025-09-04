@@ -25,29 +25,52 @@ export const PUT = authMiddleware(async (request: AuthenticatedRequest, context:
     }
 
     const body = await request.json();
-    const { name, baseURL, apiKey, newUserId, type, autoLoadModels } = body; // Added newUserId, type, autoLoadModels
+    const { name, baseURL, apiKey, newUserId, type, autoLoadModels, disabled } = body;
 
-    if (!name || !baseURL) { // apiKey is now optional
-      return NextResponse.json({ error: '缺少必填字段' }, { status: 400 });
+    // Dynamically build update fields and values
+    const updateFields: string[] = [];
+    const updateValues: any[] = [];
+
+    if (name !== undefined) {
+      updateFields.push('name = ?');
+      updateValues.push(name);
+    }
+    if (baseURL !== undefined) {
+      updateFields.push('baseURL = ?');
+      updateValues.push(baseURL);
+    }
+    if (apiKey !== undefined) {
+      updateFields.push('apiKey = ?');
+      updateValues.push(apiKey);
+    }
+    if (type !== undefined) {
+      updateFields.push('type = ?');
+      updateValues.push(type);
+    }
+    if (autoLoadModels !== undefined) {
+      updateFields.push('autoLoadModels = ?');
+      updateValues.push(autoLoadModels);
+    }
+    if (disabled !== undefined) {
+      updateFields.push('disabled = ?');
+      updateValues.push(disabled === true);
     }
 
-    // Validate newUserId if provided and user is admin
-    if (newUserId !== undefined && userRole !== 'ADMIN') {
-      return NextResponse.json({ error: '无权更改提供商所有者' }, { status: 403 });
-    }
+    // Handle newUserId separately as it has its own validation
     if (newUserId !== undefined) {
+      if (userRole !== 'ADMIN') {
+        return NextResponse.json({ error: '无权更改提供商所有者' }, { status: 403 });
+      }
       const targetUser = await db.get('SELECT * FROM User WHERE id = ?', newUserId);
       if (!targetUser) {
         return NextResponse.json({ error: '目标用户不存在' }, { status: 400 });
       }
+      updateFields.push('userId = ?');
+      updateValues.push(newUserId);
     }
 
-    const updateFields: string[] = [`name = ?`, `baseURL = ?`, `apiKey = ?`, `type = ?`, `autoLoadModels = ?`];
-    const updateValues: any[] = [name, baseURL, apiKey, type, autoLoadModels];
-
-    if (newUserId !== undefined) {
-      updateFields.push(`userId = ?`);
-      updateValues.push(newUserId);
+    if (updateFields.length === 0) {
+      return NextResponse.json({ error: '没有提供要更新的字段' }, { status: 400 });
     }
 
     await db.run(

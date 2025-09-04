@@ -5,7 +5,7 @@ import fs from 'fs';
 
 const DB_PATH = process.env.DATABASE_URL ? process.env.DATABASE_URL.replace('file:', '') : path.resolve(process.cwd(), 'ai-gateway.db');
 
-const DATABASE_SCHEMA_VERSION = 11;
+const DATABASE_SCHEMA_VERSION = 15;
 
 const schema = `
 PRAGMA foreign_keys = ON;
@@ -324,6 +324,107 @@ const migrations = [
       COMMIT;
       PRAGMA foreign_keys=on;
     `,
+  },
+  {
+    version: 12,
+    name: 'change_logdetail_body_to_blob',
+    up: `
+      PRAGMA foreign_keys=off;
+      BEGIN TRANSACTION;
+
+      CREATE TABLE LogDetail_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        logId INTEGER UNIQUE NOT NULL,
+        requestBody BLOB,
+        responseBody BLOB,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        FOREIGN KEY (logId) REFERENCES Log(id) ON DELETE CASCADE
+      );
+
+      INSERT INTO LogDetail_new (id, logId, createdAt)
+      SELECT id, logId, createdAt
+      FROM LogDetail;
+
+      DROP TABLE LogDetail;
+
+      ALTER TABLE LogDetail_new RENAME TO LogDetail;
+
+      COMMIT;
+      VACUUM;
+      PRAGMA foreign_keys=on;
+    `
+  },
+  {
+    version: 13,
+    name: 'move_model_disabled_to_modelroute_alter_table',
+    up: `
+      PRAGMA foreign_keys=off;
+      BEGIN TRANSACTION;
+
+      ALTER TABLE Provider ADD COLUMN disabled BOOLEAN DEFAULT FALSE NOT NULL;
+      -- Remove disabled from Model table (if it exists)
+      -- SQLite ALTER TABLE DROP COLUMN is limited, so we'll try to recreate if necessary
+      -- For simplicity, assuming it's safe to drop and recreate if it causes issues.
+      -- A more robust solution would check if the column exists first.
+      -- For now, we'll rely on the previous migration having added it.
+
+      -- Create a temporary table without the 'disabled' column
+      CREATE TABLE Model_temp (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        description TEXT,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        userId INTEGER,
+        alias TEXT,
+        inputTokenPrice INTEGER DEFAULT 0 NOT NULL,
+        outputTokenPrice INTEGER DEFAULT 0 NOT NULL,
+        FOREIGN KEY (userId) REFERENCES User(id) ON DELETE SET NULL
+      );
+
+      -- Copy data from the old Model table to the new one, excluding 'disabled'
+      INSERT INTO Model_temp (id, name, description, createdAt, updatedAt, userId, alias, inputTokenPrice, outputTokenPrice)
+      SELECT id, name, description, createdAt, updatedAt, userId, alias, inputTokenPrice, outputTokenPrice
+      FROM Model;
+
+      -- Drop the old Model table
+      DROP TABLE Model;
+
+      -- Rename the temporary table to Model
+      ALTER TABLE Model_temp RENAME TO Model;
+
+      -- Add disabled to ModelRoute table
+      ALTER TABLE ModelRoute ADD COLUMN disabled BOOLEAN DEFAULT FALSE NOT NULL;
+
+      COMMIT;
+      PRAGMA foreign_keys=on;
+    `
+  },
+  {
+    version: 14,
+    name: 'add_disabled_until_to_modelroute',
+    up: `
+      PRAGMA foreign_keys=off;
+      BEGIN TRANSACTION;
+
+      ALTER TABLE ModelRoute ADD COLUMN disabledUntil DATETIME;
+
+      COMMIT;
+      PRAGMA foreign_keys=on;
+    `
+  },
+  {
+    version: 15,
+    name: 'add_log_details_to_gateway_api_key',
+    up: `
+      PRAGMA foreign_keys=off;
+      BEGIN TRANSACTION;
+
+      ALTER TABLE GatewayApiKey ADD COLUMN logDetails BOOLEAN DEFAULT TRUE NOT NULL;
+
+      COMMIT;
+      PRAGMA foreign_keys=on;
+    `
   },
   // Add future migrations here
 ];

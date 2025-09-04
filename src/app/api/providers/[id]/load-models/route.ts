@@ -42,7 +42,7 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest, context:
           name: model.id,
           description: model.object,
         }));
-      } catch (e) {
+      } catch (_e) {
         return NextResponse.json({ error: '解析 OpenAI 模型数据失败' }, { status: 500 });
       }
 
