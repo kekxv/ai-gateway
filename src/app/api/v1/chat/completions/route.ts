@@ -140,6 +140,7 @@ export async function POST(request: Request) {
 
       (async () => {
         let accumulatedContent = '';
+        let accumulatedToolCalls: any[] = []; // To store tool calls
         let promptTokens = 0;
         let completionTokens = 0;
         let totalTokens = 0;
@@ -177,9 +178,45 @@ export async function POST(request: Request) {
               try {
                 const jsonObj = JSON.parse(jsonStr);
                 if (jsonObj.choices && jsonObj.choices[0] && jsonObj.choices[0].delta) {
-                  const content = jsonObj.choices[0].delta.content;
-                  if (content) {
-                    accumulatedContent += content;
+                  const delta = jsonObj.choices[0].delta;
+                  
+                  // Accumulate content
+                  if (delta.content) {
+                    accumulatedContent += delta.content;
+                  }
+                  
+                  // Accumulate tool calls
+                  if (delta.tool_calls) {
+                    delta.tool_calls.forEach((toolCall: any) => {
+                      if (toolCall.index !== undefined) {
+                        // Initialize tool call array if needed
+                        if (!accumulatedToolCalls[toolCall.index]) {
+                          accumulatedToolCalls[toolCall.index] = {
+                            id: toolCall.id || '',
+                            type: toolCall.type || 'function',
+                            function: { name: '', arguments: '' }
+                          };
+                        }
+                        
+                        // Update tool call with new data
+                        if (toolCall.id) {
+                          accumulatedToolCalls[toolCall.index].id = toolCall.id;
+                        }
+                        
+                        if (toolCall.type) {
+                          accumulatedToolCalls[toolCall.index].type = toolCall.type;
+                        }
+                        
+                        if (toolCall.function) {
+                          if (toolCall.function.name) {
+                            accumulatedToolCalls[toolCall.index].function.name = toolCall.function.name;
+                          }
+                          if (toolCall.function.arguments) {
+                            accumulatedToolCalls[toolCall.index].function.arguments += toolCall.function.arguments;
+                          }
+                        }
+                      }
+                    });
                   }
                 }
                 if (jsonObj.usage) {
@@ -191,12 +228,22 @@ export async function POST(request: Request) {
             }
           }
 
+          // Prepare the message object with either content or tool_calls
+          const message: any = { role: 'assistant' };
+          if (accumulatedToolCalls.length > 0) {
+            // If we have tool calls, include them (and remove any empty ones)
+            message.tool_calls = accumulatedToolCalls.filter(tc => tc !== undefined);
+          } else {
+            // Otherwise, just include the content
+            message.content = accumulatedContent;
+          }
+
           const formattedResponse = {
             id: 'log-' + Date.now(),
             object: 'chat.completion',
             created: Math.floor(Date.now() / 1000),
             model: requestBody.model,
-            choices: [{ index: 0, message: { role: 'assistant', content: accumulatedContent }, finish_reason: 'stop' }],
+            choices: [{ index: 0, message, finish_reason: 'stop' }],
             usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: totalTokens }
           };
 
