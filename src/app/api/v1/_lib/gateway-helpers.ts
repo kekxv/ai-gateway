@@ -48,12 +48,26 @@ export async function authenticateRequest(request: NextRequest, db: Database): P
 
 /**
  * Finds a model by its name or alias.
+ * If the model name does not contain a ':', it prefers a version with the ':latest' tag.
  * @param modelName - The name or alias of the model.
  * @param db - The database instance.
  * @returns The model data or null if not found.
  */
 export async function findModel(modelName: string, db: Database): Promise<any> {
-  return db.get('SELECT * FROM Model WHERE name = ? OR alias = ?', modelName, modelName);
+  if (modelName.includes(':')) {
+    return db.get('SELECT * FROM Model WHERE name = ? OR alias = ?', modelName, modelName);
+  }
+
+  const modelNameWithLatest = `${modelName}:latest`;
+  return db.get(
+    `SELECT * FROM Model
+     WHERE name = ? OR alias = ? OR name = ? OR alias = ?
+     ORDER BY INSTR(name, ':') DESC, name DESC`,
+    modelName,
+    modelName,
+    modelNameWithLatest,
+    modelNameWithLatest
+  );
 }
 
 /**
