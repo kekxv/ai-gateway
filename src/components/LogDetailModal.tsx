@@ -50,96 +50,65 @@ const LoadingSkeleton: React.FC = () => (
 
 // OpenAI聊天消息类型
 type OpenAIChatMessage = {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string | null;
+  tool_calls?: {
+    id: string;
+    type: string;
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }[];
+  tool_call_id?: string;
 };
 
 // 解析包含messages字段的对象
 const parseMessagesFromObject = (obj: any): OpenAIChatMessage[] => {
   if (!obj) return [];
-  
-  // 如果是一个字符串，则尝试解析为JSON
+
+  const mapItem = (item: any): OpenAIChatMessage => ({
+    role: item.role,
+    content: typeof item.content === 'string' ? item.content : (item.content ? JSON.stringify(item.content, null, 2) : null),
+    tool_calls: item.tool_calls,
+    tool_call_id: item.tool_call_id,
+  });
+
   if (typeof obj === 'string') {
     try {
       const parsed = JSON.parse(obj);
       if (parsed.messages && Array.isArray(parsed.messages)) {
-        return parsed.messages.map((item: any) => ({
-          role: item.role,
-          content: typeof item.content === 'string' ? item.content : JSON.stringify(item.content, null, 2)
-        }));
+        return parsed.messages.map(mapItem);
       }
-      // 处理OpenAI响应体中的choices
       if (parsed.choices && Array.isArray(parsed.choices)) {
-        return parsed.choices.map((choice: any) => ({
-          role: choice.message?.role || 'assistant',
-          content: choice.message?.content || JSON.stringify(choice, null, 2)
-        }));
+        const message = parsed.choices[0]?.message;
+        if (message) {
+          return [mapItem(message)];
+        }
       }
     } catch (_e) {
-      // 如果解析失败，按原样返回
-      return [{
-        role: 'user',
-        content: obj
-      }];
+      return [{ role: 'user', content: obj, tool_calls: undefined, tool_call_id: undefined }];
     }
   }
-  
-  // 如果已经是对象且有messages属性（数组形式）
+
   if (obj.messages && Array.isArray(obj.messages)) {
-    return obj.messages.map((item: any) => ({
-      role: item.role,
-      content: typeof item.content === 'string' ? item.content : JSON.stringify(item.content, null, 2)
-    }));
+    return obj.messages.map(mapItem);
   }
-  
-  // 处理OpenAI响应体中的choices
+
   if (obj.choices && Array.isArray(obj.choices)) {
-    return obj.choices.map((choice: any) => ({
-      role: choice.message?.role || 'assistant',
-      content: choice.message?.content || JSON.stringify(choice, null, 2)
-    }));
-  }
-  
-  // 如果是字符串形式的JSON对象
-  if (typeof obj === 'string') {
-    try {
-      const parsed = JSON.parse(obj);
-      if (parsed.messages && Array.isArray(parsed.messages)) {
-        return parsed.messages.map((item: any) => ({
-          role: item.role,
-          content: typeof item.content === 'string' ? item.content : JSON.stringify(item.content, null, 2)
-        }));
-      }
-      // 处理OpenAI响应体中的choices
-      if (parsed.choices && Array.isArray(parsed.choices)) {
-        return parsed.choices.map((choice: any) => ({
-          role: choice.message?.role || 'assistant',
-          content: choice.message?.content || JSON.stringify(choice, null, 2)
-        }));
-      }
-    } catch (_e) {
-      // 如果还是不行，返回简单消息
-      return [{
-        role: 'user',
-        content: obj
-      }];
+    const message = obj.choices[0]?.message;
+    if (message) {
+      return [mapItem(message)];
     }
   }
-  
-  // 如果是数组形式的messages
+
   if (Array.isArray(obj)) {
-    return obj.map((item: any) => ({
-      role: item.role,
-      content: typeof item.content === 'string' ? item.content : JSON.stringify(item.content, null, 2)
-    }));
+    return obj.map(mapItem);
   }
-  
-  // 默认情况
-  return [{
-    role: 'user',
-    content: JSON.stringify(obj, null, 2)
-  }];
+
+  return [{ role: 'user', content: JSON.stringify(obj, null, 2), tool_calls: undefined, tool_call_id: undefined }];
 };
+
 
 // 提取OpenAI聊天历史记录
 const extractChatHistory = (data: any): OpenAIChatMessage[] => {
@@ -172,32 +141,62 @@ const extractChatHistory = (data: any): OpenAIChatMessage[] => {
   }];
 };
 
-const renderContent = (content: string) => {
-  // 尝试解析为JSON并进行格式化
-  try {
-    const parsed = JSON.parse(content);
-    return (
-      <pre className="whitespace-pre-wrap break-words">
-        {JSON.stringify(parsed, null, 2)}
-      </pre>
-    );
-  } catch (_e) {
-    // 如果不是JSON，检查是否为Markdown格式
-    // if (isMarkdown(content)) {
+const renderContent = (message: OpenAIChatMessage) => {
+  if (message.content) {
+    try {
+      const parsed = JSON.parse(message.content);
+      return (
+        <pre className="w-full whitespace-pre-wrap break-all overflow-x-auto">
+          {JSON.stringify(parsed, null, 2)}
+        </pre>
+      );
+    } catch (_e) {
       return (
         <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {content}
+          {message.content}
         </ReactMarkdown>
       );
-    // }
+    }
   }
+
+  if (message.tool_calls) {
+    return (
+      <div className="space-y-2">
+        {message.tool_calls.map((toolCall, index) => (
+          <div key={index} className="bg-gray-100 p-2 rounded">
+            <div className="font-semibold text-xs">{`Tool Call: ${toolCall.function.name}`}</div>
+            <div className="text-xs text-gray-500">{`ID: ${toolCall.id}`}</div>
+            <SyntaxHighlighter
+              language="json"
+              style={atomOneLight}
+              wrapLongLines={true}
+              customStyle={{ fontSize: '0.75rem' }}
+            >
+              {toolCall.function.arguments}
+            </SyntaxHighlighter>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (message.role === 'tool') {
+    return (
+      <div className="bg-gray-100 p-2 rounded">
+        <div className="font-semibold text-xs">{`Tool Result`}</div>
+        <div className="text-xs text-gray-500">{`ID: ${message.tool_call_id}`}</div>
+        <div className="text-sm">{message.content}</div>
+      </div>
+    )
+  }
+
+  return null;
 };
 
 const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose, loading }) => {
   const { t } = useTranslation('common');
 
-  // 将请求体和响应体转换为OpenAI聊天消息格式
-  const getChatMessages = (): OpenAIChatMessage[] => {
+  const chatMessages = React.useMemo(() => {
     const messages: OpenAIChatMessage[] = [];
     
     if (log.logDetail?.requestBody) {
@@ -211,7 +210,7 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose, loading }
     }
     
     return messages;
-  };
+  }, [log.logDetail]);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50 p-4">
@@ -313,22 +312,22 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose, loading }
             </div>
           ) : (
             <div className="mb-6">
-              {getChatMessages().length > 0 ? (
+              {chatMessages.length > 0 ? (
                 <div className="flex flex-col space-y-4">
-                  {getChatMessages().map((message, index) => (
-                    <div 
-                      key={index} 
-                      className={`flex items-start ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                  {chatMessages.map((message, index) => (
+                    <div
+                      key={index}
+                      className={`flex items-start`}
                     >
                       {message.role === 'user' ? (
                         <>
                           <div className="flex-1 text-right">
-                            <div className="bg-indigo-100 rounded-lg rounded-tr-none p-4 inline-block max-w-[80%]">
+                            <div className="bg-indigo-100 rounded-lg rounded-tr-none p-4 max-w-[80%]">
                               <div className="text-xs font-medium mb-1">
                                 {message.role.charAt(0).toUpperCase() + message.role.slice(1)}
                               </div>
-                              <div className="text-sm text-left">
-                                {renderContent(message.content)}
+                              <div className="text-sm text-left break-word">
+                                {renderContent(message)}
                               </div>
                             </div>
                           </div>
@@ -336,7 +335,7 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose, loading }
                             U
                           </div>
                         </>
-                      ) : (
+                      ) : message.role === 'assistant' ? (
                         <>
                           <div className="flex-shrink-0 w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-white font-bold mr-3">
                             A
@@ -346,13 +345,35 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose, loading }
                               <div className="text-xs font-medium mb-1">
                                 {message.role.charAt(0).toUpperCase() + message.role.slice(1)}
                               </div>
-                              <div className="text-sm">
-                                {renderContent(message.content)}
+                              <div className="text-sm break-word">
+                                {renderContent(message)}
                               </div>
                             </div>
                           </div>
                         </>
-                      )}
+                      ) : message.role === 'tool' ? (
+                        <div className="flex-1 my-2">
+                          <div className="bg-gray-200 rounded-lg p-4 max-w-[80%] mx-auto">
+                            <div className="text-xs font-medium mb-1">
+                              {message.role.charAt(0).toUpperCase() + message.role.slice(1)}
+                            </div>
+                            <div className="text-sm">
+                              {renderContent(message)}
+                            </div>
+                          </div>
+                        </div>
+                      ) : message.role === 'system' ? (
+                        <div className="flex-1 my-2">
+                          <div className="bg-yellow-100 border-l-4 border-yellow-400 text-yellow-700 rounded-lg p-4 max-w-[80%] mx-auto">
+                            <div className="text-xs font-medium mb-1">
+                              {message.role.charAt(0).toUpperCase() + message.role.slice(1)}
+                            </div>
+                            <div className="text-sm">
+                              {renderContent(message)}
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   ))}
                 </div>
