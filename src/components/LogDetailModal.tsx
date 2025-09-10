@@ -289,8 +289,8 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose, loading }
           {loading ? (
             <div className="mb-6">
               <div className="flex items-start justify-end mb-4">
-                <div className="flex-1 text-right">
-                  <div className="bg-indigo-100 rounded-lg rounded-tr-none p-4 inline-block">
+                <div className="flex-1 text-right min-w-0">
+                  <div className="bg-indigo-100 rounded-lg rounded-tr-none p-4">
                     <LoadingSkeleton />
                   </div>
                 </div>
@@ -303,7 +303,7 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose, loading }
                 <div className="flex-shrink-0 w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-white font-bold mr-3">
                   A
                 </div>
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <div className="bg-green-100 rounded-lg rounded-tl-none p-4">
                     <LoadingSkeleton />
                   </div>
@@ -313,47 +313,48 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose, loading }
           ) : (
             <div className="mb-6">
               {chatMessages.length > 0 ? (
-                <div className="flex flex-col space-y-4">
+                <div className="space-y-4">
                   {chatMessages.map((message, index) => (
-                    <div
-                      key={index}
-                      className={`flex items-start`}
-                    >
+                    <div key={index} className="after:block after:clear-both">
                       {message.role === 'user' ? (
-                        <>
-                          <div className="flex-1 text-right">
-                            <div className="bg-indigo-100 rounded-lg rounded-tr-none p-4 max-w-[80%]">
-                              <div className="text-xs font-medium mb-1">
-                                {message.role.charAt(0).toUpperCase() + message.role.slice(1)}
-                              </div>
-                              <div className="text-sm text-left break-word">
-                                {renderContent(message)}
+                        <div className="float-right max-w-[85%]">
+                          <div className="flex items-start flex-row-reverse">
+                            <div className="flex-shrink-0 w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-white font-bold ml-3">
+                              U
+                            </div>
+                            <div className="min-w-0">
+                              <div className="bg-indigo-100 rounded-lg rounded-tr-none p-4">
+                                <div className="text-xs font-medium mb-1 text-right">
+                                  {message.role.charAt(0).toUpperCase() + message.role.slice(1)}
+                                </div>
+                                <div className="text-sm text-left break-word">
+                                  {renderContent(message)}
+                                </div>
                               </div>
                             </div>
                           </div>
-                          <div className="flex-shrink-0 w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-white font-bold ml-3">
-                            U
-                          </div>
-                        </>
+                        </div>
                       ) : message.role === 'assistant' ? (
-                        <>
-                          <div className="flex-shrink-0 w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-white font-bold mr-3">
-                            A
-                          </div>
-                          <div className="flex-1">
-                            <div className="bg-green-100 rounded-lg rounded-tl-none p-4 max-w-[80%]">
-                              <div className="text-xs font-medium mb-1">
-                                {message.role.charAt(0).toUpperCase() + message.role.slice(1)}
-                              </div>
-                              <div className="text-sm break-word">
-                                {renderContent(message)}
+                        <div className="float-left max-w-[85%]">
+                          <div className="flex items-start">
+                            <div className="flex-shrink-0 w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-white font-bold mr-3">
+                              A
+                            </div>
+                            <div className="min-w-0">
+                              <div className="bg-green-100 rounded-lg rounded-tl-none p-4">
+                                <div className="text-xs font-medium mb-1">
+                                  {message.role.charAt(0).toUpperCase() + message.role.slice(1)}
+                                </div>
+                                <div className="text-sm break-word">
+                                  {renderContent(message)}
+                                </div>
                               </div>
                             </div>
                           </div>
-                        </>
+                        </div>
                       ) : message.role === 'tool' ? (
-                        <div className="flex-1 my-2">
-                          <div className="bg-gray-200 rounded-lg p-4 max-w-[80%] mx-auto">
+                        <div className="max-w-[85%] mx-auto">
+                          <div className="bg-gray-200 rounded-lg p-4">
                             <div className="text-xs font-medium mb-1">
                               {message.role.charAt(0).toUpperCase() + message.role.slice(1)}
                             </div>
@@ -363,8 +364,8 @@ const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose, loading }
                           </div>
                         </div>
                       ) : message.role === 'system' ? (
-                        <div className="flex-1 my-2">
-                          <div className="bg-yellow-100 border-l-4 border-yellow-400 text-yellow-700 rounded-lg p-4 max-w-[80%] mx-auto">
+                        <div className="max-w-[85%] mx-auto">
+                          <div className="bg-yellow-100 border-l-4 border-yellow-400 text-yellow-700 rounded-lg p-4">
                             <div className="text-xs font-medium mb-1">
                               {message.role.charAt(0).toUpperCase() + message.role.slice(1)}
                             </div>
