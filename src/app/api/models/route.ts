@@ -72,8 +72,8 @@ async function syncProviderModels(db: any) {
         let updatedProviderModelsCount = 0;
 
         for (const fetchedModel of modelsToFetch) {
-          // Check if Model exists
-          let existingModel = await db.get('SELECT * FROM Model WHERE name = ?', fetchedModel.name);
+          // Check if Model exists by name or alias
+          let existingModel = await db.get('SELECT * FROM Model WHERE name = ? OR alias = ?', fetchedModel.name, fetchedModel.name);
 
           if (!existingModel) {
             // Create new Model entry if it doesn't exist
@@ -242,11 +242,17 @@ export const POST = authMiddleware(async (request: AuthenticatedRequest) => {
 
     // Single creation logic
     if (name) {
+      // Auto-generate alias if not provided and name doesn't have a version tag
+      let finalAlias = alias;
+      if (!finalAlias && !name.includes(':')) {
+        finalAlias = `${name}:latest`;
+      }
+
       const result = await db.run(
-        'INSERT INTO Model (name, description, alias, inputTokenPrice, outputTokenPrice, userId) VALUES (?, ?, ?, ?, ?, ?)', // Added alias and pricing
+        'INSERT INTO Model (name, description, alias, inputTokenPrice, outputTokenPrice, userId) VALUES (?, ?, ?, ?, ?, ?)',
         name,
         description,
-        alias || null, // Use alias from body or null
+        finalAlias || null,
         inputTokenPrice,
         outputTokenPrice,
         userId

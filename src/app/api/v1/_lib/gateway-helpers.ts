@@ -2,7 +2,7 @@ import {NextRequest, NextResponse} from 'next/server';
 import {Database} from 'sqlite';
 import {gzipSync} from 'zlib';
 
-const errorCodesToDisable = [401, 403, 429];
+const errorCodesToDisable = [429];
 
 // Define a consistent structure for our authentication result
 type AuthResult = {
@@ -55,13 +55,13 @@ export async function authenticateRequest(request: NextRequest, db: Database): P
  */
 export async function findModel(modelName: string, db: Database): Promise<any> {
   if (modelName.includes(':')) {
-    return db.get('SELECT * FROM Model WHERE name = ? OR alias = ?', modelName, modelName);
+    return db.get('SELECT * FROM Model WHERE (name = ? OR alias = ?) AND disabled = FALSE', modelName, modelName);
   }
 
   const modelNameWithLatest = `${modelName}:latest`;
   return db.get(
     `SELECT * FROM Model
-     WHERE name = ? OR alias = ? OR name = ? OR alias = ?
+     WHERE ((name = ? OR alias = ?) OR (name = ? OR alias = ?)) AND disabled = FALSE
      ORDER BY INSTR(name, ':') DESC, name DESC`,
     modelName,
     modelName,
