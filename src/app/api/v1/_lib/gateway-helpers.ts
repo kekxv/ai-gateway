@@ -189,6 +189,29 @@ export async function checkInitialBalance(
   return null; // Balance is sufficient
 }
 
+async function shouldDisableRoute(db: Database, selectedRoute: any): Promise<boolean> {
+  // 1. Count total enabled models
+  const totalModelsResult = await db.get("SELECT COUNT(*) as count FROM Model WHERE disabled = FALSE");
+  const totalModels = totalModelsResult.count;
+
+  if (totalModels <= 1) {
+    return false; // Don't disable if there's only one or zero models
+  }
+
+  // 2. Count enabled routes for this model
+  const modelRoutesResult = await db.get(
+    "SELECT COUNT(*) as count FROM ModelRoute WHERE modelId = ? AND disabled = FALSE AND (disabledUntil IS NULL OR disabledUntil < datetime('now'))",
+    selectedRoute.modelId
+  );
+  const totalModelRoutes = modelRoutesResult.count;
+
+  if (totalModelRoutes <= 1) {
+    return false; // Don't disable if it's the last route for the model
+  }
+
+  return true; // OK to disable
+}
+
 /**
  * Forwards a request to the upstream provider and handles the response.
  * @param targetUrl - The URL of the upstream service.
@@ -236,10 +259,12 @@ export async function handleUpstreamRequest(
   } else {
     if (!upstreamResponse.ok) {
       if (errorCodesToDisable.includes(upstreamResponse.status)) {
-        const tenMinutesLater = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-        db.run('UPDATE ModelRoute SET disabledUntil = ? WHERE id = ?', tenMinutesLater, selectedRoute.id).catch(
-          console.error
-        );
+        if (await shouldDisableRoute(db, selectedRoute)) {
+          const tenMinutesLater = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+          db.run('UPDATE ModelRoute SET disabledUntil = ? WHERE id = ?', tenMinutesLater, selectedRoute.id).catch(
+            console.error
+          );
+        }
       }
 
       const errorText = await upstreamResponse.text();
@@ -284,10 +309,12 @@ export async function handleUpstreamFormRequest(
 
   if (!upstreamResponse.ok) {
     if (errorCodesToDisable.includes(upstreamResponse.status)) {
-      const tenMinutesLater = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-      db.run('UPDATE ModelRoute SET disabledUntil = ? WHERE id = ?', tenMinutesLater, selectedRoute.id).catch(
-        console.error
-      );
+      if (await shouldDisableRoute(db, selectedRoute)) {
+        const tenMinutesLater = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+        db.run('UPDATE ModelRoute SET disabledUntil = ? WHERE id = ?', tenMinutesLater, selectedRoute.id).catch(
+          console.error
+        );
+      }
     }
 
     const errorData = await upstreamResponse.json();
