@@ -55,13 +55,13 @@ export async function authenticateRequest(request: NextRequest, db: Database): P
  */
 export async function findModel(modelName: string, db: Database): Promise<any> {
   if (modelName.includes(':')) {
-    return db.get('SELECT * FROM Model WHERE (name = ? OR alias = ?) AND disabled = FALSE', modelName, modelName);
+    return db.get('SELECT * FROM Model WHERE (name = ? OR alias = ?)', modelName, modelName);
   }
 
   const modelNameWithLatest = `${modelName}:latest`;
   return db.get(
     `SELECT * FROM Model
-     WHERE ((name = ? OR alias = ?) OR (name = ? OR alias = ?)) AND disabled = FALSE
+     WHERE ((name = ? OR alias = ?) OR (name = ? OR alias = ?))
      ORDER BY INSTR(name, ':') DESC, name DESC`,
     modelName,
     modelName,
@@ -191,7 +191,7 @@ export async function checkInitialBalance(
 
 async function shouldDisableRoute(db: Database, selectedRoute: any): Promise<boolean> {
   // 1. Count total enabled models
-  const totalModelsResult = await db.get("SELECT COUNT(*) as count FROM Model WHERE disabled = FALSE");
+  const totalModelsResult = await db.get("SELECT COUNT(*) as count FROM Model");
   const totalModels = totalModelsResult.count;
 
   if (totalModels <= 1) {
