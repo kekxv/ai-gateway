@@ -86,6 +86,21 @@ export async function findModel(modelName: string, db: Database): Promise<any> {
 }
 
 /**
+ * Finds a model by its ID.
+ * @param modelId - The ID of the model.
+ * @param db - The database instance.
+ * @returns The model data or null if not found.
+ */
+export async function findModelById(modelId: number, db: Database): Promise<any> {
+  try {
+    return await db.get('SELECT * FROM Model WHERE id = ?', modelId);
+  } catch (err) {
+    console.error('[MODEL] Error finding model by ID:', modelId, err);
+    return null;
+  }
+}
+
+/**
  * Selects an upstream route for a given model using weighted random selection.
  * @param modelId - The ID of the model.
  * @param db - The database instance.

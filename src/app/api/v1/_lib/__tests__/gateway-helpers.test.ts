@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   authenticateRequest,
   findModel,
+  findModelById,
   selectUpstreamRoute,
   checkApiKeyPermission,
   checkInitialBalance,
@@ -186,6 +187,40 @@ describe('Gateway Helpers - Model Operations', () => {
       mockDb.get.mockRejectedValueOnce('Database error');
 
       const result = await findModel('gpt-4', mockDb);
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('findModelById', () => {
+    it('should find model by ID', async () => {
+      mockDb.get.mockResolvedValue({
+        id: 1,
+        name: 'gpt-4',
+        alias: null,
+        createdAt: '2024-01-01',
+      });
+
+      const result = await findModelById(1, mockDb);
+
+      expect(result).not.toBeNull();
+      expect(result.id).toBe(1);
+      expect(result.name).toBe('gpt-4');
+      expect(mockDb.get).toHaveBeenCalledWith('SELECT * FROM Model WHERE id = ?', 1);
+    });
+
+    it('should return null when model not found', async () => {
+      mockDb.get.mockResolvedValue(null);
+
+      const result = await findModelById(999, mockDb);
+
+      expect(result).toBeNull();
+    });
+
+    it('should handle database errors gracefully', async () => {
+      mockDb.get.mockRejectedValueOnce('Database error');
+
+      const result = await findModelById(1, mockDb);
+
       expect(result).toBeNull();
     });
   });
