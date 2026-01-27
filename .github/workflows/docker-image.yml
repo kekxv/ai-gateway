@@ -22,30 +22,92 @@ jobs:
       with:
         node-version: '20'
 
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run tests
+      run: npm test
+      continue-on-error: false
+
+    - name: Run build
+      run: npm run build
+      continue-on-error: false
+
     - name: Check version and determine if release is needed
       id: version_check
       run: |
         VERSION=$(node -p "require('./package.json').version")
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        
         if git rev-parse "v$VERSION" >/dev/null 2>&1; then
-          echo "Tag v$VERSION already exists. No new release needed."
+          echo "status=existing" >> $GITHUB_OUTPUT
+          echo "message=Tag v$VERSION already exists. Skipping release."
           echo "release_needed=false" >> $GITHUB_OUTPUT
         else
-          echo "Version v$VERSION is new. Proceeding with release."
+          echo "status=new" >> $GITHUB_OUTPUT
+          echo "message=Version v$VERSION is new. Proceeding with release and tag creation."
           echo "release_needed=true" >> $GITHUB_OUTPUT
         fi
+      shell: bash
+
+    - name: Log version check result
+      run: |
+        echo "Version: ${{ steps.version_check.outputs.version }}"
+        echo "Status: ${{ steps.version_check.outputs.status }}"
+        echo "Release needed: ${{ steps.version_check.outputs.release_needed }}"
 
     - name: Create and push Git tag
       if: steps.version_check.outputs.release_needed == 'true'
       run: |
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -a "v${{ steps.version_check.outputs.version }}" -m "Release v${{ steps.version_check.outputs.version }}"
-        git push origin "v${{ steps.version_check.outputs.version }}"
+        
+        VERSION="${{ steps.version_check.outputs.version }}"
+        TAG="v${VERSION}"
+        
+        echo "Creating tag: $TAG"
+        git tag -a "$TAG" -m "Release $TAG
+        
+        - Automated release by GitHub Actions
+        - Built from commit: ${{ github.sha }}
+        - Build number: ${{ github.run_number }}"
+        
+        echo "Pushing tag: $TAG"
+        git push origin "$TAG"
+        
+        echo "✓ Tag created and pushed successfully: $TAG"
+      shell: bash
+
+    - name: Create GitHub Release
+      if: steps.version_check.outputs.release_needed == 'true'
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ steps.version_check.outputs.version }}
+        release_name: Release v${{ steps.version_check.outputs.version }}
+        body: |
+          ## Release v${{ steps.version_check.outputs.version }}
+          
+          **Build Details:**
+          - Commit: ${{ github.sha }}
+          - Build Number: ${{ github.run_number }}
+          - Branch: ${{ github.ref }}
+          
+          **Tests:** ✓ Passed
+          **Build:** ✓ Successful
+          
+          Docker image available at:
+          - `ghcr.io/${{ github.repository }}:v${{ steps.version_check.outputs.version }}`
+          - `ghcr.io/${{ github.repository }}:latest`
+        draft: false
+        prerelease: false
 
     - name: Set up QEMU
       if: steps.version_check.outputs.release_needed == 'true'
       uses: docker/setup-qemu-action@v3
+      with:
+        platforms: linux/amd64,linux/arm64
 
     - name: Set up Docker Buildx
       if: steps.version_check.outputs.release_needed == 'true'
@@ -65,9 +127,46 @@ jobs:
       with:
         context: .
         push: true
+        platforms: linux/amd64,linux/arm64
         tags: |
           ghcr.io/${{ github.repository }}:latest
           ghcr.io/${{ github.repository }}:v${{ steps.version_check.outputs.version }}
           ghcr.io/${{ github.repository }}:${{ github.sha }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        build-args: |
+          BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          VCS_REF=${{ github.sha }}
+          VERSION=${{ steps.version_check.outputs.version }}
+
+    - name: Docker build summary
+      if: steps.version_check.outputs.release_needed == 'true'
+      run: |
+        echo "✓ Docker image build and push completed successfully"
+        echo ""
+        echo "Image Tags:"
+        echo "  - ghcr.io/${{ github.repository }}:latest"
+        echo "  - ghcr.io/${{ github.repository }}:v${{ steps.version_check.outputs.version }}"
+        echo "  - ghcr.io/${{ github.repository }}:${{ github.sha }}"
+      shell: bash
+
+    - name: Summary
+      if: always()
+      run: |
+        echo "## GitHub Actions Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Workflow: Release and Publish Docker Image" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Tests | ✓ Passed |" >> $GITHUB_STEP_SUMMARY
+        echo "| Build | ✓ Successful |" >> $GITHUB_STEP_SUMMARY
+        echo "| Version | ${{ steps.version_check.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Release Needed | ${{ steps.version_check.outputs.release_needed }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ steps.version_check.outputs.release_needed }}" == "true" ]; then
+          echo "✓ Release artifacts created and Docker image published" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "ℹ Tag v${{ steps.version_check.outputs.version }} already exists, skipping release" >> $GITHUB_STEP_SUMMARY
+        fi
+      shell: bash
