@@ -4,13 +4,13 @@
  */
 export const TIMEOUT_CONFIG = {
   // Connection timeout - time to establish a connection
-  CONNECTION_TIMEOUT: parseInt(process.env.FETCH_CONNECTION_TIMEOUT || '10000', 10),
+  CONNECTION_TIMEOUT: parseInt(process.env.FETCH_CONNECTION_TIMEOUT || '30000', 10),
   
   // Read/Response timeout - time to receive a response once connected
-  RESPONSE_TIMEOUT: parseInt(process.env.FETCH_RESPONSE_TIMEOUT || '60000', 10),
+  RESPONSE_TIMEOUT: parseInt(process.env.FETCH_RESPONSE_TIMEOUT || '180000', 10),
   
   // Total timeout - maximum time for entire request
-  TOTAL_TIMEOUT: parseInt(process.env.FETCH_TOTAL_TIMEOUT || '120000', 10),
+  TOTAL_TIMEOUT: parseInt(process.env.FETCH_TOTAL_TIMEOUT || '240000', 10),
   
   // Model loading timeout - for loading models from providers
   MODEL_LOAD_TIMEOUT: parseInt(process.env.FETCH_MODEL_LOAD_TIMEOUT || '30000', 10),
