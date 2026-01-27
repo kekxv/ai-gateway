@@ -383,9 +383,13 @@ export async function handleUpstreamRequest(
     const latency = Date.now() - startTime;
     if (err instanceof Error && err.name === 'AbortError') {
       console.error('[UPSTREAM] Request timeout:', {targetUrl, model: model.name, timeout: timeoutMs, latency});
-      return NextResponse.json({error: `Upstream request timeout after ${timeoutMs}ms`}, {status: 504});
+      const errorMessage = `Upstream request timeout after ${timeoutMs}ms`;
+      await logErrorRequest(db, apiKeyData, model, selectedRoute, latency, 504, errorMessage);
+      return NextResponse.json({error: errorMessage}, {status: 504});
     }
     console.error('[UPSTREAM] Fatal error in handleUpstreamRequest:', {error: err, targetUrl, model: model.name, latency});
+    const errorMessage = err instanceof Error ? err.message : 'Upstream request failed';
+    await logErrorRequest(db, apiKeyData, model, selectedRoute, latency, 502, errorMessage);
     return NextResponse.json({error: 'Upstream request failed'}, {status: 502});
   }
 }
@@ -457,9 +461,13 @@ export async function handleUpstreamFormRequest(
     const latency = Date.now() - startTime;
     if (err instanceof Error && err.name === 'AbortError') {
       console.error('[FORM_REQUEST] Request timeout:', {targetUrl, model: model.name, timeout: timeoutMs, latency});
-      return NextResponse.json({error: `Form request timeout after ${timeoutMs}ms`}, {status: 504});
+      const errorMessage = `Form request timeout after ${timeoutMs}ms`;
+      await logErrorRequest(db, apiKeyData, model, selectedRoute, latency, 504, errorMessage);
+      return NextResponse.json({error: errorMessage}, {status: 504});
     }
     console.error('[FORM_REQUEST] Fatal error:', {error: err, targetUrl, model: model.name, latency});
+    const errorMessage = err instanceof Error ? err.message : 'Form request failed';
+    await logErrorRequest(db, apiKeyData, model, selectedRoute, latency, 502, errorMessage);
     return NextResponse.json({error: 'Form request failed'}, {status: 502});
   }
 }
@@ -509,6 +517,30 @@ export async function findRouteForModelPattern(pattern: string, db: Database): P
   }
 
   return selectedRoute;
+}
+
+/**
+ * Log error requests (timeout, connection error, etc.)
+ */
+export async function logErrorRequest(
+  db: Database,
+  apiKeyData: any,
+  model: any,
+  selectedRoute: any,
+  latency: number,
+  status: number,
+  errorMessage: string,
+) {
+  console.log('[LOG] Logging error request:', {model: model.name, status, latency});
+  try {
+    await db.run(
+      'INSERT INTO Log (latency, promptTokens, completionTokens, totalTokens, apiKeyId, modelName, providerName, cost, ownerChannelId, ownerChannelUserId, status, errorMessage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      latency, 0, 0, 0, apiKeyData.id, model.name, selectedRoute.providerName, 0, null, null, status, errorMessage
+    );
+    console.log('[LOG] Successfully logged error request:', {model: model.name, status, latency});
+  } catch (logError) {
+    console.error('[LOG] Failed to log error request:', logError);
+  }
 }
 
 export async function logRequestAndCalculateCost(

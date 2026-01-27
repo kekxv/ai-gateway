@@ -426,6 +426,20 @@ const migrations = [
       PRAGMA foreign_keys=on;
     `
   },
+  {
+    version: 16,
+    name: 'add_status_and_error_to_log',
+    up: `
+      PRAGMA foreign_keys=off;
+      BEGIN TRANSACTION;
+
+      ALTER TABLE Log ADD COLUMN status INTEGER DEFAULT 200 NOT NULL;
+      ALTER TABLE Log ADD COLUMN errorMessage TEXT;
+
+      COMMIT;
+      PRAGMA foreign_keys=on;
+    `
+  },
   // Add future migrations here
 ];
 

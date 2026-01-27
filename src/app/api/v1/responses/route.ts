@@ -10,7 +10,8 @@ import {
   checkInitialBalance,
   handleUpstreamRequest,
   findRouteForModelPattern,
-  findModelById
+  findModelById,
+  logErrorRequest,
 } from '../_lib/gateway-helpers';
 
 export async function POST(request: Request) {
@@ -113,6 +114,7 @@ export async function GET(request: Request) {
     if (!upstreamResponse.ok) {
       console.error('[RESPONSE] Upstream error:', upstreamResponse.status, upstreamResponse.statusText);
       const errorData = await upstreamResponse.json().catch(() => ({error: 'Upstream error'}));
+      await logErrorRequest(db, dbKey, model, selectedRoute, 0, upstreamResponse.status, `Response list error: ${upstreamResponse.statusText}`);
       return NextResponse.json(errorData, {status: upstreamResponse.status});
     }
 
@@ -121,6 +123,26 @@ export async function GET(request: Request) {
 
   } catch (error) {
     console.error('[RESPONSE] Gateway Error:', error);
+    const latency = 0;
+    const errorMessage = error instanceof Error ? error.message : 'An internal server error occurred';
+    // Try to log if we have the necessary data
+    try {
+      const db = await getInitializedDb();
+      const {apiKeyData: dbKey} = await authenticateRequest(request as any, db);
+      const selectedRoute = await findRouteForModelPattern('%', db);
+      if (dbKey && selectedRoute && selectedRoute.modelId) {
+        const model = await findModelById(selectedRoute.modelId, db);
+        if (model) {
+          if (error instanceof Error && error.name === 'AbortError') {
+            await logErrorRequest(db, dbKey, model, selectedRoute, latency, 504, 'Response list timeout');
+          } else {
+            await logErrorRequest(db, dbKey, model, selectedRoute, latency, 500, errorMessage);
+          }
+        }
+      }
+    } catch (logErr) {
+      console.error('[LOG] Failed to log response list error:', logErr);
+    }
     return NextResponse.json({error: 'An internal server error occurred.'}, {status: 500});
   }
 }
