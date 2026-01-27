@@ -1,5 +1,7 @@
 import {NextResponse} from 'next/server';
 import {getInitializedDb} from '@/lib/db';
+import {withProxySupport} from '@/lib/proxyUtils';
+import {createTimeoutSignal, getTimeoutForRequestType} from '@/lib/timeoutConfig';
 import {
   authenticateRequest,
   findModelById,
@@ -41,14 +43,17 @@ export async function GET(
 
     // 4. Make the upstream request
     const targetUrl = `${selectedRoute.baseURL}/responses/${encodeURIComponent(responseId)}`;
+    const timeoutMs = getTimeoutForRequestType('response');
+    const signal = createTimeoutSignal(timeoutMs);
 
-    const upstreamResponse = await fetch(targetUrl, {
+    const upstreamResponse = await fetch(targetUrl, withProxySupport(targetUrl, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${selectedRoute.apiKey}`,
         'User-Agent': 'AI-Gateway/1.0',
       },
-    });
+      signal,
+    }));
 
     if (!upstreamResponse.ok) {
       console.error('[RESPONSE] Upstream error:', upstreamResponse.status, upstreamResponse.statusText);
@@ -99,14 +104,17 @@ export async function DELETE(
 
     // 4. Make the upstream request
     const targetUrl = `${selectedRoute.baseURL}/responses/${encodeURIComponent(responseId)}`;
+    const timeoutMs = getTimeoutForRequestType('response');
+    const signal = createTimeoutSignal(timeoutMs);
 
-    const upstreamResponse = await fetch(targetUrl, {
+    const upstreamResponse = await fetch(targetUrl, withProxySupport(targetUrl, {
       method: 'DELETE',
       headers: {
         'Authorization': `Bearer ${selectedRoute.apiKey}`,
         'User-Agent': 'AI-Gateway/1.0',
       },
-    });
+      signal,
+    }));
 
     if (!upstreamResponse.ok) {
       console.error('[RESPONSE] Upstream error:', upstreamResponse.status, upstreamResponse.statusText);

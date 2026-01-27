@@ -1,6 +1,8 @@
 import {NextRequest, NextResponse} from 'next/server';
 import {Database} from 'sqlite';
 import {gzipSync} from 'zlib';
+import {withProxySupport} from '@/lib/proxyUtils';
+import {createTimeoutSignal, getTimeoutForRequestType} from '@/lib/timeoutConfig';
 
 const errorCodesToDisable = [429];
 
@@ -280,6 +282,9 @@ export async function handleUpstreamRequest(
   streamRequested: boolean
 ): Promise<NextResponse> {
   const startTime = Date.now();
+  const timeoutMs = getTimeoutForRequestType('upstream');
+  const signal = createTimeoutSignal(timeoutMs);
+  
   const fetchOptions: RequestInit = {
     method: 'POST',
     headers: {
@@ -287,6 +292,7 @@ export async function handleUpstreamRequest(
       'Authorization': `Bearer ${selectedRoute.apiKey}`,
     },
     body: JSON.stringify(requestBody),
+    signal,
   };
 
   if (streamRequested) {
@@ -295,8 +301,9 @@ export async function handleUpstreamRequest(
   }
 
   try {
-    console.log('[UPSTREAM] Sending request to:', targetUrl, '| Stream:', streamRequested);
-    const upstreamResponse = await fetch(targetUrl, fetchOptions);
+    console.log('[UPSTREAM] Sending request to:', targetUrl, '| Stream:', streamRequested, '| Timeout:', timeoutMs + 'ms');
+    const proxyOptions = withProxySupport(targetUrl, fetchOptions);
+    const upstreamResponse = await fetch(targetUrl, proxyOptions);
     const latency = Date.now() - startTime;
     console.log('[UPSTREAM] Response received - Status:', upstreamResponse.status, '| Latency:', latency + 'ms');
 
@@ -373,7 +380,12 @@ export async function handleUpstreamRequest(
       return NextResponse.json(responseData);
     }
   } catch (err) {
-    console.error('[UPSTREAM] Fatal error in handleUpstreamRequest:', {error: err, targetUrl, model: model.name});
+    const latency = Date.now() - startTime;
+    if (err instanceof Error && err.name === 'AbortError') {
+      console.error('[UPSTREAM] Request timeout:', {targetUrl, model: model.name, timeout: timeoutMs, latency});
+      return NextResponse.json({error: `Upstream request timeout after ${timeoutMs}ms`}, {status: 504});
+    }
+    console.error('[UPSTREAM] Fatal error in handleUpstreamRequest:', {error: err, targetUrl, model: model.name, latency});
     return NextResponse.json({error: 'Upstream request failed'}, {status: 502});
   }
 }
@@ -387,19 +399,25 @@ export async function handleUpstreamFormRequest(
   targetUrl: string,
 ) {
   const startTime = Date.now();
+  const timeoutMs = getTimeoutForRequestType('upstream');
+  const signal = createTimeoutSignal(timeoutMs);
+  
   const fetchOptions: RequestInit = {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${selectedRoute.apiKey}`,
     },
     body: formData,
+    signal,
   };
 
-  const upstreamResponse = await fetch(targetUrl, fetchOptions);
-  const latency = Date.now() - startTime;
-  console.log('[FORM_REQUEST] Response received - Status:', upstreamResponse.status, '| Latency:', latency + 'ms');
+  try {
+    const proxyOptions = withProxySupport(targetUrl, fetchOptions);
+    const upstreamResponse = await fetch(targetUrl, proxyOptions);
+    const latency = Date.now() - startTime;
+    console.log('[FORM_REQUEST] Response received - Status:', upstreamResponse.status, '| Latency:', latency + 'ms');
 
-  if (!upstreamResponse.ok) {
+    if (!upstreamResponse.ok) {
     console.error('[FORM_REQUEST] Error response from upstream:', {
       status: upstreamResponse.status,
       statusText: upstreamResponse.statusText,
@@ -430,11 +448,20 @@ export async function handleUpstreamFormRequest(
     return NextResponse.json({error: `Upstream service error: ${errorData.error?.message || upstreamResponse.statusText}`}, {status: upstreamResponse.status});
   }
   const responseData = await upstreamResponse.json();
-  console.log('[FORM_REQUEST] Success:', {model: model.name, provider: selectedRoute.providerName, latency});
+    console.log('[FORM_REQUEST] Success:', {model: model.name, provider: selectedRoute.providerName, latency});
 
-  await logRequestAndCalculateCost(db, apiKeyData, model, selectedRoute, {}, responseData, latency, false);
+    await logRequestAndCalculateCost(db, apiKeyData, model, selectedRoute, {}, responseData, latency, false);
 
-  return NextResponse.json(responseData);
+    return NextResponse.json(responseData);
+  } catch (err) {
+    const latency = Date.now() - startTime;
+    if (err instanceof Error && err.name === 'AbortError') {
+      console.error('[FORM_REQUEST] Request timeout:', {targetUrl, model: model.name, timeout: timeoutMs, latency});
+      return NextResponse.json({error: `Form request timeout after ${timeoutMs}ms`}, {status: 504});
+    }
+    console.error('[FORM_REQUEST] Fatal error:', {error: err, targetUrl, model: model.name, latency});
+    return NextResponse.json({error: 'Form request failed'}, {status: 502});
+  }
 }
 
 export async function findRouteForModelPattern(pattern: string, db: Database): Promise<any> {

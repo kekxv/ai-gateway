@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
 import { getInitializedDb } from '@/lib/db';
+import { withProxySupport } from '@/lib/proxyUtils';
+import { createTimeoutSignal, getTimeoutForRequestType } from '@/lib/timeoutConfig';
 
 // GET handler to fetch models from a provider
 export const GET = authMiddleware(async (request: AuthenticatedRequest, context: { params: Promise<{ id: string }> }) => {
@@ -24,11 +26,16 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest, context:
 
     // Determine provider type and fetch models accordingly
     if (provider.type?.toLowerCase() === 'openai') {
-      const openaiResponse = await fetch(`${provider.baseURL}/models`, {
+      const openaiUrl = `${provider.baseURL}/models`;
+      const timeoutMs = getTimeoutForRequestType('model-load');
+      const signal = createTimeoutSignal(timeoutMs);
+      
+      const openaiResponse = await fetch(openaiUrl, withProxySupport(openaiUrl, {
         headers: {
           'Authorization': `Bearer ${provider.apiKey}`,
         },
-      });
+        signal,
+      }));
 
       const openaiRawText = await openaiResponse.text();
       if (!openaiResponse.ok) {
@@ -48,11 +55,16 @@ export const GET = authMiddleware(async (request: AuthenticatedRequest, context:
 
     } else if (provider.type?.toLowerCase() === 'gemini') {
       const apiKey = provider.apiKey || '';
-      const geminiResponse = await fetch(`${provider.baseURL}/v1beta/models`, {
+      const geminiUrl = `${provider.baseURL}/v1beta/models`;
+      const timeoutMs = getTimeoutForRequestType('model-load');
+      const signal = createTimeoutSignal(timeoutMs);
+      
+      const geminiResponse = await fetch(geminiUrl, withProxySupport(geminiUrl, {
         headers: {
           'x-goog-api-key': apiKey,
         },
-      });
+        signal,
+      }));
 
       if (!geminiResponse.ok) {
         const errorText = await geminiResponse.text();

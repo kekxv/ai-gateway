@@ -14,6 +14,8 @@
   "dependencies": {
     "@types/recharts": "^1.8.29",
     "bcryptjs": "^3.0.2",
+    "http-proxy-agent": "^7.0.0",
+    "https-proxy-agent": "^7.0.0",
     "i18next": "^25.4.2",
     "jsonwebtoken": "^9.0.2",
     "next": "15.5.0",

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authMiddleware, AuthenticatedRequest } from '@/lib/auth';
 import { getInitializedDb } from '@/lib/db';
+import { withProxySupport } from '@/lib/proxyUtils';
+import { createTimeoutSignal, getTimeoutForRequestType } from '@/lib/timeoutConfig';
 
 // Function to sync models from providers with autoLoadModels enabled
 async function syncProviderModels(db: any) {
@@ -17,11 +19,16 @@ async function syncProviderModels(db: any) {
 
         // Replicate model fetching logic from load-models/route.ts
         if (provider.type?.toLowerCase() === 'openai') {
-          const openaiResponse = await fetch(`${provider.baseURL}/models`, {
+          const openaiUrl = `${provider.baseURL}/models`;
+          const timeoutMs = getTimeoutForRequestType('model-sync');
+          const signal = createTimeoutSignal(timeoutMs);
+          
+          const openaiResponse = await fetch(openaiUrl, withProxySupport(openaiUrl, {
             headers: {
               'Authorization': `Bearer ${provider.apiKey}`,
             },
-          });
+            signal,
+          }));
 
           const openaiRawText = await openaiResponse.text();
           if (!openaiResponse.ok) {
@@ -43,11 +50,16 @@ async function syncProviderModels(db: any) {
 
         } else if (provider.type?.toLowerCase() === 'gemini') {
           const apiKey = provider.apiKey || '';
-          const geminiResponse = await fetch(`${provider.baseURL}/v1beta/models`, {
+          const geminiUrl = `${provider.baseURL}/v1beta/models`;
+          const timeoutMs = getTimeoutForRequestType('model-sync');
+          const signal = createTimeoutSignal(timeoutMs);
+          
+          const geminiResponse = await fetch(geminiUrl, withProxySupport(geminiUrl, {
             headers: {
               'x-goog-api-key': apiKey,
             },
-          });
+            signal,
+          }));
 
           if (!geminiResponse.ok) {
             const errorText = await geminiResponse.text();
