@@ -66,11 +66,11 @@ export async function authenticateRequest(request: NextRequest, db: Database): P
 export async function findModel(modelName: string, db: Database): Promise<any> {
   try {
     if (modelName.includes(':')) {
-      return db.get('SELECT * FROM Model WHERE (name = ? OR alias = ?)', modelName, modelName);
+      return await db.get('SELECT * FROM Model WHERE (name = ? OR alias = ?)', modelName, modelName);
     }
 
     const modelNameWithLatest = `${modelName}:latest`;
-    return db.get(
+    return await db.get(
       `SELECT * FROM Model
        WHERE ((name = ? OR alias = ?) OR (name = ? OR alias = ?))
        ORDER BY INSTR(name, ':') DESC, name DESC`,
