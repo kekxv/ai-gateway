@@ -114,7 +114,7 @@ export async function GET(request: Request) {
     if (!upstreamResponse.ok) {
       console.error('[RESPONSE] Upstream error:', upstreamResponse.status, upstreamResponse.statusText);
       const errorData = await upstreamResponse.json().catch(() => ({error: 'Upstream error'}));
-      await logErrorRequest(db, dbKey, model, selectedRoute, 0, upstreamResponse.status, `Response list error: ${upstreamResponse.statusText}`);
+      await logErrorRequest(db, dbKey, model, selectedRoute, 0, upstreamResponse.status, `Response list error: ${upstreamResponse.statusText}`, {_method: 'GET'});
       return NextResponse.json(errorData, {status: upstreamResponse.status});
     }
 
@@ -134,9 +134,9 @@ export async function GET(request: Request) {
         const model = await findModelById(selectedRoute.modelId, db);
         if (model) {
           if (error instanceof Error && error.name === 'AbortError') {
-            await logErrorRequest(db, dbKey, model, selectedRoute, latency, 504, 'Response list timeout');
+            await logErrorRequest(db, dbKey, model, selectedRoute, latency, 504, 'Response list timeout', {_method: 'GET'});
           } else {
-            await logErrorRequest(db, dbKey, model, selectedRoute, latency, 500, errorMessage);
+            await logErrorRequest(db, dbKey, model, selectedRoute, latency, 500, errorMessage, {_method: 'GET'});
           }
         }
       }

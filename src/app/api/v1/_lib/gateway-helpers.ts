@@ -339,15 +339,8 @@ export async function handleUpstreamRequest(
         }
       }
       
-      // Log error response
-      try {
-        await db.run(
-          'INSERT INTO Log (latency, promptTokens, completionTokens, totalTokens, apiKeyId, modelName, providerName, cost, ownerChannelId, ownerChannelUserId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          latency, 0, 0, 0, apiKeyData.id, model.name, selectedRoute.providerName, 0, null, null
-        );
-      } catch (logError) {
-        console.error('[LOG] Failed to log error request:', logError);
-      }
+      // Log error response with request body
+      await logErrorRequest(db, apiKeyData, model, selectedRoute, latency, upstreamResponse.status, errorMessage, requestBody);
       
       return NextResponse.json({error: errorMessage}, {status: upstreamResponse.status});
     }
@@ -384,12 +377,12 @@ export async function handleUpstreamRequest(
     if (err instanceof Error && err.name === 'AbortError') {
       console.error('[UPSTREAM] Request timeout:', {targetUrl, model: model.name, timeout: timeoutMs, latency});
       const errorMessage = `Upstream request timeout after ${timeoutMs}ms`;
-      await logErrorRequest(db, apiKeyData, model, selectedRoute, latency, 504, errorMessage);
+      await logErrorRequest(db, apiKeyData, model, selectedRoute, latency, 504, errorMessage, requestBody);
       return NextResponse.json({error: errorMessage}, {status: 504});
     }
     console.error('[UPSTREAM] Fatal error in handleUpstreamRequest:', {error: err, targetUrl, model: model.name, latency});
     const errorMessage = err instanceof Error ? err.message : 'Upstream request failed';
-    await logErrorRequest(db, apiKeyData, model, selectedRoute, latency, 502, errorMessage);
+    await logErrorRequest(db, apiKeyData, model, selectedRoute, latency, 502, errorMessage, requestBody);
     return NextResponse.json({error: 'Upstream request failed'}, {status: 502});
   }
 }
@@ -438,17 +431,9 @@ export async function handleUpstreamFormRequest(
       }
     }
 
-    // Log error response
-    try {
-      await db.run(
-        'INSERT INTO Log (latency, promptTokens, completionTokens, totalTokens, apiKeyId, modelName, providerName, cost, ownerChannelId, ownerChannelUserId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        latency, 0, 0, 0, apiKeyData.id, model.name, selectedRoute.providerName, 0, null, null
-      );
-    } catch (logError) {
-      console.error('[LOG] Failed to log form request error:', logError);
-    }
-
+    // Log error response with form data indicator
     const errorData = await upstreamResponse.json();
+    await logErrorRequest(db, apiKeyData, model, selectedRoute, latency, upstreamResponse.status, `Upstream service error: ${errorData.error?.message || upstreamResponse.statusText}`, {_form_data: true});
     return NextResponse.json({error: `Upstream service error: ${errorData.error?.message || upstreamResponse.statusText}`}, {status: upstreamResponse.status});
   }
   const responseData = await upstreamResponse.json();
@@ -462,12 +447,12 @@ export async function handleUpstreamFormRequest(
     if (err instanceof Error && err.name === 'AbortError') {
       console.error('[FORM_REQUEST] Request timeout:', {targetUrl, model: model.name, timeout: timeoutMs, latency});
       const errorMessage = `Form request timeout after ${timeoutMs}ms`;
-      await logErrorRequest(db, apiKeyData, model, selectedRoute, latency, 504, errorMessage);
+      await logErrorRequest(db, apiKeyData, model, selectedRoute, latency, 504, errorMessage, {_form_data: true});
       return NextResponse.json({error: errorMessage}, {status: 504});
     }
     console.error('[FORM_REQUEST] Fatal error:', {error: err, targetUrl, model: model.name, latency});
     const errorMessage = err instanceof Error ? err.message : 'Form request failed';
-    await logErrorRequest(db, apiKeyData, model, selectedRoute, latency, 502, errorMessage);
+    await logErrorRequest(db, apiKeyData, model, selectedRoute, latency, 502, errorMessage, {_form_data: true});
     return NextResponse.json({error: 'Form request failed'}, {status: 502});
   }
 }
@@ -530,14 +515,29 @@ export async function logErrorRequest(
   latency: number,
   status: number,
   errorMessage: string,
+  requestBody?: any,
 ) {
   console.log('[LOG] Logging error request:', {model: model.name, status, latency});
   try {
-    await db.run(
+    const result = await db.run(
       'INSERT INTO Log (latency, promptTokens, completionTokens, totalTokens, apiKeyId, modelName, providerName, cost, ownerChannelId, ownerChannelUserId, status, errorMessage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       latency, 0, 0, 0, apiKeyData.id, model.name, selectedRoute.providerName, 0, null, null, status, errorMessage
     );
     console.log('[LOG] Successfully logged error request:', {model: model.name, status, latency});
+
+    // Store request details if provided
+    if (requestBody && apiKeyData.logDetails) {
+      try {
+        const logEntryId = result.lastID;
+        await db.run(
+          'INSERT INTO LogDetail (logId, requestBody, responseBody) VALUES (?, ?, ?)',
+          logEntryId, gzipSync(Buffer.from(JSON.stringify(requestBody))), null
+        );
+        console.log('[LOG] Stored error request details for entry:', logEntryId);
+      } catch (detailErr) {
+        console.error('[LOG] Failed to store error request details:', detailErr);
+      }
+    }
   } catch (logError) {
     console.error('[LOG] Failed to log error request:', logError);
   }

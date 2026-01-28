@@ -59,7 +59,7 @@ export async function GET(
     if (!upstreamResponse.ok) {
       console.error('[RESPONSE] Upstream error:', upstreamResponse.status, upstreamResponse.statusText);
       const errorData = await upstreamResponse.json().catch(() => ({error: 'Upstream error'}));
-      await logErrorRequest(db, dbKey, model, selectedRoute, 0, upstreamResponse.status, `Get response error: ${upstreamResponse.statusText}`);
+      await logErrorRequest(db, dbKey, model, selectedRoute, 0, upstreamResponse.status, `Get response error: ${upstreamResponse.statusText}`, {_method: 'GET', _responseId: responseId});
       return NextResponse.json(errorData, {status: upstreamResponse.status});
     }
 
@@ -78,9 +78,9 @@ export async function GET(
         const model = await findModelById(selectedRoute.modelId, db);
         if (model) {
           if (error instanceof Error && error.name === 'AbortError') {
-            await logErrorRequest(db, dbKey, model, selectedRoute, 0, 504, 'Get response timeout');
+            await logErrorRequest(db, dbKey, model, selectedRoute, 0, 504, 'Get response timeout', {_method: 'GET'});
           } else {
-            await logErrorRequest(db, dbKey, model, selectedRoute, 0, 500, errorMessage);
+            await logErrorRequest(db, dbKey, model, selectedRoute, 0, 500, errorMessage, {_method: 'GET'});
           }
         }
       }
@@ -140,7 +140,7 @@ export async function DELETE(
     if (!upstreamResponse.ok) {
       console.error('[RESPONSE] Upstream error:', upstreamResponse.status, upstreamResponse.statusText);
       const errorData = await upstreamResponse.json().catch(() => ({error: 'Upstream error'}));
-      await logErrorRequest(db, dbKey, model, selectedRoute, 0, upstreamResponse.status, `Delete response error: ${upstreamResponse.statusText}`);
+      await logErrorRequest(db, dbKey, model, selectedRoute, 0, upstreamResponse.status, `Delete response error: ${upstreamResponse.statusText}`, {_method: 'DELETE', _responseId: responseId});
       return NextResponse.json(errorData, {status: upstreamResponse.status});
     }
 
@@ -159,9 +159,9 @@ export async function DELETE(
         const model = await findModelById(selectedRoute.modelId, db);
         if (model) {
           if (error instanceof Error && error.name === 'AbortError') {
-            await logErrorRequest(db, dbKey, model, selectedRoute, 0, 504, 'Delete response timeout');
+            await logErrorRequest(db, dbKey, model, selectedRoute, 0, 504, 'Delete response timeout', {_method: 'DELETE'});
           } else {
-            await logErrorRequest(db, dbKey, model, selectedRoute, 0, 500, errorMessage);
+            await logErrorRequest(db, dbKey, model, selectedRoute, 0, 500, errorMessage, {_method: 'DELETE'});
           }
         }
       }
