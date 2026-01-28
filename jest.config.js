@@ -25,6 +25,8 @@ const customJestConfig = {
   verbose: false,
   errorOnDeprecated: false,
   coveragePathIgnorePatterns: ['/node_modules/'],
+  forceExit: true,
+  detectOpenHandles: false,
 }
 
 // createJestConfig is exported this way to ensure that next/jest can load the next.config.js which is async

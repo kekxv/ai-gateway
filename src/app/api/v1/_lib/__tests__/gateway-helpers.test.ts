@@ -21,6 +21,11 @@ beforeEach(() => {
   console.error = jest.fn();
 });
 
+// Clean up any pending timers after all tests
+afterAll(() => {
+  jest.clearAllTimers();
+});
+
 describe('Gateway Helpers - Authentication', () => {
   let mockDb: any;
   let mockRequest: any;
