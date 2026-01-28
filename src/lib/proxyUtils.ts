@@ -13,7 +13,7 @@ const HttpProxyAgent = (HttpProxyAgentModule as any).HttpProxyAgent || (HttpProx
 export function shouldBypassProxy(url: string): boolean {
   const noProxy = process.env.NO_PROXY || process.env.no_proxy || '';
   if (!noProxy) {
-    return false;
+    return true;
   }
 
   try {
