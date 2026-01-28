@@ -62,6 +62,41 @@ describe('Proxy Utils', () => {
       process.env.no_proxy = 'localhost';
       expect(shouldBypassProxy('http://localhost:3000')).toBe(true);
     });
+
+    it('should bypass CIDR IP ranges', () => {
+      process.env.NO_PROXY = '10.0.0.0/24,172.16.0.0/12';
+      // IPs within CIDR range
+      expect(shouldBypassProxy('http://10.0.0.1')).toBe(true);
+      expect(shouldBypassProxy('http://10.0.0.250')).toBe(true);
+      expect(shouldBypassProxy('http://172.16.0.1')).toBe(true);
+      expect(shouldBypassProxy('http://172.31.255.255')).toBe(true);
+      // IPs outside CIDR range
+      expect(shouldBypassProxy('http://10.0.1.1')).toBe(false);
+      expect(shouldBypassProxy('http://172.32.0.1')).toBe(false);
+      expect(shouldBypassProxy('http://8.8.8.8')).toBe(false);
+    });
+
+    it('should handle mixed NO_PROXY entries with CIDR, wildcards and domains', () => {
+      process.env.NO_PROXY = 'localhost,10.0.0.0/24,*.internal,api.example.com';
+      // Should bypass localhost
+      expect(shouldBypassProxy('http://localhost:3000')).toBe(true);
+      // Should bypass CIDR range
+      expect(shouldBypassProxy('http://10.0.0.100')).toBe(true);
+      // Should bypass wildcard domains
+      expect(shouldBypassProxy('https://service.internal')).toBe(true);
+      // Should bypass exact match
+      expect(shouldBypassProxy('https://api.example.com')).toBe(true);
+      // Should NOT bypass external domains
+      expect(shouldBypassProxy('https://external.api.com')).toBe(false);
+    });
+
+    it('should return false when NO_PROXY is not set (meaning use proxy)', () => {
+      // When NO_PROXY is not set, shouldBypassProxy returns false (i.e., use proxy)
+      delete process.env.NO_PROXY;
+      delete process.env.no_proxy;
+      expect(shouldBypassProxy('https://api.openai.com')).toBe(false);
+      expect(shouldBypassProxy('https://integrate.api.nvidia.com/v1')).toBe(false);
+    });
   });
 
   describe('getProxyAgent', () => {
