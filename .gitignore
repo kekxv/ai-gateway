@@ -38,3 +38,4 @@ web/.DS_Store
 # TypeScript
 *.tsbuildinfo
 dist/
+/server

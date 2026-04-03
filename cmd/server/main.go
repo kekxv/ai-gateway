@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -22,11 +24,17 @@ func main() {
 		log.Printf("Warning: Failed to load config file: %v, using defaults", err)
 	}
 
-	// Initialize database
-	dbPath := "ai-gateway.db"
-	if cfg != nil && cfg.Database.Path != "" {
-		dbPath = cfg.Database.Path
+	// Initialize database - prefer DATABASE_URL env var over config file
+	dbPath := os.Getenv("DATABASE_URL")
+	if dbPath == "" {
+		dbPath = "ai-gateway.db"
+		if cfg != nil && cfg.Database.Path != "" {
+			dbPath = cfg.Database.Path
+		}
 	}
+	// Remove "file:" prefix if present (SQLite URI format)
+	dbPath = strings.TrimPrefix(dbPath, "file:")
+	log.Printf("Using database: %s", dbPath)
 	db, err := config.InitDatabase(dbPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
