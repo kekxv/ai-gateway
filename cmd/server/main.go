@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"time"
 
@@ -24,16 +23,19 @@ func main() {
 		log.Printf("Warning: Failed to load config file: %v, using defaults", err)
 	}
 
-	// Initialize database - prefer DATABASE_URL env var over config file
-	dbPath := os.Getenv("DATABASE_URL")
-	if dbPath == "" {
-		dbPath = "ai-gateway.db"
-		if cfg != nil && cfg.Database.Path != "" {
-			dbPath = cfg.Database.Path
+	// Initialize database
+	dbPath := "ai-gateway.db"
+	if cfg != nil && cfg.Database.Path != "" {
+		dbPath = cfg.Database.Path
+	}
+	// Parse SQLite URI format: file:path, file:/path, file:///path
+	if strings.HasPrefix(dbPath, "file:") {
+		dbPath = strings.TrimPrefix(dbPath, "file:")
+		// Handle // or /// prefix (normalize to single / for absolute paths)
+		for strings.HasPrefix(dbPath, "//") {
+			dbPath = strings.TrimPrefix(dbPath, "/")
 		}
 	}
-	// Remove "file:" prefix if present (SQLite URI format)
-	dbPath = strings.TrimPrefix(dbPath, "file:")
 	log.Printf("Using database: %s", dbPath)
 	db, err := config.InitDatabase(dbPath)
 	if err != nil {

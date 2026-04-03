@@ -3,7 +3,7 @@ server:
   mode: release  # debug, release, test
 
 database:
-  path: ai-gateway.db
+  path: ${DATABASE_URL:ai-gateway.db}
 
 auth:
   jwt_secret: ${JWT_SECRET}
