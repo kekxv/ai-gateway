@@ -1,39 +1,51 @@
-FROM node:20-alpine AS base
-
-# Set working directory
-WORKDIR /app
-
-# Copy package.json and package-lock.json to leverage Docker cache
-COPY package.json package-lock.json ./
-
-# Install dependencies
-RUN npm install
-
-# Copy the rest of the application code
-COPY . .
-
-# Build the Next.js application
+# Stage 1: Build frontend
+FROM node:20-alpine AS frontend-builder
+WORKDIR /app/web
+COPY web/package*.json ./
+RUN npm ci
+COPY web/ ./
 RUN npm run build
 
-# Production stage
-FROM node:20-alpine AS runner
+# Stage 2: Build Go backend
+FROM golang:1.22-alpine AS backend-builder
 
 WORKDIR /app
 
-# Set environment variables for Next.js production
-ENV NODE_ENV=production
+# Install build dependencies
+RUN apk add --no-cache gcc musl-dev sqlite-dev
 
-# Copy the standalone output from the base stage
-COPY --from=base /app/.next/standalone ./
-COPY --from=base /app/public ./public
-COPY --from=base /app/.next/static ./public/_next/static
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
 
-# Set the database URL to point to the dev.db file in the app directory
+# Copy source code
+COPY . .
+
+# Copy frontend build output for go:embed
+COPY --from=frontend-builder /app/web/dist ./web/dist
+
+# Build binary
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o ai-gateway ./cmd/server
+
+# Stage 3: Runtime
+FROM alpine:3.19
+
+# Install runtime dependencies
+RUN apk add --no-cache sqlite-libs ca-certificates
+
+WORKDIR /app
+
+# Copy binary and config
+COPY --from=backend-builder /app/ai-gateway .
+COPY --from=backend-builder /app/configs ./configs
+
+# Environment variables
 ENV DATABASE_URL="file:/app/ai-gateway.db"
-ENV JWT_SECRET="your_jwt_secret_here"
+ENV JWT_SECRET=""
+ENV HTTP_PROXY=""
+ENV HTTPS_PROXY=""
+ENV NO_PROXY=""
 
-# Expose the port Next.js runs on
 EXPOSE 3000
 
-# Command to run the application
-CMD ["node", "server.js"]
+CMD ["./ai-gateway"]

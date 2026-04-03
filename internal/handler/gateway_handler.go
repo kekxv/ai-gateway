@@ -1,0 +1,175 @@
+package handler
+
+import (
+	"io"
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"github.com/kekxv/ai-gateway/internal/middleware"
+	"github.com/kekxv/ai-gateway/internal/models"
+	"github.com/kekxv/ai-gateway/internal/service"
+)
+
+type GatewayHandler struct {
+	gatewayService *service.GatewayService
+}
+
+func NewGatewayHandler(gatewayService *service.GatewayService) *GatewayHandler {
+	return &GatewayHandler{gatewayService: gatewayService}
+}
+
+// ChatCompletions handles chat completions requests
+func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
+	apiKey := middleware.GetAPIKey(c)
+	if apiKey == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	var req service.ChatRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	stream := req.Stream
+
+	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), apiKey, &req, stream)
+	if err != nil {
+		switch err {
+		case service.ErrModelNotFound:
+			c.JSON(http.StatusNotFound, gin.H{"error": "Model not found"})
+		case service.ErrNoRouteAvailable:
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "No available route for this model"})
+		case service.ErrPermissionDenied:
+			c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied for this model"})
+		case service.ErrInsufficientBalance:
+			c.JSON(http.StatusForbidden, gin.H{"error": "Insufficient balance"})
+		case service.ErrUpstreamFailed:
+			c.JSON(http.StatusBadGateway, gin.H{"error": "Upstream request failed"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	// Handle streaming response
+	if stream {
+		streamResp, ok := result.(*service.StreamingResponse)
+		if !ok {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid streaming response"})
+			return
+		}
+		defer streamResp.Close()
+
+		c.Header("Content-Type", streamResp.ResponseBody.Header.Get("Content-Type"))
+		c.Header("Cache-Control", "no-cache")
+		c.Header("Connection", "keep-alive")
+
+		c.Stream(func(w io.Writer) bool {
+			buf := make([]byte, 1024)
+			n, err := streamResp.Read(buf)
+			if err != nil {
+				return false
+			}
+			w.Write(buf[:n])
+			return true
+		})
+		return
+	}
+
+	// Handle non-streaming response
+	chatResp, ok := result.(*service.ChatResponse)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid response"})
+		return
+	}
+	c.JSON(http.StatusOK, chatResp)
+}
+
+// ListGatewayModels lists models available through the gateway
+func (h *GatewayHandler) ListGatewayModels(c *gin.Context) {
+	// Return OpenAI-compatible model list format
+	c.JSON(http.StatusOK, gin.H{
+		"object": "list",
+		"data": []gin.H{
+			// TODO: Get actual models from database
+		},
+	})
+}
+
+// Embeddings handles embeddings requests
+func (h *GatewayHandler) Embeddings(c *gin.Context) {
+	// TODO: Implement embeddings
+	c.JSON(http.StatusOK, gin.H{"message": "embeddings"})
+}
+
+// AudioTranscriptions handles audio transcription requests
+func (h *GatewayHandler) AudioTranscriptions(c *gin.Context) {
+	// TODO: Implement audio transcriptions
+	c.JSON(http.StatusOK, gin.H{"message": "audio transcriptions"})
+}
+
+// AudioTranslations handles audio translation requests
+func (h *GatewayHandler) AudioTranslations(c *gin.Context) {
+	// TODO: Implement audio translations
+	c.JSON(http.StatusOK, gin.H{"message": "audio translations"})
+}
+
+// ImageGenerations handles image generation requests
+func (h *GatewayHandler) ImageGenerations(c *gin.Context) {
+	// TODO: Implement image generations
+	c.JSON(http.StatusOK, gin.H{"message": "image generations"})
+}
+
+// ImageEdits handles image edit requests
+func (h *GatewayHandler) ImageEdits(c *gin.Context) {
+	// TODO: Implement image edits
+	c.JSON(http.StatusOK, gin.H{"message": "image edits"})
+}
+
+// ImageVariations handles image variation requests
+func (h *GatewayHandler) ImageVariations(c *gin.Context) {
+	// TODO: Implement image variations
+	c.JSON(http.StatusOK, gin.H{"message": "image variations"})
+}
+
+// BillingSubscription returns subscription info
+func (h *GatewayHandler) BillingSubscription(c *gin.Context) {
+	apiKey := middleware.GetAPIKey(c)
+	if apiKey == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"userId":           apiKey.UserID,
+		"plan":             "default",
+		"status":           "active",
+		"currentPeriodEnd": nil,
+	})
+}
+
+// BillingUsage returns usage info
+func (h *GatewayHandler) BillingUsage(c *gin.Context) {
+	apiKey := middleware.GetAPIKey(c)
+	if apiKey == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	// TODO: Implement actual usage calculation
+	c.JSON(http.StatusOK, gin.H{
+		"totalUsage": gin.H{
+			"promptTokens":     0,
+			"completionTokens": 0,
+			"totalTokens":      0,
+			"totalCost":        0,
+		},
+		"dailyUsage":  gin.H{},
+		"usageByModel": []gin.H{},
+	})
+}
+
+// Ensure models import is used
+var _ = models.GatewayAPIKey{}

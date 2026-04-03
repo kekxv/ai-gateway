@@ -22,23 +22,34 @@ jobs:
       with:
         node-version: '20'
 
+    - name: Build frontend
+      run: |
+        cd web
+        npm ci
+        npm run build
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
     - name: Install dependencies
-      run: npm ci
+      run: go mod download
 
     - name: Run tests
-      run: npm test
+      run: go test -v ./...
       continue-on-error: false
 
     - name: Run build
-      run: npm run build
+      run: CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o ai-gateway ./cmd/server
       continue-on-error: false
 
     - name: Check version and determine if release is needed
       id: version_check
       run: |
-        VERSION=$(node -p "require('./package.json').version")
+        VERSION=$(cat VERSION)
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
-        
+
         if git rev-parse "v$VERSION" >/dev/null 2>&1; then
           echo "status=existing" >> $GITHUB_OUTPUT
           echo "message=Tag v$VERSION already exists. Skipping release."

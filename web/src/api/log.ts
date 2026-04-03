@@ -1,0 +1,24 @@
+import { api } from './index'
+import type { LogDetailResponse, LogListResponse } from '@/types/log'
+
+export const logApi = {
+  // List logs with pagination
+  list: (params?: {
+    page?: number
+    page_size?: number
+    model?: string
+    provider?: string
+    status?: string
+    start_date?: string
+    end_date?: string
+  }) =>
+    api.get<LogListResponse>('/logs', { params }),
+
+  // Get log detail (returns { log, detail })
+  getDetail: (id: number) =>
+    api.get<LogDetailResponse>(`/logs/${id}`),
+
+  // Cleanup log details (admin only)
+  cleanup: (days?: number) =>
+    api.delete('/logs/cleanup', { params: { days } })
+}

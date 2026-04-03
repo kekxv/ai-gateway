@@ -1,0 +1,21 @@
+server:
+  port: 3000
+  mode: release  # debug, release, test
+
+database:
+  path: ai-gateway.db
+
+auth:
+  jwt_secret: ${JWT_SECRET}
+  jwt_expiry: 8h
+
+timeout:
+  connection: 30s
+  response: 180s
+  total: 240s
+  model_load: 30s
+
+proxy:
+  http_proxy: ${HTTP_PROXY:}
+  https_proxy: ${HTTPS_PROXY:}
+  no_proxy: ${NO_PROXY:}
