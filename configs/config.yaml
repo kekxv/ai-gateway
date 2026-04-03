@@ -3,10 +3,10 @@ server:
   mode: release  # debug, release, test
 
 database:
-  path: ${DATABASE_URL:ai-gateway.db}
+  path: ai-gateway.db
 
 auth:
-  jwt_secret: ${JWT_SECRET}
+  jwt_secret: ""
   jwt_expiry: 8h
 
 timeout:
@@ -16,6 +16,6 @@ timeout:
   model_load: 30s
 
 proxy:
-  http_proxy: ${HTTP_PROXY:}
-  https_proxy: ${HTTPS_PROXY:}
-  no_proxy: ${NO_PROXY:}
+  http_proxy: ""
+  https_proxy: ""
+  no_proxy: ""

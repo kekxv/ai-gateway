@@ -45,6 +45,13 @@ func Load(configPath string) (*Config, error) {
 	viper.SetConfigFile(configPath)
 	viper.AutomaticEnv()
 
+	// Bind specific environment variables to config keys
+	viper.BindEnv("database.path", "DATABASE_URL")
+	viper.BindEnv("proxy.http_proxy", "HTTP_PROXY")
+	viper.BindEnv("proxy.https_proxy", "HTTPS_PROXY")
+	viper.BindEnv("proxy.no_proxy", "NO_PROXY")
+	viper.BindEnv("auth.jwt_secret", "JWT_SECRET")
+
 	// Set default values
 	viper.SetDefault("server.port", 3000)
 	viper.SetDefault("server.mode", "release")
