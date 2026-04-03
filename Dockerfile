@@ -25,7 +25,7 @@ COPY . .
 COPY --from=frontend-builder /app/web/dist ./web/dist
 
 # Build binary
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o ai-gateway ./cmd/server
+RUN CGO_ENABLED=1 GOOS=linux CGO_CFLAGS="-D_LARGEFILE64_SOURCE" go build -a -installsuffix cgo -o ai-gateway ./cmd/server
 
 # Stage 3: Runtime
 FROM alpine:3.19
