@@ -11,9 +11,6 @@ FROM golang:1.22-alpine AS backend-builder
 
 WORKDIR /app
 
-# Install build dependencies
-RUN apk add --no-cache gcc musl-dev sqlite-dev
-
 # Copy go mod files
 COPY go.mod go.sum ./
 RUN go mod download
@@ -24,14 +21,14 @@ COPY . .
 # Copy frontend build output for go:embed
 COPY --from=frontend-builder /app/web/dist ./web/dist
 
-# Build binary
-RUN CGO_ENABLED=1 GOOS=linux CGO_CFLAGS="-D_LARGEFILE64_SOURCE" go build -a -installsuffix cgo -o ai-gateway ./cmd/server
+# Build binary (pure Go, no CGO required)
+RUN CGO_ENABLED=0 GOOS=linux go build -a -o ai-gateway ./cmd/server
 
 # Stage 3: Runtime
 FROM alpine:3.19
 
 # Install runtime dependencies
-RUN apk add --no-cache sqlite-libs ca-certificates
+RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
 

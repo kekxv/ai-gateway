@@ -3,8 +3,8 @@ package test
 import (
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	"github.com/kekxv/ai-gateway/internal/models"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 

@@ -41,7 +41,7 @@ jobs:
       continue-on-error: false
 
     - name: Run build
-      run: CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o ai-gateway ./cmd/server
+      run: CGO_ENABLED=0 GOOS=linux go build -a -o ai-gateway ./cmd/server
       continue-on-error: false
 
     - name: Check version and determine if release is needed

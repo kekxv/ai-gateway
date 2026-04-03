@@ -3,8 +3,8 @@ package config
 import (
 	"fmt"
 
+	"github.com/glebarez/sqlite"
 	"github.com/kekxv/ai-gateway/internal/models"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
