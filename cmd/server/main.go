@@ -88,6 +88,11 @@ func main() {
 		userRepo, logRepo, logDetailRepo, billingService, proxyConfig,
 	)
 
+	responseService := service.NewResponseService(
+		modelRepo, modelRouteRepo, providerRepo, apiKeyRepo, channelRepo,
+		userRepo, logRepo, logDetailRepo, billingService, proxyConfig,
+	)
+
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userRepo, logRepo, authService)
@@ -97,7 +102,7 @@ func main() {
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyRepo, authService)
 	logHandler := handler.NewLogHandler(logRepo, logDetailRepo)
 	statsHandler := handler.NewStatsHandler(logRepo, userRepo, modelRepo, providerRepo)
-	gatewayHandler := handler.NewGatewayHandler(gatewayService)
+	gatewayHandler := handler.NewGatewayHandler(gatewayService, responseService)
 
 	// Setup Gin
 	port := 3000
@@ -237,8 +242,11 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 	v1.POST("/images/edits", deps.GatewayHandler.ImageEdits)
 	v1.POST("/images/variations", deps.GatewayHandler.ImageVariations)
 	v1.GET("/responses", func(c *gin.Context) { c.JSON(200, gin.H{"data": []gin.H{}}) })
-	v1.POST("/responses", func(c *gin.Context) { c.JSON(200, gin.H{"message": "create response"}) })
-	v1.GET("/responses/:id", func(c *gin.Context) { c.JSON(200, gin.H{"message": "get response"}) })
+	v1.POST("/responses", deps.GatewayHandler.CreateResponse)
+	v1.GET("/responses/:id", deps.GatewayHandler.GetResponse)
+	v1.DELETE("/responses/:id", deps.GatewayHandler.DeleteResponse)
+	v1.POST("/responses/:id/cancel", deps.GatewayHandler.CancelResponse)
+	v1.POST("/responses/compact", deps.GatewayHandler.CompactConversation)
 	v1.GET("/dashboard/billing/subscription", deps.GatewayHandler.BillingSubscription)
 	v1.GET("/dashboard/billing/usage", deps.GatewayHandler.BillingUsage)
 }

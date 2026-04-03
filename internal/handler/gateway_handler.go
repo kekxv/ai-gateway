@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"io"
 	"net/http"
 
@@ -11,11 +12,15 @@ import (
 )
 
 type GatewayHandler struct {
-	gatewayService *service.GatewayService
+	gatewayService  *service.GatewayService
+	responseService *service.ResponseService
 }
 
-func NewGatewayHandler(gatewayService *service.GatewayService) *GatewayHandler {
-	return &GatewayHandler{gatewayService: gatewayService}
+func NewGatewayHandler(gatewayService *service.GatewayService, responseService *service.ResponseService) *GatewayHandler {
+	return &GatewayHandler{
+		gatewayService:  gatewayService,
+		responseService: responseService,
+	}
 }
 
 // ChatCompletions handles chat completions requests
@@ -173,3 +178,181 @@ func (h *GatewayHandler) BillingUsage(c *gin.Context) {
 
 // Ensure models import is used
 var _ = models.GatewayAPIKey{}
+
+// ================================== Responses API Handlers ==================================
+
+// CreateResponse handles POST /responses
+func (h *GatewayHandler) CreateResponse(c *gin.Context) {
+	apiKey := middleware.GetAPIKey(c)
+	if apiKey == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	var req models.ResponseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	stream := req.Stream
+
+	result, err := h.responseService.CreateResponse(c.Request.Context(), apiKey, &req)
+	if err != nil {
+		switch err {
+		case service.ErrModelNotFound:
+			c.JSON(http.StatusNotFound, gin.H{"error": "Model not found"})
+		case service.ErrNoRouteAvailable:
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "No available route for this model"})
+		case service.ErrPermissionDenied:
+			c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied for this model"})
+		case service.ErrInsufficientBalance:
+			c.JSON(http.StatusForbidden, gin.H{"error": "Insufficient balance"})
+		case service.ErrUpstreamFailed:
+			c.JSON(http.StatusBadGateway, gin.H{"error": "Upstream request failed"})
+		case service.ErrResponseNotFound:
+			c.JSON(http.StatusNotFound, gin.H{"error": "Response not found"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	// Handle streaming response
+	if stream {
+		streamResp, ok := result.(*service.ResponseStreamingResponse)
+		if !ok {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid streaming response"})
+			return
+		}
+		defer streamResp.Close()
+
+		c.Header("Content-Type", streamResp.ResponseBody.Header.Get("Content-Type"))
+		c.Header("Cache-Control", "no-cache")
+		c.Header("Connection", "keep-alive")
+
+		c.Stream(func(w io.Writer) bool {
+			buf := make([]byte, 1024)
+			n, err := streamResp.Read(buf)
+			if err != nil {
+				return false
+			}
+			w.Write(buf[:n])
+			return true
+		})
+		return
+	}
+
+	// Handle non-streaming response
+	response, ok := result.(*models.Response)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid response"})
+		return
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+// GetResponse handles GET /response/:id
+func (h *GatewayHandler) GetResponse(c *gin.Context) {
+	apiKey := middleware.GetAPIKey(c)
+	if apiKey == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	responseID := c.Param("id")
+
+	response, err := h.responseService.GetResponse(c.Request.Context(), apiKey, responseID)
+	if err != nil {
+		if errors.Is(err, service.ErrResponseNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Response not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// DeleteResponse handles DELETE /response/:id
+func (h *GatewayHandler) DeleteResponse(c *gin.Context) {
+	apiKey := middleware.GetAPIKey(c)
+	if apiKey == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	responseID := c.Param("id")
+
+	response, err := h.responseService.DeleteResponse(c.Request.Context(), apiKey, responseID)
+	if err != nil {
+		if errors.Is(err, service.ErrResponseNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Response not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// CancelResponse handles POST /response/:id/cancel
+func (h *GatewayHandler) CancelResponse(c *gin.Context) {
+	apiKey := middleware.GetAPIKey(c)
+	if apiKey == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	responseID := c.Param("id")
+
+	response, err := h.responseService.CancelResponse(c.Request.Context(), apiKey, responseID)
+	if err != nil {
+		if errors.Is(err, service.ErrResponseNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Response not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// CompactConversation handles POST /response/compact
+func (h *GatewayHandler) CompactConversation(c *gin.Context) {
+	apiKey := middleware.GetAPIKey(c)
+	if apiKey == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	var req models.CompactRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	response, err := h.responseService.CompactConversation(c.Request.Context(), apiKey, &req)
+	if err != nil {
+		switch err {
+		case service.ErrModelNotFound:
+			c.JSON(http.StatusNotFound, gin.H{"error": "Model not found"})
+		case service.ErrNoRouteAvailable:
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "No available route for this model"})
+		case service.ErrPermissionDenied:
+			c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied for this model"})
+		case service.ErrInsufficientBalance:
+			c.JSON(http.StatusForbidden, gin.H{"error": "Insufficient balance"})
+		case service.ErrUpstreamFailed:
+			c.JSON(http.StatusBadGateway, gin.H{"error": "Upstream request failed"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
