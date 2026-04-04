@@ -16,6 +16,9 @@ go.work
 *.db
 *.bak.db
 
+# Test databases (SQLite file-based test databases)
+internal/**/test_*
+
 # Config (local)
 *.local.yaml
 

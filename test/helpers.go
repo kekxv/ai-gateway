@@ -10,8 +10,9 @@ import (
 
 // SetupTestDB creates an in-memory SQLite database for testing
 func SetupTestDB(t *testing.T) *gorm.DB {
-	// Use unique database name for isolation
-	db, err := gorm.Open(sqlite.Open("file::memory:"), &gorm.Config{})
+	// Use shared-cache in-memory SQLite database for tests
+	// cache=shared allows multiple connections to share the same in-memory database
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("Failed to connect to test database: %v", err)
 	}

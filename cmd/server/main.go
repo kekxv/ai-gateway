@@ -103,6 +103,7 @@ func main() {
 	logHandler := handler.NewLogHandler(logRepo, logDetailRepo)
 	statsHandler := handler.NewStatsHandler(logRepo, userRepo, modelRepo, providerRepo)
 	gatewayHandler := handler.NewGatewayHandler(gatewayService, responseService)
+	anthropicHandler := handler.NewAnthropicHandler(gatewayService)
 
 	// Setup Gin
 	port := 3000
@@ -120,17 +121,18 @@ func main() {
 
 	// ========== Routes ==========
 	setupRoutes(r, &Dependencies{
-		JWTSecret:       jwtSecret,
-		AuthHandler:     authHandler,
-		UserHandler:     userHandler,
-		ProviderHandler: providerHandler,
-		ChannelHandler:  channelHandler,
-		ModelHandler:    modelHandler,
-		APIKeyHandler:   apiKeyHandler,
-		LogHandler:      logHandler,
-		StatsHandler:    statsHandler,
-		GatewayHandler:  gatewayHandler,
-		APIKeyRepo:      apiKeyRepo,
+		JWTSecret:        jwtSecret,
+		AuthHandler:      authHandler,
+		UserHandler:      userHandler,
+		ProviderHandler:  providerHandler,
+		ChannelHandler:   channelHandler,
+		ModelHandler:     modelHandler,
+		APIKeyHandler:    apiKeyHandler,
+		LogHandler:       logHandler,
+		StatsHandler:     statsHandler,
+		GatewayHandler:   gatewayHandler,
+		AnthropicHandler: anthropicHandler,
+		APIKeyRepo:       apiKeyRepo,
 	})
 
 	// ========== Static Files (Frontend) ==========
@@ -146,17 +148,18 @@ func main() {
 
 // Dependencies holds all dependencies for handlers
 type Dependencies struct {
-	JWTSecret       string
-	AuthHandler     *handler.AuthHandler
-	UserHandler     *handler.UserHandler
-	ProviderHandler *handler.ProviderHandler
-	ChannelHandler  *handler.ChannelHandler
-	ModelHandler    *handler.ModelHandler
-	APIKeyHandler   *handler.APIKeyHandler
-	LogHandler      *handler.LogHandler
-	StatsHandler    *handler.StatsHandler
-	GatewayHandler  *handler.GatewayHandler
-	APIKeyRepo      *repository.APIKeyRepository
+	JWTSecret        string
+	AuthHandler      *handler.AuthHandler
+	UserHandler      *handler.UserHandler
+	ProviderHandler  *handler.ProviderHandler
+	ChannelHandler   *handler.ChannelHandler
+	ModelHandler     *handler.ModelHandler
+	APIKeyHandler    *handler.APIKeyHandler
+	LogHandler       *handler.LogHandler
+	StatsHandler     *handler.StatsHandler
+	GatewayHandler   *handler.GatewayHandler
+	AnthropicHandler *handler.AnthropicHandler
+	APIKeyRepo       *repository.APIKeyRepository
 }
 
 func setupRoutes(r *gin.Engine, deps *Dependencies) {
@@ -250,4 +253,7 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 	v1.POST("/responses/compact", deps.GatewayHandler.CompactConversation)
 	v1.GET("/dashboard/billing/subscription", deps.GatewayHandler.BillingSubscription)
 	v1.GET("/dashboard/billing/usage", deps.GatewayHandler.BillingUsage)
+
+	// ========== Anthropic Messages API (API Key required) ==========
+	v1.POST("/messages", deps.AnthropicHandler.CreateMessages)
 }

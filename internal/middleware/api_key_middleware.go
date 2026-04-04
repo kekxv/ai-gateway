@@ -12,30 +12,58 @@ import (
 
 func APIKeyAuth(apiKeyRepo *repository.APIKeyRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Missing Authorization header"})
+		var apiKey string
+
+		// Method 1: Check x-api-key header (Anthropic style)
+		xAPIKey := c.GetHeader("x-api-key")
+		if xAPIKey != "" {
+			apiKey = xAPIKey
+		}
+
+		// Method 2: Check Authorization header (OpenAI style)
+		if apiKey == "" {
+			authHeader := c.GetHeader("Authorization")
+			if authHeader != "" {
+				parts := strings.Split(authHeader, " ")
+				if len(parts) == 2 && parts[0] == "Bearer" {
+					apiKey = parts[1]
+				}
+			}
+		}
+
+		if apiKey == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"type": "error",
+				"error": gin.H{
+					"type":    "authentication_error",
+					"message": "Missing API key. Use x-api-key header or Authorization: Bearer <key>",
+				},
+			})
 			c.Abort()
 			return
 		}
 
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Invalid Authorization header format"})
-			c.Abort()
-			return
-		}
-
-		apiKey := parts[1]
 		keyData, err := apiKeyRepo.FindByKey(c.Request.Context(), apiKey)
 		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Invalid API Key"})
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"type": "error",
+				"error": gin.H{
+					"type":    "authentication_error",
+					"message": "Invalid API key",
+				},
+			})
 			c.Abort()
 			return
 		}
 
 		if !keyData.Enabled {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: API Key is disabled"})
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"type": "error",
+				"error": gin.H{
+					"type":    "authentication_error",
+					"message": "API key is disabled",
+				},
+			})
 			c.Abort()
 			return
 		}
