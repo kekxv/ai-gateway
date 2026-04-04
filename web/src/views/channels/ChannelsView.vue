@@ -11,7 +11,7 @@
     <!-- Cards Grid -->
     <div v-loading="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       <div
-        v-for="channel in channels"
+        v-for="channel in paginatedChannels"
         :key="channel.id"
         class="bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow"
       >
@@ -74,7 +74,7 @@
       </div>
 
       <!-- Empty State -->
-      <div v-if="!loading && channels.length === 0" class="col-span-full text-center py-12 text-gray-500">
+      <div v-if="!loading && paginatedChannels.length === 0" class="col-span-full text-center py-12 text-gray-500">
         No channels found. Click "Create" to add one.
       </div>
     </div>
@@ -87,7 +87,6 @@
         :total="pagination.total"
         :page-sizes="[10, 20, 50]"
         layout="prev, pager, next"
-        @change="fetchChannels"
       />
     </div>
 
@@ -202,6 +201,13 @@ const filteredModels = computed(() => {
 const selectAllModels = computed({
   get: () => filteredModels.value.length > 0 && form.model_ids.length === filteredModels.value.length,
   set: () => {}
+})
+
+// Frontend pagination slicing
+const paginatedChannels = computed(() => {
+  const start = (pagination.page - 1) * pagination.pageSize
+  const end = start + pagination.pageSize
+  return channels.value.slice(start, end)
 })
 
 const formatDate = (date: string) => dayjs(date).format('YYYY-MM-DD')

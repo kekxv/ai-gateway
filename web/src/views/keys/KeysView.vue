@@ -10,7 +10,7 @@
 
     <!-- Table -->
     <el-card>
-      <el-table :data="apiKeys" stripe v-loading="loading">
+      <el-table :data="paginatedKeys" stripe v-loading="loading">
         <el-table-column prop="name" :label="t('apiKey.name')" width="150" />
         <el-table-column prop="key" :label="t('apiKey.key')" width="280">
           <template #default="{ row }">
@@ -89,7 +89,6 @@
           :total="pagination.total"
           :page-sizes="[10, 20, 50, 100]"
           layout="total, sizes, prev, pager, next"
-          @change="fetchApiKeys"
         />
       </div>
     </el-card>
@@ -211,6 +210,13 @@ const form = reactive({
 const rules: FormRules = {
   name: [{ required: true, message: 'Name is required', trigger: 'blur' }]
 }
+
+// Frontend pagination slicing
+const paginatedKeys = computed(() => {
+  const start = (pagination.page - 1) * pagination.pageSize
+  const end = start + pagination.pageSize
+  return apiKeys.value.slice(start, end)
+})
 
 const formatDate = (date: string) => dayjs(date).format('YYYY-MM-DD HH:mm')
 const maskKey = (key: string) => key ? key.slice(0, 8) + '...' + key.slice(-4) : ''

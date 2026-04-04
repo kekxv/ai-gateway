@@ -26,7 +26,7 @@
     <!-- Cards Grid -->
     <div v-loading="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       <div
-        v-for="model in filteredModels"
+        v-for="model in paginatedModels"
         :key="model.id"
         class="bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow"
       >
@@ -97,21 +97,20 @@
       </div>
 
       <!-- Empty State -->
-      <div v-if="!loading && filteredModels.length === 0" class="col-span-full text-center py-12 text-gray-500">
+      <div v-if="!loading && paginatedModels.length === 0" class="col-span-full text-center py-12 text-gray-500">
         <p v-if="searchTerm">No models found matching "{{ searchTerm }}"</p>
         <p v-else>No models found. Click "Create" to add one.</p>
       </div>
     </div>
 
     <!-- Pagination -->
-    <div v-if="pagination.total > pagination.pageSize" class="flex justify-center">
+    <div v-if="filteredModels.length > pagination.pageSize" class="flex justify-center">
       <el-pagination
         v-model:current-page="pagination.page"
         v-model:page-size="pagination.pageSize"
-        :total="pagination.total"
+        :total="filteredModels.length"
         :page-sizes="[12, 24, 48]"
         layout="prev, pager, next"
-        @change="fetchModels"
       />
     </div>
 
@@ -247,13 +246,23 @@ const rules: FormRules = {
 }
 
 const filteredModels = computed(() => {
-  if (!searchTerm.value) return models.value
-  const term = searchTerm.value.toLowerCase()
-  return models.value.filter(m =>
-    m.name.toLowerCase().includes(term) ||
-    (m.alias?.toLowerCase().includes(term)) ||
-    (m.description?.toLowerCase().includes(term))
-  )
+  let result = models.value
+  if (searchTerm.value) {
+    const term = searchTerm.value.toLowerCase()
+    result = result.filter(m =>
+      m.name.toLowerCase().includes(term) ||
+      (m.alias?.toLowerCase().includes(term)) ||
+      (m.description?.toLowerCase().includes(term))
+    )
+  }
+  return result
+})
+
+// Frontend pagination slicing (applied after filtering)
+const paginatedModels = computed(() => {
+  const start = (pagination.page - 1) * pagination.pageSize
+  const end = start + pagination.pageSize
+  return filteredModels.value.slice(start, end)
 })
 
 const formatDate = (date: string | undefined) => date ? dayjs(date).format('YYYY-MM-DD') : '-'
@@ -263,7 +272,8 @@ const formatPrice = (price?: number) => {
 }
 
 const filterModels = () => {
-  // Local filtering, no API call needed
+  // Reset to first page when search term changes
+  pagination.page = 1
 }
 
 const fetchModels = async () => {

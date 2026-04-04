@@ -10,7 +10,7 @@
 
     <!-- Table -->
     <el-card>
-      <el-table :data="providers" stripe v-loading="loading">
+      <el-table :data="paginatedProviders" stripe v-loading="loading">
         <el-table-column prop="name" :label="t('provider.name')" />
         <el-table-column prop="base_url" :label="t('provider.baseURL')" />
         <el-table-column prop="type" :label="t('provider.type')" width="120">
@@ -52,7 +52,6 @@
           :total="pagination.total"
           :page-sizes="[10, 20, 50, 100]"
           layout="total, sizes, prev, pager, next"
-          @change="fetchProviders"
         />
       </div>
     </el-card>
@@ -210,6 +209,13 @@ const filteredModels = computed(() => {
 const selectAllModels = computed({
   get: () => filteredModels.value.length > 0 && selectedModels.value.size === filteredModels.value.length,
   set: () => {}
+})
+
+// Frontend pagination slicing
+const paginatedProviders = computed(() => {
+  const start = (pagination.page - 1) * pagination.pageSize
+  const end = start + pagination.pageSize
+  return providers.value.slice(start, end)
 })
 
 const fetchProviders = async () => {

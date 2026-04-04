@@ -10,7 +10,7 @@
 
       <!-- Table -->
       <el-card>
-        <el-table :data="users" stripe v-loading="loading">
+        <el-table :data="paginatedUsers" stripe v-loading="loading">
           <el-table-column prop="email" :label="t('user.email')" />
           <el-table-column prop="role" :label="t('user.role')" width="100">
             <template #default="{ row }">
@@ -63,8 +63,7 @@
             :total="pagination.total"
             :page-sizes="[10, 20, 50, 100]"
             layout="total, sizes, prev, pager, next"
-            @change="fetchUsers"
-          />
+        />
         </div>
       </el-card>
 
@@ -122,7 +121,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
@@ -144,6 +143,13 @@ const pagination = reactive({
   page: 1,
   pageSize: 10,
   total: 0
+})
+
+// Frontend pagination slicing
+const paginatedUsers = computed(() => {
+  const start = (pagination.page - 1) * pagination.pageSize
+  const end = start + pagination.pageSize
+  return users.value.slice(start, end)
 })
 
 const form = reactive({
