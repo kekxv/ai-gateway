@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,25 +23,13 @@ func NewUserHandler(userRepo *repository.UserRepository, logRepo *repository.Log
 
 // ListUsers lists all users (admin only)
 func (h *UserHandler) ListUsers(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 10
-	}
-
-	users, total, err := h.userRepo.ListWithCount(c.Request.Context(), page, pageSize)
+	users, err := h.userRepo.List(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"users": users,
-		"total": total,
-	})
+	c.JSON(http.StatusOK, users)
 }
 
 // GetUser gets a user by ID

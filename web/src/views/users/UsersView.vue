@@ -177,12 +177,9 @@ const formatDate = (date: string) => dayjs(date).format('YYYY-MM-DD HH:mm')
 const fetchUsers = async () => {
   loading.value = true
   try {
-    const response = await userApi.list({
-      page: pagination.page,
-      page_size: pagination.pageSize
-    })
-    users.value = response.data.users || response.data
-    pagination.total = response.data.total || users.value.length
+    const response = await userApi.list()
+    users.value = response.data || []
+    pagination.total = users.value.length
   } catch (error) {
     ElMessage.error(t('common.error'))
   } finally {

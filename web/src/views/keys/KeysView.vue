@@ -246,12 +246,9 @@ const copyKey = async (key: string) => {
 const fetchApiKeys = async () => {
   loading.value = true
   try {
-    const response = await apiKeyApi.list({
-      page: pagination.page,
-      page_size: pagination.pageSize
-    })
-    apiKeys.value = response.data.keys || response.data || []
-    pagination.total = response.data.total || apiKeys.value.length
+    const response = await apiKeyApi.list()
+    apiKeys.value = response.data || []
+    pagination.total = apiKeys.value.length
   } catch (error) {
     ElMessage.error(t('common.error'))
   } finally {
@@ -261,8 +258,8 @@ const fetchApiKeys = async () => {
 
 const fetchChannels = async () => {
   try {
-    const response = await channelApi.list({ page: 1, page_size: 100 })
-    channels.value = response.data.channels || response.data || []
+    const response = await channelApi.list()
+    channels.value = response.data || []
   } catch (error) {
     console.error('Failed to fetch channels')
   }

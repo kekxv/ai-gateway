@@ -269,12 +269,9 @@ const filterModels = () => {
 const fetchModels = async () => {
   loading.value = true
   try {
-    const response = await modelApi.list({
-      page: pagination.page,
-      page_size: pagination.pageSize
-    })
-    models.value = response.data.models || response.data
-    pagination.total = response.data.total || models.value.length
+    const response = await modelApi.list()
+    models.value = response.data || []
+    pagination.total = models.value.length
   } catch (error) {
     ElMessage.error(t('common.error'))
   } finally {
@@ -284,8 +281,8 @@ const fetchModels = async () => {
 
 const fetchProviders = async () => {
   try {
-    const response = await providerApi.list({ page: 1, page_size: 100 })
-    providers.value = response.data.providers || response.data
+    const response = await providerApi.list()
+    providers.value = response.data || []
   } catch (error) {
     console.error('Failed to fetch providers')
   }

@@ -180,3 +180,15 @@ func (r *ModelRouteRepository) CountEligible(ctx context.Context, modelID uint) 
 		Count(&count).Error
 	return count, err
 }
+
+// FindByProviderID finds all routes for a specific provider
+func (r *ModelRouteRepository) FindByProviderID(ctx context.Context, providerID uint) ([]models.ModelRoute, error) {
+	var routes []models.ModelRoute
+	err := r.db.WithContext(ctx).Preload("Model").Where("providerId = ?", providerID).Find(&routes).Error
+	return routes, err
+}
+
+// Delete deletes a model route by ID
+func (r *ModelRouteRepository) Delete(ctx context.Context, id uint) error {
+	return r.db.WithContext(ctx).Delete(&models.ModelRoute{}, id).Error
+}

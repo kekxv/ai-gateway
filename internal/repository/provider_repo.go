@@ -155,6 +155,13 @@ func (r *ChannelRepository) GetAllowedModels(ctx context.Context, channelID uint
 	return modelsList, err
 }
 
+// GetChannelsByModelID finds all channel bindings for a specific model
+func (r *ChannelRepository) GetChannelsByModelID(ctx context.Context, modelID uint) ([]models.ChannelAllowedModel, error) {
+	var bindings []models.ChannelAllowedModel
+	err := r.db.WithContext(ctx).Where("modelId = ?", modelID).Find(&bindings).Error
+	return bindings, err
+}
+
 // ChannelWithRelations represents a channel with its associated providers and models
 type ChannelWithRelations struct {
 	ID            uint                   `json:"id"`

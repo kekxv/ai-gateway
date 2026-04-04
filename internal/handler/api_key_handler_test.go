@@ -42,12 +42,11 @@ func TestListAPIKeysHandler_Success(t *testing.T) {
 		t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp map[string]interface{}
+	var resp []interface{}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
-	keys := resp["keys"].([]interface{})
-	if len(keys) < 2 {
-		t.Errorf("Expected at least 2 API keys, got %d", len(keys))
+	if len(resp) < 2 {
+		t.Errorf("Expected at least 2 API keys, got %d", len(resp))
 	}
 }
 

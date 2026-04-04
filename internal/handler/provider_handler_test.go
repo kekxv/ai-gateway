@@ -20,7 +20,8 @@ func TestListProvidersHandler_Success(t *testing.T) {
 
 	providerRepo := repository.NewProviderRepository(db)
 	modelRepo := repository.NewModelRepository(db)
-	providerHandler := NewProviderHandler(providerRepo, modelRepo)
+	modelRouteRepo := repository.NewModelRouteRepository(db)
+	providerHandler := NewProviderHandler(providerRepo, modelRepo, modelRouteRepo)
 
 	// Create test providers
 	test.CreateTestProvider(db, func(p *models.Provider) { p.Name = "provider1" })
@@ -40,12 +41,11 @@ func TestListProvidersHandler_Success(t *testing.T) {
 		t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp map[string]interface{}
+	var resp []interface{}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
-	providers := resp["providers"].([]interface{})
-	if len(providers) < 2 {
-		t.Errorf("Expected at least 2 providers, got %d", len(providers))
+	if len(resp) < 2 {
+		t.Errorf("Expected at least 2 providers, got %d", len(resp))
 	}
 }
 
@@ -55,7 +55,8 @@ func TestCreateProviderHandler_Success(t *testing.T) {
 
 	providerRepo := repository.NewProviderRepository(db)
 	modelRepo := repository.NewModelRepository(db)
-	providerHandler := NewProviderHandler(providerRepo, modelRepo)
+	modelRouteRepo := repository.NewModelRouteRepository(db)
+	providerHandler := NewProviderHandler(providerRepo, modelRepo, modelRouteRepo)
 
 	adminUser := test.CreateTestAdmin(db, "admin@example.com")
 
@@ -87,7 +88,8 @@ func TestCreateProviderHandler_MissingName(t *testing.T) {
 
 	providerRepo := repository.NewProviderRepository(db)
 	modelRepo := repository.NewModelRepository(db)
-	providerHandler := NewProviderHandler(providerRepo, modelRepo)
+	modelRouteRepo := repository.NewModelRouteRepository(db)
+	providerHandler := NewProviderHandler(providerRepo, modelRepo, modelRouteRepo)
 
 	adminUser := test.CreateTestAdmin(db, "admin@example.com")
 
@@ -116,7 +118,8 @@ func TestGetProviderHandler_Success(t *testing.T) {
 
 	providerRepo := repository.NewProviderRepository(db)
 	modelRepo := repository.NewModelRepository(db)
-	providerHandler := NewProviderHandler(providerRepo, modelRepo)
+	modelRouteRepo := repository.NewModelRouteRepository(db)
+	providerHandler := NewProviderHandler(providerRepo, modelRepo, modelRouteRepo)
 
 	test.CreateTestProvider(db, func(p *models.Provider) {
 		p.Name = "test-provider"
@@ -150,7 +153,8 @@ func TestGetProviderHandler_NotFound(t *testing.T) {
 
 	providerRepo := repository.NewProviderRepository(db)
 	modelRepo := repository.NewModelRepository(db)
-	providerHandler := NewProviderHandler(providerRepo, modelRepo)
+	modelRouteRepo := repository.NewModelRouteRepository(db)
+	providerHandler := NewProviderHandler(providerRepo, modelRepo, modelRouteRepo)
 
 	adminUser := test.CreateTestAdmin(db, "admin@example.com")
 
@@ -173,7 +177,8 @@ func TestUpdateProviderHandler_Success(t *testing.T) {
 
 	providerRepo := repository.NewProviderRepository(db)
 	modelRepo := repository.NewModelRepository(db)
-	providerHandler := NewProviderHandler(providerRepo, modelRepo)
+	modelRouteRepo := repository.NewModelRouteRepository(db)
+	providerHandler := NewProviderHandler(providerRepo, modelRepo, modelRouteRepo)
 
 	test.CreateTestProvider(db, func(p *models.Provider) {
 		p.Name = "original-name"
@@ -206,7 +211,8 @@ func TestDeleteProviderHandler_Success(t *testing.T) {
 
 	providerRepo := repository.NewProviderRepository(db)
 	modelRepo := repository.NewModelRepository(db)
-	providerHandler := NewProviderHandler(providerRepo, modelRepo)
+	modelRouteRepo := repository.NewModelRouteRepository(db)
+	providerHandler := NewProviderHandler(providerRepo, modelRepo, modelRouteRepo)
 
 	test.CreateTestProvider(db, func(p *models.Provider) {
 		p.Name = "to-delete"

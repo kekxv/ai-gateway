@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,34 +14,26 @@ import (
 )
 
 type ProviderHandler struct {
-	providerRepo *repository.ProviderRepository
-	modelRepo    *repository.ModelRepository
+	providerRepo   *repository.ProviderRepository
+	modelRepo      *repository.ModelRepository
+	modelRouteRepo *repository.ModelRouteRepository
 }
 
-func NewProviderHandler(providerRepo *repository.ProviderRepository, modelRepo *repository.ModelRepository) *ProviderHandler {
-	return &ProviderHandler{providerRepo: providerRepo, modelRepo: modelRepo}
+func NewProviderHandler(providerRepo *repository.ProviderRepository, modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository) *ProviderHandler {
+	return &ProviderHandler{
+		providerRepo:   providerRepo,
+		modelRepo:      modelRepo,
+		modelRouteRepo: modelRouteRepo,
+	}
 }
 
 func (h *ProviderHandler) ListProviders(c *gin.Context) {
-	// Parse pagination params
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 10
-	}
-
-	providers, total, err := h.providerRepo.ListWithCount(c.Request.Context(), nil, page, pageSize)
+	providers, err := h.providerRepo.List(c.Request.Context(), nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"providers": providers,
-		"total":     total,
-	})
+	c.JSON(http.StatusOK, providers)
 }
 
 func (h *ProviderHandler) CreateProvider(c *gin.Context) {
@@ -334,15 +325,28 @@ func (h *ProviderHandler) SyncModels(c *gin.Context) {
 		return
 	}
 
-	// Sync models to database
-	newModelsCount := 0
 	ctx := c.Request.Context()
 
+	// Get existing routes for this provider
+	existingRoutes, _ := h.modelRouteRepo.FindByProviderID(ctx, id)
+	existingRouteMap := make(map[uint]models.ModelRoute)
+	for _, route := range existingRoutes {
+		existingRouteMap[route.ModelID] = route
+	}
+
+	// Track remote model names
+	remoteModelNames := make(map[string]bool)
+
+	modelsCreated := 0
+	routesCreated := 0
+
+	// Process remote models
 	for _, m := range fetchedModels {
 		modelName, ok := m["name"].(string)
 		if !ok {
 			continue
 		}
+		remoteModelNames[modelName] = true
 
 		// Check if model exists
 		existingModel, _ := h.modelRepo.FindByNameOrAlias(ctx, modelName)
@@ -362,14 +366,143 @@ func (h *ProviderHandler) SyncModels(c *gin.Context) {
 			if err := h.modelRepo.Create(ctx, newModel); err != nil {
 				continue
 			}
-			newModelsCount++
+			existingModel = newModel
+			modelsCreated++
+		}
+
+		// Check if route exists
+		if _, hasRoute := existingRouteMap[existingModel.ID]; !hasRoute {
+			// Create route
+			route := &models.ModelRoute{
+				ModelID:    existingModel.ID,
+				ProviderID: id,
+				Weight:     1,
+				CreatedAt:  time.Now(),
+			}
+			if err := h.modelRouteRepo.Create(ctx, route); err == nil {
+				routesCreated++
+			}
+		}
+	}
+
+	// Remove models that no longer exist remotely
+	modelsRemoved := 0
+	routesRemoved := 0
+	for _, route := range existingRoutes {
+		model, _ := h.modelRepo.FindByID(ctx, route.ModelID)
+		if model != nil && !remoteModelNames[model.Name] {
+			// Check if model has other provider associations
+			otherRoutes, _ := h.modelRouteRepo.FindByModel(ctx, model.ID)
+			hasOtherProvider := false
+			for _, r := range otherRoutes {
+				if r.ProviderID != id {
+					hasOtherProvider = true
+					break
+				}
+			}
+
+			// Delete the route
+			h.modelRouteRepo.Delete(ctx, route.ID)
+			routesRemoved++
+
+			// Only delete model if no other associations
+			if !hasOtherProvider && len(otherRoutes) <= 1 {
+				h.modelRepo.Delete(ctx, model.ID)
+				modelsRemoved++
+			}
 		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":          "模型同步成功",
-		"newModelsAdded":   newModelsCount,
-		"totalModelsFound": len(fetchedModels),
+		"message":        "模型同步成功",
+		"modelsCreated":  modelsCreated,
+		"routesCreated":  routesCreated,
+		"modelsRemoved":  modelsRemoved,
+		"routesRemoved":  routesRemoved,
+		"totalFetched":   len(fetchedModels),
+	})
+}
+
+// AddModels adds multiple models and creates routes to the provider
+func (h *ProviderHandler) AddModels(c *gin.Context) {
+	id := parseUintParam(c.Param("id"))
+
+	provider, err := h.providerRepo.FindByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Provider not found"})
+		return
+	}
+
+	var req struct {
+		Models []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"models"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx := c.Request.Context()
+	modelsCreated := 0
+	routesCreated := 0
+	alreadyAssociated := 0
+
+	for _, m := range req.Models {
+		if m.Name == "" {
+			continue
+		}
+
+		// Check if model exists
+		existingModel, _ := h.modelRepo.FindByNameOrAlias(ctx, m.Name)
+		if existingModel == nil {
+			// Create new model
+			newModel := &models.Model{
+				Name:        m.Name,
+				Description: m.Description,
+				CreatedAt:   time.Now(),
+				UpdatedAt:   time.Now(),
+			}
+			if err := h.modelRepo.Create(ctx, newModel); err != nil {
+				continue
+			}
+			existingModel = newModel
+			modelsCreated++
+		}
+
+		// Check if route already exists
+		routes, _ := h.modelRouteRepo.FindByModel(ctx, existingModel.ID)
+		hasRoute := false
+		for _, r := range routes {
+			if r.ProviderID == provider.ID {
+				hasRoute = true
+				break
+			}
+		}
+		if hasRoute {
+			alreadyAssociated++
+			continue
+		}
+
+		// Create route
+		route := &models.ModelRoute{
+			ModelID:    existingModel.ID,
+			ProviderID: provider.ID,
+			Weight:     1,
+			CreatedAt:  time.Now(),
+		}
+		if err := h.modelRouteRepo.Create(ctx, route); err != nil {
+			continue
+		}
+		routesCreated++
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":           "模型添加成功",
+		"modelsCreated":     modelsCreated,
+		"routesCreated":     routesCreated,
+		"alreadyAssociated": alreadyAssociated,
 	})
 }
 
@@ -383,24 +516,12 @@ func NewChannelHandler(channelRepo *repository.ChannelRepository) *ChannelHandle
 }
 
 func (h *ChannelHandler) ListChannels(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 10
-	}
-
-	channels, total, err := h.channelRepo.ListWithRelationsPaginated(c.Request.Context(), nil, page, pageSize)
+	channels, err := h.channelRepo.ListWithRelations(c.Request.Context(), nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"channels": channels,
-		"total":    total,
-	})
+	c.JSON(http.StatusOK, channels)
 }
 
 func (h *ChannelHandler) CreateChannel(c *gin.Context) {
@@ -588,10 +709,15 @@ func (h *ChannelHandler) BindModels(c *gin.Context) {
 type ModelHandler struct {
 	modelRepo      *repository.ModelRepository
 	modelRouteRepo *repository.ModelRouteRepository
+	channelRepo    *repository.ChannelRepository
 }
 
-func NewModelHandler(modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository) *ModelHandler {
-	return &ModelHandler{modelRepo: modelRepo, modelRouteRepo: modelRouteRepo}
+func NewModelHandler(modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository, channelRepo *repository.ChannelRepository) *ModelHandler {
+	return &ModelHandler{
+		modelRepo:      modelRepo,
+		modelRouteRepo: modelRouteRepo,
+		channelRepo:    channelRepo,
+	}
 }
 
 func (h *ModelHandler) ListModels(c *gin.Context) {
@@ -599,46 +725,25 @@ func (h *ModelHandler) ListModels(c *gin.Context) {
 	if name != "" {
 		model, err := h.modelRepo.FindByNameOrAlias(c.Request.Context(), name)
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"models": []models.Model{},
-				"total":  0,
-			})
+			c.JSON(http.StatusOK, []models.Model{})
 			return
 		}
 		// Load routes for this model
 		modelWithRoutes, err := h.modelRepo.FindWithRoutes(c.Request.Context(), model.ID)
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"models": []models.Model{*model},
-				"total":  1,
-			})
+			c.JSON(http.StatusOK, []*models.Model{model})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{
-			"models": []models.Model{*modelWithRoutes},
-			"total":  1,
-		})
+		c.JSON(http.StatusOK, []*models.Model{modelWithRoutes})
 		return
 	}
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 10
-	}
-
-	modelsList, total, err := h.modelRepo.ListWithRoutesPaginated(c.Request.Context(), nil, page, pageSize)
+	modelsList, err := h.modelRepo.ListWithRoutes(c.Request.Context(), nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"models": modelsList,
-		"total":  total,
-	})
+	c.JSON(http.StatusOK, modelsList)
 }
 
 func (h *ModelHandler) CreateModel(c *gin.Context) {
@@ -748,8 +853,33 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 
 func (h *ModelHandler) DeleteModel(c *gin.Context) {
 	id := parseUintParam(c.Param("id"))
+	ctx := c.Request.Context()
 
-	if err := h.modelRepo.Delete(c.Request.Context(), id); err != nil {
+	// Check if model exists
+	_, err := h.modelRepo.FindByID(ctx, id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Model not found"})
+		return
+	}
+
+	// Check if model is associated with any channels
+	channelBindings, _ := h.channelRepo.GetChannelsByModelID(ctx, id)
+	if len(channelBindings) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":    "无法删除，该模型被渠道关联",
+			"channels": len(channelBindings),
+		})
+		return
+	}
+
+	// Delete associated routes first
+	routes, _ := h.modelRouteRepo.FindByModel(ctx, id)
+	for _, route := range routes {
+		h.modelRouteRepo.Delete(ctx, route.ID)
+	}
+
+	// Delete model
+	if err := h.modelRepo.Delete(ctx, id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -780,24 +910,12 @@ func NewAPIKeyHandler(apiKeyRepo *repository.APIKeyRepository, authService *serv
 }
 
 func (h *APIKeyHandler) ListAPIKeys(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 10
-	}
-
-	keys, total, err := h.apiKeyRepo.ListWithCount(c.Request.Context(), nil, page, pageSize)
+	keys, err := h.apiKeyRepo.List(c.Request.Context(), nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"keys":  keys,
-		"total": total,
-	})
+	c.JSON(http.StatusOK, keys)
 }
 
 func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {

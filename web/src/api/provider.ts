@@ -1,15 +1,10 @@
 import { api } from './index'
 import type { Provider, CreateProviderRequest, UpdateProviderRequest } from '@/types/provider'
 
-interface ProviderListResponse {
-  providers: Provider[]
-  total: number
-}
-
 export const providerApi = {
-  // List all providers
-  list: (params?: { page?: number; page_size?: number }) =>
-    api.get<ProviderListResponse>('/providers', { params }),
+  // List all providers (returns full list, no pagination)
+  list: () =>
+    api.get<Provider[]>('/providers'),
 
   // Get provider by ID
   get: (id: number) =>
@@ -33,5 +28,9 @@ export const providerApi = {
 
   // Sync models from provider
   syncModels: (id: number) =>
-    api.post(`/providers/${id}/sync-models`)
+    api.post(`/providers/${id}/sync-models`),
+
+  // Add models to provider (creates models and routes)
+  addModels: (id: number, data: { models: { name: string; description?: string }[] }) =>
+    api.post(`/providers/${id}/add-models`, data)
 }

@@ -1,25 +1,10 @@
 import { api } from './index'
 import type { Channel, CreateChannelRequest, UpdateChannelRequest } from '@/types/channel'
 
-interface ChannelListResponse {
-  channels: Channel[]
-  total: number
-}
-
-interface ProviderListResponse {
-  providers: { id: number; name: string }[]
-  total: number
-}
-
-interface ModelListResponse {
-  models: { id: number; name: string }[]
-  total: number
-}
-
 export const channelApi = {
-  // List all channels
-  list: (params?: { page?: number; page_size?: number }) =>
-    api.get<ChannelListResponse>('/channels', { params }),
+  // List all channels (returns full list, no pagination)
+  list: () =>
+    api.get<Channel[]>('/channels'),
 
   // Get channel by ID
   get: (id: number) =>
@@ -45,6 +30,3 @@ export const channelApi = {
   bindModels: (id: number, modelIds: number[]) =>
     api.post(`/channels/${id}/models`, { model_ids: modelIds })
 }
-
-// Export response types for use in views
-export type { ChannelListResponse, ProviderListResponse, ModelListResponse }

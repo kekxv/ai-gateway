@@ -32,20 +32,15 @@ export const authApi = {
     api.get('/users/me/stats')
 }
 
-interface UserListResponse {
-  users: User[]
-  total: number
-}
-
 interface UpdateBalanceRequest {
   amount: number
   action: string
 }
 
 export const userApi = {
-  // List all users
-  list: (params?: { page?: number; page_size?: number }) =>
-    api.get<UserListResponse>('/users', { params }),
+  // List all users (returns full list, no pagination)
+  list: () =>
+    api.get<User[]>('/users'),
 
   // Get user by ID
   get: (id: number) =>

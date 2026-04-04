@@ -34,12 +34,12 @@ describe('User API', () => {
 
   describe('userApi', () => {
     it('should list users', async () => {
-      const mockResponse = { data: { users: [], total: 0 } }
+      const mockResponse = { data: [] }
       vi.mocked(axios.get).mockResolvedValue(mockResponse)
 
-      const result = await userApi.list({ page: 1, page_size: 10 })
+      const result = await userApi.list()
 
-      expect(axios.get).toHaveBeenCalledWith('/users', { params: { page: 1, page_size: 10 } })
+      expect(axios.get).toHaveBeenCalledWith('/users')
       expect(result).toEqual(mockResponse)
     })
 
@@ -113,12 +113,12 @@ describe('Provider API', () => {
   })
 
   it('should list providers', async () => {
-    const mockResponse = { data: { providers: [], total: 0 } }
+    const mockResponse = { data: [] }
     vi.mocked(axios.get).mockResolvedValue(mockResponse)
 
-    const result = await providerApi.list({ page: 1, page_size: 10 })
+    const result = await providerApi.list()
 
-    expect(axios.get).toHaveBeenCalledWith('/providers', { params: { page: 1, page_size: 10 } })
+    expect(axios.get).toHaveBeenCalledWith('/providers')
     expect(result).toEqual(mockResponse)
   })
 
@@ -165,12 +165,12 @@ describe('Channel API', () => {
   })
 
   it('should list channels', async () => {
-    const mockResponse = { data: { channels: [] } }
+    const mockResponse = { data: [] }
     vi.mocked(axios.get).mockResolvedValue(mockResponse)
 
-    const result = await channelApi.list({ page: 1 })
+    const result = await channelApi.list()
 
-    expect(axios.get).toHaveBeenCalledWith('/channels', { params: { page: 1 } })
+    expect(axios.get).toHaveBeenCalledWith('/channels')
     expect(result).toEqual(mockResponse)
   })
 
@@ -204,12 +204,12 @@ describe('Model API', () => {
   })
 
   it('should list models', async () => {
-    const mockResponse = { data: { models: [] } }
+    const mockResponse = { data: [] }
     vi.mocked(axios.get).mockResolvedValue(mockResponse)
 
-    const result = await modelApi.list({ page: 1 })
+    const result = await modelApi.list()
 
-    expect(axios.get).toHaveBeenCalledWith('/models', { params: { page: 1 } })
+    expect(axios.get).toHaveBeenCalledWith('/models', { params: undefined })
     expect(result).toEqual(mockResponse)
   })
 
@@ -255,12 +255,12 @@ describe('API Key API', () => {
   })
 
   it('should list api keys', async () => {
-    const mockResponse = { data: { keys: [] } }
+    const mockResponse = { data: [] }
     vi.mocked(axios.get).mockResolvedValue(mockResponse)
 
-    const result = await apiKeyApi.list({ page: 1 })
+    const result = await apiKeyApi.list()
 
-    expect(axios.get).toHaveBeenCalledWith('/keys', { params: { page: 1 } })
+    expect(axios.get).toHaveBeenCalledWith('/keys')
     expect(result).toEqual(mockResponse)
   })
 

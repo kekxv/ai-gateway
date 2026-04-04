@@ -1,19 +1,14 @@
 import { api } from './index'
 import type { Model, ModelRoute, CreateModelRequest, UpdateModelRequest, UpdateModelPricesRequest } from '@/types/model'
 
-interface ModelListResponse {
-  models: Model[]
-  total: number
-}
-
 interface RouteListResponse {
   routes: ModelRoute[]
 }
 
 export const modelApi = {
-  // List all models
-  list: (params?: { page?: number; page_size?: number; name?: string }) =>
-    api.get<ModelListResponse>('/models', { params }),
+  // List all models (returns full list, no pagination)
+  list: (params?: { name?: string }) =>
+    api.get<Model[]>('/models', { params }),
 
   // Get model by ID
   get: (id: number) =>

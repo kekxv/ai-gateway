@@ -47,13 +47,11 @@ func TestListUsersHandler_AdminAccess(t *testing.T) {
 		t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp map[string]interface{}
+	var resp []interface{}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
-	users := resp["users"].([]interface{})
-
-	if len(users) < 2 {
-		t.Errorf("Expected at least 2 users, got %d", len(users))
+	if len(resp) < 2 {
+		t.Errorf("Expected at least 2 users, got %d", len(resp))
 	}
 }
 

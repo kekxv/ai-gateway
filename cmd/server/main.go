@@ -96,9 +96,9 @@ func main() {
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userRepo, logRepo, authService)
-	providerHandler := handler.NewProviderHandler(providerRepo, modelRepo)
+	providerHandler := handler.NewProviderHandler(providerRepo, modelRepo, modelRouteRepo)
 	channelHandler := handler.NewChannelHandler(channelRepo)
-	modelHandler := handler.NewModelHandler(modelRepo, modelRouteRepo)
+	modelHandler := handler.NewModelHandler(modelRepo, modelRouteRepo, channelRepo)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyRepo, authService)
 	logHandler := handler.NewLogHandler(logRepo, logDetailRepo)
 	statsHandler := handler.NewStatsHandler(logRepo, userRepo, modelRepo, providerRepo)
@@ -191,6 +191,7 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 	admin.PUT("/providers/:id", deps.ProviderHandler.UpdateProvider)
 	admin.DELETE("/providers/:id", deps.ProviderHandler.DeleteProvider)
 	admin.GET("/providers/:id/load-models", deps.ProviderHandler.LoadModels)
+	admin.POST("/providers/:id/add-models", deps.ProviderHandler.AddModels)
 	admin.POST("/providers/:id/sync-models", deps.ProviderHandler.SyncModels)
 
 	// Channel management

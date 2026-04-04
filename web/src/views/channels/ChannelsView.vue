@@ -226,12 +226,9 @@ const toggleModel = (modelId: number) => {
 const fetchChannels = async () => {
   loading.value = true
   try {
-    const response = await channelApi.list({
-      page: pagination.page,
-      page_size: pagination.pageSize
-    })
-    channels.value = response.data.channels || response.data
-    pagination.total = response.data.total || channels.value.length
+    const response = await channelApi.list()
+    channels.value = response.data || []
+    pagination.total = channels.value.length
   } catch (error) {
     ElMessage.error(t('common.error'))
   } finally {
@@ -241,8 +238,8 @@ const fetchChannels = async () => {
 
 const fetchProviders = async () => {
   try {
-    const response = await providerApi.list({ page: 1, page_size: 100 })
-    providers.value = response.data.providers || response.data
+    const response = await providerApi.list()
+    providers.value = response.data || []
   } catch (error) {
     console.error('Failed to fetch providers')
   }
@@ -250,8 +247,8 @@ const fetchProviders = async () => {
 
 const fetchModels = async () => {
   try {
-    const response = await modelApi.list({ page: 1, page_size: 1000 })
-    models.value = response.data.models || response.data
+    const response = await modelApi.list()
+    models.value = response.data || []
   } catch (error) {
     console.error('Failed to fetch models')
   }

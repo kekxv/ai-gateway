@@ -1,11 +1,6 @@
 import { api } from './index'
 import type { GatewayAPIKey, CreateAPIKeyRequest, UpdateAPIKeyRequest } from '@/types/apiKey'
 
-interface APIKeyListResponse {
-  keys: GatewayAPIKey[]
-  total: number
-}
-
 interface APIKeyCreateResponse {
   id: number
   key: string
@@ -13,9 +8,9 @@ interface APIKeyCreateResponse {
 }
 
 export const apiKeyApi = {
-  // List all API keys
-  list: (params?: { page?: number; page_size?: number }) =>
-    api.get<APIKeyListResponse>('/keys', { params }),
+  // List all API keys (returns full list, no pagination)
+  list: () =>
+    api.get<GatewayAPIKey[]>('/keys'),
 
   // Create API key
   create: (data: CreateAPIKeyRequest) =>

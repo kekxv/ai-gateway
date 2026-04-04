@@ -215,12 +215,9 @@ const selectAllModels = computed({
 const fetchProviders = async () => {
   loading.value = true
   try {
-    const response = await providerApi.list({
-      page: pagination.page,
-      page_size: pagination.pageSize
-    })
-    providers.value = response.data.providers || response.data
-    pagination.total = response.data.total || providers.value.length
+    const response = await providerApi.list()
+    providers.value = response.data || []
+    pagination.total = providers.value.length
   } catch (error) {
     ElMessage.error(t('common.error'))
   } finally {
@@ -310,8 +307,8 @@ const openModelsDialog = async (provider: Provider) => {
 
     // Fetch existing models from database
     try {
-      const existingResponse = await modelApi.list({ page: 1, page_size: 1000 })
-      const existingModels = existingResponse.data.models || existingResponse.data || []
+      const existingResponse = await modelApi.list()
+      const existingModels = existingResponse.data || []
       existingModelNames.value = new Set(existingModels.map((m: { name: string }) => m.name))
     } catch {
       // Ignore error when fetching existing models
@@ -353,19 +350,11 @@ const saveSelectedModels = async () => {
 
   savingModels.value = true
   try {
-    const modelsToSave = availableModels.value.filter(m => selectedModels.value.has(m.name))
+    const modelsToSave = availableModels.value
+      .filter(m => selectedModels.value.has(m.name))
+      .map(m => ({ name: m.name, description: m.description || '' }))
 
-    for (const model of modelsToSave) {
-      try {
-        await modelApi.create({
-          name: model.name,
-          description: model.description || ''
-        })
-      } catch {
-        // Model may already exist, ignore error
-      }
-    }
-
+    await providerApi.addModels(currentProviderId.value, { models: modelsToSave })
     ElMessage.success(`成功添加 ${modelsToSave.length} 个模型`)
     modelsDialogVisible.value = false
   } catch (error) {
