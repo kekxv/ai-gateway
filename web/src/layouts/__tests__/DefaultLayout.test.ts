@@ -71,8 +71,8 @@ describe('DefaultLayout', () => {
     })
 
     expect(wrapper.find('main').exists()).toBe(true)
-    // DefaultLayout uses router-view, not slot
-    expect(wrapper.find('.flex-1.p-6').exists()).toBe(true)
+    // DefaultLayout uses router-view with flex-1 and responsive padding (p-4 lg:p-6)
+    expect(wrapper.find('.flex-1.p-4').exists()).toBe(true)
   })
 
   it('should show user email in sidebar', async () => {

@@ -84,13 +84,35 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 		return nil, ErrNoRouteAvailable
 	}
 
+	// Create initial log entry at request start
+	logEntry := &models.Log{
+		APIKeyID:     apiKey.ID,
+		ModelName:    model.Name,
+		ProviderName: route.Provider.Name,
+		Status:       0, // pending
+	}
+	if err := s.logRepo.Create(ctx, logEntry); err != nil {
+		logEntry.ID = 0 // Continue without log if creation fails
+	} else if apiKey.LogDetails {
+		// Store request body immediately at request start
+		reqBody, _ := json.Marshal(req)
+		reqGz, _ := utils.GzipCompress(reqBody)
+		detail := &models.LogDetail{
+			LogID:       logEntry.ID,
+			RequestBody: reqGz,
+		}
+		s.logDetailRepo.Create(ctx, detail)
+	}
+
 	// 3. Check permission
 	if err := s.checkPermission(ctx, apiKey, model.ID); err != nil {
+		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 403, err.Error())
 		return nil, err
 	}
 
 	// 4. Check balance
 	if err := s.checkBalance(ctx, apiKey.UserID, model); err != nil {
+		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 402, err.Error())
 		return nil, err
 	}
 
@@ -100,8 +122,7 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 	// 6. Send upstream request
 	resp, err := s.sendResponseUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req, req.Stream)
 	if err != nil {
-		latency := time.Since(startTime).Milliseconds()
-		s.logError(ctx, apiKey, model, route.Provider.Name, int(latency), 502, err.Error(), req)
+		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 502, err.Error())
 		return nil, ErrUpstreamFailed
 	}
 
@@ -109,7 +130,9 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 	if resp.StatusCode >= 400 {
 		latency := time.Since(startTime).Milliseconds()
 		s.handleUpstreamError(ctx, resp, route)
-		s.logError(ctx, apiKey, model, route.Provider.Name, int(latency), resp.StatusCode, "Upstream error", req)
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		s.updateLogError(ctx, logEntry.ID, int(latency), resp.StatusCode, string(body))
 		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 	}
 
@@ -117,6 +140,8 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 	if req.Stream {
 		streamResp := NewResponseStreamingResponse(resp)
 		// Store context for later logging
+		streamResp.ctx = ctx
+		streamResp.logID = logEntry.ID
 		streamResp.apiKey = apiKey
 		streamResp.model = model
 		streamResp.providerName = route.Provider.Name
@@ -134,11 +159,13 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 	body, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
+		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 500, err.Error())
 		return nil, err
 	}
 
 	var response models.Response
 	if err := json.Unmarshal(body, &response); err != nil {
+		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 500, err.Error())
 		return nil, err
 	}
 
@@ -147,9 +174,9 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 		s.cache.Set(response.ID, &route.Provider)
 	}
 
-	// Log and calculate cost
+	// Update log with completion data
 	latency := time.Since(startTime).Milliseconds()
-	s.logResponseAndCalculateCost(ctx, apiKey, model, route.Provider.Name, req, &response, int(latency))
+	s.updateLogAndCalculateCost(ctx, apiKey, model, route.Provider.Name, logEntry.ID, req, &response, int(latency))
 
 	return &response, nil
 }
@@ -327,13 +354,35 @@ func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *model
 		return nil, ErrNoRouteAvailable
 	}
 
+	// Create initial log entry at request start
+	logEntry := &models.Log{
+		APIKeyID:     apiKey.ID,
+		ModelName:    model.Name,
+		ProviderName: route.Provider.Name,
+		Status:       0, // pending
+	}
+	if err := s.logRepo.Create(ctx, logEntry); err != nil {
+		logEntry.ID = 0 // Continue without log if creation fails
+	} else if apiKey.LogDetails {
+		// Store request body immediately at request start
+		reqBody, _ := json.Marshal(req)
+		reqGz, _ := utils.GzipCompress(reqBody)
+		detail := &models.LogDetail{
+			LogID:       logEntry.ID,
+			RequestBody: reqGz,
+		}
+		s.logDetailRepo.Create(ctx, detail)
+	}
+
 	// 3. Check permission
 	if err := s.checkPermission(ctx, apiKey, model.ID); err != nil {
+		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 403, err.Error())
 		return nil, err
 	}
 
 	// 4. Check balance
 	if err := s.checkBalance(ctx, apiKey.UserID, model); err != nil {
+		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 402, err.Error())
 		return nil, err
 	}
 
@@ -343,8 +392,7 @@ func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *model
 	// 6. Send upstream request
 	resp, err := s.sendCompactUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req)
 	if err != nil {
-		latency := time.Since(startTime).Milliseconds()
-		s.logError(ctx, apiKey, model, route.Provider.Name, int(latency), 502, err.Error(), req)
+		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 502, err.Error())
 		return nil, ErrUpstreamFailed
 	}
 
@@ -352,23 +400,25 @@ func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *model
 		latency := time.Since(startTime).Milliseconds()
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		s.logError(ctx, apiKey, model, route.Provider.Name, int(latency), resp.StatusCode, string(body), req)
+		s.updateLogError(ctx, logEntry.ID, int(latency), resp.StatusCode, string(body))
 		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
+		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 500, err.Error())
 		return nil, err
 	}
 
 	var response models.Response
 	if err := json.Unmarshal(body, &response); err != nil {
+		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 500, err.Error())
 		return nil, err
 	}
 
 	latency := time.Since(startTime).Milliseconds()
-	s.logResponseAndCalculateCost(ctx, apiKey, model, route.Provider.Name, req, &response, int(latency))
+	s.updateLogAndCalculateCost(ctx, apiKey, model, route.Provider.Name, logEntry.ID, req, &response, int(latency))
 
 	return &response, nil
 }
@@ -585,6 +635,66 @@ func (s *ResponseService) logError(ctx context.Context, apiKey *models.GatewayAP
 	}
 }
 
+// updateLogAndCalculateCost updates an existing log entry with completion data and calculates cost
+func (s *ResponseService) updateLogAndCalculateCost(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, logID uint, req interface{}, resp *models.Response, latency int) {
+	if logID == 0 {
+		return
+	}
+
+	var promptTokens, completionTokens, totalTokens int
+	if resp.Usage != nil {
+		promptTokens = resp.Usage.InputTokens
+		completionTokens = resp.Usage.OutputTokens
+		totalTokens = resp.Usage.TotalTokens
+	}
+
+	cost := s.billingService.CalculateCost(promptTokens, completionTokens, model.InputTokenPrice, model.OutputTokenPrice)
+
+	// Determine owner channel (for shared channels)
+	ownerChannelID, ownerChannelUserID := s.determineChannelOwner(ctx, apiKey, model.ID)
+
+	// Deduct cost
+	if cost > 0 && apiKey.UserID != nil {
+		s.billingService.DeductAndDistribute(ctx, apiKey.UserID, ownerChannelUserID, cost)
+	}
+
+	// Update log entry
+	updates := map[string]interface{}{
+		"latency":            latency,
+		"promptTokens":      promptTokens,
+		"completionTokens":  completionTokens,
+		"totalTokens":       totalTokens,
+		"cost":               cost,
+		"status":             200,
+		"ownerChannelId":   ownerChannelID,
+		"ownerChannelUserId": ownerChannelUserID,
+	}
+
+	s.logRepo.UpdateByID(ctx, logID, updates)
+
+	if apiKey.LogDetails {
+		// Update existing LogDetail with response body
+		respBody, _ := json.Marshal(resp)
+		respGz, _ := utils.GzipCompress(respBody)
+		s.logDetailRepo.UpdateResponseBody(ctx, logID, respGz)
+	}
+}
+
+// updateLogError updates an existing log entry with error information
+func (s *ResponseService) updateLogError(ctx context.Context, logID uint, latency, status int, errMsg string) {
+	if logID == 0 {
+		return
+	}
+
+	updates := map[string]interface{}{
+		"latency":       latency,
+		"status":        status,
+		"errorMessage": errMsg,
+	}
+
+	s.logRepo.UpdateByID(ctx, logID, updates)
+}
+
 // determineChannelOwner determines the channel owner for billing
 func (s *ResponseService) determineChannelOwner(ctx context.Context, apiKey *models.GatewayAPIKey, modelID uint) (*uint, *uint) {
 	// TODO: Implement channel owner determination logic
@@ -600,6 +710,8 @@ type ResponseStreamingResponse struct {
 	reader         *bufio.Reader
 
 	// For logging after streaming is complete
+	ctx            context.Context // Store context to detect client disconnect
+	logID          uint            // ID of the initial log entry
 	apiKey         *models.GatewayAPIKey
 	model          *models.Model
 	providerName   string
@@ -704,10 +816,22 @@ func (s *ResponseStreamingResponse) GetCapturedData() (responseID string, conten
 	return
 }
 
-// LogAfterComplete logs the streaming request after it's complete
+// LogAfterComplete updates the log entry after streaming is complete
 func (s *ResponseStreamingResponse) LogAfterComplete(ctx context.Context) {
-	if s.logRepo == nil {
+	if s.logRepo == nil || s.logID == 0 {
 		return
+	}
+
+	// Determine status based on context cancellation (client disconnect)
+	status := 200
+	errMsg := ""
+	if s.ctx != nil {
+		select {
+		case <-s.ctx.Done():
+			status = 499 // Client closed request (Nginx convention)
+			errMsg = "client disconnected"
+		default:
+		}
 	}
 
 	responseID, content, usage, _ := s.GetCapturedData()
@@ -736,28 +860,27 @@ func (s *ResponseStreamingResponse) LogAfterComplete(ctx context.Context) {
 		)
 	}
 
-	// Deduct cost
-	if cost > 0 && s.apiKey.UserID != nil {
+	// Deduct cost only if request was successful
+	if cost > 0 && status == 200 && s.apiKey.UserID != nil {
 		s.billingService.DeductAndDistribute(ctx, s.apiKey.UserID, nil, cost)
 	}
 
-	// Create log entry
-	logEntry := &models.Log{
-		Latency:          int(latency),
-		PromptTokens:     usage.InputTokens,
-		CompletionTokens: completionTokens,
-		TotalTokens:      usage.InputTokens + completionTokens,
-		Cost:             cost,
-		APIKeyID:         s.apiKey.ID,
-		ModelName:        s.model.Name,
-		ProviderName:     s.providerName,
-		Status:           200,
+	// Update log entry
+	updates := map[string]interface{}{
+		"latency":           int(latency),
+		"promptTokens":     usage.InputTokens,
+		"completionTokens": completionTokens,
+		"totalTokens":      usage.InputTokens + completionTokens,
+		"cost":              cost,
+		"status":            status,
+	}
+	if errMsg != "" {
+		updates["errorMessage"] = errMsg
 	}
 
-	if err := s.logRepo.Create(ctx, logEntry); err == nil && s.apiKey.LogDetails {
-		// Store detailed log
-		reqBody, _ := json.Marshal(s.request)
+	s.logRepo.UpdateByID(ctx, s.logID, updates)
 
+	if s.apiKey.LogDetails {
 		// Build response object for logging
 		respObj := map[string]interface{}{
 			"id":      responseID,
@@ -787,21 +910,19 @@ func (s *ResponseStreamingResponse) LogAfterComplete(ctx context.Context) {
 			},
 		}
 		respBody, _ := json.Marshal(respObj)
-
-		reqGz, _ := utils.GzipCompress(reqBody)
 		respGz, _ := utils.GzipCompress(respBody)
 
-		detail := &models.LogDetail{
-			LogID:        logEntry.ID,
-			RequestBody:  reqGz,
-			ResponseBody: respGz,
-		}
-		s.logDetailRepo.Create(ctx, detail)
+		// Update existing LogDetail with response body
+		s.logDetailRepo.UpdateResponseBody(ctx, s.logID, respGz)
 	}
 }
 
 // Close closes the underlying response body and logs the request
 func (s *ResponseStreamingResponse) Close() error {
-	s.LogAfterComplete(context.Background())
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.LogAfterComplete(ctx)
 	return s.ResponseBody.Body.Close()
 }

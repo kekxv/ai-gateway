@@ -132,8 +132,17 @@ func (s *ModelSyncService) SyncProviderModels(ctx context.Context, providerID ui
 
 	// Remove models that no longer exist remotely
 	for _, route := range existingRoutes {
-		model, _ := s.modelRepo.FindByID(ctx, route.ModelID)
-		if model != nil && !remoteModelNames[model.Name] {
+		model, err := s.modelRepo.FindByID(ctx, route.ModelID)
+
+		// Handle orphan routes (model not found in database)
+		if err != nil || model == nil {
+			s.modelRouteRepo.Delete(ctx, route.ID)
+			result.RoutesRemoved++
+			continue
+		}
+
+		// Check if model exists in remote
+		if !remoteModelNames[model.Name] {
 			// Check if model has other provider associations
 			otherRoutes, _ := s.modelRouteRepo.FindByModel(ctx, model.ID)
 			hasOtherProvider := false

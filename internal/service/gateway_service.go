@@ -160,6 +160,8 @@ type StreamingResponse struct {
 	reader         *bufio.Reader
 
 	// For logging after streaming is complete
+	ctx            context.Context // Store context to detect client disconnect
+	logID          uint            // ID of the initial log entry
 	apiKey         *models.GatewayAPIKey
 	model          *models.Model
 	providerName   string
@@ -239,10 +241,22 @@ func (s *StreamingResponse) GetCapturedData() (content string, usage *Usage, raw
 	return
 }
 
-// LogAfterComplete logs the streaming request after it's complete
+// LogAfterComplete updates the log entry after streaming is complete
 func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
-	if s.logRepo == nil {
+	if s.logRepo == nil || s.logID == 0 {
 		return
+	}
+
+	// Determine status based on context cancellation (client disconnect)
+	status := 200
+	errMsg := ""
+	if s.ctx != nil {
+		select {
+		case <-s.ctx.Done():
+			status = 499 // Client closed request (Nginx convention)
+			errMsg = "client disconnected"
+		default:
+		}
 	}
 
 	content, usage, _ := s.GetCapturedData()
@@ -266,23 +280,27 @@ func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 		)
 	}
 
-	// Create log entry
-	logEntry := &models.Log{
-		Latency:          int(latency),
-		PromptTokens:     usage.PromptTokens,
-		CompletionTokens: completionTokens,
-		TotalTokens:      usage.PromptTokens + completionTokens,
-		Cost:             cost,
-		APIKeyID:         s.apiKey.ID,
-		ModelName:        s.model.Name,
-		ProviderName:     s.providerName,
-		Status:           200,
+	// Deduct cost only if request was successful
+	if cost > 0 && status == 200 && s.apiKey.UserID != nil {
+		s.billingService.DeductAndDistribute(ctx, s.apiKey.UserID, nil, cost)
 	}
 
-	if err := s.logRepo.Create(ctx, logEntry); err == nil && s.apiKey.LogDetails {
-		// Store detailed log
-		reqBody, _ := json.Marshal(s.request)
+	// Update log entry
+	updates := map[string]interface{}{
+		"latency":           int(latency),
+		"promptTokens":     usage.PromptTokens,
+		"completionTokens": completionTokens,
+		"totalTokens":      usage.PromptTokens + completionTokens,
+		"cost":              cost,
+		"status":            status,
+	}
+	if errMsg != "" {
+		updates["errorMessage"] = errMsg
+	}
 
+	s.logRepo.UpdateByID(ctx, s.logID, updates)
+
+	if s.apiKey.LogDetails {
 		// Build response object for logging
 		respObj := map[string]interface{}{
 			"id":      "",
@@ -300,28 +318,26 @@ func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 				},
 			},
 			"usage": map[string]int{
-				"prompt_tokens":     usage.PromptTokens,
-				"completion_tokens": completionTokens,
-				"total_tokens":      usage.PromptTokens + completionTokens,
+				"promptTokens":     usage.PromptTokens,
+				"completionTokens": completionTokens,
+				"totalTokens":      usage.PromptTokens + completionTokens,
 			},
 		}
 		respBody, _ := json.Marshal(respObj)
-
-		reqGz, _ := utils.GzipCompress(reqBody)
 		respGz, _ := utils.GzipCompress(respBody)
 
-		detail := &models.LogDetail{
-			LogID:        logEntry.ID,
-			RequestBody:  reqGz,
-			ResponseBody: respGz,
-		}
-		s.logDetailRepo.Create(ctx, detail)
+		// Update existing LogDetail with response body
+		s.logDetailRepo.UpdateResponseBody(ctx, s.logID, respGz)
 	}
 }
 
 // Close closes the underlying response body and logs the request
 func (s *StreamingResponse) Close() error {
-	s.LogAfterComplete(context.Background())
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.LogAfterComplete(ctx)
 	return s.ResponseBody.Body.Close()
 }
 
@@ -397,22 +413,61 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		return nil, err
 	}
 
+	// Create initial log entry (status=0 means pending)
+	logEntry := &models.Log{
+		APIKeyID:     apiKey.ID,
+		ModelName:    model.Name,
+		ProviderName: route.Provider.Name,
+		Status:       0, // pending
+	}
+	if err := s.logRepo.Create(ctx, logEntry); err != nil {
+		logEntry.ID = 0 // Continue without log if creation fails
+	} else if apiKey.LogDetails {
+		// Store request body immediately at request start
+		reqBody, _ := json.Marshal(req)
+		reqGz, _ := utils.GzipCompress(reqBody)
+		detail := &models.LogDetail{
+			LogID:       logEntry.ID,
+			RequestBody: reqGz,
+		}
+		s.logDetailRepo.Create(ctx, detail)
+	}
+
+	// Helper to update log on completion
+	updateLog := func(latency int, promptTokens, completionTokens, totalTokens int, cost int64, status int, errMsg string) {
+		if logEntry.ID == 0 {
+			return
+		}
+		updates := map[string]interface{}{
+			"latency":           latency,
+			"promptTokens":     promptTokens,
+			"completionTokens": completionTokens,
+			"totalTokens":      totalTokens,
+			"cost":              cost,
+			"status":            status,
+		}
+		if errMsg != "" {
+			updates["errorMessage"] = errMsg
+		}
+		s.logRepo.UpdateByID(ctx, logEntry.ID, updates)
+	}
+
 	// 5. Build upstream request
 	targetURL := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(route.Provider.BaseURL, "/"))
 
 	// 6. Send upstream request
 	resp, err := s.sendUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req, stream)
 	if err != nil {
-		latency := time.Since(startTime).Milliseconds()
-		s.logError(ctx, apiKey, model, route.Provider.Name, int(latency), 502, err.Error(), req)
+		latency := int(time.Since(startTime).Milliseconds())
+		updateLog(latency, 0, 0, 0, 0, 502, err.Error())
 		return nil, ErrUpstreamFailed
 	}
 
 	// Handle error responses
 	if resp.StatusCode >= 400 {
-		latency := time.Since(startTime).Milliseconds()
+		latency := int(time.Since(startTime).Milliseconds())
 		s.handleUpstreamError(ctx, resp, route)
-		s.logError(ctx, apiKey, model, route.Provider.Name, int(latency), resp.StatusCode, "Upstream error", req)
+		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, "Upstream error")
 		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 	}
 
@@ -420,6 +475,8 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	if stream {
 		streamResp := NewStreamingResponse(resp)
 		// Store context for later logging
+		streamResp.ctx = ctx
+		streamResp.logID = logEntry.ID
 		streamResp.apiKey = apiKey
 		streamResp.model = model
 		streamResp.providerName = route.Provider.Name
@@ -435,17 +492,21 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	body, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
+		latency := int(time.Since(startTime).Milliseconds())
+		updateLog(latency, 0, 0, 0, 0, 500, err.Error())
 		return nil, err
 	}
 
 	var chatResp ChatResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
+		latency := int(time.Since(startTime).Milliseconds())
+		updateLog(latency, 0, 0, 0, 0, 500, err.Error())
 		return nil, err
 	}
 
-	// Log and calculate cost
-	latency := time.Since(startTime).Milliseconds()
-	s.logAndCalculateCost(ctx, apiKey, model, route.Provider.Name, req, &chatResp, int(latency))
+	// Update log and calculate cost
+	latency := int(time.Since(startTime).Milliseconds())
+	s.updateLogAndCalculateCost(ctx, apiKey, model, route.Provider.Name, req, &chatResp, latency, logEntry.ID)
 
 	return &chatResp, nil
 }
@@ -571,7 +632,7 @@ func (s *GatewayService) handleUpstreamError(ctx context.Context, resp *http.Res
 	}
 }
 
-// logAndCalculateCost logs the request and calculates cost
+// logAndCalculateCost logs the request and calculates cost (deprecated, use updateLogAndCalculateCost)
 func (s *GatewayService) logAndCalculateCost(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, req *ChatRequest, resp *ChatResponse, latency int) {
 	var promptTokens, completionTokens, totalTokens int
 	if resp.Usage != nil {
@@ -592,17 +653,17 @@ func (s *GatewayService) logAndCalculateCost(ctx context.Context, apiKey *models
 
 	// Create log entry
 	logEntry := &models.Log{
-		Latency:          latency,
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		TotalTokens:      totalTokens,
-		Cost:             cost,
-		APIKeyID:         apiKey.ID,
-		ModelName:        model.Name,
-		ProviderName:     providerName,
-		OwnerChannelID:   ownerChannelID,
+		Latency:            latency,
+		PromptTokens:       promptTokens,
+		CompletionTokens:   completionTokens,
+		TotalTokens:        totalTokens,
+		Cost:               cost,
+		APIKeyID:           apiKey.ID,
+		ModelName:          model.Name,
+		ProviderName:       providerName,
+		OwnerChannelID:     ownerChannelID,
 		OwnerChannelUserID: ownerChannelUserID,
-		Status:           200,
+		Status:             200,
 	}
 
 	if err := s.logRepo.Create(ctx, logEntry); err == nil && apiKey.LogDetails {
@@ -618,6 +679,48 @@ func (s *GatewayService) logAndCalculateCost(ctx context.Context, apiKey *models
 			ResponseBody: respGz,
 		}
 		s.logDetailRepo.Create(ctx, detail)
+	}
+}
+
+// updateLogAndCalculateCost updates an existing log entry and calculates cost
+func (s *GatewayService) updateLogAndCalculateCost(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, req *ChatRequest, resp *ChatResponse, latency int, logID uint) {
+	var promptTokens, completionTokens, totalTokens int
+	if resp.Usage != nil {
+		promptTokens = resp.Usage.PromptTokens
+		completionTokens = resp.Usage.CompletionTokens
+		totalTokens = resp.Usage.TotalTokens
+	}
+
+	cost := s.billingService.CalculateCost(promptTokens, completionTokens, model.InputTokenPrice, model.OutputTokenPrice)
+
+	// Determine owner channel (for shared channels)
+	ownerChannelID, ownerChannelUserID := s.determineChannelOwner(ctx, apiKey, model.ID)
+
+	// Deduct cost
+	if cost > 0 && apiKey.UserID != nil {
+		s.billingService.DeductAndDistribute(ctx, apiKey.UserID, ownerChannelUserID, cost)
+	}
+
+	// Update log entry
+	if logID > 0 {
+		updates := map[string]interface{}{
+			"latency":              latency,
+			"promptTokens":        promptTokens,
+			"completionTokens":    completionTokens,
+			"totalTokens":         totalTokens,
+			"cost":                 cost,
+			"ownerChannelId":     ownerChannelID,
+			"ownerChannelUserId": ownerChannelUserID,
+			"status":               200,
+		}
+		s.logRepo.UpdateByID(ctx, logID, updates)
+
+		if apiKey.LogDetails {
+			// Update existing LogDetail with response body
+			respBody, _ := json.Marshal(resp)
+			respGz, _ := utils.GzipCompress(respBody)
+			s.logDetailRepo.UpdateResponseBody(ctx, logID, respGz)
+		}
 	}
 }
 

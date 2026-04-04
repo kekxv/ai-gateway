@@ -6,6 +6,7 @@ import (
 
 	"github.com/kekxv/ai-gateway/internal/models"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 type ModelRepository struct {
@@ -18,7 +19,9 @@ func NewModelRepository(db *gorm.DB) *ModelRepository {
 
 func (r *ModelRepository) FindByID(ctx context.Context, id uint) (*models.Model, error) {
 	var model models.Model
-	err := r.db.WithContext(ctx).First(&model, id).Error
+	err := r.db.WithContext(ctx).
+		Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).
+		First(&model, id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -27,7 +30,9 @@ func (r *ModelRepository) FindByID(ctx context.Context, id uint) (*models.Model,
 
 func (r *ModelRepository) FindByName(ctx context.Context, name string) (*models.Model, error) {
 	var model models.Model
-	err := r.db.WithContext(ctx).Where("name = ?", name).First(&model).Error
+	err := r.db.WithContext(ctx).
+		Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).
+		Where("name = ?", name).First(&model).Error
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +41,9 @@ func (r *ModelRepository) FindByName(ctx context.Context, name string) (*models.
 
 func (r *ModelRepository) FindByNameOrAlias(ctx context.Context, name string) (*models.Model, error) {
 	var model models.Model
-	err := r.db.WithContext(ctx).Where("name = ? OR alias = ?", name, name).First(&model).Error
+	err := r.db.WithContext(ctx).
+		Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).
+		Where("name = ? OR alias = ?", name, name).First(&model).Error
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +126,9 @@ func (r *ModelRepository) UpdatePrices(ctx context.Context, id uint, inputPrice,
 
 func (r *ModelRepository) FindWithRoutes(ctx context.Context, id uint) (*models.Model, error) {
 	var model models.Model
-	err := r.db.WithContext(ctx).Preload("ModelRoutes.Provider").First(&model, id).Error
+	err := r.db.WithContext(ctx).
+		Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).
+		Preload("ModelRoutes.Provider").First(&model, id).Error
 	if err != nil {
 		return nil, err
 	}

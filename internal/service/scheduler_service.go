@@ -34,7 +34,7 @@ func NewSchedulerService(
 	}
 }
 
-// Start starts the scheduler
+// Start starts the scheduler (non-blocking, runs sync in background)
 func (s *SchedulerService) Start(ctx context.Context) {
 	s.mu.Lock()
 	if s.running {
@@ -44,23 +44,22 @@ func (s *SchedulerService) Start(ctx context.Context) {
 	s.running = true
 	s.mu.Unlock()
 
-	log.Println("[Scheduler] Starting model sync scheduler...")
-
-	// Wait for initial delay
-	if s.initialDelay > 0 {
-		log.Printf("[Scheduler] Waiting %v before first sync...", s.initialDelay)
-		time.Sleep(s.initialDelay)
-	}
-
-	// Run initial sync
-	s.runSync(ctx)
-
-	// Start ticker
 	s.ticker = time.NewTicker(s.interval)
 
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+
+		// Wait for initial delay (async)
+		if s.initialDelay > 0 {
+			log.Printf("[Scheduler] Waiting %v before first sync...", s.initialDelay)
+			time.Sleep(s.initialDelay)
+		}
+
+		// Run initial sync (async)
+		s.runSync(ctx)
+
+		// Start periodic sync loop
 		for {
 			select {
 			case <-s.ticker.C:

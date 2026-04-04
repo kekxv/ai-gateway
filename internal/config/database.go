@@ -11,7 +11,7 @@ import (
 
 func InitDatabase(dbPath string) (*gorm.DB, error) {
 	config := &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		Logger: logger.Default.LogMode(logger.Error),
 	}
 
 	db, err := gorm.Open(sqlite.Open(dbPath), config)

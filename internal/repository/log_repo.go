@@ -21,6 +21,11 @@ func (r *LogRepository) Create(ctx context.Context, log *models.Log) error {
 	return r.db.WithContext(ctx).Create(log).Error
 }
 
+// UpdateByID updates a log entry by ID with the given fields
+func (r *LogRepository) UpdateByID(ctx context.Context, id uint, updates map[string]interface{}) error {
+	return r.db.WithContext(ctx).Model(&models.Log{}).Where("id = ?", id).Updates(updates).Error
+}
+
 func (r *LogRepository) List(ctx context.Context, apiKeyID *uint, page, limit int) ([]models.Log, int64, error) {
 	var logs []models.Log
 	var total int64
@@ -84,6 +89,14 @@ func (r *LogDetailRepository) FindByLogID(ctx context.Context, logID uint) (*mod
 
 func (r *LogDetailRepository) Cleanup(ctx context.Context, before time.Time) error {
 	return r.db.WithContext(ctx).Where("created_at < ?", before).Delete(&models.LogDetail{}).Error
+}
+
+// UpdateResponseBody updates the response body of an existing log detail
+func (r *LogDetailRepository) UpdateResponseBody(ctx context.Context, logID uint, responseBody []byte) error {
+	return r.db.WithContext(ctx).
+		Model(&models.LogDetail{}).
+		Where("logId = ?", logID).
+		Update("responseBody", responseBody).Error
 }
 
 type SettingsRepository struct {
