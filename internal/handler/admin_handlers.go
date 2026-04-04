@@ -14,16 +14,18 @@ import (
 )
 
 type ProviderHandler struct {
-	providerRepo   *repository.ProviderRepository
-	modelRepo      *repository.ModelRepository
-	modelRouteRepo *repository.ModelRouteRepository
+	providerRepo     *repository.ProviderRepository
+	modelRepo        *repository.ModelRepository
+	modelRouteRepo   *repository.ModelRouteRepository
+	modelSyncService *service.ModelSyncService
 }
 
-func NewProviderHandler(providerRepo *repository.ProviderRepository, modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository) *ProviderHandler {
+func NewProviderHandler(providerRepo *repository.ProviderRepository, modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository, modelSyncService *service.ModelSyncService) *ProviderHandler {
 	return &ProviderHandler{
-		providerRepo:   providerRepo,
-		modelRepo:      modelRepo,
-		modelRouteRepo: modelRouteRepo,
+		providerRepo:     providerRepo,
+		modelRepo:        modelRepo,
+		modelRouteRepo:   modelRouteRepo,
+		modelSyncService: modelSyncService,
 	}
 }
 
@@ -297,6 +299,32 @@ func (h *ProviderHandler) fetchGeminiModels(baseURL, apiKey string) ([]map[strin
 func (h *ProviderHandler) SyncModels(c *gin.Context) {
 	id := parseUintParam(c.Param("id"))
 
+	// Use ModelSyncService if available
+	if h.modelSyncService != nil {
+		result := h.modelSyncService.SyncProviderModels(c.Request.Context(), id)
+		if result.Error != nil {
+			if strings.Contains(result.Error.Error(), "provider not found") {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Provider not found"})
+			} else if strings.Contains(result.Error.Error(), "autoLoadModels enabled") {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "此提供商未启用自动加载模型"})
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
+			}
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"message":        "模型同步成功",
+			"modelsCreated":  result.ModelsCreated,
+			"routesCreated":  result.RoutesCreated,
+			"modelsRemoved":  result.ModelsRemoved,
+			"routesRemoved":  result.RoutesRemoved,
+			"totalFetched":   result.TotalFetched,
+		})
+		return
+	}
+
+	// Fallback to original implementation (for backwards compatibility)
 	provider, err := h.providerRepo.FindByID(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Provider not found"})

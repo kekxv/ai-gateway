@@ -7,11 +7,12 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Auth     AuthConfig
-	Timeout  TimeoutConfig
-	Proxy    ProxyConfig
+	Server    ServerConfig
+	Database  DatabaseConfig
+	Auth      AuthConfig
+	Timeout   TimeoutConfig
+	Proxy     ProxyConfig
+	Scheduler SchedulerConfig
 }
 
 type ServerConfig struct {
@@ -41,6 +42,12 @@ type ProxyConfig struct {
 	NoProxy    string
 }
 
+type SchedulerConfig struct {
+	Enabled      bool
+	SyncInterval time.Duration
+	InitialDelay time.Duration
+}
+
 func Load(configPath string) (*Config, error) {
 	viper.SetConfigFile(configPath)
 	viper.AutomaticEnv()
@@ -62,6 +69,11 @@ func Load(configPath string) (*Config, error) {
 	viper.SetDefault("timeout.total", "240s")
 	viper.SetDefault("timeout.model_load", "30s")
 
+	// Scheduler defaults
+	viper.SetDefault("scheduler.enabled", true)
+	viper.SetDefault("scheduler.sync_interval", "1h")
+	viper.SetDefault("scheduler.initial_delay", "10s")
+
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err
 	}
@@ -74,6 +86,14 @@ func Load(configPath string) (*Config, error) {
 	// Ensure JWT expiry is set
 	if config.Auth.JWTExpiry == 0 {
 		config.Auth.JWTExpiry = 8 * time.Hour
+	}
+
+	// Ensure scheduler defaults are set
+	if config.Scheduler.SyncInterval == 0 {
+		config.Scheduler.SyncInterval = 1 * time.Hour
+	}
+	if config.Scheduler.InitialDelay == 0 {
+		config.Scheduler.InitialDelay = 10 * time.Second
 	}
 
 	return &config, nil

@@ -4,7 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -93,10 +97,13 @@ func main() {
 		userRepo, logRepo, logDetailRepo, billingService, proxyConfig,
 	)
 
+	// Initialize model sync service
+	modelSyncService := service.NewModelSyncService(providerRepo, modelRepo, modelRouteRepo)
+
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userRepo, logRepo, authService)
-	providerHandler := handler.NewProviderHandler(providerRepo, modelRepo, modelRouteRepo)
+	providerHandler := handler.NewProviderHandler(providerRepo, modelRepo, modelRouteRepo, modelSyncService)
 	channelHandler := handler.NewChannelHandler(channelRepo)
 	modelHandler := handler.NewModelHandler(modelRepo, modelRouteRepo, channelRepo)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyRepo, authService)
@@ -138,12 +145,55 @@ func main() {
 	// ========== Static Files (Frontend) ==========
 	setupStaticRoutes(r)
 
-	// Start server
-	addr := fmt.Sprintf(":%d", port)
-	log.Printf("AI Gateway starting on %s", addr)
-	if err := r.Run(addr); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+	// Initialize and start scheduler if enabled
+	var scheduler *service.SchedulerService
+	if cfg != nil && cfg.Scheduler.Enabled {
+		scheduler = service.NewSchedulerService(
+			modelSyncService,
+			cfg.Scheduler.SyncInterval,
+			cfg.Scheduler.InitialDelay,
+		)
+		ctx, cancel := context.WithCancel(context.Background())
+		scheduler.Start(ctx)
+		defer func() {
+			cancel()
+			scheduler.Stop()
+		}()
 	}
+
+	// Start server with graceful shutdown
+	addr := fmt.Sprintf(":%d", port)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: r,
+	}
+
+	// Start server in a goroutine
+	go func() {
+		log.Printf("AI Gateway starting on %s", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutting down server...")
+
+	// Stop scheduler first
+	if scheduler != nil {
+		scheduler.Stop()
+	}
+
+	// Give outstanding requests 5 seconds to complete
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatal("Server forced to shutdown:", err)
+	}
+	log.Println("Server exited")
 }
 
 // Dependencies holds all dependencies for handlers

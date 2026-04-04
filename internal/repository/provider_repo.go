@@ -79,6 +79,16 @@ func (r *ProviderRepository) Count(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+// FindAutoLoadProviders finds all providers with autoLoadModels enabled and not disabled
+func (r *ProviderRepository) FindAutoLoadProviders(ctx context.Context) ([]models.Provider, error) {
+	var providers []models.Provider
+	err := r.db.WithContext(ctx).
+		Where("autoLoadModels = ?", true).
+		Where("disabled = ?", false).
+		Find(&providers).Error
+	return providers, err
+}
+
 type ChannelRepository struct {
 	db *gorm.DB
 }
