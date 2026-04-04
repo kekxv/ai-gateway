@@ -97,17 +97,81 @@ func (c *ProtocolConverter) openAIToAnthropicRequest(req *ChatRequest) (*models.
 	var messages []models.AnthropicMessage
 	for _, msg := range req.Messages {
 		if msg.Role == "system" {
-			anthropicReq.System = msg.Content
+			anthropicReq.System = msg.Content.GetText()
 		} else {
+			// Convert content - handle multimodal
+			var content models.AnthropicContent
+			if msg.Content.StringContent != "" {
+				content = models.AnthropicContent{StringContent: msg.Content.StringContent}
+			} else if len(msg.Content.Parts) > 0 {
+				// Convert OpenAI content parts to Anthropic content blocks
+				var blocks []models.AnthropicContentBlock
+				for _, part := range msg.Content.Parts {
+					switch part.Type {
+					case "text":
+						blocks = append(blocks, models.AnthropicContentBlock{
+							Type: "text",
+							Text: part.Text,
+						})
+					case "image_url":
+						if part.ImageURL != nil {
+							blocks = append(blocks, convertOpenAIMediaToAnthropic("image", part.ImageURL.URL))
+						}
+					case "video_url":
+						if part.VideoURL != nil {
+							blocks = append(blocks, convertOpenAIMediaToAnthropic("video", part.VideoURL.URL))
+						}
+					}
+				}
+				content = models.AnthropicContent{Blocks: blocks}
+			}
 			messages = append(messages, models.AnthropicMessage{
 				Role:    msg.Role,
-				Content: models.AnthropicContent{StringContent: msg.Content},
+				Content: content,
 			})
 		}
 	}
 	anthropicReq.Messages = messages
 
 	return anthropicReq, nil
+}
+
+// convertOpenAIMediaToAnthropic converts OpenAI media URL to Anthropic media block
+func convertOpenAIMediaToAnthropic(mediaType string, url string) models.AnthropicContentBlock {
+	// Check if it's a base64 data URL
+	if strings.HasPrefix(url, "data:") {
+		// Parse data URL: data:image/jpeg;base64,<data> or data:video/mp4;base64,<data>
+		parts := strings.SplitN(url, ",", 2)
+		if len(parts) == 2 {
+			mimeInfo := parts[0] // data:image/jpeg;base64
+			data := parts[1]
+
+			// Extract media type
+			mimeType := ""
+			if strings.HasPrefix(mimeInfo, "data:") {
+				mimeType = strings.TrimPrefix(mimeInfo, "data:")
+				mimeType = strings.Split(mimeType, ";")[0]
+			}
+
+			return models.AnthropicContentBlock{
+				Type: mediaType, // "image" or "video"
+				Source: &models.AnthropicMediaSource{
+					Type:      "base64",
+					MediaType: mimeType,
+					Data:      data,
+				},
+			}
+		}
+	}
+
+	// For URL-based media
+	return models.AnthropicContentBlock{
+		Type: mediaType, // "image" or "video"
+		Source: &models.AnthropicMediaSource{
+			Type: "url",
+			URL:  url,
+		},
+	}
 }
 
 // Anthropic -> OpenAI Request Conversion
@@ -133,13 +197,13 @@ func (c *ProtocolConverter) anthropicToOpenAIRequest(req *models.AnthropicMessag
 	if req.System != "" {
 		messages = append(messages, ChatMessage{
 			Role:    "system",
-			Content: req.System,
+			Content: ChatMessageContent{StringContent: req.System},
 		})
 	}
 
 	// Convert messages
 	for _, msg := range req.Messages {
-		content := msg.Content.GetText()
+		content := convertAnthropicContentToOpenAI(msg.Content)
 		messages = append(messages, ChatMessage{
 			Role:    msg.Role,
 			Content: content,
@@ -148,6 +212,62 @@ func (c *ProtocolConverter) anthropicToOpenAIRequest(req *models.AnthropicMessag
 	openAIReq.Messages = messages
 
 	return openAIReq, nil
+}
+
+// convertAnthropicContentToOpenAI converts Anthropic content to OpenAI format
+func convertAnthropicContentToOpenAI(content models.AnthropicContent) ChatMessageContent {
+	// Simple string content
+	if content.StringContent != "" {
+		return ChatMessageContent{StringContent: content.StringContent}
+	}
+
+	// Convert content blocks
+	if len(content.Blocks) > 0 {
+		var parts []ChatContentPart
+		for _, block := range content.Blocks {
+			switch block.Type {
+			case "text":
+				parts = append(parts, ChatContentPart{
+					Type: "text",
+					Text: block.Text,
+				})
+			case "image":
+				if block.Source != nil {
+					var url string
+					if block.Source.Type == "base64" {
+						url = fmt.Sprintf("data:%s;base64,%s", block.Source.MediaType, block.Source.Data)
+					} else {
+						url = block.Source.URL
+					}
+					parts = append(parts, ChatContentPart{
+						Type:     "image_url",
+						ImageURL: &ChatImageURL{URL: url},
+					})
+				}
+			case "video":
+				if block.Source != nil {
+					var url string
+					if block.Source.Type == "base64" {
+						url = fmt.Sprintf("data:%s;base64,%s", block.Source.MediaType, block.Source.Data)
+					} else {
+						url = block.Source.URL
+					}
+					parts = append(parts, ChatContentPart{
+						Type:     "video_url",
+						VideoURL: &ChatMediaURL{URL: url},
+					})
+				}
+			}
+		}
+
+		// If only text, simplify to string
+		if len(parts) == 1 && parts[0].Type == "text" {
+			return ChatMessageContent{StringContent: parts[0].Text}
+		}
+		return ChatMessageContent{Parts: parts}
+	}
+
+	return ChatMessageContent{}
 }
 
 // OpenAI -> Anthropic Response Conversion
@@ -168,7 +288,7 @@ func (c *ProtocolConverter) openAIToAnthropicResponse(resp *ChatResponse, modelN
 		if choice.Message != nil {
 			content = append(content, models.AnthropicContentBlock{
 				Type: "text",
-				Text: choice.Message.Content,
+				Text: choice.Message.Content.GetText(),
 			})
 		}
 		stopReason = convertFinishReasonToAnthropic(choice.FinishReason)
@@ -208,7 +328,7 @@ func (c *ProtocolConverter) anthropicToOpenAIResponse(resp *models.AnthropicMess
 			Index: 0,
 			Message: &ChatMessage{
 				Role:    "assistant",
-				Content: content,
+				Content: ChatMessageContent{StringContent: content},
 			},
 			FinishReason: convertStopReasonToOpenAI(resp.StopReason),
 		},

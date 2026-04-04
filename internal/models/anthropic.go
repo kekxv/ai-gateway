@@ -80,9 +80,9 @@ func (ac AnthropicContent) GetText() string {
 
 // AnthropicContentBlock for multimodal content
 type AnthropicContentBlock struct {
-	Type   string                  `json:"type"`             // "text", "image", "tool_use", "tool_result"
+	Type   string                  `json:"type"`             // "text", "image", "video", "tool_use", "tool_result"
 	Text   string                  `json:"text,omitempty"`   // for text type
-	Source *AnthropicImageSource   `json:"source,omitempty"` // for image type
+	Source *AnthropicMediaSource   `json:"source,omitempty"` // for image/video type
 
 	// Tool use fields
 	ID     string                  `json:"id,omitempty"`
@@ -95,13 +95,16 @@ type AnthropicContentBlock struct {
 	IsError   bool                 `json:"is_error,omitempty"`
 }
 
-// AnthropicImageSource for image content
-type AnthropicImageSource struct {
+// AnthropicMediaSource for image/video content
+type AnthropicMediaSource struct {
 	Type      string `json:"type"`                // "base64" or "url"
-	MediaType string `json:"media_type,omitempty"` // "image/jpeg", "image/png", "image/gif", "image/webp"
+	MediaType string `json:"media_type,omitempty"` // "image/jpeg", "image/png", "video/mp4", etc.
 	Data      string `json:"data,omitempty"`
 	URL       string `json:"url,omitempty"`
 }
+
+// AnthropicImageSource is an alias for backward compatibility
+type AnthropicImageSource = AnthropicMediaSource
 
 // AnthropicTool definition
 type AnthropicTool struct {

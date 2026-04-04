@@ -35,9 +35,83 @@ type ChatRequest struct {
 	Extra       map[string]interface{} `json:"-"` // Additional fields
 }
 
+// ChatMessageContent can be string or array of content parts (for multimodal)
+type ChatMessageContent struct {
+	StringContent string
+	Parts         []ChatContentPart
+}
+
+// ChatContentPart represents a part of multimodal content
+type ChatContentPart struct {
+	Type     string            `json:"type"` // "text", "image_url", "video_url"
+	Text     string            `json:"text,omitempty"`
+	ImageURL *ChatMediaURL     `json:"image_url,omitempty"`
+	VideoURL *ChatMediaURL     `json:"video_url,omitempty"` // Extended for video support
+}
+
+// ChatMediaURL represents a media URL or base64 data
+type ChatMediaURL struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"` // "auto", "low", "high" (for images)
+}
+
+// ChatImageURL is an alias for backward compatibility
+type ChatImageURL = ChatMediaURL
+
+// UnmarshalJSON handles both string and array formats for content
+func (c *ChatMessageContent) UnmarshalJSON(data []byte) error {
+	// Try string first
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		c.StringContent = str
+		return nil
+	}
+	// Try array
+	var parts []ChatContentPart
+	if err := json.Unmarshal(data, &parts); err != nil {
+		return err
+	}
+	c.Parts = parts
+	return nil
+}
+
+// MarshalJSON handles both string and array formats for content
+func (c ChatMessageContent) MarshalJSON() ([]byte, error) {
+	if c.StringContent != "" && len(c.Parts) == 0 {
+		return json.Marshal(c.StringContent)
+	}
+	if len(c.Parts) > 0 {
+		return json.Marshal(c.Parts)
+	}
+	return json.Marshal("")
+}
+
+// GetText extracts text content
+func (c ChatMessageContent) GetText() string {
+	if c.StringContent != "" {
+		return c.StringContent
+	}
+	for _, part := range c.Parts {
+		if part.Type == "text" {
+			return part.Text
+		}
+	}
+	return ""
+}
+
+// HasImage checks if content contains image
+func (c ChatMessageContent) HasImage() bool {
+	for _, part := range c.Parts {
+		if part.Type == "image_url" {
+			return true
+		}
+	}
+	return false
+}
+
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string             `json:"role"`
+	Content ChatMessageContent `json:"content"`
 }
 
 type ChatResponse struct {

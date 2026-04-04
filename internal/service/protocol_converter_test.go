@@ -40,8 +40,8 @@ func TestConvertRequest_OpenAIToAnthropic_Basic(t *testing.T) {
 	openAIReq := &ChatRequest{
 		Model: "gpt-4",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
-			{Role: "assistant", Content: "Hi there!"},
+			{Role: "user", Content: ChatMessageContent{StringContent: "Hello"}},
+			{Role: "assistant", Content: ChatMessageContent{StringContent: "Hi there!"}},
 		},
 		MaxTokens:   100,
 		Stream:      false,
@@ -78,8 +78,8 @@ func TestConvertRequest_OpenAIToAnthropic_WithSystem(t *testing.T) {
 	openAIReq := &ChatRequest{
 		Model: "gpt-4",
 		Messages: []ChatMessage{
-			{Role: "system", Content: "You are helpful"},
-			{Role: "user", Content: "Hello"},
+			{Role: "system", Content: ChatMessageContent{StringContent: "You are helpful"}},
+			{Role: "user", Content: ChatMessageContent{StringContent: "Hello"}},
 		},
 		MaxTokens: 100,
 	}
@@ -96,6 +96,64 @@ func TestConvertRequest_OpenAIToAnthropic_WithSystem(t *testing.T) {
 	}
 	if len(anthropicReq.Messages) != 1 {
 		t.Errorf("Messages count = %d, want 1 (system should be separate)", len(anthropicReq.Messages))
+	}
+}
+
+func TestConvertRequest_OpenAIToAnthropic_WithImage(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	openAIReq := &ChatRequest{
+		Model: "gpt-4-vision",
+		Messages: []ChatMessage{
+			{
+				Role: "user",
+				Content: ChatMessageContent{
+					Parts: []ChatContentPart{
+						{Type: "text", Text: "What's in this image?"},
+						{Type: "image_url", ImageURL: &ChatImageURL{URL: "data:image/jpeg;base64,/9j/4AAQSkZJRg=="}},
+					},
+				},
+			},
+		},
+		MaxTokens: 100,
+	}
+
+	result, err := converter.ConvertRequest(openAIReq, ProtocolOpenAI, ProtocolAnthropic)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	anthropicReq := result.(*models.AnthropicMessagesRequest)
+
+	if len(anthropicReq.Messages) != 1 {
+		t.Fatalf("Messages count = %d, want 1", len(anthropicReq.Messages))
+	}
+
+	if len(anthropicReq.Messages[0].Content.Blocks) != 2 {
+		t.Errorf("Content blocks = %d, want 2 (text + image)", len(anthropicReq.Messages[0].Content.Blocks))
+	}
+
+	// Check text block
+	if anthropicReq.Messages[0].Content.Blocks[0].Type != "text" {
+		t.Errorf("First block type = %s, want text", anthropicReq.Messages[0].Content.Blocks[0].Type)
+	}
+	if anthropicReq.Messages[0].Content.Blocks[0].Text != "What's in this image?" {
+		t.Errorf("First block text = %s, want 'What's in this image?'", anthropicReq.Messages[0].Content.Blocks[0].Text)
+	}
+
+	// Check image block
+	if anthropicReq.Messages[0].Content.Blocks[1].Type != "image" {
+		t.Errorf("Second block type = %s, want image", anthropicReq.Messages[0].Content.Blocks[1].Type)
+	}
+	if anthropicReq.Messages[0].Content.Blocks[1].Source == nil {
+		t.Error("Image block should have source")
+	} else {
+		if anthropicReq.Messages[0].Content.Blocks[1].Source.Type != "base64" {
+			t.Errorf("Image source type = %s, want base64", anthropicReq.Messages[0].Content.Blocks[1].Source.Type)
+		}
+		if anthropicReq.Messages[0].Content.Blocks[1].Source.MediaType != "image/jpeg" {
+			t.Errorf("Image media type = %s, want image/jpeg", anthropicReq.Messages[0].Content.Blocks[1].Source.MediaType)
+		}
 	}
 }
 
@@ -157,8 +215,71 @@ func TestConvertRequest_AnthropicToOpenAI_WithSystem(t *testing.T) {
 	if openAIReq.Messages[0].Role != "system" {
 		t.Errorf("First message role = %s, want system", openAIReq.Messages[0].Role)
 	}
-	if openAIReq.Messages[0].Content != "You are helpful" {
-		t.Errorf("System content = %s, want 'You are helpful'", openAIReq.Messages[0].Content)
+	if openAIReq.Messages[0].Content.GetText() != "You are helpful" {
+		t.Errorf("System content = %s, want 'You are helpful'", openAIReq.Messages[0].Content.GetText())
+	}
+}
+
+func TestConvertRequest_AnthropicToOpenAI_WithImage(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	anthropicReq := &models.AnthropicMessagesRequest{
+		Model: "claude-3-5-sonnet",
+		Messages: []models.AnthropicMessage{
+			{
+				Role: "user",
+				Content: models.AnthropicContent{
+					Blocks: []models.AnthropicContentBlock{
+						{Type: "text", Text: "What's in this image?"},
+						{
+							Type: "image",
+							Source: &models.AnthropicImageSource{
+								Type:      "base64",
+								MediaType: "image/jpeg",
+								Data:      "/9j/4AAQSkZJRg==",
+							},
+						},
+					},
+				},
+			},
+		},
+		MaxTokens: 100,
+	}
+
+	result, err := converter.ConvertRequest(anthropicReq, ProtocolAnthropic, ProtocolOpenAI)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	openAIReq := result.(*ChatRequest)
+
+	if len(openAIReq.Messages) != 1 {
+		t.Fatalf("Messages count = %d, want 1", len(openAIReq.Messages))
+	}
+
+	if len(openAIReq.Messages[0].Content.Parts) != 2 {
+		t.Errorf("Content parts = %d, want 2 (text + image)", len(openAIReq.Messages[0].Content.Parts))
+	}
+
+	// Check text part
+	if openAIReq.Messages[0].Content.Parts[0].Type != "text" {
+		t.Errorf("First part type = %s, want text", openAIReq.Messages[0].Content.Parts[0].Type)
+	}
+	if openAIReq.Messages[0].Content.Parts[0].Text != "What's in this image?" {
+		t.Errorf("First part text = %s, want 'What's in this image?'", openAIReq.Messages[0].Content.Parts[0].Text)
+	}
+
+	// Check image part
+	if openAIReq.Messages[0].Content.Parts[1].Type != "image_url" {
+		t.Errorf("Second part type = %s, want image_url", openAIReq.Messages[0].Content.Parts[1].Type)
+	}
+	if openAIReq.Messages[0].Content.Parts[1].ImageURL == nil {
+		t.Error("Image part should have image_url")
+	} else {
+		expectedURL := "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
+		if openAIReq.Messages[0].Content.Parts[1].ImageURL.URL != expectedURL {
+			t.Errorf("Image URL = %s, want %s", openAIReq.Messages[0].Content.Parts[1].ImageURL.URL, expectedURL)
+		}
 	}
 }
 
@@ -168,7 +289,7 @@ func TestConvertRequest_NoConversion(t *testing.T) {
 	openAIReq := &ChatRequest{
 		Model: "gpt-4",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: ChatMessageContent{StringContent: "Hello"}},
 		},
 	}
 
@@ -195,7 +316,7 @@ func TestConvertResponse_OpenAIToAnthropic_Basic(t *testing.T) {
 				Index: 0,
 				Message: &ChatMessage{
 					Role:    "assistant",
-					Content: "Hello! How can I help?",
+					Content: ChatMessageContent{StringContent: "Hello! How can I help?"},
 				},
 				FinishReason: "stop",
 			},
@@ -270,8 +391,8 @@ func TestConvertResponse_AnthropicToOpenAI_Basic(t *testing.T) {
 	if len(openAIResp.Choices) != 1 {
 		t.Errorf("Choices count = %d, want 1", len(openAIResp.Choices))
 	}
-	if openAIResp.Choices[0].Message.Content != "Hello! How can I help?" {
-		t.Errorf("Message content = %s, want 'Hello! How can I help?'", openAIResp.Choices[0].Message.Content)
+	if openAIResp.Choices[0].Message.Content.GetText() != "Hello! How can I help?" {
+		t.Errorf("Message content = %s, want 'Hello! How can I help?'", openAIResp.Choices[0].Message.Content.GetText())
 	}
 	if openAIResp.Choices[0].FinishReason != "stop" {
 		t.Errorf("FinishReason = %s, want stop", openAIResp.Choices[0].FinishReason)
@@ -283,7 +404,7 @@ func TestConvertResponse_AnthropicToOpenAI_Basic(t *testing.T) {
 
 func TestConvertFinishReason(t *testing.T) {
 	tests := []struct {
-		openAI   string
+		openAI    string
 		anthropic string
 	}{
 		{"stop", models.AnthropicStopEndTurn},
