@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-6">
+  <div class="space-y-4">
     <!-- Header -->
     <div class="flex justify-between items-center">
       <h2 class="text-xl font-semibold">{{ t('provider.title') }}</h2>
@@ -8,8 +8,8 @@
       </el-button>
     </div>
 
-    <!-- Table -->
-    <el-card>
+    <!-- Desktop Table -->
+    <el-card class="hidden lg:block">
       <el-table :data="paginatedProviders" stripe v-loading="loading">
         <el-table-column prop="name" :label="t('provider.name')" />
         <el-table-column prop="base_url" :label="t('provider.baseURL')" />
@@ -56,9 +56,56 @@
       </div>
     </el-card>
 
+    <!-- Mobile Card List -->
+    <div class="lg:hidden space-y-3">
+      <div v-if="loading" class="text-center py-8">
+        <el-icon class="is-loading" :size="32"><Loading /></el-icon>
+      </div>
+      <div
+        v-for="provider in paginatedProviders"
+        :key="provider.id"
+        class="bg-white rounded-lg shadow-sm border border-gray-100 p-4"
+      >
+        <div class="flex items-start justify-between mb-3">
+          <div class="flex-1 min-w-0">
+            <h3 class="font-semibold text-gray-800 truncate">{{ provider.name }}</h3>
+            <p class="text-sm text-gray-500 truncate">{{ provider.base_url }}</p>
+          </div>
+          <el-tag :type="provider.disabled ? 'danger' : 'success'" size="small">
+            {{ provider.disabled ? t('common.disabled') : t('common.enabled') }}
+          </el-tag>
+        </div>
+        <div class="flex items-center gap-2 mb-3">
+          <el-tag size="small">{{ provider.type || 'custom' }}</el-tag>
+          <el-tag :type="provider.auto_load_models ? 'success' : 'info'" size="small">
+            {{ t('provider.autoLoadModels') }}: {{ provider.auto_load_models ? t('common.yes') : t('common.no') }}
+          </el-tag>
+        </div>
+        <div class="flex flex-wrap gap-2 pt-3 border-t border-gray-100">
+          <el-button size="small" @click="openEditDialog(provider)">{{ t('common.edit') }}</el-button>
+          <el-button size="small" type="success" @click="openModelsDialog(provider)">{{ t('provider.loadModels') }}</el-button>
+          <el-button size="small" :type="provider.disabled ? 'warning' : 'info'" @click="toggleDisabled(provider)">
+            {{ provider.disabled ? t('common.enabled') : t('common.disabled') }}
+          </el-button>
+          <el-button size="small" type="danger" @click="deleteProvider(provider)">{{ t('common.delete') }}</el-button>
+        </div>
+      </div>
+      <!-- Mobile Pagination -->
+      <div class="flex justify-center mt-4">
+        <el-pagination
+          v-model:current-page="pagination.page"
+          v-model:page-size="pagination.pageSize"
+          :total="pagination.total"
+          :page-sizes="[10, 20, 50]"
+          layout="prev, pager, next"
+          size="small"
+        />
+      </div>
+    </div>
+
     <!-- Create/Edit Dialog -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? t('provider.editTitle') : t('provider.createTitle')" width="600px">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="120px">
+    <el-dialog v-model="dialogVisible" :title="isEdit ? t('provider.editTitle') : t('provider.createTitle')" :width="isMobile ? '90%' : '600px'">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="120px" label-position="top" :class="isMobile ? 'mobile-form' : ''">
         <el-form-item :label="t('provider.name')" prop="name">
           <el-input v-model="form.name" />
         </el-form-item>
@@ -66,7 +113,7 @@
           <el-input v-model="form.base_url" placeholder="https://api.openai.com/v1" />
         </el-form-item>
         <el-form-item :label="t('provider.type')" prop="type">
-          <el-select v-model="form.type">
+          <el-select v-model="form.type" class="w-full">
             <el-option label="OpenAI" value="openai" />
             <el-option label="Gemini" value="gemini" />
             <el-option label="Custom" value="custom" />
@@ -89,7 +136,7 @@
     </el-dialog>
 
     <!-- Models Selection Dialog -->
-    <el-dialog v-model="modelsDialogVisible" title="选择要添加的模型" width="800px">
+    <el-dialog v-model="modelsDialogVisible" title="选择要添加的模型" :width="isMobile ? '95%' : '800px'">
       <div v-if="loadingModels" class="text-center py-8">
         <el-icon class="is-loading" :size="40"><Loading /></el-icon>
         <p class="mt-4 text-gray-500">正在加载模型列表...</p>
@@ -110,7 +157,7 @@
           <span class="text-sm text-gray-500 whitespace-nowrap">已选择 {{ selectedModels.size }} / {{ filteredModels.length }}</span>
         </div>
         <div class="max-h-80 overflow-y-auto border rounded-lg">
-          <div class="grid grid-cols-2 gap-2 p-2">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 p-2">
             <div
               v-for="model in filteredModels"
               :key="model.id"
@@ -147,7 +194,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, Search } from '@element-plus/icons-vue'
@@ -164,6 +211,22 @@ const dialogVisible = ref(false)
 const isEdit = ref(false)
 const selectedProvider = ref<Provider | null>(null)
 const formRef = ref<FormInstance>()
+const isMobile = ref(false)
+
+// Check if mobile on mount and resize
+const checkMobile = () => {
+  isMobile.value = window.innerWidth < 1024
+}
+
+onMounted(() => {
+  checkMobile()
+  window.addEventListener('resize', checkMobile)
+  fetchProviders()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', checkMobile)
+})
 
 // Models dialog
 const modelsDialogVisible = ref(false)
@@ -394,6 +457,4 @@ const deleteProvider = async (provider: Provider) => {
     // User cancelled
   }
 }
-
-onMounted(fetchProviders)
 </script>

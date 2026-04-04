@@ -1,16 +1,50 @@
 <template>
   <div class="min-h-screen bg-gray-50">
-    <!-- Sidebar - Fixed -->
-    <aside class="fixed left-0 top-0 bottom-0 w-64 bg-gradient-to-b from-slate-800 via-slate-800 to-slate-900 text-white flex flex-col shadow-xl z-50">
+    <!-- Mobile Header (only on mobile) -->
+    <header class="lg:hidden fixed top-0 left-0 right-0 h-14 bg-white border-b border-gray-200 flex items-center justify-between px-4 z-50 shadow-sm">
+      <button @click="sidebarOpen = true" class="p-2 rounded-lg hover:bg-gray-100">
+        <svg class="w-6 h-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+      </button>
+      <h1 class="text-lg font-semibold text-gray-800">AI Gateway</h1>
+      <div class="flex items-center gap-2">
+        <el-select v-model="locale" size="small" style="width: 80px;">
+          <el-option label="中文" value="zh" />
+          <el-option label="English" value="en" />
+        </el-select>
+      </div>
+    </header>
+
+    <!-- Mobile Sidebar Overlay -->
+    <div
+      v-if="sidebarOpen"
+      class="lg:hidden fixed inset-0 bg-black/50 z-40"
+      @click="sidebarOpen = false"
+    />
+
+    <!-- Sidebar -->
+    <aside
+      class="fixed left-0 top-0 bottom-0 w-64 bg-gradient-to-b from-slate-800 via-slate-800 to-slate-900 text-white flex flex-col shadow-xl z-50 transition-transform duration-300"
+      :class="isMobile ? (sidebarOpen ? 'translate-x-0' : '-translate-x-full') : 'translate-x-0'"
+    >
       <!-- Logo -->
       <div class="p-5 border-b border-slate-700/50">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 bg-indigo-500 rounded-xl flex items-center justify-center shadow-lg">
-            <svg class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-indigo-500 rounded-xl flex items-center justify-center shadow-lg">
+              <svg class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+            </div>
+            <h1 class="text-xl font-bold tracking-tight">AI Gateway</h1>
           </div>
-          <h1 class="text-xl font-bold tracking-tight">AI Gateway</h1>
+          <!-- Close button (mobile only) -->
+          <button v-if="isMobile" @click="sidebarOpen = false" class="p-1 rounded-lg hover:bg-slate-700/50">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -24,6 +58,7 @@
               :class="isActive(item.path)
                 ? 'bg-gradient-to-r from-indigo-500/20 to-purple-500/20 text-white border-r-4 border-indigo-400'
                 : 'text-slate-300 hover:bg-slate-700/50 hover:text-white'"
+              @click="isMobile && (sidebarOpen = false)"
             >
               <component :is="item.icon" class="w-5 h-5" />
               <span class="font-medium">{{ item.title }}</span>
@@ -63,10 +98,10 @@
       </div>
     </aside>
 
-    <!-- Main content - with left margin for sidebar -->
-    <main class="ml-64 flex flex-col min-h-screen">
-      <!-- Header -->
-      <header class="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 shadow-sm sticky top-0 z-40">
+    <!-- Main content -->
+    <main class="lg:ml-64 flex flex-col min-h-screen pt-14 lg:pt-0">
+      <!-- Header (desktop only) -->
+      <header class="hidden lg:flex h-16 bg-white border-b border-gray-200 items-center justify-between px-6 shadow-sm sticky top-0 z-40">
         <h2 class="text-xl font-semibold text-gray-800">{{ currentTitle }}</h2>
         <div class="flex items-center gap-4">
           <!-- Language Selector -->
@@ -84,7 +119,7 @@
       </header>
 
       <!-- Page content -->
-      <div class="flex-1 p-6 overflow-auto bg-gray-50">
+      <div class="flex-1 p-4 lg:p-6 overflow-auto bg-gray-50">
         <router-view />
       </div>
     </main>
@@ -92,7 +127,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, watch, ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from 'vue-i18n'
@@ -103,6 +138,25 @@ const authStore = useAuthStore()
 const { locale, t } = useI18n()
 
 const user = computed(() => authStore.user)
+const sidebarOpen = ref(false)
+const isMobile = ref(false)
+
+// Check if mobile on mount and resize
+const checkMobile = () => {
+  isMobile.value = window.innerWidth < 1024
+  if (!isMobile.value) {
+    sidebarOpen.value = false
+  }
+}
+
+onMounted(() => {
+  checkMobile()
+  window.addEventListener('resize', checkMobile)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', checkMobile)
+})
 
 // Persist locale changes to localStorage
 watch(locale, (newLocale) => {

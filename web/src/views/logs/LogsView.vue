@@ -1,9 +1,9 @@
 <template>
-  <div class="space-y-6">
+  <div class="space-y-4">
     <!-- Header -->
     <div class="flex justify-between items-center">
       <h2 class="text-xl font-semibold">{{ t('log.title') }}</h2>
-      <el-button type="danger" plain @click="cleanupLogs">
+      <el-button type="danger" plain size="small" @click="cleanupLogs">
         <el-icon class="mr-1"><Delete /></el-icon>
         清理旧日志
       </el-button>
@@ -11,9 +11,9 @@
 
     <!-- Filters -->
     <div class="flex flex-wrap gap-2 items-center text-sm">
-      <el-input v-model="filters.model" placeholder="模型" clearable class="!w-48" size="small" />
-      <el-input v-model="filters.provider" placeholder="提供商" clearable class="!w-36" size="small" />
-      <el-select v-model="filters.status" placeholder="状态" clearable class="!w-24" size="small">
+      <el-input v-model="filters.model" placeholder="模型" clearable class="!w-32 sm:!w-48" size="small" />
+      <el-input v-model="filters.provider" placeholder="提供商" clearable class="!w-28 sm:!w-36" size="small" />
+      <el-select v-model="filters.status" placeholder="状态" clearable class="!w-20 sm:!w-24" size="small">
         <el-option label="成功" value="success" />
         <el-option label="错误" value="error" />
       </el-select>
@@ -23,15 +23,15 @@
         range-separator="-"
         start-placeholder="开始"
         end-placeholder="结束"
-        class="!w-52"
+        class="!w-48 sm:!w-52"
         size="small"
       />
       <el-button type="primary" size="small" @click="fetchLogs">搜索</el-button>
       <el-button size="small" @click="resetFilters">重置</el-button>
     </div>
 
-    <!-- Table -->
-    <el-card shadow="never" class="border-0">
+    <!-- Desktop Table -->
+    <el-card shadow="never" class="border-0 hidden lg:block">
       <el-table :data="logs" v-loading="loading" class="w-full">
         <el-table-column :label="t('log.timestamp')" width="170">
           <template #default="{ row }">
@@ -94,12 +94,6 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column :label="t('log.channel')" width="100">
-          <template #default="{ row }">
-            <span v-if="row.ownerChannel" class="text-sm">{{ row.ownerChannel.name }}</span>
-            <span v-else class="text-gray-300">-</span>
-          </template>
-        </el-table-column>
         <el-table-column :label="t('log.detail')" width="70" fixed="right" align="center">
           <template #default="{ row }">
             <el-button size="small" link type="primary" class="!px-2 !py-1 hover:!bg-indigo-50 rounded" @click="viewDetail(row)">
@@ -122,11 +116,70 @@
       </div>
     </el-card>
 
+    <!-- Mobile Card List -->
+    <div class="lg:hidden space-y-3">
+      <div v-if="loading" class="text-center py-8">
+        <el-icon class="is-loading" :size="32"><Loading /></el-icon>
+      </div>
+      <div
+        v-for="log in logs"
+        :key="log.id"
+        class="bg-white rounded-lg shadow-sm border border-gray-100 p-3"
+      >
+        <div class="flex items-start justify-between mb-2">
+          <div class="flex-1 min-w-0">
+            <el-tag type="info" size="small" class="font-mono mb-1">{{ log.modelName || log.model || '-' }}</el-tag>
+            <div class="text-xs text-gray-400">{{ formatDate(log.createdAt) }}</div>
+          </div>
+          <el-tag :type="getStatusType(log.status)" size="small">
+            {{ log.status === 200 || log.status === 'success' ? '成功' : '错误' }}
+          </el-tag>
+        </div>
+        <div class="grid grid-cols-3 gap-2 text-center mb-2">
+          <div class="bg-indigo-50 rounded p-1.5">
+            <div class="text-xs text-indigo-500">输入</div>
+            <div class="text-sm font-semibold text-indigo-700">{{ formatNumber(log.promptTokens || log.prompt_tokens) }}</div>
+          </div>
+          <div class="bg-green-50 rounded p-1.5">
+            <div class="text-xs text-green-500">输出</div>
+            <div class="text-sm font-semibold text-green-700">{{ formatNumber(log.completionTokens || log.completion_tokens) }}</div>
+          </div>
+          <div class="bg-amber-50 rounded p-1.5">
+            <div class="text-xs text-amber-500">费用</div>
+            <div class="text-sm font-semibold text-amber-700">{{ formatCost(log.cost) }}</div>
+          </div>
+        </div>
+        <div class="flex items-center justify-between text-xs text-gray-500">
+          <span>{{ log.providerName || log.provider || '-' }}</span>
+          <el-tag :type="getLatencyType(log.latency || log.latency_ms)" size="small">
+            {{ formatLatency(log.latency || log.latency_ms) }}
+          </el-tag>
+        </div>
+        <div class="flex justify-end pt-2 mt-2 border-t border-gray-100">
+          <el-button size="small" link type="primary" @click="viewDetail(log)">
+            <el-icon class="mr-1"><View /></el-icon>详情
+          </el-button>
+        </div>
+      </div>
+      <!-- Mobile Pagination -->
+      <div class="flex justify-center mt-4">
+        <el-pagination
+          v-model:current-page="pagination.page"
+          v-model:page-size="pagination.pageSize"
+          :total="pagination.total"
+          :page-sizes="[10, 20, 50]"
+          layout="prev, pager, next"
+          size="small"
+          @change="fetchLogs"
+        />
+      </div>
+    </div>
+
     <!-- Detail Dialog -->
-    <el-dialog v-model="detailDialogVisible" title="日志详情" width="800px" destroy-on-close>
+    <el-dialog v-model="detailDialogVisible" title="日志详情" :width="isMobile ? '95%' : '800px'" destroy-on-close>
       <div v-if="logDetail" class="space-y-4">
         <!-- Stats Grid -->
-        <div class="grid grid-cols-4 gap-3">
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div class="stat-card stat-card-indigo">
             <div class="stat-label">{{ t('log.promptTokens') }}</div>
             <div class="stat-value">{{ formatNumber(logDetail.promptTokens || logDetail.prompt_tokens) }}</div>
@@ -146,10 +199,10 @@
         </div>
 
         <!-- Info Grid -->
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
           <div class="info-card">
             <div class="info-label">{{ t('log.timestamp') }}</div>
-            <div class="info-value">{{ formatDate(logDetail.createdAt) }}</div>
+            <div class="info-value text-xs">{{ formatDate(logDetail.createdAt) }}</div>
           </div>
           <div class="info-card">
             <div class="info-label">{{ t('log.apiKey') }}</div>
@@ -260,10 +313,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, View, CopyDocument, Warning } from '@element-plus/icons-vue'
+import { Delete, View, CopyDocument, Warning, Loading } from '@element-plus/icons-vue'
 import { logApi } from '@/api/log'
 import type { Log, LogDetail } from '@/types/log'
 import dayjs from 'dayjs'
@@ -273,6 +326,21 @@ const loading = ref(false)
 const logs = ref<Log[]>([])
 const logDetail = ref<LogDetail | null>(null)
 const detailDialogVisible = ref(false)
+const isMobile = ref(false)
+
+const checkMobile = () => {
+  isMobile.value = window.innerWidth < 1024
+}
+
+onMounted(() => {
+  checkMobile()
+  window.addEventListener('resize', checkMobile)
+  fetchLogs()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', checkMobile)
+})
 
 const pagination = reactive({
   page: 1,
@@ -436,8 +504,6 @@ const cleanupLogs = async () => {
     // User cancelled
   }
 }
-
-onMounted(fetchLogs)
 </script>
 
 <style>

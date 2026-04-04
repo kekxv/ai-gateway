@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-6">
+  <div class="space-y-4">
       <!-- Header -->
       <div class="flex justify-between items-center">
         <h2 class="text-xl font-semibold">{{ t('user.title') }}</h2>
@@ -8,8 +8,8 @@
         </el-button>
       </div>
 
-      <!-- Table -->
-      <el-card>
+      <!-- Desktop Table -->
+      <el-card class="hidden lg:block">
         <el-table :data="paginatedUsers" stripe v-loading="loading">
           <el-table-column prop="email" :label="t('user.email')" />
           <el-table-column prop="role" :label="t('user.role')" width="100">
@@ -63,13 +63,61 @@
             :total="pagination.total"
             :page-sizes="[10, 20, 50, 100]"
             layout="total, sizes, prev, pager, next"
-        />
+          />
         </div>
       </el-card>
 
+      <!-- Mobile Card List -->
+      <div class="lg:hidden space-y-3">
+        <div v-if="loading" class="text-center py-8">
+          <el-icon class="is-loading" :size="32"><Loading /></el-icon>
+        </div>
+        <div
+          v-for="user in paginatedUsers"
+          :key="user.id"
+          class="bg-white rounded-lg shadow-sm border border-gray-100 p-4"
+        >
+          <div class="flex items-start justify-between mb-2">
+            <div class="flex-1 min-w-0">
+              <h3 class="font-semibold text-gray-800 truncate">{{ user.email }}</h3>
+            </div>
+            <el-tag :type="user.role === 'ADMIN' ? 'danger' : 'info'" size="small">
+              {{ user.role }}
+            </el-tag>
+          </div>
+          <div class="flex items-center gap-2 mb-2 text-sm text-gray-600">
+            <span>{{ t('user.balance') }}: {{ formatCurrency(user.balance) }}</span>
+            <el-tag :type="user.disabled ? 'danger' : 'success'" size="small">
+              {{ user.disabled ? t('common.disabled') : t('common.enabled') }}
+            </el-tag>
+            <el-tag v-if="user.totpEnabled" type="success" size="small">TOTP</el-tag>
+          </div>
+          <div class="text-xs text-gray-400 mb-3">{{ formatDate(user.createdAt) }}</div>
+          <div class="flex flex-wrap gap-2 pt-3 border-t border-gray-100">
+            <el-button size="small" @click="openEditDialog(user)">{{ t('common.edit') }}</el-button>
+            <el-button size="small" type="warning" @click="adjustBalance(user)">{{ t('user.adjustBalance') }}</el-button>
+            <el-button size="small" :type="user.disabled ? 'success' : 'danger'" @click="toggleDisabled(user)">
+              {{ user.disabled ? '启用' : '禁用' }}
+            </el-button>
+            <el-button size="small" type="danger" @click="deleteUser(user)">{{ t('common.delete') }}</el-button>
+          </div>
+        </div>
+        <!-- Mobile Pagination -->
+        <div class="flex justify-center mt-4">
+          <el-pagination
+            v-model:current-page="pagination.page"
+            v-model:page-size="pagination.pageSize"
+            :total="pagination.total"
+            :page-sizes="[10, 20, 50]"
+            layout="prev, pager, next"
+            size="small"
+          />
+        </div>
+      </div>
+
       <!-- Create/Edit Dialog -->
-      <el-dialog v-model="dialogVisible" :title="isEdit ? t('user.editTitle') : t('user.createTitle')" width="500px">
-        <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
+      <el-dialog v-model="dialogVisible" :title="isEdit ? t('user.editTitle') : t('user.createTitle')" :width="isMobile ? '90%' : '500px'">
+        <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" label-position="top" :class="isMobile ? 'mobile-form' : ''">
           <el-form-item :label="t('user.email')" prop="email">
             <el-input v-model="form.email" :disabled="isEdit" />
           </el-form-item>
@@ -77,16 +125,16 @@
             <el-input v-model="form.password" type="password" show-password />
           </el-form-item>
           <el-form-item :label="t('user.role')" prop="role">
-            <el-select v-model="form.role">
+            <el-select v-model="form.role" class="w-full">
               <el-option label="USER" value="USER" />
               <el-option label="ADMIN" value="ADMIN" />
             </el-select>
           </el-form-item>
           <el-form-item :label="t('user.balance')" prop="balance">
-            <el-input-number v-model="form.balance" :precision="4" :step="1" />
+            <el-input-number v-model="form.balance" :precision="4" :step="1" class="w-full" />
           </el-form-item>
           <el-form-item :label="t('user.validUntil')" prop="valid_until">
-            <el-date-picker v-model="form.valid_until" type="datetime" />
+            <el-date-picker v-model="form.valid_until" type="datetime" class="w-full" />
           </el-form-item>
         </el-form>
         <template #footer>
@@ -96,13 +144,13 @@
       </el-dialog>
 
       <!-- Balance Adjust Dialog -->
-      <el-dialog v-model="balanceDialogVisible" :title="t('user.adjustBalance')" width="400px">
-        <el-form :model="balanceForm" label-width="100px">
+      <el-dialog v-model="balanceDialogVisible" :title="t('user.adjustBalance')" :width="isMobile ? '90%' : '400px'">
+        <el-form :model="balanceForm" label-width="100px" label-position="top" :class="isMobile ? 'mobile-form' : ''">
           <el-form-item label="Current">
             {{ formatCurrency(selectedUser?.balance || 0) }}
           </el-form-item>
           <el-form-item label="Amount">
-            <el-input-number v-model="balanceForm.amount" :precision="4" :step="1" />
+            <el-input-number v-model="balanceForm.amount" :precision="4" :step="1" class="w-full" />
           </el-form-item>
           <el-form-item label="Action">
             <el-radio-group v-model="balanceForm.action">
@@ -121,9 +169,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Loading } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { userApi } from '@/api/auth'
 import type { User } from '@/types/user'
@@ -138,6 +187,21 @@ const balanceDialogVisible = ref(false)
 const isEdit = ref(false)
 const selectedUser = ref<User | null>(null)
 const formRef = ref<FormInstance>()
+const isMobile = ref(false)
+
+const checkMobile = () => {
+  isMobile.value = window.innerWidth < 1024
+}
+
+onMounted(() => {
+  checkMobile()
+  window.addEventListener('resize', checkMobile)
+  fetchUsers()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', checkMobile)
+})
 
 const pagination = reactive({
   page: 1,
@@ -302,6 +366,4 @@ const deleteUser = async (user: User) => {
     // User cancelled
   }
 }
-
-onMounted(fetchUsers)
 </script>

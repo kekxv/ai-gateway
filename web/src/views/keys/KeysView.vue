@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-6">
+  <div class="space-y-4">
     <!-- Header -->
     <div class="flex justify-between items-center">
       <h2 class="text-xl font-semibold">{{ t('apiKey.title') }}</h2>
@@ -8,8 +8,8 @@
       </el-button>
     </div>
 
-    <!-- Table -->
-    <el-card>
+    <!-- Desktop Table -->
+    <el-card class="hidden lg:block">
       <el-table :data="paginatedKeys" stripe v-loading="loading">
         <el-table-column prop="name" :label="t('apiKey.name')" width="150" />
         <el-table-column prop="key" :label="t('apiKey.key')" width="280">
@@ -93,9 +93,63 @@
       </div>
     </el-card>
 
+    <!-- Mobile Card List -->
+    <div class="lg:hidden space-y-3">
+      <div v-if="loading" class="text-center py-8">
+        <el-icon class="is-loading" :size="32"><Loading /></el-icon>
+      </div>
+      <div
+        v-for="key in paginatedKeys"
+        :key="key.id"
+        class="bg-white rounded-lg shadow-sm border border-gray-100 p-4"
+      >
+        <div class="flex items-start justify-between mb-2">
+          <div class="flex-1 min-w-0">
+            <h3 class="font-semibold text-gray-800 truncate">{{ key.name }}</h3>
+            <p class="text-sm text-gray-400 font-mono truncate">{{ maskKey(key.key) }}</p>
+          </div>
+          <el-tag :type="key.enabled ? 'success' : 'danger'" size="small">
+            {{ key.enabled ? t('common.enabled') : t('common.disabled') }}
+          </el-tag>
+        </div>
+        <div class="flex items-center gap-2 mb-2 flex-wrap">
+          <el-tag :type="(key.bind_to_all ?? key.bindToAllChannels) ? 'success' : 'info'" size="small">
+            {{ (key.bind_to_all ?? key.bindToAllChannels) ? 'All Channels' : `${key.channels?.length || 0} Channels` }}
+          </el-tag>
+          <el-tag :type="(key.log_details ?? key.logDetails) ? 'success' : 'info'" size="small">
+            {{ t('apiKey.logDetails') }}: {{ (key.log_details ?? key.logDetails) ? t('common.yes') : t('common.no') }}
+          </el-tag>
+        </div>
+        <div class="flex items-center justify-between pt-3 border-t border-gray-100">
+          <span class="text-xs text-gray-400">{{ (key.last_used || key.lastUsed) ? formatDate(String(key.last_used || key.lastUsed)) : '-' }}</span>
+          <div class="flex gap-2">
+            <el-button size="small" link type="primary" @click="openEditDialog(key)">{{ t('common.edit') }}</el-button>
+            <el-button size="small" link type="primary" @click="copyKey(key.key || '')">
+              <el-icon><CopyDocument /></el-icon>
+            </el-button>
+            <el-button size="small" link :type="key.enabled ? 'warning' : 'success'" @click="toggleEnabled(key)">
+              {{ key.enabled ? 'Disable' : 'Enable' }}
+            </el-button>
+            <el-button size="small" link type="danger" @click="deleteKey(key)">{{ t('common.delete') }}</el-button>
+          </div>
+        </div>
+      </div>
+      <!-- Mobile Pagination -->
+      <div class="flex justify-center mt-4">
+        <el-pagination
+          v-model:current-page="pagination.page"
+          v-model:page-size="pagination.pageSize"
+          :total="pagination.total"
+          :page-sizes="[10, 20, 50]"
+          layout="prev, pager, next"
+          size="small"
+        />
+      </div>
+    </div>
+
     <!-- Create/Edit Dialog -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? t('apiKey.editTitle') : t('apiKey.createTitle')" width="600px">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="120px">
+    <el-dialog v-model="dialogVisible" :title="isEdit ? t('apiKey.editTitle') : t('apiKey.createTitle')" :width="isMobile ? '90%' : '600px'">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="120px" label-position="top" :class="isMobile ? 'mobile-form' : ''">
         <el-form-item :label="t('apiKey.name')" prop="name">
           <el-input v-model="form.name" placeholder="Enter a name for this API key" />
         </el-form-item>
@@ -127,7 +181,7 @@
     </el-dialog>
 
     <!-- New Key Display Dialog -->
-    <el-dialog v-model="showKeyDialog" title="New API Key" width="500px">
+    <el-dialog v-model="showKeyDialog" title="New API Key" :width="isMobile ? '90%' : '500px'">
       <el-alert type="warning" :closable="false" class="mb-4">
         Please save this key. It will not be shown again.
       </el-alert>
@@ -170,11 +224,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { CopyDocument, Loading } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
-import { CopyDocument } from '@element-plus/icons-vue'
 import { apiKeyApi } from '@/api/apiKey'
 import { channelApi } from '@/api/channel'
 import type { GatewayAPIKey } from '@/types/apiKey'
@@ -192,6 +246,22 @@ const newKey = ref('')
 const isEdit = ref(false)
 const selectedKey = ref<GatewayAPIKey | null>(null)
 const formRef = ref<FormInstance>()
+const isMobile = ref(false)
+
+const checkMobile = () => {
+  isMobile.value = window.innerWidth < 1024
+}
+
+onMounted(() => {
+  checkMobile()
+  window.addEventListener('resize', checkMobile)
+  fetchApiKeys()
+  fetchChannels()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', checkMobile)
+})
 
 const pagination = reactive({
   page: 1,
@@ -363,9 +433,4 @@ const deleteKey = async (key: GatewayAPIKey) => {
     // User cancelled
   }
 }
-
-onMounted(() => {
-  fetchApiKeys()
-  fetchChannels()
-})
 </script>
