@@ -97,7 +97,7 @@ func (c *ProtocolConverter) openAIToAnthropicRequest(req *ChatRequest) (*models.
 	var messages []models.AnthropicMessage
 	for _, msg := range req.Messages {
 		if msg.Role == "system" {
-			anthropicReq.System = msg.Content.GetText()
+			anthropicReq.System = models.AnthropicSystem{StringContent: msg.Content.GetText()}
 		} else {
 			// Convert content - handle multimodal
 			var content models.AnthropicContent
@@ -194,10 +194,10 @@ func (c *ProtocolConverter) anthropicToOpenAIRequest(req *models.AnthropicMessag
 
 	// Build messages - add system message first if present
 	var messages []ChatMessage
-	if req.System != "" {
+	if !req.System.IsEmpty() {
 		messages = append(messages, ChatMessage{
 			Role:    "system",
-			Content: ChatMessageContent{StringContent: req.System},
+			Content: ChatMessageContent{StringContent: req.System.GetText()},
 		})
 	}
 

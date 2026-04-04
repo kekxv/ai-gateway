@@ -21,7 +21,7 @@ echo ""
 
 # Test non-streaming with x-api-key header (Anthropic style)
 echo "--- Non-streaming test (x-api-key header) ---"
-RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" "$BASE_URL/v1/messages" \
+RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" "$BASE_URL/anthropic/v1/messages" \
     -H "Content-Type: application/json" \
     -H "x-api-key: $API_KEY" \
     -H "anthropic-version: 2023-06-01" \
@@ -44,7 +44,7 @@ echo ""
 
 # Test non-streaming with Bearer token (OpenAI style auth)
 echo "--- Non-streaming test (Bearer token) ---"
-RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" "$BASE_URL/v1/messages" \
+RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" "$BASE_URL/anthropic/v1/messages" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $API_KEY" \
     -d '{
@@ -66,7 +66,7 @@ echo ""
 
 # Test streaming
 echo "--- Streaming test ---"
-curl -s "$BASE_URL/v1/messages" \
+curl -s "$BASE_URL/anthropic/v1/messages" \
     -H "Content-Type: application/json" \
     -H "x-api-key: $API_KEY" \
     -H "anthropic-version: 2023-06-01" \

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -91,8 +92,8 @@ func TestConvertRequest_OpenAIToAnthropic_WithSystem(t *testing.T) {
 
 	anthropicReq := result.(*models.AnthropicMessagesRequest)
 
-	if anthropicReq.System != "You are helpful" {
-		t.Errorf("System = %s, want 'You are helpful'", anthropicReq.System)
+	if anthropicReq.System.GetText() != "You are helpful" {
+		t.Errorf("System = %s, want 'You are helpful'", anthropicReq.System.GetText())
 	}
 	if len(anthropicReq.Messages) != 1 {
 		t.Errorf("Messages count = %d, want 1 (system should be separate)", len(anthropicReq.Messages))
@@ -198,7 +199,7 @@ func TestConvertRequest_AnthropicToOpenAI_WithSystem(t *testing.T) {
 		Messages: []models.AnthropicMessage{
 			{Role: "user", Content: models.AnthropicContent{StringContent: "Hello"}},
 		},
-		System:    "You are helpful",
+		System:    models.AnthropicSystem{StringContent: "You are helpful"},
 		MaxTokens: 100,
 	}
 
@@ -217,6 +218,91 @@ func TestConvertRequest_AnthropicToOpenAI_WithSystem(t *testing.T) {
 	}
 	if openAIReq.Messages[0].Content.GetText() != "You are helpful" {
 		t.Errorf("System content = %s, want 'You are helpful'", openAIReq.Messages[0].Content.GetText())
+	}
+}
+
+func TestConvertRequest_AnthropicToOpenAI_WithSystemArray(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	// Test with system as array (new format)
+	anthropicReq := &models.AnthropicMessagesRequest{
+		Model: "claude-3-5-sonnet",
+		Messages: []models.AnthropicMessage{
+			{Role: "user", Content: models.AnthropicContent{StringContent: "Hello"}},
+		},
+		System: models.AnthropicSystem{
+			Blocks: []models.AnthropicContentBlock{
+				{Type: "text", Text: "You are helpful. "},
+				{Type: "text", Text: "Be concise."},
+			},
+		},
+		MaxTokens: 100,
+	}
+
+	result, err := converter.ConvertRequest(anthropicReq, ProtocolAnthropic, ProtocolOpenAI)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	openAIReq := result.(*ChatRequest)
+
+	if len(openAIReq.Messages) != 2 {
+		t.Errorf("Messages count = %d, want 2 (system + user)", len(openAIReq.Messages))
+	}
+	if openAIReq.Messages[0].Role != "system" {
+		t.Errorf("First message role = %s, want system", openAIReq.Messages[0].Role)
+	}
+	expectedSystem := "You are helpful. Be concise."
+	if openAIReq.Messages[0].Content.GetText() != expectedSystem {
+		t.Errorf("System content = %s, want '%s'", openAIReq.Messages[0].Content.GetText(), expectedSystem)
+	}
+}
+
+func TestAnthropicSystemJSONParsing(t *testing.T) {
+	// Test system as string
+	jsonStr := `{"model":"claude-3","max_tokens":100,"messages":[],"system":"You are helpful"}`
+	var req1 models.AnthropicMessagesRequest
+	if err := json.Unmarshal([]byte(jsonStr), &req1); err != nil {
+		t.Fatalf("Failed to parse system as string: %v", err)
+	}
+	if req1.System.StringContent != "You are helpful" {
+		t.Errorf("System.StringContent = %s, want 'You are helpful'", req1.System.StringContent)
+	}
+	if req1.System.GetText() != "You are helpful" {
+		t.Errorf("System.GetText() = %s, want 'You are helpful'", req1.System.GetText())
+	}
+
+	// Test system as array
+	jsonArr := `{"model":"claude-3","max_tokens":100,"messages":[],"system":[{"type":"text","text":"You are helpful. "},{"type":"text","text":"Be concise."}]}`
+	var req2 models.AnthropicMessagesRequest
+	if err := json.Unmarshal([]byte(jsonArr), &req2); err != nil {
+		t.Fatalf("Failed to parse system as array: %v", err)
+	}
+	if len(req2.System.Blocks) != 2 {
+		t.Errorf("System.Blocks length = %d, want 2", len(req2.System.Blocks))
+	}
+	expectedText := "You are helpful. Be concise."
+	if req2.System.GetText() != expectedText {
+		t.Errorf("System.GetText() = %s, want '%s'", req2.System.GetText(), expectedText)
+	}
+
+	// Test marshaling back to JSON
+	// String format should remain as string
+	data1, err := json.Marshal(req1.System)
+	if err != nil {
+		t.Fatalf("Failed to marshal string system: %v", err)
+	}
+	if string(data1) != `"You are helpful"` {
+		t.Errorf("Marshaled string system = %s, want '\"You are helpful\"'", string(data1))
+	}
+
+	// Array format should remain as array
+	data2, err := json.Marshal(req2.System)
+	if err != nil {
+		t.Fatalf("Failed to marshal array system: %v", err)
+	}
+	if !strings.Contains(string(data2), `"type":"text"`) {
+		t.Errorf("Marshaled array system should contain type:text, got %s", string(data2))
 	}
 }
 

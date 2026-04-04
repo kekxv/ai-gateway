@@ -9,7 +9,7 @@ type AnthropicMessagesRequest struct {
 	Model         string                    `json:"model"`
 	MaxTokens     int                       `json:"max_tokens"`
 	Messages      []AnthropicMessage        `json:"messages"`
-	System        string                    `json:"system,omitempty"`
+	System        AnthropicSystem           `json:"system,omitempty"`
 	Stream        bool                      `json:"stream,omitempty"`
 	Temperature   float64                   `json:"temperature,omitempty"`
 	TopP          float64                   `json:"top_p,omitempty"`
@@ -18,6 +18,60 @@ type AnthropicMessagesRequest struct {
 	Tools         []AnthropicTool           `json:"tools,omitempty"`
 	ToolChoice    *AnthropicToolChoice      `json:"tool_choice,omitempty"`
 	Metadata      map[string]interface{}    `json:"metadata,omitempty"`
+}
+
+// AnthropicSystem can be string or array of content blocks
+type AnthropicSystem struct {
+	StringContent string
+	Blocks        []AnthropicContentBlock
+}
+
+// UnmarshalJSON handles both string and array formats for system
+func (as *AnthropicSystem) UnmarshalJSON(data []byte) error {
+	// Try string first
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		as.StringContent = str
+		return nil
+	}
+	// Try array
+	var blocks []AnthropicContentBlock
+	if err := json.Unmarshal(data, &blocks); err != nil {
+		return err
+	}
+	as.Blocks = blocks
+	return nil
+}
+
+// MarshalJSON handles both string and array formats for system
+func (as AnthropicSystem) MarshalJSON() ([]byte, error) {
+	if as.StringContent != "" && len(as.Blocks) == 0 {
+		return json.Marshal(as.StringContent)
+	}
+	if len(as.Blocks) > 0 {
+		return json.Marshal(as.Blocks)
+	}
+	return json.Marshal("")
+}
+
+// GetText extracts text content from the system
+func (as AnthropicSystem) GetText() string {
+	if as.StringContent != "" {
+		return as.StringContent
+	}
+	// Combine all text blocks
+	var result string
+	for _, block := range as.Blocks {
+		if block.Type == "text" {
+			result += block.Text
+		}
+	}
+	return result
+}
+
+// IsEmpty checks if the system is empty
+func (as AnthropicSystem) IsEmpty() bool {
+	return as.StringContent == "" && len(as.Blocks) == 0
 }
 
 // AnthropicMessage represents a message in Anthropic format

@@ -305,5 +305,7 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 	v1.GET("/dashboard/billing/usage", deps.GatewayHandler.BillingUsage)
 
 	// ========== Anthropic Messages API (API Key required) ==========
-	v1.POST("/messages", deps.AnthropicHandler.CreateMessages)
+	anthropic := r.Group("/api/anthropic/v1")
+		anthropic.Use(middleware.APIKeyAuth(deps.APIKeyRepo))
+		anthropic.POST("/messages", deps.AnthropicHandler.CreateMessages)
 }
