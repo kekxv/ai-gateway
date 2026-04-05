@@ -1,5 +1,5 @@
 import { api } from './index'
-import type { Conversation, Message, CreateConversationRequest, UpdateConversationRequest, ChatRequest, ConversationSettings } from '@/types/conversation'
+import type { Conversation, Message, CreateConversationRequest, UpdateConversationRequest, ChatRequest } from '@/types/conversation'
 
 export const conversationApi = {
   // List all conversations for current user

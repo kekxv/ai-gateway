@@ -30,6 +30,7 @@ const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: '/dashboard', name: 'Dashboard', component: { template: '<div>Dashboard</div>' } },
+    { path: '/chat', name: 'Chat', component: { template: '<div>Chat</div>' } },
     { path: '/providers', name: 'Providers', component: { template: '<div>Providers</div>' } },
     { path: '/channels', name: 'Channels', component: { template: '<div>Channels</div>' } },
     { path: '/models', name: 'Models', component: { template: '<div>Models</div>' } },

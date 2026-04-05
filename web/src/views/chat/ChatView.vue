@@ -300,10 +300,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted, nextTick, computed } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Plus, Setting, ChatLineRound, User, Monitor,
+  Plus, Setting, ChatLineRound, Monitor,
   Loading, Promotion, MoreFilled, Delete, MagicStick, Close, Menu
 } from '@element-plus/icons-vue'
 import { conversationApi, modelApi } from '@/api/conversation'
@@ -408,14 +408,9 @@ const selectConversation = async (conv: Conversation) => {
 
   // Parse settings
   if (conv.settings) {
-    try {
-      const settings = JSON.parse(conv.settings) as ConversationSettings
-      settingsForm.temperature = settings.temperature || 0.7
-      settingsForm.max_tokens = settings.max_tokens || 4096
-      settingsForm.top_p = settings.top_p || 0.9
-    } catch {
-      // Use defaults
-    }
+    settingsForm.temperature = conv.settings.temperature || 0.7
+    settingsForm.max_tokens = conv.settings.max_tokens || 4096
+    settingsForm.top_p = conv.settings.top_p || 0.9
   }
   settingsForm.system_prompt = conv.system_prompt || ''
 
