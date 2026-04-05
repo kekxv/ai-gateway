@@ -58,17 +58,20 @@
           <!-- Actions -->
           <div class="flex items-center justify-between pt-3 border-t border-gray-100">
             <span class="text-xs text-gray-400">{{ formatDate(channel.createdAt) }}</span>
-            <div class="flex gap-2">
-              <el-button size="small" link type="primary" @click="openEditDialog(channel)">
-                {{ t('common.edit') }}
+            <el-dropdown trigger="click">
+              <el-button size="small">
+                操作 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
               </el-button>
-              <el-button size="small" link :type="channel.enabled ? 'warning' : 'success'" @click="toggleEnabled(channel)">
-                {{ channel.enabled ? 'Disable' : 'Enable' }}
-              </el-button>
-              <el-button size="small" link type="danger" @click="deleteChannel(channel)">
-                {{ t('common.delete') }}
-              </el-button>
-            </div>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item @click="openEditDialog(channel)">{{ t('common.edit') }}</el-dropdown-item>
+                  <el-dropdown-item @click="toggleEnabled(channel)">
+                    {{ channel.enabled ? 'Disable' : 'Enable' }}
+                  </el-dropdown-item>
+                  <el-dropdown-item divided @click="deleteChannel(channel)">{{ t('common.delete') }}</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </div>
       </div>
@@ -151,7 +154,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search } from '@element-plus/icons-vue'
+import { Search, ArrowDown } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { channelApi } from '@/api/channel'
 import { providerApi } from '@/api/provider'

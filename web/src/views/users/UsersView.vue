@@ -93,13 +93,22 @@
             <el-tag v-if="user.totpEnabled" type="success" size="small">TOTP</el-tag>
           </div>
           <div class="text-xs text-gray-400 mb-3">{{ formatDate(user.createdAt) }}</div>
-          <div class="flex flex-wrap gap-2 pt-3 border-t border-gray-100">
+          <div class="flex items-center justify-between pt-3 border-t border-gray-100">
             <el-button size="small" @click="openEditDialog(user)">{{ t('common.edit') }}</el-button>
-            <el-button size="small" type="warning" @click="adjustBalance(user)">{{ t('user.adjustBalance') }}</el-button>
-            <el-button size="small" :type="user.disabled ? 'success' : 'danger'" @click="toggleDisabled(user)">
-              {{ user.disabled ? '启用' : '禁用' }}
-            </el-button>
-            <el-button size="small" type="danger" @click="deleteUser(user)">{{ t('common.delete') }}</el-button>
+            <el-dropdown trigger="click">
+              <el-button size="small">
+                更多 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item @click="adjustBalance(user)">{{ t('user.adjustBalance') }}</el-dropdown-item>
+                  <el-dropdown-item @click="toggleDisabled(user)">
+                    {{ user.disabled ? '启用' : '禁用' }}
+                  </el-dropdown-item>
+                  <el-dropdown-item divided @click="deleteUser(user)">{{ t('common.delete') }}</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </div>
         <!-- Mobile Pagination -->
@@ -172,7 +181,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading } from '@element-plus/icons-vue'
+import { Loading, ArrowDown } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { userApi } from '@/api/auth'
 import type { User } from '@/types/user'

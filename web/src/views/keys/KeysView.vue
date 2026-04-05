@@ -122,16 +122,21 @@
         </div>
         <div class="flex items-center justify-between pt-3 border-t border-gray-100">
           <span class="text-xs text-gray-400">{{ (key.last_used || key.lastUsed) ? formatDate(String(key.last_used || key.lastUsed)) : '-' }}</span>
-          <div class="flex gap-2">
-            <el-button size="small" link type="primary" @click="openEditDialog(key)">{{ t('common.edit') }}</el-button>
-            <el-button size="small" link type="primary" @click="copyKey(key.key || '')">
-              <el-icon><CopyDocument /></el-icon>
+          <el-dropdown trigger="click">
+            <el-button size="small">
+              操作 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
             </el-button>
-            <el-button size="small" link :type="key.enabled ? 'warning' : 'success'" @click="toggleEnabled(key)">
-              {{ key.enabled ? 'Disable' : 'Enable' }}
-            </el-button>
-            <el-button size="small" link type="danger" @click="deleteKey(key)">{{ t('common.delete') }}</el-button>
-          </div>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item @click="openEditDialog(key)">{{ t('common.edit') }}</el-dropdown-item>
+                <el-dropdown-item @click="copyKey(key.key || '')">复制 Key</el-dropdown-item>
+                <el-dropdown-item @click="toggleEnabled(key)">
+                  {{ key.enabled ? 'Disable' : 'Enable' }}
+                </el-dropdown-item>
+                <el-dropdown-item divided @click="deleteKey(key)">{{ t('common.delete') }}</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </div>
       <!-- Mobile Pagination -->
@@ -201,7 +206,14 @@
           <span class="text-lg font-semibold">API Usage Examples</span>
         </div>
       </template>
-      <div class="space-y-6">
+      <!-- Provider Tabs -->
+      <el-tabs v-model="activeProviderTab" class="mb-4">
+        <el-tab-pane label="OpenAI" name="openai" />
+        <el-tab-pane label="Anthropic" name="anthropic" />
+      </el-tabs>
+
+      <!-- OpenAI Examples -->
+      <div v-show="activeProviderTab === 'openai'" class="space-y-6">
         <!-- Chat Completion -->
         <div>
           <h4 class="font-medium text-gray-800 mb-2">Chat Completion</h4>
@@ -219,6 +231,26 @@
           </div>
         </div>
       </div>
+
+      <!-- Anthropic Examples -->
+      <div v-show="activeProviderTab === 'anthropic'" class="space-y-6">
+        <!-- Messages API -->
+        <div>
+          <h4 class="font-medium text-gray-800 mb-2">Messages API</h4>
+          <p class="text-sm text-gray-500 mb-3">Send a messages request using Anthropic API format.</p>
+          <div class="bg-gray-900 rounded-lg p-4 overflow-x-auto">
+            <pre class="text-green-400 text-sm font-mono whitespace-pre-wrap">{{ anthropicExample }}</pre>
+          </div>
+        </div>
+        <!-- Streaming -->
+        <div>
+          <h4 class="font-medium text-gray-800 mb-2">Streaming Messages</h4>
+          <p class="text-sm text-gray-500 mb-3">Enable streaming for real-time responses.</p>
+          <div class="bg-gray-900 rounded-lg p-4 overflow-x-auto">
+            <pre class="text-green-400 text-sm font-mono whitespace-pre-wrap">{{ anthropicStreamExample }}</pre>
+          </div>
+        </div>
+      </div>
     </el-card>
   </div>
 </template>
@@ -227,7 +259,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CopyDocument, Loading } from '@element-plus/icons-vue'
+import { CopyDocument, Loading, ArrowDown } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { apiKeyApi } from '@/api/apiKey'
 import { channelApi } from '@/api/channel'
@@ -247,6 +279,7 @@ const isEdit = ref(false)
 const selectedKey = ref<GatewayAPIKey | null>(null)
 const formRef = ref<FormInstance>()
 const isMobile = ref(false)
+const activeProviderTab = ref('openai')
 
 const checkMobile = () => {
   isMobile.value = window.innerWidth < 1024
@@ -306,6 +339,27 @@ const curlStreamExample = computed(() => `curl -X POST ${apiBaseUrl}/api/v1/chat
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -d '{
     "model": "gpt-3.5-turbo",
+    "messages": [{"role": "user", "content": "Tell me a story."}],
+    "stream": true
+  }'`)
+
+const anthropicExample = computed(() => `curl -X POST ${apiBaseUrl}/api/anthropic/v1/messages \\
+  -H "Content-Type: application/json" \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -H "anthropic-version: 2023-06-01" \\
+  -d '{
+    "model": "claude-3-5-sonnet-20241022",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Hello, Claude!"}]
+  }'`)
+
+const anthropicStreamExample = computed(() => `curl -X POST ${apiBaseUrl}/api/anthropic/v1/messages \\
+  -H "Content-Type: application/json" \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -H "anthropic-version: 2023-06-01" \\
+  -d '{
+    "model": "claude-3-5-sonnet-20241022",
+    "max_tokens": 1024,
     "messages": [{"role": "user", "content": "Tell me a story."}],
     "stream": true
   }'`)

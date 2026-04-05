@@ -555,24 +555,26 @@ onMounted(() => {
 /* 统计卡片 */
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 20px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
   margin-bottom: 24px;
+  min-width: 0; /* 防止内容溢出 */
 }
 
 .stats-grid.user-stats {
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(2, 1fr);
 }
 
 .stat-card {
   background: white;
   border-radius: 16px;
-  padding: 24px;
+  padding: 16px;
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 12px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   transition: all 0.3s ease;
+  min-width: 0; /* 防止内容溢出 */
 }
 
 .stat-card:hover {
@@ -581,14 +583,14 @@ onMounted(() => {
 }
 
 .stat-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: 14px;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  font-size: 24px;
+  font-size: 20px;
 }
 
 .stat-card--blue .stat-icon { background: #dbeafe; }
@@ -604,16 +606,16 @@ onMounted(() => {
 }
 
 .stat-value {
-  font-size: 28px;
+  font-size: 20px;
   font-weight: 700;
   color: #1e293b;
   line-height: 1.2;
 }
 
 .stat-label {
-  font-size: 14px;
+  font-size: 13px;
   color: #64748b;
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 /* 图表区域 */
@@ -727,17 +729,40 @@ onMounted(() => {
 }
 
 /* 响应式 */
-@media (max-width: 1200px) {
+/* 平板及以上：4列布局 */
+@media (min-width: 768px) {
   .stats-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(4, 1fr);
+    gap: 20px;
+  }
+
+  .stats-grid.user-stats {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .stat-card {
+    padding: 24px;
+    gap: 20px;
+  }
+
+  .stat-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    font-size: 24px;
+  }
+
+  .stat-value {
+    font-size: 28px;
+  }
+
+  .stat-label {
+    font-size: 14px;
+    margin-top: 4px;
   }
 }
 
 @media (max-width: 768px) {
-  .stats-grid {
-    grid-template-columns: 1fr;
-  }
-
   .charts-grid,
   .tables-grid {
     grid-template-columns: 1fr;
