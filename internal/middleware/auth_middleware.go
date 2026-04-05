@@ -94,6 +94,29 @@ func GetUserRole(c *gin.Context) string {
 	return ""
 }
 
+// CurrentUser represents the current authenticated user
+type CurrentUser struct {
+	ID    uint
+	Email string
+	Role  string
+}
+
+// GetCurrentUser gets the current user info from context
+func GetCurrentUser(c *gin.Context) *CurrentUser {
+	userID, exists := c.Get("userId")
+	if !exists {
+		return nil
+	}
+	email, _ := c.Get("email")
+	role, _ := c.Get("role")
+
+	return &CurrentUser{
+		ID:    userID.(uint),
+		Email: email.(string),
+		Role:  role.(string),
+	}
+}
+
 // MockJWTAuth creates a mock JWT auth middleware for testing (no user)
 func MockJWTAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {

@@ -6,7 +6,7 @@ import (
 
 type GatewayAPIKey struct {
 	ID              uint        `gorm:"primaryKey" json:"id"`
-	Key             string      `gorm:"unique;not null" json:"key"`
+	Key             string      `gorm:"unique;not null" json:"key"` // 返回完整 key，前端负责脱敏显示
 	Name            string      `gorm:"not null" json:"name"`
 	Enabled         bool        `gorm:"not null" json:"enabled"`
 	BindToAllChannels bool      `gorm:"column:bindToAllChannels;default:false;not null" json:"bindToAllChannels"`

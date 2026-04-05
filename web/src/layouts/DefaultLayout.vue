@@ -166,6 +166,7 @@ watch(locale, (newLocale) => {
 const menuItems = computed(() => {
   const items = [
     { path: '/dashboard', title: t('menu.dashboard'), icon: 'Dashboard' },
+    { path: '/chat', title: t('menu.chat'), icon: 'Chat' },
     { path: '/providers', title: t('menu.providers'), icon: 'Provider' },
     { path: '/channels', title: t('menu.channels'), icon: 'Channel' },
     { path: '/models', title: t('menu.models'), icon: 'Model' },
@@ -175,7 +176,7 @@ const menuItems = computed(() => {
   ]
 
   if (authStore.isAdmin) {
-    items.splice(1, 0, { path: '/users', title: t('menu.users'), icon: 'User' })
+    items.splice(2, 0, { path: '/users', title: t('menu.users'), icon: 'User' })
   }
 
   return items

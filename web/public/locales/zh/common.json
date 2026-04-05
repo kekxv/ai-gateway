@@ -19,6 +19,7 @@
   },
   "menu": {
     "dashboard": "仪表板",
+    "chat": "AI 聊天",
     "users": "用户管理",
     "providers": "提供商管理",
     "channels": "渠道管理",

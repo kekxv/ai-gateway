@@ -38,6 +38,8 @@ func InitDatabase(dbPath string) (*gorm.DB, error) {
 		&models.GatewayAPIKeyChannel{},
 		&models.ChannelAllowedModel{},
 		&models.ProviderModel{},
+		&models.Conversation{},
+		&models.Message{},
 	}
 
 	// Only migrate tables that don't exist yet (for backward compatibility)

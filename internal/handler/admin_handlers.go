@@ -35,6 +35,10 @@ func (h *ProviderHandler) ListProviders(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// Mask API keys
+	for i := range providers {
+		providers[i].APIKeyMasked = models.MaskAPIKey(providers[i].APIKey)
+	}
 	c.JSON(http.StatusOK, providers)
 }
 
@@ -82,6 +86,8 @@ func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 		return
 	}
 
+	// Mask API key in response
+	provider.APIKeyMasked = models.MaskAPIKey(provider.APIKey)
 	c.JSON(http.StatusCreated, provider)
 }
 
@@ -94,6 +100,8 @@ func (h *ProviderHandler) GetProvider(c *gin.Context) {
 		return
 	}
 
+	// Mask API key in response
+	provider.APIKeyMasked = models.MaskAPIKey(provider.APIKey)
 	c.JSON(http.StatusOK, provider)
 }
 
@@ -139,7 +147,10 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 	if apiKey == "" {
 		apiKey = req.APIKeySnake
 	}
-	provider.APIKey = apiKey
+	// Only update APIKey if a new value is provided
+		if apiKey != "" {
+			provider.APIKey = apiKey
+		}
 	provider.Type = req.Type
 	// Support both camelCase and snake_case
 	provider.AutoLoadModels = req.AutoLoadModels || req.AutoLoadModelsSnake
@@ -150,6 +161,8 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 		return
 	}
 
+	// Mask API key in response
+	provider.APIKeyMasked = models.MaskAPIKey(provider.APIKey)
 	c.JSON(http.StatusOK, provider)
 }
 

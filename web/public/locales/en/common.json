@@ -19,6 +19,7 @@
   },
   "menu": {
     "dashboard": "Dashboard",
+    "chat": "AI Chat",
     "users": "Users",
     "providers": "Providers",
     "channels": "Channels",

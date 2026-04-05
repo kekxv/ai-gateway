@@ -56,6 +56,8 @@ func main() {
 	logRepo := repository.NewLogRepository(db)
 	logDetailRepo := repository.NewLogDetailRepository(db)
 	settingsRepo := repository.NewSettingsRepository(db)
+	conversationRepo := repository.NewConversationRepository(db)
+	messageRepo := repository.NewMessageRepository(db)
 
 	// Get JWT secret from settings or environment
 	jwtSecret := ""
@@ -111,6 +113,7 @@ func main() {
 	statsHandler := handler.NewStatsHandler(logRepo, userRepo, modelRepo, providerRepo)
 	gatewayHandler := handler.NewGatewayHandler(gatewayService, responseService)
 	anthropicHandler := handler.NewAnthropicHandler(gatewayService)
+	chatHandler := handler.NewChatHandler(conversationRepo, messageRepo, userRepo, gatewayService, billingService)
 
 	// Setup Gin
 	port := 3000
@@ -139,6 +142,7 @@ func main() {
 		StatsHandler:     statsHandler,
 		GatewayHandler:   gatewayHandler,
 		AnthropicHandler: anthropicHandler,
+		ChatHandler:      chatHandler,
 		APIKeyRepo:       apiKeyRepo,
 	})
 
@@ -209,6 +213,7 @@ type Dependencies struct {
 	StatsHandler     *handler.StatsHandler
 	GatewayHandler   *handler.GatewayHandler
 	AnthropicHandler *handler.AnthropicHandler
+	ChatHandler      *handler.ChatHandler
 	APIKeyRepo       *repository.APIKeyRepository
 }
 
@@ -282,6 +287,15 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 	admin.GET("/stats", deps.StatsHandler.GetStats)
 	admin.DELETE("/cleanup/log-details", middleware.RequireRole("ADMIN"), deps.LogHandler.CleanupLogDetails)
 	admin.POST("/test-model", deps.StatsHandler.TestModel)
+
+	// Chat conversations (user scope)
+	admin.GET("/conversations", deps.ChatHandler.ListConversations)
+	admin.POST("/conversations", deps.ChatHandler.CreateConversation)
+	admin.GET("/conversations/:id", deps.ChatHandler.GetConversation)
+	admin.PUT("/conversations/:id", deps.ChatHandler.UpdateConversation)
+	admin.DELETE("/conversations/:id", deps.ChatHandler.DeleteConversation)
+	admin.GET("/conversations/:id/messages", deps.ChatHandler.GetMessages)
+	admin.POST("/conversations/:id/chat", deps.ChatHandler.SendMessage)
 
 	// ========== Gateway API (API Key required) ==========
 	v1 := r.Group("/api/v1")

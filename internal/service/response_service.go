@@ -85,23 +85,28 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 	}
 
 	// Create initial log entry at request start
+	// Skip logging for virtual API keys (ID=0)
 	logEntry := &models.Log{
 		APIKeyID:     apiKey.ID,
 		ModelName:    model.Name,
 		ProviderName: route.Provider.Name,
 		Status:       0, // pending
 	}
-	if err := s.logRepo.Create(ctx, logEntry); err != nil {
-		logEntry.ID = 0 // Continue without log if creation fails
-	} else if apiKey.LogDetails {
-		// Store request body immediately at request start
-		reqBody, _ := json.Marshal(req)
-		reqGz, _ := utils.GzipCompress(reqBody)
-		detail := &models.LogDetail{
-			LogID:       logEntry.ID,
-			RequestBody: reqGz,
+	if apiKey.ID != 0 {
+		if err := s.logRepo.Create(ctx, logEntry); err != nil {
+			logEntry.ID = 0 // Continue without log if creation fails
+		} else if apiKey.LogDetails {
+			// Store request body immediately at request start
+			reqBody, _ := json.Marshal(req)
+			reqGz, _ := utils.GzipCompress(reqBody)
+			detail := &models.LogDetail{
+				LogID:       logEntry.ID,
+				RequestBody: reqGz,
+			}
+			s.logDetailRepo.Create(ctx, detail)
 		}
-		s.logDetailRepo.Create(ctx, detail)
+	} else {
+		logEntry.ID = 0 // Virtual key, no logging
 	}
 
 	// 3. Check permission
@@ -355,23 +360,28 @@ func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *model
 	}
 
 	// Create initial log entry at request start
+	// Skip logging for virtual API keys (ID=0)
 	logEntry := &models.Log{
 		APIKeyID:     apiKey.ID,
 		ModelName:    model.Name,
 		ProviderName: route.Provider.Name,
 		Status:       0, // pending
 	}
-	if err := s.logRepo.Create(ctx, logEntry); err != nil {
-		logEntry.ID = 0 // Continue without log if creation fails
-	} else if apiKey.LogDetails {
-		// Store request body immediately at request start
-		reqBody, _ := json.Marshal(req)
-		reqGz, _ := utils.GzipCompress(reqBody)
-		detail := &models.LogDetail{
-			LogID:       logEntry.ID,
-			RequestBody: reqGz,
+	if apiKey.ID != 0 {
+		if err := s.logRepo.Create(ctx, logEntry); err != nil {
+			logEntry.ID = 0 // Continue without log if creation fails
+		} else if apiKey.LogDetails {
+			// Store request body immediately at request start
+			reqBody, _ := json.Marshal(req)
+			reqGz, _ := utils.GzipCompress(reqBody)
+			detail := &models.LogDetail{
+				LogID:       logEntry.ID,
+				RequestBody: reqGz,
+			}
+			s.logDetailRepo.Create(ctx, detail)
 		}
-		s.logDetailRepo.Create(ctx, detail)
+	} else {
+		logEntry.ID = 0 // Virtual key, no logging
 	}
 
 	// 3. Check permission
@@ -582,38 +592,46 @@ func (s *ResponseService) logResponseAndCalculateCost(ctx context.Context, apiKe
 	}
 
 	// Create log entry
-	logEntry := &models.Log{
-		Latency:            latency,
-		PromptTokens:       promptTokens,
-		CompletionTokens:   completionTokens,
-		TotalTokens:        totalTokens,
-		Cost:               cost,
-		APIKeyID:           apiKey.ID,
-		ModelName:          model.Name,
-		ProviderName:       providerName,
-		OwnerChannelID:     ownerChannelID,
-		OwnerChannelUserID: ownerChannelUserID,
-		Status:             200,
-	}
-
-	if err := s.logRepo.Create(ctx, logEntry); err == nil && apiKey.LogDetails {
-		// Store detailed log
-		reqBody, _ := json.Marshal(req)
-		respBody, _ := json.Marshal(resp)
-		reqGz, _ := utils.GzipCompress(reqBody)
-		respGz, _ := utils.GzipCompress(respBody)
-
-		detail := &models.LogDetail{
-			LogID:        logEntry.ID,
-			RequestBody:  reqGz,
-			ResponseBody: respGz,
+	// Skip logging for virtual API keys (ID=0)
+	if apiKey.ID != 0 {
+		logEntry := &models.Log{
+			Latency:            latency,
+			PromptTokens:       promptTokens,
+			CompletionTokens:   completionTokens,
+			TotalTokens:        totalTokens,
+			Cost:               cost,
+			APIKeyID:           apiKey.ID,
+			ModelName:          model.Name,
+			ProviderName:       providerName,
+			OwnerChannelID:     ownerChannelID,
+			OwnerChannelUserID: ownerChannelUserID,
+			Status:             200,
 		}
-		s.logDetailRepo.Create(ctx, detail)
+
+		if err := s.logRepo.Create(ctx, logEntry); err == nil && apiKey.LogDetails {
+			// Store detailed log
+			reqBody, _ := json.Marshal(req)
+			respBody, _ := json.Marshal(resp)
+			reqGz, _ := utils.GzipCompress(reqBody)
+			respGz, _ := utils.GzipCompress(respBody)
+
+			detail := &models.LogDetail{
+				LogID:        logEntry.ID,
+				RequestBody:  reqGz,
+				ResponseBody: respGz,
+			}
+			s.logDetailRepo.Create(ctx, detail)
+		}
 	}
 }
 
 // logError logs an error request
 func (s *ResponseService) logError(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, latency, status int, errMsg string, req interface{}) {
+	// Skip logging for virtual API keys (ID=0)
+	if apiKey.ID == 0 {
+		return
+	}
+
 	logEntry := &models.Log{
 		Latency:      latency,
 		APIKeyID:     apiKey.ID,
