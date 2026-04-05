@@ -1,15 +1,22 @@
 <template>
   <div class="chat-page">
+    <!-- Mobile Sidebar Overlay -->
+    <div
+      v-if="sidebarOpen && isMobile"
+      class="sidebar-overlay"
+      @click="sidebarOpen = false"
+    ></div>
+
     <!-- Sidebar - Conversation List -->
-    <aside class="sidebar" :class="{ collapsed: !sidebarOpen }">
+    <aside class="sidebar" :class="{ open: sidebarOpen || !isMobile }">
       <div class="sidebar-header">
-        <div class="sidebar-toggle" @click="sidebarOpen = !sidebarOpen">
-          <el-icon><Fold v-if="sidebarOpen" /><Expand v-else /></el-icon>
-        </div>
-        <span v-if="sidebarOpen" class="sidebar-title">对话历史</span>
+        <span class="sidebar-title">对话历史</span>
+        <button class="sidebar-close" @click="sidebarOpen = false" v-if="isMobile">
+          <el-icon><Close /></el-icon>
+        </button>
       </div>
 
-      <div class="sidebar-content" v-show="sidebarOpen">
+      <div class="sidebar-content">
         <button class="new-chat-btn" @click="createNewConversation">
           <el-icon><Plus /></el-icon>
           <span>新对话</span>
@@ -23,10 +30,12 @@
             :class="{ active: currentConversation?.id === conv.id }"
             @click="selectConversation(conv)"
           >
-            <el-icon class="conv-icon"><ChatLineRound /></el-icon>
+            <div class="conv-icon">
+              <el-icon><ChatLineRound /></el-icon>
+            </div>
             <div class="conv-info">
               <div class="conv-title">{{ conv.title }}</div>
-              <div class="conv-meta">{{ conv.model }} · {{ formatDateShort(conv.updated_at) }}</div>
+              <div class="conv-meta">{{ conv.model }}</div>
             </div>
             <el-dropdown trigger="click" @command="handleConversationAction($event, conv)">
               <button class="conv-more" @click.stop>
@@ -56,8 +65,8 @@
       <!-- Header -->
       <header class="chat-header">
         <div class="header-left">
-          <button v-if="!sidebarOpen" class="toggle-btn" @click="sidebarOpen = true">
-            <el-icon><Expand /></el-icon>
+          <button class="menu-btn" @click="sidebarOpen = true" v-if="isMobile && !sidebarOpen">
+            <el-icon><Menu /></el-icon>
           </button>
 
           <!-- Model Selector -->
@@ -65,20 +74,15 @@
             <el-select
               v-model="selectedModel"
               placeholder="选择模型"
-              size="large"
+              size="default"
               @change="updateModel"
             >
               <el-option
                 v-for="model in models"
                 :key="model.name"
-                :label="model.name"
+                :label="model.alias || model.name"
                 :value="model.name"
-              >
-                <div class="model-option">
-                  <span class="model-name">{{ model.name }}</span>
-                  <span class="model-alias" v-if="model.alias">{{ model.alias }}</span>
-                </div>
-              </el-option>
+              />
             </el-select>
           </div>
           <div class="model-selector" v-else>
@@ -92,7 +96,7 @@
           </button>
           <button class="primary-btn" @click="createNewConversation">
             <el-icon><Plus /></el-icon>
-            <span>新对话</span>
+            <span class="hide-mobile">新对话</span>
           </button>
         </div>
       </header>
@@ -108,28 +112,22 @@
             <h2>AI 助手</h2>
             <p>选择或创建一个对话开始聊天</p>
 
-            <div class="quick-actions">
-              <div class="quick-action" @click="createNewConversation">
-                <el-icon><ChatLineRound /></el-icon>
-                <span>开始新对话</span>
+            <div class="quick-start">
+              <div class="model-select-row">
+                <span class="label">模型</span>
+                <el-select v-model="selectedModel" placeholder="选择模型" size="large">
+                  <el-option
+                    v-for="model in models"
+                    :key="model.name"
+                    :label="model.alias || model.name"
+                    :value="model.name"
+                  />
+                </el-select>
               </div>
-            </div>
-
-            <!-- Model Selection for New Chat -->
-            <div class="new-chat-model-select">
-              <span class="label">选择模型：</span>
-              <el-select
-                v-model="selectedModel"
-                placeholder="选择模型"
-                size="large"
-              >
-                <el-option
-                  v-for="model in models"
-                  :key="model.name"
-                  :label="model.name"
-                  :value="model.name"
-                />
-              </el-select>
+              <button class="start-btn" @click="createNewConversation">
+                <el-icon><ChatLineRound /></el-icon>
+                <span>开始对话</span>
+              </button>
             </div>
           </div>
         </div>
@@ -139,47 +137,61 @@
           <div
             v-for="message in messages"
             :key="message.id"
-            class="message-row"
+            class="message-block"
             :class="message.role"
           >
-            <div class="message-content">
-              <div class="message-avatar" :class="message.role">
-                <el-icon v-if="message.role === 'user'"><User /></el-icon>
-                <el-icon v-else><Monitor /></el-icon>
-              </div>
-              <div class="message-body">
-                <div class="message-role">{{ message.role === 'user' ? '你' : 'AI' }}</div>
-                <div class="message-text">{{ message.content }}</div>
+            <!-- User Message -->
+            <div v-if="message.role === 'user'" class="user-message">
+              <div class="user-bubble">
+                <div class="user-text">{{ message.content }}</div>
               </div>
             </div>
-          </div>
 
-          <!-- Streaming Message -->
-          <div v-if="streamingContent" class="message-row assistant streaming">
-            <div class="message-content">
-              <div class="message-avatar assistant">
+            <!-- Assistant Message -->
+            <div v-else class="assistant-message">
+              <div class="assistant-avatar">
                 <el-icon><Monitor /></el-icon>
               </div>
-              <div class="message-body">
-                <div class="message-role">AI</div>
-                <div class="message-text">
-                  {{ streamingContent }}
-                  <span class="cursor">▌</span>
+              <div class="assistant-content">
+                <div class="assistant-name">AI</div>
+                <div class="assistant-bubble">
+                  <div class="assistant-text">{{ message.content }}</div>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- Loading -->
-          <div v-if="sending && !streamingContent" class="message-row assistant loading">
-            <div class="message-content">
-              <div class="message-avatar assistant">
+          <!-- Streaming Message -->
+          <div v-if="streamingContent" class="message-block assistant">
+            <div class="assistant-message">
+              <div class="assistant-avatar">
                 <el-icon><Monitor /></el-icon>
               </div>
-              <div class="message-body">
-                <div class="message-role">AI</div>
-                <div class="message-text loading-dots">
-                  <span></span><span></span><span></span>
+              <div class="assistant-content">
+                <div class="assistant-name">AI</div>
+                <div class="assistant-bubble">
+                  <div class="assistant-text">
+                    {{ streamingContent }}
+                    <span class="cursor">▌</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Thinking State -->
+          <div v-if="sending && !streamingContent" class="message-block assistant">
+            <div class="assistant-message">
+              <div class="assistant-avatar thinking">
+                <el-icon class="is-loading"><Loading /></el-icon>
+              </div>
+              <div class="assistant-content">
+                <div class="assistant-name">AI</div>
+                <div class="assistant-bubble thinking">
+                  <div class="thinking-indicator">
+                    <span></span><span></span><span></span>
+                  </div>
+                  <span class="thinking-text">正在思考...</span>
                 </div>
               </div>
             </div>
@@ -191,24 +203,16 @@
       <div class="input-area">
         <div class="input-container">
           <!-- Preset Prompts -->
-          <div class="preset-bar" v-if="currentConversation">
+          <div class="preset-bar" v-if="currentConversation && !isMobile">
             <el-dropdown trigger="click" @command="applyPreset" placement="top">
               <button class="preset-btn">
                 <el-icon><MagicStick /></el-icon>
-                <span>预设 Prompt</span>
-                <el-icon class="arrow"><ArrowDown /></el-icon>
+                <span>预设</span>
               </button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item
-                    v-for="p in presets"
-                    :key="p.id"
-                    :command="p.id"
-                  >
-                    <div class="preset-item">
-                      <span class="preset-name">{{ p.name }}</span>
-                      <span class="preset-desc">{{ p.description }}</span>
-                    </div>
+                  <el-dropdown-item v-for="p in presets" :key="p.id" :command="p.id">
+                    <span class="preset-name">{{ p.name }}</span>
                   </el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -228,6 +232,7 @@
             ></textarea>
             <button
               class="send-btn"
+              :class="{ active: inputContent.trim() && currentConversation && !sending }"
               :disabled="!inputContent.trim() || !currentConversation || sending"
               @click="sendMessage"
             >
@@ -236,8 +241,8 @@
             </button>
           </div>
 
-          <div class="input-hint">
-            <span>按 Ctrl + Enter 发送</span>
+          <div class="input-hint" v-if="!isMobile">
+            <span>Ctrl + Enter 发送</span>
           </div>
         </div>
       </div>
@@ -267,7 +272,6 @@
             <span class="setting-value">{{ settingsForm.temperature }}</span>
           </label>
           <el-slider v-model="settingsForm.temperature" :min="0" :max="2" :step="0.1" />
-          <p class="setting-hint">较低值更确定，较高值更有创意</p>
         </div>
 
         <div class="setting-item">
@@ -276,7 +280,6 @@
             <span class="setting-value">{{ settingsForm.max_tokens }}</span>
           </label>
           <el-input-number v-model="settingsForm.max_tokens" :min="100" :max="128000" :step="100" class="w-full" />
-          <p class="setting-hint">响应的最大 token 数量</p>
         </div>
 
         <div class="setting-item">
@@ -285,7 +288,6 @@
             <span class="setting-value">{{ settingsForm.top_p }}</span>
           </label>
           <el-slider v-model="settingsForm.top_p" :min="0" :max="1" :step="0.05" />
-          <p class="setting-hint">核采样参数，控制输出多样性</p>
         </div>
       </div>
 
@@ -298,23 +300,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, watch, nextTick } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, nextTick, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Fold, Expand, Plus, Setting, ChatLineRound, User, Monitor,
-  Loading, Promotion, MoreFilled, Delete, MagicStick, ArrowDown
+  Plus, Setting, ChatLineRound, User, Monitor,
+  Loading, Promotion, MoreFilled, Delete, MagicStick, Close, Menu
 } from '@element-plus/icons-vue'
 import { conversationApi, modelApi } from '@/api/conversation'
 import type { Conversation, Message, ConversationSettings, PresetPrompt } from '@/types/conversation'
 import { PRESET_PROMPTS } from '@/types/conversation'
-import dayjs from 'dayjs'
 
 // Refs
 const messagesAreaRef = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
 // State
-const sidebarOpen = ref(true)
+const isMobile = ref(false)
+const sidebarOpen = ref(false)
 const conversations = ref<Conversation[]>([])
 const currentConversation = ref<Conversation | null>(null)
 const messages = ref<Message[]>([])
@@ -324,7 +326,6 @@ const inputContent = ref('')
 const sending = ref(false)
 const streamingContent = ref('')
 const showSettingsDialog = ref(false)
-const selectedPreset = ref('')
 const presets = ref<PresetPrompt[]>(PRESET_PROMPTS)
 
 const settingsForm = reactive<ConversationSettings & { system_prompt: string }>({
@@ -334,20 +335,19 @@ const settingsForm = reactive<ConversationSettings & { system_prompt: string }>(
   system_prompt: ''
 })
 
-// Helper functions
-const formatDateShort = (date: string) => {
-  const d = dayjs(date)
-  const now = dayjs()
-  if (d.isSame(now, 'day')) return d.format('HH:mm')
-  if (d.isSame(now, 'year')) return d.format('MM-DD')
-  return d.format('YYYY-MM-DD')
+// Check mobile
+const checkMobile = () => {
+  isMobile.value = window.innerWidth < 768
+  if (!isMobile.value) {
+    sidebarOpen.value = true
+  }
 }
 
 // Auto resize textarea
 const autoResize = () => {
   if (textareaRef.value) {
     textareaRef.value.style.height = 'auto'
-    textareaRef.value.style.height = Math.min(textareaRef.value.scrollHeight, 200) + 'px'
+    textareaRef.value.style.height = Math.min(textareaRef.value.scrollHeight, 150) + 'px'
   }
 }
 
@@ -394,6 +394,7 @@ const createNewConversation = async () => {
     conversations.value.unshift(newConv)
     selectConversation(newConv)
     inputContent.value = ''
+    if (isMobile.value) sidebarOpen.value = false
     nextTick(() => textareaRef.value?.focus())
   } catch (error) {
     ElMessage.error('创建对话失败')
@@ -430,6 +431,7 @@ const selectConversation = async (conv: Conversation) => {
   // Scroll to bottom
   await nextTick()
   scrollToBottom()
+  if (isMobile.value) sidebarOpen.value = false
 }
 
 // Update model
@@ -479,7 +481,6 @@ const sendMessage = async () => {
         try {
           const response = await conversationApi.getMessages(currentConversation.value!.id)
           messages.value = response.data.data || []
-          // Update conversation title if first message
           if (messages.value.length === 2) {
             loadConversations()
           }
@@ -525,7 +526,7 @@ const saveSettings = async () => {
     })
     currentConversation.value.model = selectedModel.value
     currentConversation.value.system_prompt = settingsForm.system_prompt
-    showSettingsDialog = false
+    showSettingsDialog.value = false
     ElMessage.success('设置已保存')
   } catch (error) {
     ElMessage.error('保存失败')
@@ -564,8 +565,14 @@ const handleConversationAction = async (action: string, conv: Conversation) => {
 
 // Init
 onMounted(() => {
+  checkMobile()
   loadConversations()
   loadModels()
+  window.addEventListener('resize', checkMobile)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', checkMobile)
 })
 </script>
 
@@ -573,58 +580,79 @@ onMounted(() => {
 .chat-page {
   display: flex;
   height: calc(100vh - 56px - 56px);
-  background: #f8fafc;
+  background: #f0f2f5;
+  position: relative;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .chat-page {
     height: calc(100vh - 56px - 56px - 56px);
   }
 }
 
+/* Sidebar Overlay */
+.sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 99;
+}
+
 /* Sidebar */
 .sidebar {
   width: 280px;
-  background: white;
-  border-right: 1px solid #e2e8f0;
+  background: #fff;
   display: flex;
   flex-direction: column;
-  transition: width 0.3s ease;
+  border-right: 1px solid #e5e7eb;
+  transition: transform 0.3s ease;
+  flex-shrink: 0;
 }
 
-.sidebar.collapsed {
-  width: 56px;
+@media (max-width: 767px) {
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 100;
+    transform: translateX(-100%);
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
 }
 
 .sidebar-header {
   padding: 16px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  border-bottom: 1px solid #e2e8f0;
+  justify-content: space-between;
+  border-bottom: 1px solid #f0f0f0;
 }
 
-.sidebar-toggle {
+.sidebar-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.sidebar-close {
   width: 32px;
   height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: #6b7280;
   cursor: pointer;
-  color: #64748b;
-  transition: all 0.2s;
+  border-radius: 8px;
 }
 
-.sidebar-toggle:hover {
-  background: #f1f5f9;
-  color: #334155;
-}
-
-.sidebar-title {
-  font-weight: 600;
-  color: #1e293b;
-  font-size: 15px;
+.sidebar-close:hover {
+  background: #f3f4f6;
 }
 
 .sidebar-content {
@@ -632,16 +660,16 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding: 12px;
 }
 
 .new-chat-btn {
-  margin: 12px;
-  padding: 12px 16px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  padding: 12px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border: none;
   border-radius: 12px;
@@ -649,17 +677,17 @@ onMounted(() => {
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
+  margin-bottom: 12px;
 }
 
 .new-chat-btn:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
 }
 
 .conversation-list {
   flex: 1;
   overflow-y: auto;
-  padding: 8px;
 }
 
 .conversation-item {
@@ -674,7 +702,7 @@ onMounted(() => {
 }
 
 .conversation-item:hover {
-  background: #f1f5f9;
+  background: #f3f4f6;
 }
 
 .conversation-item.active {
@@ -682,8 +710,19 @@ onMounted(() => {
 }
 
 .conv-icon {
-  color: #6366f1;
-  font-size: 20px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f3f4f6;
+  border-radius: 10px;
+  color: #667eea;
+  font-size: 18px;
+}
+
+.conversation-item.active .conv-icon {
+  background: #e0e7ff;
 }
 
 .conv-info {
@@ -694,7 +733,7 @@ onMounted(() => {
 .conv-title {
   font-size: 14px;
   font-weight: 500;
-  color: #1e293b;
+  color: #1f2937;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -702,7 +741,7 @@ onMounted(() => {
 
 .conv-meta {
   font-size: 12px;
-  color: #94a3b8;
+  color: #9ca3af;
   margin-top: 2px;
 }
 
@@ -716,7 +755,7 @@ onMounted(() => {
   background: transparent;
   border-radius: 6px;
   cursor: pointer;
-  color: #94a3b8;
+  color: #9ca3af;
   opacity: 0;
   transition: all 0.2s;
 }
@@ -726,8 +765,8 @@ onMounted(() => {
 }
 
 .conv-more:hover {
-  background: #e2e8f0;
-  color: #475569;
+  background: #e5e7eb;
+  color: #4b5563;
 }
 
 .empty-state {
@@ -736,7 +775,7 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   padding: 40px 20px;
-  color: #94a3b8;
+  color: #9ca3af;
 }
 
 .empty-state p {
@@ -750,6 +789,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  background: #f0f2f5;
 }
 
 /* Header */
@@ -757,88 +797,75 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 24px;
-  background: white;
-  border-bottom: 1px solid #e2e8f0;
+  padding: 12px 16px;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
-.toggle-btn {
-  width: 40px;
-  height: 40px;
+.menu-btn {
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid #e2e8f0;
-  background: white;
-  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: #6b7280;
   cursor: pointer;
-  color: #64748b;
-  transition: all 0.2s;
+  border-radius: 8px;
 }
 
-.toggle-btn:hover {
-  background: #f8fafc;
-  color: #334155;
+.menu-btn:hover {
+  background: #f3f4f6;
 }
 
 .model-selector :deep(.el-select) {
-  width: 220px;
+  width: 180px;
+}
+
+@media (max-width: 767px) {
+  .model-selector :deep(.el-select) {
+    width: 140px;
+  }
 }
 
 .model-selector :deep(.el-input__wrapper) {
-  border-radius: 10px;
-  box-shadow: 0 0 0 1px #e2e8f0;
-}
-
-.model-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.model-name {
-  font-weight: 500;
-}
-
-.model-alias {
-  font-size: 12px;
-  color: #94a3b8;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px #e5e7eb;
 }
 
 .placeholder-text {
-  color: #94a3b8;
-  font-size: 15px;
+  color: #9ca3af;
+  font-size: 14px;
 }
 
 .header-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .icon-btn {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid #e2e8f0;
-  background: white;
-  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: #6b7280;
   cursor: pointer;
-  color: #64748b;
-  transition: all 0.2s;
+  border-radius: 8px;
 }
 
 .icon-btn:hover:not(:disabled) {
-  background: #f8fafc;
-  color: #334155;
+  background: #f3f4f6;
 }
 
 .icon-btn:disabled {
@@ -849,12 +876,12 @@ onMounted(() => {
 .primary-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  gap: 6px;
+  padding: 8px 16px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border: none;
-  border-radius: 10px;
+  border-radius: 8px;
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -863,13 +890,20 @@ onMounted(() => {
 
 .primary-btn:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+@media (max-width: 767px) {
+  .hide-mobile {
+    display: none;
+  }
 }
 
 /* Messages Area */
 .messages-area {
   flex: 1;
   overflow-y: auto;
+  padding: 16px;
 }
 
 .welcome-screen {
@@ -877,138 +911,167 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px;
 }
 
 .welcome-content {
   text-align: center;
-  max-width: 480px;
+  max-width: 400px;
+  padding: 20px;
 }
 
 .welcome-icon {
-  width: 80px;
-  height: 80px;
-  margin: 0 auto 24px;
-  background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
-  border-radius: 24px;
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 20px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #6366f1;
+  color: white;
 }
 
 .welcome-content h2 {
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 700;
-  color: #1e293b;
+  color: #1f2937;
   margin: 0 0 8px;
 }
 
 .welcome-content p {
-  font-size: 16px;
-  color: #64748b;
-  margin: 0 0 32px;
+  font-size: 14px;
+  color: #6b7280;
+  margin: 0 0 24px;
 }
 
-.quick-actions {
+.quick-start {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
   gap: 16px;
-  margin-bottom: 32px;
 }
 
-.quick-action {
+.model-select-row {
   display: flex;
   align-items: center;
+  gap: 12px;
+  justify-content: center;
+}
+
+.model-select-row .label {
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.model-select-row :deep(.el-select) {
+  width: 200px;
+}
+
+.start-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding: 16px 24px;
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 16px;
+  padding: 14px 28px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
-  color: #334155;
-  font-weight: 500;
 }
 
-.quick-action:hover {
-  border-color: #6366f1;
-  background: #f8fafc;
+.start-btn:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-}
-
-.new-chat-model-select {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-}
-
-.new-chat-model-select .label {
-  color: #64748b;
-  font-size: 14px;
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
 }
 
 .messages-container {
   max-width: 800px;
   margin: 0 auto;
-  padding: 24px;
 }
 
-.message-row {
-  margin-bottom: 24px;
+/* Message Blocks */
+.message-block {
+  margin-bottom: 20px;
 }
 
-.message-content {
+/* User Message */
+.user-message {
   display: flex;
-  gap: 16px;
+  justify-content: flex-end;
 }
 
-.message-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
+.user-bubble {
+  max-width: 70%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
+  padding: 12px 16px;
+  border-radius: 18px 18px 4px 18px;
 }
 
-.message-avatar.user {
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-}
-
-.message-avatar.assistant {
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-}
-
-.message-body {
-  flex: 1;
-  min-width: 0;
-}
-
-.message-role {
-  font-size: 13px;
-  font-weight: 600;
-  color: #64748b;
-  margin-bottom: 6px;
-}
-
-.message-text {
-  font-size: 15px;
-  line-height: 1.7;
-  color: #1e293b;
+.user-text {
+  font-size: 14px;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.message-row.user .message-text {
-  background: #f1f5f9;
-  padding: 16px 20px;
-  border-radius: 16px;
-  border-top-left-radius: 4px;
+/* Assistant Message */
+.assistant-message {
+  display: flex;
+  gap: 12px;
+}
+
+.assistant-avatar {
+  width: 36px;
+  height: 36px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  flex-shrink: 0;
+}
+
+.assistant-avatar.thinking {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+}
+
+.assistant-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.assistant-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  margin-bottom: 6px;
+}
+
+.assistant-bubble {
+  background: white;
+  padding: 14px 18px;
+  border-radius: 4px 18px 18px 18px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  max-width: 85%;
+}
+
+.assistant-bubble.thinking {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.assistant-text {
+  font-size: 14px;
+  line-height: 1.7;
+  color: #1f2937;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .cursor {
@@ -1020,31 +1083,37 @@ onMounted(() => {
   51%, 100% { opacity: 0; }
 }
 
-.loading-dots {
+.thinking-indicator {
   display: flex;
   gap: 4px;
 }
 
-.loading-dots span {
+.thinking-indicator span {
   width: 8px;
   height: 8px;
-  background: #94a3b8;
+  background: #f59e0b;
   border-radius: 50%;
   animation: bounce 1.4s infinite ease-in-out both;
 }
 
-.loading-dots span:nth-child(1) { animation-delay: -0.32s; }
-.loading-dots span:nth-child(2) { animation-delay: -0.16s; }
+.thinking-indicator span:nth-child(1) { animation-delay: -0.32s; }
+.thinking-indicator span:nth-child(2) { animation-delay: -0.16s; }
 
 @keyframes bounce {
   0%, 80%, 100% { transform: scale(0); }
   40% { transform: scale(1); }
 }
 
+.thinking-text {
+  font-size: 14px;
+  color: #6b7280;
+}
+
 /* Input Area */
 .input-area {
-  padding: 16px 24px 24px;
-  background: linear-gradient(to top, white 0%, rgba(255, 255, 255, 0.9) 100%);
+  padding: 12px 16px 16px;
+  background: #fff;
+  border-top: 1px solid #e5e7eb;
 }
 
 .input-container {
@@ -1053,66 +1122,49 @@ onMounted(() => {
 }
 
 .preset-bar {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .preset-btn {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 14px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  padding: 6px 12px;
+  background: #f3f4f6;
+  border: none;
+  border-radius: 6px;
   font-size: 13px;
-  color: #64748b;
+  color: #6b7280;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .preset-btn:hover {
-  background: #f1f5f9;
-  color: #334155;
-}
-
-.preset-btn .arrow {
-  font-size: 12px;
-}
-
-.preset-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  background: #e5e7eb;
 }
 
 .preset-name {
   font-weight: 500;
 }
 
-.preset-desc {
-  font-size: 12px;
-  color: #94a3b8;
-}
-
 .input-box {
   display: flex;
   align-items: flex-end;
-  gap: 12px;
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  padding: 12px 16px;
+  gap: 10px;
+  background: #f3f4f6;
+  border-radius: 20px;
+  padding: 10px 14px;
   transition: all 0.2s;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  border: 2px solid transparent;
 }
 
 .input-box:focus-within {
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  border-color: #667eea;
+  background: #fff;
 }
 
 .input-box.disabled {
-  background: #f8fafc;
+  opacity: 0.6;
 }
 
 .input-box textarea {
@@ -1120,15 +1172,16 @@ onMounted(() => {
   border: none;
   outline: none;
   resize: none;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.5;
-  color: #1e293b;
+  color: #1f2937;
   background: transparent;
-  max-height: 200px;
+  max-height: 150px;
+  font-family: inherit;
 }
 
 .input-box textarea::placeholder {
-  color: #94a3b8;
+  color: #9ca3af;
 }
 
 .input-box textarea:disabled {
@@ -1136,26 +1189,30 @@ onMounted(() => {
 }
 
 .send-btn {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  color: white;
+  background: #e5e7eb;
+  color: #9ca3af;
   border: none;
-  border-radius: 12px;
+  border-radius: 50%;
   cursor: pointer;
   transition: all 0.2s;
   flex-shrink: 0;
 }
 
-.send-btn:hover:not(:disabled) {
+.send-btn.active {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.send-btn.active:hover {
   transform: scale(1.05);
 }
 
 .send-btn:disabled {
-  opacity: 0.5;
   cursor: not-allowed;
 }
 
@@ -1166,11 +1223,11 @@ onMounted(() => {
 
 .input-hint span {
   font-size: 12px;
-  color: #94a3b8;
+  color: #9ca3af;
 }
 
 /* Settings Dialog */
-.settings-dialog .settings-form {
+.settings-form {
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -1181,19 +1238,14 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   font-weight: 500;
-  color: #334155;
+  color: #374151;
   margin-bottom: 8px;
+  font-size: 14px;
 }
 
 .setting-value {
   font-size: 14px;
-  color: #6366f1;
+  color: #667eea;
   font-weight: 600;
-}
-
-.setting-hint {
-  font-size: 12px;
-  color: #94a3b8;
-  margin: 4px 0 0;
 }
 </style>
