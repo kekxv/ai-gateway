@@ -106,7 +106,8 @@
     "lastUsed": "Last Used",
     "createTitle": "Create API Key",
     "editTitle": "Edit API Key",
-    "copyKey": "Copy Key"
+    "copyKey": "Copy Key",
+    "channels": "Channels"
   },
   "log": {
     "title": "Logs",

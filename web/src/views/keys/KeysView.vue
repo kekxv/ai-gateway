@@ -8,153 +8,106 @@
       </el-button>
     </div>
 
-    <!-- Desktop Table -->
-    <el-card class="hidden lg:block">
-      <el-table :data="paginatedKeys" stripe v-loading="loading">
-        <el-table-column prop="name" :label="t('apiKey.name')" width="150" />
-        <el-table-column prop="key" :label="t('apiKey.key')" width="280">
-          <template #default="{ row }">
-            <div class="flex items-center gap-2">
-              <span class="text-gray-400 font-mono text-sm">{{ maskKey(row.key) }}</span>
-              <el-button size="small" text @click="copyKey(row.key)">
-                <el-icon><CopyDocument /></el-icon>
-              </el-button>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column prop="enabled" :label="t('apiKey.enabled')" width="90">
-          <template #default="{ row }">
-            <el-tag :type="row.enabled ? 'success' : 'danger'" size="small">
-              {{ row.enabled ? t('common.yes') : t('common.no') }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('apiKey.bindToAll')" width="110">
-          <template #default="{ row }">
-            <el-tag :type="(row.bind_to_all ?? row.bindToAllChannels) ? 'success' : 'info'" size="small">
-              {{ (row.bind_to_all ?? row.bindToAllChannels) ? t('common.yes') : t('common.no') }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="Channels" min-width="180">
-          <template #default="{ row }">
-            <div v-if="row.bind_to_all ?? row.bindToAllChannels" class="flex items-center">
-              <el-tag type="primary" size="small">All Channels</el-tag>
-            </div>
-            <div v-else-if="row.channels && row.channels.length > 0" class="flex flex-wrap gap-1">
-              <el-tag
-                v-for="c in row.channels.slice(0, 3)"
-                :key="c.id"
-                size="small"
-                type="info"
-                class="max-w-[100px] overflow-hidden"
-              >
-                <span class="truncate block">{{ c.name || c }}</span>
-              </el-tag>
-              <el-tag v-if="row.channels.length > 3" size="small" type="info">
-                +{{ row.channels.length - 3 }}
-              </el-tag>
-            </div>
-            <span v-else class="text-gray-400 text-sm">-</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('apiKey.logDetails')" width="110">
-          <template #default="{ row }">
-            <el-tag :type="(row.log_details ?? row.logDetails) ? 'success' : 'info'" size="small">
-              {{ (row.log_details ?? row.logDetails) ? t('common.yes') : t('common.no') }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('apiKey.lastUsed')" width="160">
-          <template #default="{ row }">
-            {{ (row.last_used || row.lastUsed) ? formatDate(row.last_used || row.lastUsed) : '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('common.actions')" width="180" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="openEditDialog(row)">{{ t('common.edit') }}</el-button>
-            <el-button size="small" link :type="row.enabled ? 'warning' : 'success'" @click="toggleEnabled(row)">
-              {{ row.enabled ? 'Disable' : 'Enable' }}
-            </el-button>
-            <el-button size="small" link type="danger" @click="deleteKey(row)">{{ t('common.delete') }}</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <!-- Pagination -->
-      <div class="flex justify-end mt-4">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          v-model:page-size="pagination.pageSize"
-          :total="pagination.total"
-          :page-sizes="[10, 20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
-        />
-      </div>
-    </el-card>
-
-    <!-- Mobile Card List -->
-    <div class="lg:hidden space-y-3">
-      <div v-if="loading" class="text-center py-8">
-        <el-icon class="is-loading" :size="32"><Loading /></el-icon>
-      </div>
+    <!-- Card Grid -->
+    <div v-if="loading" class="text-center py-12">
+      <el-icon class="is-loading" :size="40"><Loading /></el-icon>
+    </div>
+    <div v-else-if="apiKeys.length === 0" class="text-center py-12 text-gray-500">
+      {{ t('common.noData') }}
+    </div>
+    <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
       <div
         v-for="key in paginatedKeys"
         :key="key.id"
-        class="bg-white rounded-lg shadow-sm border border-gray-100 p-4"
+        class="bg-white rounded-lg shadow-sm border border-gray-100 p-4 hover:shadow-md transition-shadow"
       >
-        <div class="flex items-start justify-between mb-2">
+        <!-- Header -->
+        <div class="flex items-start justify-between mb-3 gap-2">
           <div class="flex-1 min-w-0">
             <h3 class="font-semibold text-gray-800 truncate">{{ key.name }}</h3>
-            <p class="text-sm text-gray-400 font-mono truncate">{{ maskKey(key.key) }}</p>
+            <div class="flex items-center gap-1 mt-1">
+              <span class="text-sm text-gray-400 font-mono truncate">{{ maskKey(key.key) }}</span>
+              <el-button size="small" text @click="copyKey(key.key)">
+                <el-icon><CopyDocument /></el-icon>
+              </el-button>
+            </div>
           </div>
-          <el-tag :type="key.enabled ? 'success' : 'danger'" size="small">
+          <el-tag :type="key.enabled ? 'success' : 'danger'" size="small" class="shrink-0">
             {{ key.enabled ? t('common.enabled') : t('common.disabled') }}
           </el-tag>
         </div>
-        <div class="flex items-center gap-2 mb-2 flex-wrap">
-          <el-tag :type="(key.bind_to_all ?? key.bindToAllChannels) ? 'success' : 'info'" size="small">
-            {{ (key.bind_to_all ?? key.bindToAllChannels) ? 'All Channels' : `${key.channels?.length || 0} Channels` }}
-          </el-tag>
-          <el-tag :type="(key.log_details ?? key.logDetails) ? 'success' : 'info'" size="small">
-            {{ t('apiKey.logDetails') }}: {{ (key.log_details ?? key.logDetails) ? t('common.yes') : t('common.no') }}
-          </el-tag>
+
+        <!-- Channels -->
+        <div class="mb-3">
+          <div class="text-xs text-gray-400 mb-1">{{ t('apiKey.channels') }}</div>
+          <div v-if="key.bind_to_all ?? key.bindToAllChannels" class="flex items-center">
+            <el-tag type="primary" size="small">All Channels</el-tag>
+          </div>
+          <div v-else-if="key.channels && key.channels.length > 0" class="flex flex-wrap gap-1">
+            <el-tag
+              v-for="c in key.channels.slice(0, 2)"
+              :key="typeof c === 'object' ? c.id : c"
+              size="small"
+              type="info"
+              effect="plain"
+              class="max-w-[80px]"
+            >
+              <span class="truncate">{{ typeof c === 'object' ? c.name : c }}</span>
+            </el-tag>
+            <el-tag v-if="key.channels.length > 2" size="small" type="info" effect="plain">
+              +{{ key.channels.length - 2 }}
+            </el-tag>
+          </div>
+          <span v-else class="text-sm text-gray-400">-</span>
         </div>
-        <div class="flex items-center justify-between pt-3 border-t border-gray-100">
-          <span class="text-xs text-gray-400">{{ (key.last_used || key.lastUsed) ? formatDate(String(key.last_used || key.lastUsed)) : '-' }}</span>
-          <el-dropdown trigger="click">
-            <el-button size="small">
-              操作 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item @click="openEditDialog(key)">{{ t('common.edit') }}</el-dropdown-item>
-                <el-dropdown-item @click="copyKey(key.key || '')">复制 Key</el-dropdown-item>
-                <el-dropdown-item @click="toggleEnabled(key)">
-                  {{ key.enabled ? 'Disable' : 'Enable' }}
-                </el-dropdown-item>
-                <el-dropdown-item divided @click="deleteKey(key)">{{ t('common.delete') }}</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+
+        <!-- Stats -->
+        <div class="grid grid-cols-2 gap-2 mb-3">
+          <div class="bg-gray-50 rounded-lg p-2 text-center">
+            <div class="text-xs text-gray-500">{{ t('apiKey.logDetails') }}</div>
+            <el-tag :type="(key.log_details ?? key.logDetails) ? 'success' : 'info'" size="small" class="mt-1">
+              {{ (key.log_details ?? key.logDetails) ? t('common.yes') : t('common.no') }}
+            </el-tag>
+          </div>
+          <div class="bg-gray-50 rounded-lg p-2 text-center">
+            <div class="text-xs text-gray-500">{{ t('apiKey.lastUsed') }}</div>
+            <div class="text-xs text-gray-600 mt-1 truncate">
+              {{ (key.last_used || key.lastUsed) ? formatDate(String(key.last_used || key.lastUsed)) : '-' }}
+            </div>
+          </div>
         </div>
-      </div>
-      <!-- Mobile Pagination -->
-      <div class="flex justify-center mt-4">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          v-model:page-size="pagination.pageSize"
-          :total="pagination.total"
-          :page-sizes="[10, 20, 50]"
-          layout="prev, pager, next"
-          size="small"
-        />
+
+        <!-- Actions -->
+        <div class="flex flex-wrap gap-2 pt-3 border-t border-gray-100">
+          <el-button size="small" @click="openEditDialog(key)">
+            <el-icon class="mr-1"><Edit /></el-icon>
+            {{ t('common.edit') }}
+          </el-button>
+          <el-button size="small" :type="key.enabled ? 'warning' : 'success'" @click="toggleEnabled(key)">
+            {{ key.enabled ? 'Disable' : 'Enable' }}
+          </el-button>
+          <el-button size="small" type="danger" @click="deleteKey(key)">
+            <el-icon><Delete /></el-icon>
+          </el-button>
+        </div>
       </div>
     </div>
 
+    <!-- Pagination -->
+    <div v-if="apiKeys.length > 0" class="flex justify-center mt-6">
+      <el-pagination
+        v-model:current-page="pagination.page"
+        v-model:page-size="pagination.pageSize"
+        :total="pagination.total"
+        :page-sizes="[12, 24, 48, 96]"
+        layout="total, sizes, prev, pager, next"
+        :size="isMobile ? 'small' : 'default'"
+      />
+    </div>
+
     <!-- Create/Edit Dialog -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? t('apiKey.editTitle') : t('apiKey.createTitle')" :width="isMobile ? '90%' : '600px'">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="120px" label-position="top" :class="isMobile ? 'mobile-form' : ''">
+    <el-dialog v-model="dialogVisible" :title="isEdit ? t('apiKey.editTitle') : t('apiKey.createTitle')" :width="isMobile ? '90%' : '500px'">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" label-position="top">
         <el-form-item :label="t('apiKey.name')" prop="name">
           <el-input v-model="form.name" placeholder="Enter a name for this API key" />
         </el-form-item>
@@ -259,7 +212,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CopyDocument, Loading, ArrowDown } from '@element-plus/icons-vue'
+import { CopyDocument, Loading, Edit, Delete } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { apiKeyApi } from '@/api/apiKey'
 import { channelApi } from '@/api/channel'
@@ -282,7 +235,7 @@ const isMobile = ref(false)
 const activeProviderTab = ref('openai')
 
 const checkMobile = () => {
-  isMobile.value = window.innerWidth < 1024
+  isMobile.value = window.innerWidth < 768
 }
 
 onMounted(() => {
@@ -298,7 +251,7 @@ onUnmounted(() => {
 
 const pagination = reactive({
   page: 1,
-  pageSize: 10,
+  pageSize: 12,
   total: 0
 })
 

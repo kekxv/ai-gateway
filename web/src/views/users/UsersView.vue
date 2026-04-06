@@ -1,187 +1,149 @@
 <template>
   <div class="space-y-4">
-      <!-- Header -->
-      <div class="flex justify-between items-center">
-        <h2 class="text-xl font-semibold">{{ t('user.title') }}</h2>
-        <el-button type="primary" @click="openCreateDialog">
-          {{ t('common.create') }}
-        </el-button>
-      </div>
-
-      <!-- Desktop Table -->
-      <el-card class="hidden lg:block">
-        <el-table :data="paginatedUsers" stripe v-loading="loading">
-          <el-table-column prop="email" :label="t('user.email')" />
-          <el-table-column prop="role" :label="t('user.role')" width="100">
-            <template #default="{ row }">
-              <el-tag :type="row.role === 'ADMIN' ? 'danger' : 'info'">
-                {{ row.role }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="balance" :label="t('user.balance')" width="150">
-            <template #default="{ row }">
-              {{ formatCurrency(row.balance) }}
-            </template>
-          </el-table-column>
-          <el-table-column prop="disabled" :label="t('user.disabled')" width="100">
-            <template #default="{ row }">
-              <el-tag :type="row.disabled ? 'danger' : 'success'">
-                {{ row.disabled ? t('common.yes') : t('common.no') }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="totp_enabled" :label="t('user.totpEnabled')" width="120">
-            <template #default="{ row }">
-              <el-tag :type="row.totp_enabled ? 'success' : 'info'">
-                {{ row.totp_enabled ? t('common.yes') : t('common.no') }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="created_at" :label="t('user.createdAt')" width="180">
-            <template #default="{ row }">
-              {{ formatDate(row.created_at) }}
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('common.actions')" width="280" fixed="right">
-            <template #default="{ row }">
-              <el-button size="small" @click="openEditDialog(row)">{{ t('common.edit') }}</el-button>
-              <el-button size="small" type="warning" @click="adjustBalance(row)">{{ t('user.adjustBalance') }}</el-button>
-              <el-button size="small" :type="row.disabled ? 'success' : 'danger'" @click="toggleDisabled(row)">
-                {{ row.disabled ? '启用' : '禁用' }}
-              </el-button>
-              <el-button size="small" type="danger" @click="deleteUser(row)">{{ t('common.delete') }}</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-
-        <!-- Pagination -->
-        <div class="flex justify-end mt-4">
-          <el-pagination
-            v-model:current-page="pagination.page"
-            v-model:page-size="pagination.pageSize"
-            :total="pagination.total"
-            :page-sizes="[10, 20, 50, 100]"
-            layout="total, sizes, prev, pager, next"
-          />
-        </div>
-      </el-card>
-
-      <!-- Mobile Card List -->
-      <div class="lg:hidden space-y-3">
-        <div v-if="loading" class="text-center py-8">
-          <el-icon class="is-loading" :size="32"><Loading /></el-icon>
-        </div>
-        <div
-          v-for="user in paginatedUsers"
-          :key="user.id"
-          class="bg-white rounded-lg shadow-sm border border-gray-100 p-4"
-        >
-          <div class="flex items-start justify-between mb-2">
-            <div class="flex-1 min-w-0">
-              <h3 class="font-semibold text-gray-800 truncate">{{ user.email }}</h3>
-            </div>
-            <el-tag :type="user.role === 'ADMIN' ? 'danger' : 'info'" size="small">
-              {{ user.role }}
-            </el-tag>
-          </div>
-          <div class="flex items-center gap-2 mb-2 text-sm text-gray-600">
-            <span>{{ t('user.balance') }}: {{ formatCurrency(user.balance) }}</span>
-            <el-tag :type="user.disabled ? 'danger' : 'success'" size="small">
-              {{ user.disabled ? t('common.disabled') : t('common.enabled') }}
-            </el-tag>
-            <el-tag v-if="user.totpEnabled" type="success" size="small">TOTP</el-tag>
-          </div>
-          <div class="text-xs text-gray-400 mb-3">{{ formatDate(user.createdAt) }}</div>
-          <div class="flex items-center justify-between pt-3 border-t border-gray-100">
-            <el-button size="small" @click="openEditDialog(user)">{{ t('common.edit') }}</el-button>
-            <el-dropdown trigger="click">
-              <el-button size="small">
-                更多 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-              </el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item @click="adjustBalance(user)">{{ t('user.adjustBalance') }}</el-dropdown-item>
-                  <el-dropdown-item @click="toggleDisabled(user)">
-                    {{ user.disabled ? '启用' : '禁用' }}
-                  </el-dropdown-item>
-                  <el-dropdown-item divided @click="deleteUser(user)">{{ t('common.delete') }}</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </div>
-        </div>
-        <!-- Mobile Pagination -->
-        <div class="flex justify-center mt-4">
-          <el-pagination
-            v-model:current-page="pagination.page"
-            v-model:page-size="pagination.pageSize"
-            :total="pagination.total"
-            :page-sizes="[10, 20, 50]"
-            layout="prev, pager, next"
-            size="small"
-          />
-        </div>
-      </div>
-
-      <!-- Create/Edit Dialog -->
-      <el-dialog v-model="dialogVisible" :title="isEdit ? t('user.editTitle') : t('user.createTitle')" :width="isMobile ? '90%' : '500px'">
-        <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" label-position="top" :class="isMobile ? 'mobile-form' : ''">
-          <el-form-item :label="t('user.email')" prop="email">
-            <el-input v-model="form.email" :disabled="isEdit" />
-          </el-form-item>
-          <el-form-item v-if="!isEdit" :label="t('login.password')" prop="password">
-            <el-input v-model="form.password" type="password" show-password />
-          </el-form-item>
-          <el-form-item :label="t('user.role')" prop="role">
-            <el-select v-model="form.role" class="w-full">
-              <el-option label="USER" value="USER" />
-              <el-option label="ADMIN" value="ADMIN" />
-            </el-select>
-          </el-form-item>
-          <el-form-item :label="t('user.balance')" prop="balance">
-            <el-input-number v-model="form.balance" :precision="4" :step="1" class="w-full" />
-          </el-form-item>
-          <el-form-item :label="t('user.validUntil')" prop="valid_until">
-            <el-date-picker v-model="form.valid_until" type="datetime" class="w-full" />
-          </el-form-item>
-        </el-form>
-        <template #footer>
-          <el-button @click="dialogVisible = false">{{ t('common.cancel') }}</el-button>
-          <el-button type="primary" @click="submitForm" :loading="submitting">{{ t('common.save') }}</el-button>
-        </template>
-      </el-dialog>
-
-      <!-- Balance Adjust Dialog -->
-      <el-dialog v-model="balanceDialogVisible" :title="t('user.adjustBalance')" :width="isMobile ? '90%' : '400px'">
-        <el-form :model="balanceForm" label-width="100px" label-position="top" :class="isMobile ? 'mobile-form' : ''">
-          <el-form-item label="Current">
-            {{ formatCurrency(selectedUser?.balance || 0) }}
-          </el-form-item>
-          <el-form-item label="Amount">
-            <el-input-number v-model="balanceForm.amount" :precision="4" :step="1" class="w-full" />
-          </el-form-item>
-          <el-form-item label="Action">
-            <el-radio-group v-model="balanceForm.action">
-              <el-radio value="add">Add</el-radio>
-              <el-radio value="subtract">Subtract</el-radio>
-              <el-radio value="set">Set</el-radio>
-            </el-radio-group>
-          </el-form-item>
-        </el-form>
-        <template #footer>
-          <el-button @click="balanceDialogVisible = false">{{ t('common.cancel') }}</el-button>
-          <el-button type="primary" @click="submitBalance" :loading="submitting">{{ t('common.confirm') }}</el-button>
-        </template>
-      </el-dialog>
+    <!-- Header -->
+    <div class="flex justify-between items-center">
+      <h2 class="text-xl font-semibold">{{ t('user.title') }}</h2>
+      <el-button type="primary" @click="openCreateDialog">
+        {{ t('common.create') }}
+      </el-button>
     </div>
+
+    <!-- Card Grid -->
+    <div v-if="loading" class="text-center py-12">
+      <el-icon class="is-loading" :size="40"><Loading /></el-icon>
+    </div>
+    <div v-else-if="users.length === 0" class="text-center py-12 text-gray-500">
+      {{ t('common.noData') }}
+    </div>
+    <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      <div
+        v-for="user in paginatedUsers"
+        :key="user.id"
+        class="bg-white rounded-lg shadow-sm border border-gray-100 p-4 hover:shadow-md transition-shadow"
+      >
+        <!-- Header -->
+        <div class="flex items-start justify-between mb-3 gap-2">
+          <div class="flex-1 min-w-0">
+            <h3 class="font-semibold text-gray-800 truncate">{{ user.email }}</h3>
+            <p class="text-xs text-gray-400 mt-1">{{ formatDate(user.createdAt) }}</p>
+          </div>
+          <el-tag :type="user.role === 'ADMIN' ? 'danger' : 'info'" size="small" class="shrink-0">
+            {{ user.role }}
+          </el-tag>
+        </div>
+
+        <!-- Stats -->
+        <div class="grid grid-cols-2 gap-2 mb-3">
+          <div class="bg-amber-50 rounded-lg p-2 text-center">
+            <div class="text-xs text-amber-500">{{ t('user.balance') }}</div>
+            <div class="text-sm font-semibold text-amber-700">{{ formatCurrency(user.balance) }}</div>
+          </div>
+          <div class="rounded-lg p-2 text-center" :class="user.disabled ? 'bg-red-50' : 'bg-green-50'">
+            <div class="text-xs" :class="user.disabled ? 'text-red-500' : 'text-green-500'">{{ t('common.status') }}</div>
+            <div class="text-sm font-semibold" :class="user.disabled ? 'text-red-700' : 'text-green-700'">
+              {{ user.disabled ? t('common.disabled') : t('common.enabled') }}
+            </div>
+          </div>
+        </div>
+
+        <!-- TOTP -->
+        <div v-if="user.totpEnabled" class="mb-3">
+          <el-tag type="success" size="small" effect="plain">
+            <el-icon class="mr-1"><Key /></el-icon>
+            TOTP {{ t('common.enabled') }}
+          </el-tag>
+        </div>
+
+        <!-- Actions -->
+        <div class="flex flex-wrap gap-2 pt-3 border-t border-gray-100">
+          <el-button size="small" @click="openEditDialog(user)">
+            <el-icon class="mr-1"><Edit /></el-icon>
+            {{ t('common.edit') }}
+          </el-button>
+          <el-button size="small" type="warning" @click="adjustBalance(user)">
+            <el-icon class="mr-1"><Wallet /></el-icon>
+            {{ t('user.adjustBalance') }}
+          </el-button>
+          <el-button size="small" :type="user.disabled ? 'success' : 'danger'" @click="toggleDisabled(user)">
+            {{ user.disabled ? '启用' : '禁用' }}
+          </el-button>
+          <el-button size="small" type="danger" @click="deleteUser(user)">
+            <el-icon><Delete /></el-icon>
+          </el-button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pagination -->
+    <div v-if="users.length > 0" class="flex justify-center mt-6">
+      <el-pagination
+        v-model:current-page="pagination.page"
+        v-model:page-size="pagination.pageSize"
+        :total="pagination.total"
+        :page-sizes="[12, 24, 48, 96]"
+        layout="total, sizes, prev, pager, next"
+        :size="isMobile ? 'small' : 'default'"
+      />
+    </div>
+
+    <!-- Create/Edit Dialog -->
+    <el-dialog v-model="dialogVisible" :title="isEdit ? t('user.editTitle') : t('user.createTitle')" :width="isMobile ? '90%' : '500px'">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" label-position="top">
+        <el-form-item :label="t('user.email')" prop="email">
+          <el-input v-model="form.email" :disabled="isEdit" />
+        </el-form-item>
+        <el-form-item v-if="!isEdit" :label="t('login.password')" prop="password">
+          <el-input v-model="form.password" type="password" show-password />
+        </el-form-item>
+        <el-form-item :label="t('user.role')" prop="role">
+          <el-select v-model="form.role" class="w-full">
+            <el-option label="USER" value="USER" />
+            <el-option label="ADMIN" value="ADMIN" />
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="t('user.balance')" prop="balance">
+          <el-input-number v-model="form.balance" :precision="4" :step="1" class="w-full" />
+        </el-form-item>
+        <el-form-item :label="t('user.validUntil')" prop="valid_until">
+          <el-date-picker v-model="form.valid_until" type="datetime" class="w-full" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dialogVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" @click="submitForm" :loading="submitting">{{ t('common.save') }}</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Balance Adjust Dialog -->
+    <el-dialog v-model="balanceDialogVisible" :title="t('user.adjustBalance')" :width="isMobile ? '90%' : '400px'">
+      <el-form :model="balanceForm" label-width="100px" label-position="top">
+        <el-form-item label="Current">
+          {{ formatCurrency(selectedUser?.balance || 0) }}
+        </el-form-item>
+        <el-form-item label="Amount">
+          <el-input-number v-model="balanceForm.amount" :precision="4" :step="1" class="w-full" />
+        </el-form-item>
+        <el-form-item label="Action">
+          <el-radio-group v-model="balanceForm.action">
+            <el-radio value="add">Add</el-radio>
+            <el-radio value="subtract">Subtract</el-radio>
+            <el-radio value="set">Set</el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="balanceDialogVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" @click="submitBalance" :loading="submitting">{{ t('common.confirm') }}</el-button>
+      </template>
+    </el-dialog>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, ArrowDown } from '@element-plus/icons-vue'
+import { Loading, Edit, Wallet, Delete, Key } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { userApi } from '@/api/auth'
 import type { User } from '@/types/user'
@@ -199,7 +161,7 @@ const formRef = ref<FormInstance>()
 const isMobile = ref(false)
 
 const checkMobile = () => {
-  isMobile.value = window.innerWidth < 1024
+  isMobile.value = window.innerWidth < 768
 }
 
 onMounted(() => {
@@ -214,7 +176,7 @@ onUnmounted(() => {
 
 const pagination = reactive({
   page: 1,
-  pageSize: 10,
+  pageSize: 12,
   total: 0
 })
 

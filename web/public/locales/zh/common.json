@@ -106,7 +106,8 @@
     "lastUsed": "最后使用",
     "createTitle": "创建API Key",
     "editTitle": "编辑API Key",
-    "copyKey": "复制密钥"
+    "copyKey": "复制密钥",
+    "channels": "渠道"
   },
   "log": {
     "title": "日志查看",

@@ -11,8 +11,8 @@
 
     <!-- Filters -->
     <div class="flex flex-wrap gap-2 items-center text-sm">
-      <el-input v-model="filters.model" placeholder="模型" clearable class="!w-32 sm:!w-48" size="small" />
-      <el-input v-model="filters.provider" placeholder="提供商" clearable class="!w-28 sm:!w-36" size="small" />
+      <el-input v-model="filters.model" placeholder="模型" clearable class="!w-32 sm:!w-40" size="small" />
+      <el-input v-model="filters.provider" placeholder="提供商" clearable class="!w-24 sm:!w-32" size="small" />
       <el-select v-model="filters.status" placeholder="状态" clearable class="!w-20 sm:!w-24" size="small">
         <el-option label="成功" value="success" />
         <el-option label="错误" value="error" />
@@ -23,156 +23,82 @@
         range-separator="-"
         start-placeholder="开始"
         end-placeholder="结束"
-        class="!w-48 sm:!w-52"
+        class="!w-44 sm:!w-48"
         size="small"
       />
       <el-button type="primary" size="small" @click="fetchLogs">搜索</el-button>
       <el-button size="small" @click="resetFilters">重置</el-button>
     </div>
 
-    <!-- Desktop Table -->
-    <el-card shadow="never" class="border-0 hidden lg:block">
-      <el-table :data="logs" v-loading="loading" class="w-full">
-        <el-table-column :label="t('log.timestamp')" width="170">
-          <template #default="{ row }">
-            <span class="text-sm text-gray-600 whitespace-nowrap">{{ formatDate(row.createdAt) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('log.apiKey')" width="120">
-          <template #default="{ row }">
-            <span v-if="row.apiKey" class="text-sm">{{ row.apiKey.name }}</span>
-            <span v-else class="text-gray-300">-</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('log.userAccount')" width="140">
-          <template #default="{ row }">
-            <span v-if="row.apiKey?.user" class="text-sm text-gray-600 truncate block">{{ row.apiKey.user.email }}</span>
-            <span v-else class="text-gray-300">-</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('log.model')" min-width="140">
-          <template #default="{ row }">
-            <el-tag type="info" size="small" class="font-mono">{{ row.modelName || row.model || '-' }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('log.provider')" width="110">
-          <template #default="{ row }">
-            <span class="text-sm whitespace-nowrap">{{ row.providerName || row.provider || '-' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('log.latency')" width="80" align="center">
-          <template #default="{ row }">
-            <el-tag :type="getLatencyType(row.latency || row.latency_ms)" size="small">
-              {{ formatLatency(row.latency || row.latency_ms) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('log.promptTokens')" width="90" align="right">
-          <template #default="{ row }">
-            <span class="text-indigo-600 font-medium text-sm whitespace-nowrap">{{ formatNumber(row.promptTokens || row.prompt_tokens) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('log.completionTokens')" width="110" align="right">
-          <template #default="{ row }">
-            <span class="text-green-600 font-medium text-sm whitespace-nowrap">{{ formatNumber(row.completionTokens || row.completion_tokens) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('log.totalTokens')" width="110" align="right">
-          <template #default="{ row }">
-            <span class="font-semibold text-sm whitespace-nowrap">{{ formatNumber(row.totalTokens || row.total_tokens) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('log.cost')" width="85" align="right">
-          <template #default="{ row }">
-            <span class="text-amber-600 text-sm whitespace-nowrap">{{ formatCost(row.cost) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('log.status')" width="70" align="center">
-          <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">
-              {{ row.status === 200 || row.status === 'success' ? '成功' : '错误' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('log.detail')" width="70" fixed="right" align="center">
-          <template #default="{ row }">
-            <el-button size="small" link type="primary" class="!px-2 !py-1 hover:!bg-indigo-50 rounded" @click="viewDetail(row)">
-              <el-icon class="mr-1"><View /></el-icon>详情
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <!-- Pagination -->
-      <div class="flex justify-end mt-4">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          v-model:page-size="pagination.pageSize"
-          :total="pagination.total"
-          :page-sizes="[10, 20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
-          @change="fetchLogs"
-        />
-      </div>
-    </el-card>
-
-    <!-- Mobile Card List -->
-    <div class="lg:hidden space-y-3">
-      <div v-if="loading" class="text-center py-8">
-        <el-icon class="is-loading" :size="32"><Loading /></el-icon>
-      </div>
+    <!-- Card Grid -->
+    <div v-if="loading" class="text-center py-12">
+      <el-icon class="is-loading" :size="40"><Loading /></el-icon>
+    </div>
+    <div v-else-if="logs.length === 0" class="text-center py-12 text-gray-500">
+      {{ t('common.noData') }}
+    </div>
+    <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
       <div
         v-for="log in logs"
         :key="log.id"
-        class="bg-white rounded-lg shadow-sm border border-gray-100 p-3"
+        class="bg-white rounded-lg shadow-sm border border-gray-100 p-3 hover:shadow-md transition-shadow cursor-pointer"
+        @click="viewDetail(log)"
       >
-        <div class="flex items-start justify-between mb-2">
+        <!-- Header -->
+        <div class="flex items-start justify-between mb-2 gap-2">
           <div class="flex-1 min-w-0">
-            <el-tag type="info" size="small" class="font-mono mb-1">{{ log.modelName || log.model || '-' }}</el-tag>
-            <div class="text-xs text-gray-400">{{ formatDate(log.createdAt) }}</div>
+            <el-tag type="info" size="small" class="font-mono">{{ log.modelName || log.model || '-' }}</el-tag>
           </div>
-          <el-tag :type="getStatusType(log.status)" size="small">
+          <el-tag :type="getStatusType(log.status)" size="small" class="shrink-0">
             {{ log.status === 200 || log.status === 'success' ? '成功' : '错误' }}
           </el-tag>
         </div>
-        <div class="grid grid-cols-3 gap-2 text-center mb-2">
-          <div class="bg-indigo-50 rounded p-1.5">
+
+        <!-- Time & Provider -->
+        <div class="flex items-center justify-between text-xs text-gray-400 mb-3">
+          <span>{{ formatDate(log.createdAt) }}</span>
+          <span>{{ log.providerName || log.provider || '-' }}</span>
+        </div>
+
+        <!-- Stats Grid -->
+        <div class="grid grid-cols-3 gap-2 mb-2">
+          <div class="bg-indigo-50 rounded p-1.5 text-center">
             <div class="text-xs text-indigo-500">输入</div>
             <div class="text-sm font-semibold text-indigo-700">{{ formatNumber(log.promptTokens || log.prompt_tokens) }}</div>
           </div>
-          <div class="bg-green-50 rounded p-1.5">
+          <div class="bg-green-50 rounded p-1.5 text-center">
             <div class="text-xs text-green-500">输出</div>
             <div class="text-sm font-semibold text-green-700">{{ formatNumber(log.completionTokens || log.completion_tokens) }}</div>
           </div>
-          <div class="bg-amber-50 rounded p-1.5">
+          <div class="bg-amber-50 rounded p-1.5 text-center">
             <div class="text-xs text-amber-500">费用</div>
             <div class="text-sm font-semibold text-amber-700">{{ formatCost(log.cost) }}</div>
           </div>
         </div>
-        <div class="flex items-center justify-between text-xs text-gray-500">
-          <span>{{ log.providerName || log.provider || '-' }}</span>
+
+        <!-- Latency -->
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-gray-400">
+            {{ log.apiKey?.name ? log.apiKey.name : '-' }}
+          </span>
           <el-tag :type="getLatencyType(log.latency || log.latency_ms)" size="small">
             {{ formatLatency(log.latency || log.latency_ms) }}
           </el-tag>
         </div>
-        <div class="flex justify-end pt-2 mt-2 border-t border-gray-100">
-          <el-button size="small" link type="primary" @click="viewDetail(log)">
-            <el-icon class="mr-1"><View /></el-icon>详情
-          </el-button>
-        </div>
       </div>
-      <!-- Mobile Pagination -->
-      <div class="flex justify-center mt-4">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          v-model:page-size="pagination.pageSize"
-          :total="pagination.total"
-          :page-sizes="[10, 20, 50]"
-          layout="prev, pager, next"
-          size="small"
-          @change="fetchLogs"
-        />
-      </div>
+    </div>
+
+    <!-- Pagination -->
+    <div v-if="logs.length > 0" class="flex justify-center mt-6">
+      <el-pagination
+        v-model:current-page="pagination.page"
+        v-model:page-size="pagination.pageSize"
+        :total="pagination.total"
+        :page-sizes="[12, 24, 48, 96]"
+        layout="total, sizes, prev, pager, next"
+        :size="isMobile ? 'small' : 'default'"
+        @change="fetchLogs"
+      />
     </div>
 
     <!-- Detail Dialog -->
@@ -344,7 +270,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, View, CopyDocument, Warning, Loading, Document } from '@element-plus/icons-vue'
+import { Delete, CopyDocument, Warning, Loading, Document } from '@element-plus/icons-vue'
 import { logApi } from '@/api/log'
 import type { Log, LogDetail } from '@/types/log'
 import dayjs from 'dayjs'
@@ -376,7 +302,7 @@ const parsedResponseHeaders = computed(() => {
 })
 
 const checkMobile = () => {
-  isMobile.value = window.innerWidth < 1024
+  isMobile.value = window.innerWidth < 768
 }
 
 onMounted(() => {
@@ -391,7 +317,7 @@ onUnmounted(() => {
 
 const pagination = reactive({
   page: 1,
-  pageSize: 10,
+  pageSize: 12,
   total: 0
 })
 
@@ -446,6 +372,31 @@ const copyToClipboard = async (text: string | object | null | undefined) => {
   }
 }
 
+// Helper function to extract text from content
+const extractContentText = (content: string | object | undefined): string => {
+  if (!content) return ''
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    // Handle [{type: "text", text: "..."}] format
+    return content
+      .map((item: { type?: string; text?: string }) => {
+        if (item.type === 'text' && item.text) return item.text
+        return ''
+      })
+      .join('')
+  }
+  if (typeof content === 'object') {
+    // Handle { StringContent, Parts } or similar
+    const contentObj = content as { StringContent?: string; Parts?: { text?: string }[] }
+    if (contentObj.StringContent) return contentObj.StringContent
+    if (contentObj.Parts) {
+      return contentObj.Parts.map((p: { text?: string }) => p.text || '').join('')
+    }
+    return JSON.stringify(content, null, 2)
+  }
+  return ''
+}
+
 // Extract chat messages from request/response
 const chatMessages = computed(() => {
   if (!logDetail.value?.detail) return []
@@ -477,23 +428,9 @@ const chatMessages = computed(() => {
           // Input is array of items
           reqObj.input.forEach((item: { type?: string; role?: string; content?: string | object }) => {
             if (item.type === 'message' || item.role) {
-              let content = ''
-              if (typeof item.content === 'string') {
-                content = item.content
-              } else if (item.content && typeof item.content === 'object') {
-                // Content might be { StringContent, Parts } or array
-                const contentObj = item.content as { StringContent?: string; Parts?: { text?: string }[] }
-                if (contentObj.StringContent) {
-                  content = contentObj.StringContent
-                } else if (Array.isArray(item.content)) {
-                  content = item.content.map((p: { text?: string; type?: string }) => p.text || '').join('')
-                } else {
-                  content = JSON.stringify(item.content, null, 2)
-                }
-              }
               messages.push({
                 role: item.role || 'user',
-                content
+                content: extractContentText(item.content)
               })
             }
           })
@@ -504,7 +441,7 @@ const chatMessages = computed(() => {
         reqObj.messages.forEach((msg: { role: string; content: string | object }) => {
           messages.push({
             role: msg.role,
-            content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2)
+            content: extractContentText(msg.content)
           })
         })
       }
@@ -550,7 +487,7 @@ const chatMessages = computed(() => {
           if (choice.message) {
             messages.push({
               role: choice.message.role,
-              content: typeof choice.message.content === 'string' ? choice.message.content : JSON.stringify(choice.message.content, null, 2)
+              content: extractContentText(choice.message.content)
             })
           }
         })

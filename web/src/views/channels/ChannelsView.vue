@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-6">
+  <div class="space-y-4">
     <!-- Header -->
     <div class="flex justify-between items-center">
       <h2 class="text-xl font-semibold">{{ t('channel.title') }}</h2>
@@ -8,105 +8,117 @@
       </el-button>
     </div>
 
-    <!-- Cards Grid -->
-    <div v-loading="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    <!-- Card Grid -->
+    <div v-if="loading" class="text-center py-12">
+      <el-icon class="is-loading" :size="40"><Loading /></el-icon>
+    </div>
+    <div v-else-if="channels.length === 0" class="text-center py-12 text-gray-500">
+      {{ t('common.noData') }}
+    </div>
+    <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
       <div
         v-for="channel in paginatedChannels"
         :key="channel.id"
-        class="bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow"
+        class="bg-white rounded-lg shadow-sm border border-gray-100 p-4 hover:shadow-md transition-shadow"
       >
-        <div class="p-4">
-          <!-- Header -->
-          <div class="flex items-center justify-between mb-3">
+        <!-- Header -->
+        <div class="flex items-start justify-between mb-3 gap-2">
+          <div class="flex-1 min-w-0">
             <h3 class="font-semibold text-gray-800 truncate">{{ channel.name }}</h3>
-            <div class="flex items-center gap-1">
-              <el-tag :type="channel.enabled ? 'success' : 'danger'" size="small">
-                {{ channel.enabled ? t('common.enabled') : t('common.disabled') }}
-              </el-tag>
-              <el-tag v-if="channel.shared" type="info" size="small">{{ t('channel.shared') }}</el-tag>
-            </div>
+            <p class="text-xs text-gray-400 mt-1">{{ formatDate(channel.createdAt) }}</p>
           </div>
-
-          <!-- Providers -->
-          <div class="mb-3">
-            <div class="text-xs text-gray-500 mb-1">Providers</div>
-            <div class="flex flex-wrap gap-1">
-              <el-tag v-for="p in channel.providers?.slice(0, 3)" :key="p.id" size="small" type="info" class="max-w-[100px] overflow-hidden">
-                <span class="truncate block">{{ p.name }}</span>
-              </el-tag>
-              <el-tag v-if="(channel.providers?.length || 0) > 3" size="small" type="info">
-                +{{ channel.providers!.length - 3 }}
-              </el-tag>
-              <span v-if="!channel.providers?.length" class="text-gray-400 text-sm">-</span>
-            </div>
-          </div>
-
-          <!-- Models -->
-          <div class="mb-3">
-            <div class="text-xs text-gray-500 mb-1">Models</div>
-            <div class="flex flex-wrap gap-1">
-              <el-tag v-for="m in channel.allowedModels?.slice(0, 4)" :key="m.id" size="small" class="!max-w-[140px] overflow-hidden">
-                <span class="truncate block">{{ m.name }}</span>
-              </el-tag>
-              <el-tag v-if="(channel.allowedModels?.length || 0) > 4" size="small">
-                +{{ channel.allowedModels!.length - 4 }}
-              </el-tag>
-              <span v-if="!channel.allowedModels?.length" class="text-gray-400 text-sm">-</span>
-            </div>
-          </div>
-
-          <!-- Actions -->
-          <div class="flex items-center justify-between pt-3 border-t border-gray-100">
-            <span class="text-xs text-gray-400">{{ formatDate(channel.createdAt) }}</span>
-            <el-dropdown trigger="click">
-              <el-button size="small">
-                操作 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-              </el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item @click="openEditDialog(channel)">{{ t('common.edit') }}</el-dropdown-item>
-                  <el-dropdown-item @click="toggleEnabled(channel)">
-                    {{ channel.enabled ? 'Disable' : 'Enable' }}
-                  </el-dropdown-item>
-                  <el-dropdown-item divided @click="deleteChannel(channel)">{{ t('common.delete') }}</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
+          <div class="flex flex-wrap items-center gap-1 shrink-0">
+            <el-tag :type="channel.enabled ? 'success' : 'danger'" size="small">
+              {{ channel.enabled ? t('common.enabled') : t('common.disabled') }}
+            </el-tag>
+            <el-tag v-if="channel.shared" type="info" size="small" effect="plain">
+              {{ t('channel.shared') }}
+            </el-tag>
           </div>
         </div>
-      </div>
 
-      <!-- Empty State -->
-      <div v-if="!loading && paginatedChannels.length === 0" class="col-span-full text-center py-12 text-gray-500">
-        No channels found. Click "Create" to add one.
+        <!-- Providers -->
+        <div class="mb-3">
+          <div class="text-xs text-gray-400 mb-1">{{ t('provider.title') }}</div>
+          <div class="flex flex-wrap gap-1">
+            <el-tag
+              v-for="p in channel.providers?.slice(0, 2)"
+              :key="p.id"
+              size="small"
+              type="info"
+              effect="plain"
+              class="max-w-[80px]"
+            >
+              <span class="truncate">{{ p.name }}</span>
+            </el-tag>
+            <el-tag v-if="(channel.providers?.length || 0) > 2" size="small" type="info" effect="plain">
+              +{{ channel.providers!.length - 2 }}
+            </el-tag>
+            <span v-if="!channel.providers?.length" class="text-gray-400 text-sm">-</span>
+          </div>
+        </div>
+
+        <!-- Models -->
+        <div class="mb-3">
+          <div class="text-xs text-gray-400 mb-1">{{ t('model.title') }}</div>
+          <div class="flex flex-wrap gap-1">
+            <el-tag
+              v-for="m in channel.allowedModels?.slice(0, 2)"
+              :key="m.id"
+              size="small"
+              class="max-w-full"
+            >
+              <span class="truncate block max-w-[120px]">{{ m.name }}</span>
+            </el-tag>
+            <el-tag v-if="(channel.allowedModels?.length || 0) > 2" size="small">
+              +{{ channel.allowedModels!.length - 2 }}
+            </el-tag>
+            <span v-if="!channel.allowedModels?.length" class="text-gray-400 text-sm">-</span>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="flex flex-wrap gap-2 pt-3 border-t border-gray-100">
+          <el-button size="small" @click="openEditDialog(channel)">
+            <el-icon class="mr-1"><Edit /></el-icon>
+            {{ t('common.edit') }}
+          </el-button>
+          <el-button size="small" :type="channel.enabled ? 'warning' : 'success'" @click="toggleEnabled(channel)">
+            {{ channel.enabled ? 'Disable' : 'Enable' }}
+          </el-button>
+          <el-button size="small" type="danger" @click="deleteChannel(channel)">
+            <el-icon><Delete /></el-icon>
+          </el-button>
+        </div>
       </div>
     </div>
 
     <!-- Pagination -->
-    <div v-if="pagination.total > pagination.pageSize" class="flex justify-center">
+    <div v-if="channels.length > 0" class="flex justify-center mt-6">
       <el-pagination
         v-model:current-page="pagination.page"
         v-model:page-size="pagination.pageSize"
         :total="pagination.total"
-        :page-sizes="[10, 20, 50]"
-        layout="prev, pager, next"
+        :page-sizes="[12, 24, 48, 96]"
+        layout="total, sizes, prev, pager, next"
+        :size="isMobile ? 'small' : 'default'"
       />
     </div>
 
     <!-- Create/Edit Dialog -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? t('channel.editTitle') : t('channel.createTitle')" width="600px">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
+    <el-dialog v-model="dialogVisible" :title="isEdit ? t('channel.editTitle') : t('channel.createTitle')" :width="isMobile ? '90%' : '600px'">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" label-position="top">
         <el-form-item :label="t('channel.name')" prop="name">
           <el-input v-model="form.name" placeholder="Enter channel name" />
         </el-form-item>
 
-        <el-form-item label="Providers" prop="provider_ids">
+        <el-form-item :label="t('provider.title')" prop="provider_ids">
           <el-select v-model="form.provider_ids" multiple placeholder="Select providers" class="w-full">
             <el-option v-for="p in providers" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
         </el-form-item>
 
-        <el-form-item label="Models">
+        <el-form-item :label="t('model.title')">
           <div class="w-full">
             <div class="flex items-center justify-between mb-2">
               <el-input v-model="modelSearch" placeholder="Search models..." clearable class="w-40" size="small">
@@ -151,10 +163,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, ArrowDown } from '@element-plus/icons-vue'
+import { Search, Loading, Edit, Delete } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { channelApi } from '@/api/channel'
 import { providerApi } from '@/api/provider'
@@ -175,10 +187,27 @@ const isEdit = ref(false)
 const selectedChannel = ref<Channel | null>(null)
 const formRef = ref<FormInstance>()
 const modelSearch = ref('')
+const isMobile = ref(false)
+
+const checkMobile = () => {
+  isMobile.value = window.innerWidth < 768
+}
+
+onMounted(() => {
+  checkMobile()
+  window.addEventListener('resize', checkMobile)
+  fetchChannels()
+  fetchProviders()
+  fetchModels()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', checkMobile)
+})
 
 const pagination = reactive({
   page: 1,
-  pageSize: 10,
+  pageSize: 12,
   total: 0
 })
 
@@ -358,10 +387,4 @@ const deleteChannel = async (channel: Channel) => {
     // User cancelled
   }
 }
-
-onMounted(() => {
-  fetchChannels()
-  fetchProviders()
-  fetchModels()
-})
 </script>

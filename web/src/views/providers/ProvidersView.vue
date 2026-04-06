@@ -8,106 +8,80 @@
       </el-button>
     </div>
 
-    <!-- Desktop Table -->
-    <el-card class="hidden lg:block">
-      <el-table :data="paginatedProviders" stripe v-loading="loading">
-        <el-table-column prop="name" :label="t('provider.name')" />
-        <el-table-column prop="base_url" :label="t('provider.baseURL')" />
-        <el-table-column prop="type" :label="t('provider.type')" width="180">
-          <template #default="{ row }">
-            <div class="flex flex-wrap gap-1">
-              <el-tag v-for="t in (row.typesList || [row.type || 'custom'])" :key="t" size="small">{{ t }}</el-tag>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column prop="auto_load_models" :label="t('provider.autoLoadModels')" width="140">
-          <template #default="{ row }">
-            <el-tag :type="row.auto_load_models ? 'success' : 'info'">
-              {{ row.auto_load_models ? t('common.yes') : t('common.no') }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="disabled" :label="t('common.status')" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.disabled ? 'danger' : 'success'">
-              {{ row.disabled ? t('common.disabled') : t('common.enabled') }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('common.actions')" width="320" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" @click="openEditDialog(row)">{{ t('common.edit') }}</el-button>
-            <el-button size="small" type="success" @click="openModelsDialog(row)">{{ t('provider.loadModels') }}</el-button>
-            <el-button size="small" :type="row.disabled ? 'warning' : 'info'" @click="toggleDisabled(row)">
-              {{ row.disabled ? t('common.enabled') : t('common.disabled') }}
-            </el-button>
-            <el-button size="small" type="danger" @click="deleteProvider(row)">{{ t('common.delete') }}</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <!-- Pagination -->
-      <div class="flex justify-end mt-4">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          v-model:page-size="pagination.pageSize"
-          :total="pagination.total"
-          :page-sizes="[10, 20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
-        />
-      </div>
-    </el-card>
-
-    <!-- Mobile Card List -->
-    <div class="lg:hidden space-y-3">
-      <div v-if="loading" class="text-center py-8">
-        <el-icon class="is-loading" :size="32"><Loading /></el-icon>
-      </div>
+    <!-- Card Grid -->
+    <div v-if="loading" class="text-center py-12">
+      <el-icon class="is-loading" :size="40"><Loading /></el-icon>
+    </div>
+    <div v-else-if="providers.length === 0" class="text-center py-12 text-gray-500">
+      {{ t('common.noData') }}
+    </div>
+    <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
       <div
         v-for="provider in paginatedProviders"
         :key="provider.id"
-        class="bg-white rounded-lg shadow-sm border border-gray-100 p-4"
+        class="bg-white rounded-lg shadow-sm border border-gray-100 p-4 hover:shadow-md transition-shadow"
       >
-        <div class="flex items-start justify-between mb-3">
+        <!-- Header -->
+        <div class="flex items-start justify-between mb-3 gap-2">
           <div class="flex-1 min-w-0">
             <h3 class="font-semibold text-gray-800 truncate">{{ provider.name }}</h3>
-            <p class="text-sm text-gray-500 truncate">{{ provider.base_url }}</p>
+            <p class="text-sm text-gray-500 truncate mt-1">{{ provider.base_url || provider.baseURL }}</p>
           </div>
-          <el-tag :type="provider.disabled ? 'danger' : 'success'" size="small">
+          <el-tag :type="provider.disabled ? 'danger' : 'success'" size="small" class="shrink-0">
             {{ provider.disabled ? t('common.disabled') : t('common.enabled') }}
           </el-tag>
         </div>
-        <div class="flex items-center gap-2 mb-3 flex-wrap">
-          <el-tag v-for="t in (provider.typesList || [provider.type || 'custom'])" :key="t" size="small">{{ t }}</el-tag>
-          <el-tag :type="provider.auto_load_models ? 'success' : 'info'" size="small">
-            {{ t('provider.autoLoadModels') }}: {{ provider.auto_load_models ? t('common.yes') : t('common.no') }}
+
+        <!-- Types -->
+        <div class="flex items-center gap-1 mb-3 flex-wrap">
+          <el-tag v-for="typeItem in (provider.typesList || [provider.type || 'custom'])" :key="typeItem" size="small" effect="plain">
+            {{ typeItem }}
           </el-tag>
         </div>
+
+        <!-- Auto Load Models -->
+        <div class="flex items-center gap-2 mb-4">
+          <span class="text-xs text-gray-400">{{ t('provider.autoLoadModels') }}</span>
+          <el-tag :type="provider.auto_load_models || provider.autoLoadModels ? 'success' : 'info'" size="small">
+            {{ (provider.auto_load_models || provider.autoLoadModels) ? t('common.yes') : t('common.no') }}
+          </el-tag>
+        </div>
+
+        <!-- Actions -->
         <div class="flex flex-wrap gap-2 pt-3 border-t border-gray-100">
-          <el-button size="small" @click="openEditDialog(provider)">{{ t('common.edit') }}</el-button>
-          <el-button size="small" type="success" @click="openModelsDialog(provider)">{{ t('provider.loadModels') }}</el-button>
+          <el-button size="small" @click="openEditDialog(provider)">
+            <el-icon class="mr-1"><Edit /></el-icon>
+            {{ t('common.edit') }}
+          </el-button>
+          <el-button size="small" type="success" @click="openModelsDialog(provider)">
+            <el-icon class="mr-1"><Download /></el-icon>
+            {{ t('provider.loadModels') }}
+          </el-button>
           <el-button size="small" :type="provider.disabled ? 'warning' : 'info'" @click="toggleDisabled(provider)">
             {{ provider.disabled ? t('common.enabled') : t('common.disabled') }}
           </el-button>
-          <el-button size="small" type="danger" @click="deleteProvider(provider)">{{ t('common.delete') }}</el-button>
+          <el-button size="small" type="danger" @click="deleteProvider(provider)">
+            <el-icon><Delete /></el-icon>
+          </el-button>
         </div>
-      </div>
-      <!-- Mobile Pagination -->
-      <div class="flex justify-center mt-4">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          v-model:page-size="pagination.pageSize"
-          :total="pagination.total"
-          :page-sizes="[10, 20, 50]"
-          layout="prev, pager, next"
-          size="small"
-        />
       </div>
     </div>
 
+    <!-- Pagination -->
+    <div v-if="providers.length > 0" class="flex justify-center mt-6">
+      <el-pagination
+        v-model:current-page="pagination.page"
+        v-model:page-size="pagination.pageSize"
+        :total="pagination.total"
+        :page-sizes="[12, 24, 48, 96]"
+        layout="total, sizes, prev, pager, next"
+        :size="isMobile ? 'small' : 'default'"
+      />
+    </div>
+
     <!-- Create/Edit Dialog -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? t('provider.editTitle') : t('provider.createTitle')" :width="isMobile ? '90%' : '600px'">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="120px" label-position="top" :class="isMobile ? 'mobile-form' : ''">
+    <el-dialog v-model="dialogVisible" :title="isEdit ? t('provider.editTitle') : t('provider.createTitle')" :width="isMobile ? '90%' : '500px'">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" label-position="top">
         <el-form-item :label="t('provider.name')" prop="name">
           <el-input v-model="form.name" />
         </el-form-item>
@@ -200,7 +174,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Search } from '@element-plus/icons-vue'
+import { Loading, Search, Edit, Download, Delete } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { providerApi } from '@/api/provider'
 import { modelApi } from '@/api/model'
@@ -218,7 +192,7 @@ const isMobile = ref(false)
 
 // Check if mobile on mount and resize
 const checkMobile = () => {
-  isMobile.value = window.innerWidth < 1024
+  isMobile.value = window.innerWidth < 768
 }
 
 onMounted(() => {
@@ -244,7 +218,7 @@ const existingModelNames = ref<Set<string>>(new Set())
 
 const pagination = reactive({
   page: 1,
-  pageSize: 10,
+  pageSize: 12,
   total: 0
 })
 
