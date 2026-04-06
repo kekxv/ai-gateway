@@ -153,10 +153,19 @@ func main() {
 	var scheduler *service.SchedulerService
 	if cfg != nil && cfg.Scheduler.Enabled {
 		scheduler = service.NewSchedulerService(
-			modelSyncService,
 			cfg.Scheduler.SyncInterval,
 			cfg.Scheduler.InitialDelay,
 		)
+		// Add model sync task
+		scheduler.AddTask(modelSyncService)
+		// Add log cleanup task if enabled
+		if cfg.LogCleanup.Enabled {
+			logCleanupService := service.NewLogCleanupService(
+				logDetailRepo,
+				cfg.LogCleanup.DetailRetention,
+			)
+			scheduler.AddTask(logCleanupService)
+		}
 		ctx, cancel := context.WithCancel(context.Background())
 		scheduler.Start(ctx)
 		defer func() {
@@ -296,6 +305,7 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 	admin.DELETE("/conversations/:id", deps.ChatHandler.DeleteConversation)
 	admin.GET("/conversations/:id/messages", deps.ChatHandler.GetMessages)
 	admin.POST("/conversations/:id/chat", deps.ChatHandler.SendMessage)
+	admin.POST("/chat/upload", deps.ChatHandler.UploadFile)
 
 	// ========== Gateway API (API Key required) ==========
 	v1 := r.Group("/api/v1")

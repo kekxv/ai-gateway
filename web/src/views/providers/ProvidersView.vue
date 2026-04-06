@@ -13,9 +13,11 @@
       <el-table :data="paginatedProviders" stripe v-loading="loading">
         <el-table-column prop="name" :label="t('provider.name')" />
         <el-table-column prop="base_url" :label="t('provider.baseURL')" />
-        <el-table-column prop="type" :label="t('provider.type')" width="120">
+        <el-table-column prop="type" :label="t('provider.type')" width="180">
           <template #default="{ row }">
-            <el-tag>{{ row.type || 'custom' }}</el-tag>
+            <div class="flex flex-wrap gap-1">
+              <el-tag v-for="t in (row.typesList || [row.type || 'custom'])" :key="t" size="small">{{ t }}</el-tag>
+            </div>
           </template>
         </el-table-column>
         <el-table-column prop="auto_load_models" :label="t('provider.autoLoadModels')" width="140">
@@ -75,8 +77,8 @@
             {{ provider.disabled ? t('common.disabled') : t('common.enabled') }}
           </el-tag>
         </div>
-        <div class="flex items-center gap-2 mb-3">
-          <el-tag size="small">{{ provider.type || 'custom' }}</el-tag>
+        <div class="flex items-center gap-2 mb-3 flex-wrap">
+          <el-tag v-for="t in (provider.typesList || [provider.type || 'custom'])" :key="t" size="small">{{ t }}</el-tag>
           <el-tag :type="provider.auto_load_models ? 'success' : 'info'" size="small">
             {{ t('provider.autoLoadModels') }}: {{ provider.auto_load_models ? t('common.yes') : t('common.no') }}
           </el-tag>
@@ -112,9 +114,10 @@
         <el-form-item :label="t('provider.baseURL')" prop="base_url">
           <el-input v-model="form.base_url" placeholder="https://api.openai.com/v1" />
         </el-form-item>
-        <el-form-item :label="t('provider.type')" prop="type">
-          <el-select v-model="form.type" class="w-full">
+        <el-form-item :label="t('provider.type')" prop="typesList">
+          <el-select v-model="form.typesList" multiple class="w-full" placeholder="Select provider types">
             <el-option label="OpenAI" value="openai" />
+            <el-option label="Anthropic/Claude" value="anthropic" />
             <el-option label="Gemini" value="gemini" />
             <el-option label="Custom" value="custom" />
           </el-select>
@@ -248,7 +251,7 @@ const pagination = reactive({
 const form = reactive({
   name: '',
   base_url: '',
-  type: 'openai',
+  typesList: [] as string[],
   auto_load_models: false,
   disabled: false,
   api_key: ''
@@ -256,8 +259,7 @@ const form = reactive({
 
 const rules: FormRules = {
   name: [{ required: true, message: 'Name is required', trigger: 'blur' }],
-  base_url: [{ required: true, message: 'Base URL is required', trigger: 'blur' }],
-  type: [{ required: true, message: 'Type is required', trigger: 'change' }]
+  base_url: [{ required: true, message: 'Base URL is required', trigger: 'blur' }]
 }
 
 const filteredModels = computed(() => {
@@ -297,7 +299,7 @@ const fetchProviders = async () => {
 const resetForm = () => {
   form.name = ''
   form.base_url = ''
-  form.type = 'openai'
+  form.typesList = ['openai']
   form.auto_load_models = false
   form.disabled = false
   form.api_key = ''
@@ -314,7 +316,7 @@ const openEditDialog = (provider: Provider) => {
   selectedProvider.value = provider
   form.name = provider.name
   form.base_url = provider.base_url ?? provider.baseURL ?? ''
-  form.type = provider.type || 'openai'
+  form.typesList = provider.typesList || (provider.type ? [provider.type] : ['openai'])
   form.auto_load_models = provider.auto_load_models ?? provider.autoLoadModels ?? false
   form.disabled = provider.disabled ?? false
   form.api_key = ''
@@ -335,7 +337,7 @@ const submitForm = async () => {
       await providerApi.update(selectedProvider.value.id, {
         name: form.name,
         base_url: form.base_url,
-        type: form.type,
+        typesList: form.typesList,
         auto_load_models: form.auto_load_models,
         disabled: form.disabled,
         api_key: form.api_key || undefined
@@ -344,7 +346,7 @@ const submitForm = async () => {
       await providerApi.create({
         name: form.name,
         base_url: form.base_url,
-        type: form.type,
+        typesList: form.typesList,
         auto_load_models: form.auto_load_models,
         disabled: form.disabled,
         api_key: form.api_key

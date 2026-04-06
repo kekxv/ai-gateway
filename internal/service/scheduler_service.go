@@ -7,31 +7,42 @@ import (
 	"time"
 )
 
-// SchedulerService handles periodic model sync scheduling
+// ScheduledTask defines the interface for tasks that can be scheduled
+type ScheduledTask interface {
+	Name() string
+	Run(ctx context.Context)
+}
+
+// SchedulerService handles periodic task scheduling
 type SchedulerService struct {
-	syncService   *ModelSyncService
-	providerRepo  interface{} // Will be used for future enhancements
-	interval      time.Duration
-	initialDelay  time.Duration
-	ticker        *time.Ticker
-	stopChan      chan struct{}
-	wg            sync.WaitGroup
-	mu            sync.Mutex
-	running       bool
+	tasks       []ScheduledTask
+	interval    time.Duration
+	initialDelay time.Duration
+	ticker      *time.Ticker
+	stopChan    chan struct{}
+	wg          sync.WaitGroup
+	mu          sync.Mutex
+	running     bool
 }
 
 // NewSchedulerService creates a new scheduler service
 func NewSchedulerService(
-	syncService *ModelSyncService,
 	syncInterval time.Duration,
 	initialDelay time.Duration,
 ) *SchedulerService {
 	return &SchedulerService{
-		syncService:  syncService,
+		tasks:        []ScheduledTask{},
 		interval:     syncInterval,
 		initialDelay: initialDelay,
 		stopChan:     make(chan struct{}),
 	}
+}
+
+// AddTask adds a task to the scheduler
+func (s *SchedulerService) AddTask(task ScheduledTask) {
+	s.mu.Lock()
+	s.tasks = append(s.tasks, task)
+	s.mu.Unlock()
 }
 
 // Start starts the scheduler (non-blocking, runs sync in background)
@@ -95,24 +106,24 @@ func (s *SchedulerService) Stop() {
 	log.Println("[Scheduler] Scheduler stopped")
 }
 
-// runSync executes a sync cycle
+// runSync executes all scheduled tasks
 func (s *SchedulerService) runSync(ctx context.Context) {
-	log.Println("[Scheduler] Starting model sync cycle...")
-	startTime := time.Now()
+	s.mu.Lock()
+	tasks := s.tasks
+	s.mu.Unlock()
 
-	results := s.syncService.SyncAllProviders(ctx)
-
-	for _, result := range results {
-		if result.Error != nil {
-			log.Printf("[Scheduler] Provider %d (%s): ERROR - %v",
-				result.ProviderID, result.ProviderName, result.Error)
-		} else {
-			log.Printf("[Scheduler] Provider %d (%s): created=%d, routes=%d, removed=%d, fetched=%d",
-				result.ProviderID, result.ProviderName,
-				result.ModelsCreated, result.RoutesCreated,
-				result.ModelsRemoved, result.TotalFetched)
-		}
+	if len(tasks) == 0 {
+		log.Println("[Scheduler] No tasks to run")
+		return
 	}
 
-	log.Printf("[Scheduler] Sync cycle completed in %v", time.Since(startTime))
+	log.Println("[Scheduler] Starting scheduled tasks cycle...")
+	startTime := time.Now()
+
+	for _, task := range tasks {
+		log.Printf("[Scheduler] Running task: %s", task.Name())
+		task.Run(ctx)
+	}
+
+	log.Printf("[Scheduler] All tasks completed in %v", time.Since(startTime))
 }

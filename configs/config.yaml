@@ -19,3 +19,13 @@ proxy:
   http_proxy: ""
   https_proxy: ""
   no_proxy: ""
+
+scheduler:
+  enabled: true
+  sync_interval: 1h
+  initial_delay: 10s
+
+logCleanup:
+  enabled: true
+  detailRetention: 720h  # 30 days
+  interval: 24h          # Daily cleanup

@@ -26,6 +26,76 @@ var (
 	ErrUpstreamFailed     = errors.New("upstream request failed")
 )
 
+// Headers that should NOT be forwarded to upstream
+var excludedHeaders = []string{
+	"authorization",
+	"cookie",
+	"host",
+	"content-length",
+	"content-type", // We set our own
+}
+
+// extractForwardableHeaders extracts headers that should be forwarded to upstream
+// and returns them as a map for forwarding and a JSON string for logging
+func extractForwardableHeaders(header http.Header) (map[string]string, string) {
+	result := make(map[string]string)
+
+	for key, values := range header {
+		keyLower := strings.ToLower(key)
+		// Skip excluded headers
+		skip := false
+		for _, excluded := range excludedHeaders {
+			if keyLower == excluded {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		// Take first value
+		if len(values) > 0 {
+			result[key] = values[0]
+		}
+	}
+
+	// Convert to JSON for logging
+	headersJSON, _ := json.Marshal(result)
+	return result, string(headersJSON)
+}
+
+// getAPIKeyIDPtr returns a pointer to the API key ID, or nil if ID is 0
+func getAPIKeyIDPtr(id uint) *uint {
+	if id == 0 {
+		return nil
+	}
+	return &id
+}
+
+// extractResponseHeaders extracts relevant headers from upstream response
+func extractResponseHeaders(header http.Header) map[string]string {
+	result := make(map[string]string)
+	// Headers to capture from upstream response
+	captureHeaders := []string{
+		"Content-Type",
+		"X-Request-Id",
+		"X-RateLimit-Limit",
+		"X-RateLimit-Remaining",
+		"X-RateLimit-Reset",
+		"Openai-Model",
+		"Openai-Organization",
+		"Openai-Version",
+		"Openai-Processing-Ms",
+	}
+
+	for _, key := range captureHeaders {
+		if value := header.Get(key); value != "" {
+			result[key] = value
+		}
+	}
+	return result
+}
+
 type ChatRequest struct {
 	Model       string                 `json:"model"`
 	Messages    []ChatMessage          `json:"messages"`
@@ -170,6 +240,7 @@ type StreamingResponse struct {
 	logRepo        *repository.LogRepository
 	logDetailRepo  *repository.LogDetailRepository
 	billingService *BillingService
+	responseHeaders map[string]string // Response headers for logging
 }
 
 // NewStreamingResponse creates a new streaming response wrapper
@@ -297,6 +368,10 @@ func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 	if errMsg != "" {
 		updates["errorMessage"] = errMsg
 	}
+	if len(s.responseHeaders) > 0 {
+		respHeadersJSON, _ := json.Marshal(s.responseHeaders)
+		updates["responseHeaders"] = string(respHeadersJSON)
+	}
 
 	s.logRepo.UpdateByID(ctx, s.logID, updates)
 
@@ -388,8 +463,11 @@ func NewGatewayService(
 // HandleChatCompletions handles chat completions requests
 // For streaming, returns (*StreamingResponse, error)
 // For non-streaming, returns (*ChatResponse, error)
-func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *models.GatewayAPIKey, req *ChatRequest, stream bool) (interface{}, error) {
+func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *models.GatewayAPIKey, req *ChatRequest, stream bool, requestHeaders http.Header) (interface{}, error) {
 	startTime := time.Now()
+
+	// Extract and filter headers for forwarding and logging
+	forwardHeaders, headersJSON := extractForwardableHeaders(requestHeaders)
 
 	// 1. Find model (supports alias and :latest)
 	model, err := s.findModel(ctx, req.Model)
@@ -414,14 +492,16 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	}
 
 	// Create initial log entry (status=0 means pending)
-	// Skip logging for virtual API keys (ID=0)
+	// Skip logging for virtual API keys (ID=0) unless IsChatKey is true
 	logEntry := &models.Log{
-		APIKeyID:     apiKey.ID,
-		ModelName:    model.Name,
-		ProviderName: route.Provider.Name,
-		Status:       0, // pending
+		APIKeyID:       getAPIKeyIDPtr(apiKey.ID),
+		ModelName:      model.Name,
+		ProviderName:   route.Provider.Name,
+		Status:         0, // pending
+		RequestHeaders: headersJSON,
 	}
-	if apiKey.ID != 0 {
+	// Log for real API keys or chat keys (IsChatKey=true)
+	if apiKey.ID != 0 || apiKey.IsChatKey {
 		if err := s.logRepo.Create(ctx, logEntry); err != nil {
 			logEntry.ID = 0 // Continue without log if creation fails
 		} else if apiKey.LogDetails {
@@ -439,7 +519,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	}
 
 	// Helper to update log on completion
-	updateLog := func(latency int, promptTokens, completionTokens, totalTokens int, cost int64, status int, errMsg string) {
+	updateLog := func(latency int, promptTokens, completionTokens, totalTokens int, cost int64, status int, errMsg string, respHeaders map[string]string) {
 		if logEntry.ID == 0 {
 			return
 		}
@@ -454,17 +534,21 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		if errMsg != "" {
 			updates["errorMessage"] = errMsg
 		}
+		if len(respHeaders) > 0 {
+			respHeadersJSON, _ := json.Marshal(respHeaders)
+			updates["responseHeaders"] = string(respHeadersJSON)
+		}
 		s.logRepo.UpdateByID(ctx, logEntry.ID, updates)
 	}
 
 	// 5. Build upstream request
 	targetURL := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(route.Provider.BaseURL, "/"))
 
-	// 6. Send upstream request
-	resp, err := s.sendUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req, stream)
+	// 6. Send upstream request with forwarded headers
+	resp, err := s.sendUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req, stream, forwardHeaders)
 	if err != nil {
 		latency := int(time.Since(startTime).Milliseconds())
-		updateLog(latency, 0, 0, 0, 0, 502, err.Error())
+		updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
 		return nil, ErrUpstreamFailed
 	}
 
@@ -472,7 +556,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	if resp.StatusCode >= 400 {
 		latency := int(time.Since(startTime).Milliseconds())
 		s.handleUpstreamError(ctx, resp, route)
-		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, "Upstream error")
+		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, "Upstream error", nil)
 		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 	}
 
@@ -490,6 +574,8 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		streamResp.logRepo = s.logRepo
 		streamResp.logDetailRepo = s.logDetailRepo
 		streamResp.billingService = s.billingService
+		// Extract response headers
+		streamResp.responseHeaders = extractResponseHeaders(resp.Header)
 		return streamResp, nil
 	}
 
@@ -498,20 +584,21 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	resp.Body.Close()
 	if err != nil {
 		latency := int(time.Since(startTime).Milliseconds())
-		updateLog(latency, 0, 0, 0, 0, 500, err.Error())
+		updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil)
 		return nil, err
 	}
 
 	var chatResp ChatResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
 		latency := int(time.Since(startTime).Milliseconds())
-		updateLog(latency, 0, 0, 0, 0, 500, err.Error())
+		updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil)
 		return nil, err
 	}
 
 	// Update log and calculate cost
 	latency := int(time.Since(startTime).Milliseconds())
-	s.updateLogAndCalculateCost(ctx, apiKey, model, route.Provider.Name, req, &chatResp, latency, logEntry.ID)
+	respHeaders := extractResponseHeaders(resp.Header)
+	s.updateLogAndCalculateCost(ctx, apiKey, model, route.Provider.Name, req, &chatResp, latency, logEntry.ID, respHeaders)
 
 	return &chatResp, nil
 }
@@ -605,7 +692,7 @@ func (s *GatewayService) checkBalance(ctx context.Context, userID *uint, model *
 }
 
 // sendUpstreamRequest sends a request to the upstream provider
-func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey string, req *ChatRequest, stream bool) (*http.Response, error) {
+func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey string, req *ChatRequest, stream bool, forwardHeaders map[string]string) (*http.Response, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -618,6 +705,11 @@ func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey st
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+
+	// Forward additional headers
+	for key, value := range forwardHeaders {
+		httpReq.Header.Set(key, value)
+	}
 
 	// TODO: Add proxy support
 
@@ -665,7 +757,7 @@ func (s *GatewayService) logAndCalculateCost(ctx context.Context, apiKey *models
 			CompletionTokens:   completionTokens,
 			TotalTokens:        totalTokens,
 			Cost:               cost,
-			APIKeyID:           apiKey.ID,
+			APIKeyID:           getAPIKeyIDPtr(apiKey.ID),
 			ModelName:          model.Name,
 			ProviderName:       providerName,
 			OwnerChannelID:     ownerChannelID,
@@ -691,7 +783,7 @@ func (s *GatewayService) logAndCalculateCost(ctx context.Context, apiKey *models
 }
 
 // updateLogAndCalculateCost updates an existing log entry and calculates cost
-func (s *GatewayService) updateLogAndCalculateCost(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, req *ChatRequest, resp *ChatResponse, latency int, logID uint) {
+func (s *GatewayService) updateLogAndCalculateCost(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, req *ChatRequest, resp *ChatResponse, latency int, logID uint, respHeaders map[string]string) {
 	var promptTokens, completionTokens, totalTokens int
 	if resp.Usage != nil {
 		promptTokens = resp.Usage.PromptTokens
@@ -721,6 +813,10 @@ func (s *GatewayService) updateLogAndCalculateCost(ctx context.Context, apiKey *
 			"ownerChannelUserId": ownerChannelUserID,
 			"status":               200,
 		}
+		if len(respHeaders) > 0 {
+			respHeadersJSON, _ := json.Marshal(respHeaders)
+			updates["responseHeaders"] = string(respHeadersJSON)
+		}
 		s.logRepo.UpdateByID(ctx, logID, updates)
 
 		if apiKey.LogDetails {
@@ -733,19 +829,23 @@ func (s *GatewayService) updateLogAndCalculateCost(ctx context.Context, apiKey *
 }
 
 // logError logs an error request
-func (s *GatewayService) logError(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, latency, status int, errMsg string, req *ChatRequest) {
-	// Skip logging for virtual API keys (ID=0)
-	if apiKey.ID == 0 {
+func (s *GatewayService) logError(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, latency, status int, errMsg string, req *ChatRequest, requestHeaders http.Header) {
+	// Log for real API keys or chat keys (IsChatKey=true)
+	if apiKey.ID == 0 && !apiKey.IsChatKey {
 		return
 	}
 
+	// Extract headers for logging
+	_, headersJSON := extractForwardableHeaders(requestHeaders)
+
 	logEntry := &models.Log{
-		Latency:      latency,
-		APIKeyID:     apiKey.ID,
-		ModelName:    model.Name,
-		ProviderName: providerName,
-		Status:       status,
-		ErrorMessage: errMsg,
+		Latency:        latency,
+		APIKeyID:       getAPIKeyIDPtr(apiKey.ID),
+		ModelName:      model.Name,
+		ProviderName:   providerName,
+		Status:         status,
+		ErrorMessage:   errMsg,
+		RequestHeaders: headersJSON,
 	}
 
 	if err := s.logRepo.Create(ctx, logEntry); err == nil && apiKey.LogDetails {

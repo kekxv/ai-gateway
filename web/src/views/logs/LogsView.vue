@@ -218,6 +218,34 @@
           </div>
         </div>
 
+        <!-- Request Headers -->
+        <div v-if="parsedRequestHeaders && Object.keys(parsedRequestHeaders).length > 0" class="headers-card">
+          <div class="headers-header">
+            <el-icon class="text-blue-500"><Document /></el-icon>
+            <span class="font-medium">请求头</span>
+          </div>
+          <div class="headers-body">
+            <div v-for="(value, key) in parsedRequestHeaders" :key="key" class="headers-row">
+              <span class="headers-key">{{ key }}</span>
+              <span class="headers-value">{{ value }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Response Headers -->
+        <div v-if="parsedResponseHeaders && Object.keys(parsedResponseHeaders).length > 0" class="headers-card headers-card-green">
+          <div class="headers-header">
+            <el-icon class="text-green-500"><Document /></el-icon>
+            <span class="font-medium">响应头</span>
+          </div>
+          <div class="headers-body">
+            <div v-for="(value, key) in parsedResponseHeaders" :key="key" class="headers-row">
+              <span class="headers-key">{{ key }}</span>
+              <span class="headers-value">{{ value }}</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Error Message (show if exists) -->
         <div v-if="logDetail.errorMessage || logDetail.error_message" class="error-card">
           <div class="flex items-start gap-3">
@@ -316,7 +344,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, View, CopyDocument, Warning, Loading } from '@element-plus/icons-vue'
+import { Delete, View, CopyDocument, Warning, Loading, Document } from '@element-plus/icons-vue'
 import { logApi } from '@/api/log'
 import type { Log, LogDetail } from '@/types/log'
 import dayjs from 'dayjs'
@@ -327,6 +355,25 @@ const logs = ref<Log[]>([])
 const logDetail = ref<LogDetail | null>(null)
 const detailDialogVisible = ref(false)
 const isMobile = ref(false)
+
+// Parse headers JSON
+const parsedRequestHeaders = computed(() => {
+  if (!logDetail.value?.requestHeaders) return null
+  try {
+    return JSON.parse(logDetail.value.requestHeaders)
+  } catch {
+    return null
+  }
+})
+
+const parsedResponseHeaders = computed(() => {
+  if (!logDetail.value?.responseHeaders) return null
+  try {
+    return JSON.parse(logDetail.value.responseHeaders)
+  } catch {
+    return null
+  }
+})
 
 const checkMobile = () => {
   isMobile.value = window.innerWidth < 1024
@@ -409,7 +456,51 @@ const chatMessages = computed(() => {
     const request = logDetail.value.detail.requestBody
     if (request) {
       const reqObj = typeof request === 'string' ? JSON.parse(request) : request
-      if (reqObj.messages && Array.isArray(reqObj.messages)) {
+
+      // Handle Responses API format (input field)
+      if (reqObj.input) {
+        // Add instructions as system message if present
+        if (reqObj.instructions) {
+          messages.push({
+            role: 'system',
+            content: reqObj.instructions
+          })
+        }
+
+        // Handle input - can be string or array
+        if (typeof reqObj.input === 'string') {
+          messages.push({
+            role: 'user',
+            content: reqObj.input
+          })
+        } else if (Array.isArray(reqObj.input)) {
+          // Input is array of items
+          reqObj.input.forEach((item: { type?: string; role?: string; content?: string | object }) => {
+            if (item.type === 'message' || item.role) {
+              let content = ''
+              if (typeof item.content === 'string') {
+                content = item.content
+              } else if (item.content && typeof item.content === 'object') {
+                // Content might be { StringContent, Parts } or array
+                const contentObj = item.content as { StringContent?: string; Parts?: { text?: string }[] }
+                if (contentObj.StringContent) {
+                  content = contentObj.StringContent
+                } else if (Array.isArray(item.content)) {
+                  content = item.content.map((p: { text?: string; type?: string }) => p.text || '').join('')
+                } else {
+                  content = JSON.stringify(item.content, null, 2)
+                }
+              }
+              messages.push({
+                role: item.role || 'user',
+                content
+              })
+            }
+          })
+        }
+      }
+      // Handle Chat Completions API format (messages field)
+      else if (reqObj.messages && Array.isArray(reqObj.messages)) {
         reqObj.messages.forEach((msg: { role: string; content: string | object }) => {
           messages.push({
             role: msg.role,
@@ -427,7 +518,34 @@ const chatMessages = computed(() => {
     const response = logDetail.value.detail.responseBody
     if (response) {
       const respObj = typeof response === 'string' ? JSON.parse(response) : response
-      if (respObj.choices && Array.isArray(respObj.choices)) {
+
+      // Handle Responses API format (output field)
+      if (respObj.output && Array.isArray(respObj.output)) {
+        respObj.output.forEach((item: { type?: string; role?: string; content?: object[]; output_text?: string }) => {
+          if (item.type === 'message' && item.content) {
+            // Extract text from content array
+            const text = item.content
+              .filter((c: { type?: string; text?: string }) => c.type === 'output_text' && c.text)
+              .map((c: { text?: string }) => c.text)
+              .join('')
+            if (text) {
+              messages.push({
+                role: item.role || 'assistant',
+                content: text
+              })
+            }
+          }
+        })
+        // Also check output_text at top level
+        if (respObj.output_text && messages.filter(m => m.role === 'assistant').length === 0) {
+          messages.push({
+            role: 'assistant',
+            content: respObj.output_text
+          })
+        }
+      }
+      // Handle Chat Completions API format (choices field)
+      else if (respObj.choices && Array.isArray(respObj.choices)) {
         respObj.choices.forEach((choice: { message?: { role: string; content: string | object } }) => {
           if (choice.message) {
             messages.push({
@@ -554,6 +672,59 @@ const cleanupLogs = async () => {
 .info-value {
   font-weight: 500;
   color: #374151;
+}
+
+/* Headers card */
+.headers-card {
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.headers-card.headers-card-green {
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+  border-color: #bbf7d0;
+}
+.headers-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #bfdbfe;
+  font-size: 14px;
+}
+.headers-card.headers-card-green .headers-header {
+  border-color: #bbf7d0;
+}
+.headers-body {
+  padding: 12px 16px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.headers-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px dashed #e5e7eb;
+}
+.headers-row:last-child {
+  border-bottom: none;
+}
+.headers-key {
+  font-size: 12px;
+  font-weight: 500;
+  color: #6366f1;
+  min-width: 140px;
+  flex-shrink: 0;
+}
+.headers-card.headers-card-green .headers-key {
+  color: #22c55e;
+}
+.headers-value {
+  font-size: 12px;
+  color: #374151;
+  word-break: break-all;
 }
 
 /* Error card */

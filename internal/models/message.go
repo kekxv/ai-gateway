@@ -12,11 +12,25 @@ type Message struct {
 	CreatedAt      time.Time `json:"created_at" gorm:"autoCreateTime"`
 }
 
+// ChatContentPart represents a part of multimodal content
+type ChatContentPart struct {
+	Type     string            `json:"type"`           // "text", "image_url"
+	Text     string            `json:"text,omitempty"` // For type "text"
+	ImageURL *ChatMediaURL     `json:"image_url,omitempty"`
+}
+
+// ChatMediaURL represents a media URL or base64 data
+type ChatMediaURL struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"` // "auto", "low", "high" (for images)
+}
+
 // ChatRequest is the request body for sending a message
 type ChatRequest struct {
-	Content      string              `json:"content"`
-	Stream       bool                `json:"stream"`
-	Settings     ConversationSettings `json:"settings,omitempty"` // optional override settings
+	Content  string              `json:"content"`
+	Parts    []ChatContentPart   `json:"parts,omitempty"` // For multimodal content
+	Stream   bool                `json:"stream"`
+	Settings ConversationSettings `json:"settings,omitempty"` // optional override settings
 }
 
 // ChatStreamEvent represents a streaming event

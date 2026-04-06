@@ -183,6 +183,27 @@ func (s *ModelSyncService) SyncAllProviders(ctx context.Context) []SyncResult {
 	return results
 }
 
+// Name returns the task name for scheduler (implements ScheduledTask interface)
+func (s *ModelSyncService) Name() string {
+	return "model_sync"
+}
+
+// Run executes the sync task (implements ScheduledTask interface)
+func (s *ModelSyncService) Run(ctx context.Context) {
+	results := s.SyncAllProviders(ctx)
+	for _, result := range results {
+		if result.Error != nil {
+			fmt.Printf("[ModelSync] Provider %d (%s): ERROR - %v\n",
+				result.ProviderID, result.ProviderName, result.Error)
+		} else {
+			fmt.Printf("[ModelSync] Provider %d (%s): created=%d, routes=%d, removed=%d, fetched=%d\n",
+				result.ProviderID, result.ProviderName,
+				result.ModelsCreated, result.RoutesCreated,
+				result.ModelsRemoved, result.TotalFetched)
+		}
+	}
+}
+
 // fetchModels fetches models from a provider based on its type
 func (s *ModelSyncService) fetchModels(provider *models.Provider) ([]map[string]interface{}, error) {
 	switch strings.ToLower(provider.Type) {

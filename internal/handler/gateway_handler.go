@@ -39,7 +39,8 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 
 	stream := req.Stream
 
-	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), apiKey, &req, stream)
+	// Pass request headers for forwarding and logging
+	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), apiKey, &req, stream, c.Request.Header)
 	if err != nil {
 		switch err {
 		case service.ErrModelNotFound:
@@ -197,7 +198,7 @@ func (h *GatewayHandler) CreateResponse(c *gin.Context) {
 
 	stream := req.Stream
 
-	result, err := h.responseService.CreateResponse(c.Request.Context(), apiKey, &req)
+	result, err := h.responseService.CreateResponse(c.Request.Context(), apiKey, &req, c.Request.Header)
 	if err != nil {
 		switch err {
 		case service.ErrModelNotFound:
@@ -335,7 +336,7 @@ func (h *GatewayHandler) CompactConversation(c *gin.Context) {
 		return
 	}
 
-	response, err := h.responseService.CompactConversation(c.Request.Context(), apiKey, &req)
+	response, err := h.responseService.CompactConversation(c.Request.Context(), apiKey, &req, c.Request.Header)
 	if err != nil {
 		switch err {
 		case service.ErrModelNotFound:

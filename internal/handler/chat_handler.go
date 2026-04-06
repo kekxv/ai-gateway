@@ -2,10 +2,12 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
@@ -325,13 +327,34 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 		})
 	}
 
-	// Add new user message
+	// Add new user message (support multimodal)
+	var userContent service.ChatMessageContent
+	if len(req.Parts) > 0 {
+		// Convert models.ChatContentPart to service.ChatContentPart
+		parts := make([]service.ChatContentPart, len(req.Parts))
+		for i, p := range req.Parts {
+			parts[i] = service.ChatContentPart{
+				Type: p.Type,
+				Text: p.Text,
+			}
+			if p.ImageURL != nil {
+				parts[i].ImageURL = &service.ChatMediaURL{
+					URL:    p.ImageURL.URL,
+					Detail: p.ImageURL.Detail,
+				}
+			}
+		}
+		userContent = service.ChatMessageContent{Parts: parts}
+	} else {
+		userContent = service.ChatMessageContent{StringContent: req.Content}
+	}
+
 	chatMessages = append(chatMessages, service.ChatMessage{
-		Role: "user",
-		Content: service.ChatMessageContent{StringContent: req.Content},
+		Role:    "user",
+		Content: userContent,
 	})
 
-	// Save user message
+	// Save user message (store text content for simplicity)
 	userMsg := &models.Message{
 		ConversationID: conversationID,
 		Role:           "user",
@@ -377,11 +400,13 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 		ID:               0, // Virtual key, no real ID
 		UserID:           &userID,
 		BindToAllChannels: true, // Allow access to all models
+		IsChatKey:        true,  // Enable logging for chat requests
+		LogDetails:       true,  // Enable detailed logging for chat
 	}
 
 	stream := req.Stream
 
-	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, stream)
+	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, stream, c.Request.Header)
 	if err != nil {
 		// Save error as assistant message
 		errorMsg := &models.Message{
@@ -539,4 +564,83 @@ func parseUint(s string, v *uint) error {
 func parseInt(s string, v *int) error {
 	_, err := fmt.Sscanf(s, "%d", v)
 	return err
+}
+
+// UploadFile handles file uploads for chat
+// Supports all file types and returns base64 data URL
+func (h *ChatHandler) UploadFile(c *gin.Context) {
+	user := middleware.GetCurrentUser(c)
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided"})
+		return
+	}
+
+	// Limit file size to 20MB
+	if file.Size > 20*1024*1024 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File too large (max 20MB)"})
+		return
+	}
+
+	// Read file content
+	content, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer content.Close()
+
+	data, err := io.ReadAll(content)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Convert to base64
+	base64Data := base64.StdEncoding.EncodeToString(data)
+
+	// Determine MIME type
+	mimeType := file.Header.Get("Content-Type")
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	// Return base64 data URL format
+	dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data)
+
+	c.JSON(http.StatusOK, gin.H{
+		"data":     dataURL,
+		"filename": file.Filename,
+		"size":     file.Size,
+		"mimeType": mimeType,
+	})
+}
+
+// readFileAsBase64 reads a multipart file and returns base64 data URL
+func readFileAsBase64(file *multipart.FileHeader) (string, string, error) {
+	content, err := file.Open()
+	if err != nil {
+		return "", "", err
+	}
+	defer content.Close()
+
+	data, err := io.ReadAll(content)
+	if err != nil {
+		return "", "", err
+	}
+
+	mimeType := file.Header.Get("Content-Type")
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	base64Data := base64.StdEncoding.EncodeToString(data)
+	dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data)
+
+	return dataURL, mimeType, nil
 }

@@ -44,6 +44,8 @@ export interface Log {
   ownerChannelId?: number
   ownerChannel?: ChannelInfo
   ownerChannelUserId?: number
+  requestHeaders?: string
+  responseHeaders?: string
   createdAt: string
   created_at?: string
 }

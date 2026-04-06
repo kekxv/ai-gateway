@@ -11,6 +11,7 @@ type GatewayAPIKey struct {
 	Enabled         bool        `gorm:"not null" json:"enabled"`
 	BindToAllChannels bool      `gorm:"column:bindToAllChannels;default:false;not null" json:"bindToAllChannels"`
 	LogDetails      bool        `gorm:"column:logDetails;default:true;not null" json:"logDetails"`
+	IsChatKey       bool        `gorm:"column:isChatKey;default:false;not null" json:"isChatKey"` // Mark as chat-generated key for logging
 	UserID          *uint       `gorm:"column:userId" json:"userId"`
 	LastUsed        *time.Time  `gorm:"column:lastUsed" json:"lastUsed"`
 	CreatedAt       time.Time   `gorm:"column:createdAt" json:"createdAt"`

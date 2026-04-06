@@ -35,24 +35,27 @@ func (h *ProviderHandler) ListProviders(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// Mask API keys
+	// Mask API keys and populate TypesList
 	for i := range providers {
 		providers[i].APIKeyMasked = models.MaskAPIKey(providers[i].APIKey)
+		providers[i].TypesList = providers[i].GetTypes()
 	}
 	c.JSON(http.StatusOK, providers)
 }
 
 func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 	var req struct {
-		Name               string `json:"name" binding:"required"`
-		BaseURL            string `json:"baseURL"`
-		BaseURLSnake       string `json:"base_url"`
-		APIKey             string `json:"apiKey"`
-		APIKeySnake        string `json:"api_key"`
-		Type               string `json:"type"`
-		AutoLoadModels     bool   `json:"autoLoadModels"`
-		AutoLoadModelsSnake bool   `json:"auto_load_models"`
-		Disabled           bool   `json:"disabled"`
+		Name               string   `json:"name" binding:"required"`
+		BaseURL            string   `json:"baseURL"`
+		BaseURLSnake       string   `json:"base_url"`
+		APIKey             string   `json:"apiKey"`
+		APIKeySnake        string   `json:"api_key"`
+		Type               string   `json:"type"`
+		Types              string   `json:"types"`     // JSON array string
+		TypesList          []string `json:"typesList"` // Array format
+		AutoLoadModels     bool     `json:"autoLoadModels"`
+		AutoLoadModelsSnake bool    `json:"auto_load_models"`
+		Disabled           bool     `json:"disabled"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -81,13 +84,26 @@ func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 		CreatedAt:      time.Now(),
 	}
 
+	// Handle Types array
+	if len(req.TypesList) > 0 {
+		provider.SetTypes(req.TypesList)
+	} else if req.Types != "" {
+		provider.Types = req.Types
+		provider.TypesList = provider.GetTypes()
+	} else if req.Type != "" {
+		provider.SetTypes([]string{req.Type})
+	} else {
+		provider.SetTypes([]string{"openai"}) // Default
+	}
+
 	if err := h.providerRepo.Create(c.Request.Context(), provider); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Mask API key in response
+	// Mask API key in response and populate TypesList
 	provider.APIKeyMasked = models.MaskAPIKey(provider.APIKey)
+	provider.TypesList = provider.GetTypes()
 	c.JSON(http.StatusCreated, provider)
 }
 
@@ -109,15 +125,17 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 	id := parseUintParam(c.Param("id"))
 
 	var req struct {
-		Name               string `json:"name"`
-		BaseURL            string `json:"baseURL"`
-		BaseURLSnake       string `json:"base_url"`
-		APIKey             string `json:"apiKey"`
-		APIKeySnake        string `json:"api_key"`
-		Type               string `json:"type"`
-		AutoLoadModels     bool   `json:"autoLoadModels"`
-		AutoLoadModelsSnake bool   `json:"auto_load_models"`
-		Disabled           bool   `json:"disabled"`
+		Name               string   `json:"name"`
+		BaseURL            string   `json:"baseURL"`
+		BaseURLSnake       string   `json:"base_url"`
+		APIKey             string   `json:"apiKey"`
+		APIKeySnake        string   `json:"api_key"`
+		Type               string   `json:"type"`
+		Types              string   `json:"types"`     // JSON array string
+		TypesList          []string `json:"typesList"` // Array format
+		AutoLoadModels     bool     `json:"autoLoadModels"`
+		AutoLoadModelsSnake bool    `json:"auto_load_models"`
+		Disabled           bool     `json:"disabled"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -151,7 +169,14 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 		if apiKey != "" {
 			provider.APIKey = apiKey
 		}
-	provider.Type = req.Type
+	// Handle Types array
+	if len(req.TypesList) > 0 {
+		provider.SetTypes(req.TypesList)
+	} else if req.Types != "" {
+		provider.Types = req.Types
+	} else if req.Type != "" {
+		provider.SetTypes([]string{req.Type})
+	}
 	// Support both camelCase and snake_case
 	provider.AutoLoadModels = req.AutoLoadModels || req.AutoLoadModelsSnake
 	provider.Disabled = req.Disabled
@@ -161,8 +186,9 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 		return
 	}
 
-	// Mask API key in response
+	// Mask API key in response and populate TypesList
 	provider.APIKeyMasked = models.MaskAPIKey(provider.APIKey)
+	provider.TypesList = provider.GetTypes()
 	c.JSON(http.StatusOK, provider)
 }
 

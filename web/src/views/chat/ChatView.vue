@@ -221,19 +221,47 @@
 
           <!-- Input Box -->
           <div class="input-box" :class="{ disabled: !currentConversation || sending }">
+            <!-- File upload button -->
+            <button
+              class="upload-btn"
+              :disabled="!currentConversation || sending"
+              @click="triggerUpload"
+              title="上传文件"
+            >
+              <el-icon><Paperclip /></el-icon>
+            </button>
+            <input
+              ref="fileInputRef"
+              type="file"
+              accept="*/*"
+              multiple
+              @change="handleFileUpload"
+              style="display: none"
+            />
+
+            <!-- Attached files preview -->
+            <div v-if="attachedFiles.length > 0" class="attached-files">
+              <div v-for="(file, idx) in attachedFiles" :key="idx" class="attached-file">
+                <img v-if="file.isImage" :src="file.dataUrl" class="file-preview" />
+                <span v-else class="file-name">{{ file.filename }}</span>
+                <button class="remove-file" @click="removeFile(idx)">×</button>
+              </div>
+            </div>
+
             <textarea
               ref="textareaRef"
               v-model="inputContent"
-              placeholder="输入消息..."
+              placeholder="输入消息... (支持粘贴截图/文件)"
               :disabled="!currentConversation || sending"
               @keydown="handleKeydown"
               @input="autoResize"
+              @paste="handlePaste"
               rows="1"
             ></textarea>
             <button
               class="send-btn"
-              :class="{ active: inputContent.trim() && currentConversation && !sending }"
-              :disabled="!inputContent.trim() || !currentConversation || sending"
+              :class="{ active: (inputContent.trim() || attachedFiles.length > 0) && currentConversation && !sending }"
+              :disabled="(!inputContent.trim() && attachedFiles.length === 0) || !currentConversation || sending"
               @click="sendMessage"
             >
               <el-icon v-if="!sending"><Promotion /></el-icon>
@@ -304,15 +332,25 @@ import { ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Setting, ChatLineRound, Monitor,
-  Loading, Promotion, MoreFilled, Delete, MagicStick, Close, Menu
+  Loading, Promotion, MoreFilled, Delete, MagicStick, Close, Menu, Paperclip
 } from '@element-plus/icons-vue'
 import { conversationApi, modelApi } from '@/api/conversation'
-import type { Conversation, Message, ConversationSettings, PresetPrompt } from '@/types/conversation'
+import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart } from '@/types/conversation'
 import { PRESET_PROMPTS } from '@/types/conversation'
 
 // Refs
 const messagesAreaRef = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// Attached files state
+interface AttachedFile {
+  dataUrl: string
+  filename: string
+  isImage: boolean
+  part: { type: string; image_url?: { url: string } }
+}
+const attachedFiles = ref<AttachedFile[]>([])
 
 // State
 const isMobile = ref(false)
@@ -443,12 +481,26 @@ const updateModel = async () => {
 
 // Send message
 const sendMessage = async () => {
-  if (!inputContent.value.trim() || !currentConversation.value || sending.value) return
+  if ((!inputContent.value.trim() && attachedFiles.value.length === 0) || !currentConversation.value || sending.value) return
 
   sending.value = true
   streamingContent.value = ''
   const content = inputContent.value.trim()
   inputContent.value = ''
+
+  // Build parts array for multimodal content
+  const parts: ChatContentPart[] = []
+  if (content) {
+    parts.push({ type: 'text', text: content })
+  }
+  for (const file of attachedFiles.value) {
+    if (file.part.image_url) {
+      parts.push({ type: 'image_url', image_url: file.part.image_url })
+    }
+  }
+  // Clear attached files after building parts
+  attachedFiles.value = []
+
   autoResize()
 
   // Add user message to display immediately
@@ -465,7 +517,7 @@ const sendMessage = async () => {
   try {
     await conversationApi.sendMessageStream(
       currentConversation.value.id,
-      { content, stream: true, settings: { temperature: settingsForm.temperature, max_tokens: settingsForm.max_tokens } },
+      { content, parts, stream: true, settings: { temperature: settingsForm.temperature, max_tokens: settingsForm.max_tokens } },
       (text) => {
         streamingContent.value += text
         scrollToBottom()
@@ -503,6 +555,71 @@ const scrollToBottom = () => {
   if (messagesAreaRef.value) {
     messagesAreaRef.value.scrollTop = messagesAreaRef.value.scrollHeight
   }
+}
+
+// File upload functions
+const triggerUpload = () => {
+  fileInputRef.value?.click()
+}
+
+const handleFileUpload = async (event: Event) => {
+  const target = event.target as HTMLInputElement
+  const files = target.files
+  if (!files) return
+
+  for (const file of Array.from(files)) {
+    await addFile(file)
+  }
+  // Reset input
+  target.value = ''
+}
+
+const handlePaste = async (e: ClipboardEvent) => {
+  const items = e.clipboardData?.items
+  if (!items) return
+
+  for (const item of Array.from(items)) {
+    if (item.kind === 'file') {
+      const file = item.getAsFile()
+      if (file) {
+        await addFile(file)
+      }
+    }
+  }
+}
+
+const addFile = async (file: File) => {
+  // Check file size (max 20MB)
+  if (file.size > 20 * 1024 * 1024) {
+    ElMessage.error('文件太大，最大支持20MB')
+    return
+  }
+
+  const isImage = file.type.startsWith('image/')
+  const dataUrl = await fileToBase64(file)
+
+  attachedFiles.value.push({
+    dataUrl,
+    filename: file.name,
+    isImage,
+    part: {
+      type: isImage ? 'image_url' : 'text',
+      image_url: isImage ? { url: dataUrl } : undefined
+    }
+  })
+}
+
+const fileToBase64 = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+const removeFile = (index: number) => {
+  attachedFiles.value.splice(index, 1)
 }
 
 // Save settings
@@ -1160,6 +1277,86 @@ onUnmounted(() => {
 
 .input-box.disabled {
   opacity: 0.6;
+}
+
+.upload-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: #6b7280;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.upload-btn:hover:not(:disabled) {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.upload-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.attached-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.attached-file {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.attached-file .file-preview {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+}
+
+.attached-file .file-name {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #374151;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attached-file .remove-file {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 50%;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.attached-file:hover .remove-file {
+  opacity: 1;
 }
 
 .input-box textarea {

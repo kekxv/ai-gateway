@@ -88,7 +88,7 @@ func (r *LogDetailRepository) FindByLogID(ctx context.Context, logID uint) (*mod
 }
 
 func (r *LogDetailRepository) Cleanup(ctx context.Context, before time.Time) error {
-	return r.db.WithContext(ctx).Where("created_at < ?", before).Delete(&models.LogDetail{}).Error
+	return r.db.WithContext(ctx).Where("createdAt < ?", before).Delete(&models.LogDetail{}).Error
 }
 
 // UpdateResponseBody updates the response body of an existing log detail

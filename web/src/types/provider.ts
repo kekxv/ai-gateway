@@ -7,6 +7,8 @@ export interface Provider {
   apiKey?: string
   api_key?: string
   type: string
+  types?: string
+  typesList?: string[]
   autoLoadModels: boolean
   auto_load_models?: boolean
   disabled?: boolean
@@ -22,6 +24,8 @@ export interface CreateProviderRequest {
   apiKey?: string
   api_key?: string
   type?: string
+  types?: string
+  typesList?: string[]
   autoLoadModels?: boolean
   auto_load_models?: boolean
   disabled?: boolean
@@ -35,6 +39,8 @@ export interface UpdateProviderRequest {
   apiKey?: string
   api_key?: string
   type?: string
+  types?: string
+  typesList?: string[]
   autoLoadModels?: boolean
   auto_load_models?: boolean
   disabled?: boolean

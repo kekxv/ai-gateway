@@ -87,6 +87,7 @@ func (h *AnthropicHandler) CreateMessages(c *gin.Context) {
 		apiKey,
 		openAIReq.(*service.ChatRequest),
 		req.Stream,
+		c.Request.Header,
 	)
 
 	if err != nil {

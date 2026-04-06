@@ -13,13 +13,15 @@ type Log struct {
 	Cost             int64     `gorm:"column:cost;default:0;not null" json:"cost"`
 	Status           int       `gorm:"column:status;default:200;not null" json:"status"`
 	ErrorMessage     string    `gorm:"column:errorMessage" json:"errorMessage"`
-	APIKeyID         uint      `gorm:"not null;index;column:apiKeyId" json:"apiKeyId"`
-	APIKey           *GatewayAPIKey `gorm:"foreignKey:APIKeyID" json:"apiKey,omitempty"`
+	APIKeyID         *uint     `gorm:"index;column:apiKeyId" json:"apiKeyId"` // Nullable for chat requests
+	APIKey           *GatewayAPIKey `gorm:"foreignKey:APIKeyID;constraint:OnDelete:SET NULL" json:"apiKey,omitempty"`
 	ModelName        string    `gorm:"column:modelName" json:"modelName"`
 	ProviderName     string    `gorm:"column:providerName" json:"providerName"`
 	OwnerChannelID   *uint     `gorm:"column:ownerChannelId" json:"ownerChannelId"`
 	OwnerChannel     *Channel  `gorm:"foreignKey:OwnerChannelID" json:"ownerChannel,omitempty"`
 	OwnerChannelUserID *uint   `gorm:"column:ownerChannelUserId" json:"ownerChannelUserId"`
+	RequestHeaders   string    `gorm:"column:requestHeaders;type:text" json:"requestHeaders"`  // JSON format
+	ResponseHeaders  string    `gorm:"column:responseHeaders;type:text" json:"responseHeaders"` // JSON format
 	CreatedAt        time.Time `gorm:"column:createdAt;index" json:"createdAt"`
 }
 

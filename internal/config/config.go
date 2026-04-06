@@ -13,6 +13,13 @@ type Config struct {
 	Timeout   TimeoutConfig
 	Proxy     ProxyConfig
 	Scheduler SchedulerConfig
+	LogCleanup LogCleanupConfig
+}
+
+type LogCleanupConfig struct {
+	Enabled         bool
+	DetailRetention time.Duration // 保留LogDetail的时间（默认30天）
+	Interval        time.Duration // 清理任务执行间隔（默认24小时）
 }
 
 type ServerConfig struct {
@@ -74,6 +81,16 @@ func Load(configPath string) (*Config, error) {
 	viper.SetDefault("scheduler.sync_interval", "1h")
 	viper.SetDefault("scheduler.initial_delay", "10s")
 
+	// LogCleanup defaults
+	viper.SetDefault("logCleanup.enabled", true)
+	viper.SetDefault("logCleanup.detailRetention", "720h") // 30 days
+	viper.SetDefault("logCleanup.interval", "24h")        // Daily cleanup
+
+	// Bind environment variables
+	viper.BindEnv("logCleanup.enabled", "LOG_CLEANUP_ENABLED")
+	viper.BindEnv("logCleanup.detailRetention", "LOG_DETAIL_RETENTION")
+	viper.BindEnv("logCleanup.interval", "LOG_CLEANUP_INTERVAL")
+
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err
 	}
@@ -94,6 +111,14 @@ func Load(configPath string) (*Config, error) {
 	}
 	if config.Scheduler.InitialDelay == 0 {
 		config.Scheduler.InitialDelay = 10 * time.Second
+	}
+
+	// Ensure logCleanup defaults are set
+	if config.LogCleanup.DetailRetention == 0 {
+		config.LogCleanup.DetailRetention = 720 * time.Hour // 30 days
+	}
+	if config.LogCleanup.Interval == 0 {
+		config.LogCleanup.Interval = 24 * time.Hour // Daily
 	}
 
 	return &config, nil

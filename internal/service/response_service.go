@@ -69,8 +69,11 @@ func NewResponseService(
 // CreateResponse handles POST /responses
 // For streaming, returns (*ResponseStreamingResponse, error)
 // For non-streaming, returns (*models.Response, error)
-func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.GatewayAPIKey, req *models.ResponseRequest) (interface{}, error) {
+func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.GatewayAPIKey, req *models.ResponseRequest, requestHeaders http.Header) (interface{}, error) {
 	startTime := time.Now()
+
+	// Extract headers for logging and forwarding
+	forwardHeaders, headersJSON := extractForwardableHeaders(requestHeaders)
 
 	// 1. Find model (supports alias and :latest)
 	model, err := s.findModel(ctx, req.Model)
@@ -87,10 +90,11 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 	// Create initial log entry at request start
 	// Skip logging for virtual API keys (ID=0)
 	logEntry := &models.Log{
-		APIKeyID:     apiKey.ID,
-		ModelName:    model.Name,
-		ProviderName: route.Provider.Name,
-		Status:       0, // pending
+		APIKeyID:       getAPIKeyIDPtr(apiKey.ID),
+		ModelName:      model.Name,
+		ProviderName:   route.Provider.Name,
+		Status:         0, // pending
+		RequestHeaders: headersJSON,
 	}
 	if apiKey.ID != 0 {
 		if err := s.logRepo.Create(ctx, logEntry); err != nil {
@@ -124,8 +128,8 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 	// 5. Build upstream URL for Responses API
 	targetURL := fmt.Sprintf("%s/responses", strings.TrimSuffix(route.Provider.BaseURL, "/"))
 
-	// 6. Send upstream request
-	resp, err := s.sendResponseUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req, req.Stream)
+	// 6. Send upstream request with forwarded headers
+	resp, err := s.sendResponseUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req, req.Stream, forwardHeaders)
 	if err != nil {
 		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 502, err.Error())
 		return nil, ErrUpstreamFailed
@@ -157,6 +161,8 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 		streamResp.billingService = s.billingService
 		streamResp.cache = s.cache
 		streamResp.provider = &route.Provider
+		// Extract response headers
+		streamResp.responseHeaders = extractResponseHeaders(resp.Header)
 		return streamResp, nil
 	}
 
@@ -181,7 +187,8 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 
 	// Update log with completion data
 	latency := time.Since(startTime).Milliseconds()
-	s.updateLogAndCalculateCost(ctx, apiKey, model, route.Provider.Name, logEntry.ID, req, &response, int(latency))
+	respHeaders := extractResponseHeaders(resp.Header)
+	s.updateLogAndCalculateCost(ctx, apiKey, model, route.Provider.Name, logEntry.ID, req, &response, int(latency), respHeaders)
 
 	return &response, nil
 }
@@ -339,8 +346,11 @@ func (s *ResponseService) getDefaultProvider(ctx context.Context) (*models.Provi
 }
 
 // CompactConversation handles POST /responses/compact
-func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *models.GatewayAPIKey, req *models.CompactRequest) (*models.Response, error) {
+func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *models.GatewayAPIKey, req *models.CompactRequest, requestHeaders http.Header) (*models.Response, error) {
 	startTime := time.Now()
+
+	// Extract headers for logging and forwarding
+	forwardHeaders, headersJSON := extractForwardableHeaders(requestHeaders)
 
 	// Determine model (can be optional for compact)
 	if req.Model == "" {
@@ -362,10 +372,11 @@ func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *model
 	// Create initial log entry at request start
 	// Skip logging for virtual API keys (ID=0)
 	logEntry := &models.Log{
-		APIKeyID:     apiKey.ID,
-		ModelName:    model.Name,
-		ProviderName: route.Provider.Name,
-		Status:       0, // pending
+		APIKeyID:       getAPIKeyIDPtr(apiKey.ID),
+		ModelName:      model.Name,
+		ProviderName:   route.Provider.Name,
+		Status:         0, // pending
+		RequestHeaders: headersJSON,
 	}
 	if apiKey.ID != 0 {
 		if err := s.logRepo.Create(ctx, logEntry); err != nil {
@@ -399,8 +410,8 @@ func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *model
 	// 5. Build upstream URL
 	targetURL := fmt.Sprintf("%s/responses/compact", strings.TrimSuffix(route.Provider.BaseURL, "/"))
 
-	// 6. Send upstream request
-	resp, err := s.sendCompactUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req)
+	// 6. Send upstream request with forwarded headers
+	resp, err := s.sendCompactUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req, forwardHeaders)
 	if err != nil {
 		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 502, err.Error())
 		return nil, ErrUpstreamFailed
@@ -428,13 +439,14 @@ func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *model
 	}
 
 	latency := time.Since(startTime).Milliseconds()
-	s.updateLogAndCalculateCost(ctx, apiKey, model, route.Provider.Name, logEntry.ID, req, &response, int(latency))
+	respHeaders := extractResponseHeaders(resp.Header)
+	s.updateLogAndCalculateCost(ctx, apiKey, model, route.Provider.Name, logEntry.ID, req, &response, int(latency), respHeaders)
 
 	return &response, nil
 }
 
 // sendResponseUpstreamRequest sends request to upstream Responses API
-func (s *ResponseService) sendResponseUpstreamRequest(ctx context.Context, url, apiKey string, req *models.ResponseRequest, stream bool) (*http.Response, error) {
+func (s *ResponseService) sendResponseUpstreamRequest(ctx context.Context, url, apiKey string, req *models.ResponseRequest, stream bool, forwardHeaders map[string]string) (*http.Response, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -447,12 +459,17 @@ func (s *ResponseService) sendResponseUpstreamRequest(ctx context.Context, url, 
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+
+	// Forward additional headers
+	for key, value := range forwardHeaders {
+		httpReq.Header.Set(key, value)
+	}
 
 	return s.httpClient.Do(httpReq)
 }
 
 // sendCompactUpstreamRequest sends compact request to upstream
-func (s *ResponseService) sendCompactUpstreamRequest(ctx context.Context, url, apiKey string, req *models.CompactRequest) (*http.Response, error) {
+func (s *ResponseService) sendCompactUpstreamRequest(ctx context.Context, url, apiKey string, req *models.CompactRequest, forwardHeaders map[string]string) (*http.Response, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -465,6 +482,11 @@ func (s *ResponseService) sendCompactUpstreamRequest(ctx context.Context, url, a
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+
+	// Forward additional headers
+	for key, value := range forwardHeaders {
+		httpReq.Header.Set(key, value)
+	}
 
 	return s.httpClient.Do(httpReq)
 }
@@ -600,7 +622,7 @@ func (s *ResponseService) logResponseAndCalculateCost(ctx context.Context, apiKe
 			CompletionTokens:   completionTokens,
 			TotalTokens:        totalTokens,
 			Cost:               cost,
-			APIKeyID:           apiKey.ID,
+			APIKeyID:           getAPIKeyIDPtr(apiKey.ID),
 			ModelName:          model.Name,
 			ProviderName:       providerName,
 			OwnerChannelID:     ownerChannelID,
@@ -634,7 +656,7 @@ func (s *ResponseService) logError(ctx context.Context, apiKey *models.GatewayAP
 
 	logEntry := &models.Log{
 		Latency:      latency,
-		APIKeyID:     apiKey.ID,
+		APIKeyID:     getAPIKeyIDPtr(apiKey.ID),
 		ModelName:    model.Name,
 		ProviderName: providerName,
 		Status:       status,
@@ -654,7 +676,7 @@ func (s *ResponseService) logError(ctx context.Context, apiKey *models.GatewayAP
 }
 
 // updateLogAndCalculateCost updates an existing log entry with completion data and calculates cost
-func (s *ResponseService) updateLogAndCalculateCost(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, logID uint, req interface{}, resp *models.Response, latency int) {
+func (s *ResponseService) updateLogAndCalculateCost(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, logID uint, req interface{}, resp *models.Response, latency int, respHeaders map[string]string) {
 	if logID == 0 {
 		return
 	}
@@ -686,6 +708,12 @@ func (s *ResponseService) updateLogAndCalculateCost(ctx context.Context, apiKey 
 		"status":             200,
 		"ownerChannelId":   ownerChannelID,
 		"ownerChannelUserId": ownerChannelUserID,
+	}
+
+	// Add response headers if available
+	if len(respHeaders) > 0 {
+		respHeadersJSON, _ := json.Marshal(respHeaders)
+		updates["responseHeaders"] = string(respHeadersJSON)
 	}
 
 	s.logRepo.UpdateByID(ctx, logID, updates)
@@ -740,6 +768,7 @@ type ResponseStreamingResponse struct {
 	logDetailRepo  *repository.LogDetailRepository
 	billingService *BillingService
 	cache          *ResponseCache
+	responseHeaders map[string]string // Response headers for logging
 }
 
 // NewResponseStreamingResponse creates a new streaming response wrapper for Responses API
@@ -894,6 +923,10 @@ func (s *ResponseStreamingResponse) LogAfterComplete(ctx context.Context) {
 	}
 	if errMsg != "" {
 		updates["errorMessage"] = errMsg
+	}
+	if len(s.responseHeaders) > 0 {
+		respHeadersJSON, _ := json.Marshal(s.responseHeaders)
+		updates["responseHeaders"] = string(respHeadersJSON)
 	}
 
 	s.logRepo.UpdateByID(ctx, s.logID, updates)

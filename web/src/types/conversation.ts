@@ -42,8 +42,15 @@ export interface UpdateConversationRequest {
   settings?: ConversationSettings
 }
 
+export interface ChatContentPart {
+  type: 'text' | 'image_url'
+  text?: string
+  image_url?: { url: string; detail?: string }
+}
+
 export interface ChatRequest {
   content: string
+  parts?: ChatContentPart[]
   stream?: boolean
   settings?: ConversationSettings
 }
