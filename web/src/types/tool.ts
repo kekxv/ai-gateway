@@ -64,7 +64,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     id: 'execute_javascript',
     name: 'execute_javascript',
-    description: '执行 JavaScript 代码并返回结果。可用于计算、数据处理等。',
+    description: '执行 JavaScript 代码并返回结果。可用于计算、数据处理等。注意：代码中需要使用 return 语句返回结果。',
     type: 'builtin',
     enabled: true,
     parameters: {
@@ -72,7 +72,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
       properties: {
         code: {
           type: 'string',
-          description: '要执行的 JavaScript 代码'
+          description: '要执行的 JavaScript 代码，需要使用 return 返回结果'
         }
       },
       required: ['code']

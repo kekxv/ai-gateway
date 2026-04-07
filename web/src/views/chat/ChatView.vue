@@ -63,52 +63,7 @@
     <!-- Main Content -->
     <main class="main-content">
       <!-- Tools Panel -->
-      <div class="tools-panel" :class="{ open: showToolsPanel }">
-        <div class="tools-panel-header">
-          <span class="tools-panel-title">工具</span>
-          <button class="tools-panel-close" @click="showToolsPanel = false">
-            <el-icon><Close /></el-icon>
-          </button>
-        </div>
-        <div class="tools-panel-content">
-          <div class="tools-section">
-            <div class="tools-section-title">内置工具</div>
-            <div class="tools-list">
-              <div
-                v-for="tool in toolsStore.builtinTools"
-                :key="tool.id"
-                class="tool-item"
-                :class="{ enabled: tool.enabled }"
-                @click="toolsStore.toggleTool(tool.id)"
-              >
-                <div class="tool-info">
-                  <span class="tool-name">{{ tool.name }}</span>
-                  <span class="tool-desc">{{ tool.description }}</span>
-                </div>
-                <el-switch :model-value="tool.enabled" size="small" />
-              </div>
-            </div>
-          </div>
-          <div class="tools-section" v-if="toolsStore.customTools.length > 0">
-            <div class="tools-section-title">自定义工具</div>
-            <div class="tools-list">
-              <div
-                v-for="tool in toolsStore.customTools"
-                :key="tool.id"
-                class="tool-item"
-                :class="{ enabled: tool.enabled }"
-                @click="toolsStore.toggleTool(tool.id)"
-              >
-                <div class="tool-info">
-                  <span class="tool-name">{{ tool.name }}</span>
-                  <span class="tool-desc">{{ tool.description }}</span>
-                </div>
-                <el-switch :model-value="tool.enabled" size="small" />
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <ToolPanel :is-open="showToolsPanel" @close="showToolsPanel = false" />
 
       <!-- Header -->
       <header class="chat-header">
@@ -153,7 +108,7 @@
       </header>
 
       <!-- Messages Area -->
-      <div class="messages-area" ref="messagesAreaRef">
+      <div class="messages-area" ref="messagesAreaRef" @scroll="handleScroll">
         <!-- Welcome Screen -->
         <div v-if="!currentConversation" class="welcome-screen">
           <div class="welcome-content">
@@ -213,6 +168,9 @@
                 <button class="action-icon-btn" @click="startEdit(index)" title="编辑">
                   <el-icon><Edit /></el-icon>
                 </button>
+                <button class="action-icon-btn" @click="regenerateFromUser(index)" title="重新生成">
+                  <el-icon><RefreshRight /></el-icon>
+                </button>
               </div>
             </div>
 
@@ -225,9 +183,6 @@
                 <div class="assistant-header">
                   <div class="assistant-name">AI</div>
                   <div v-if="!sending" class="message-actions">
-                    <button class="action-icon-btn" @click="regenerateMessage(index)" title="重新生成">
-                      <el-icon><RefreshRight /></el-icon>
-                    </button>
                     <button class="action-icon-btn" @click="copyMessage(message.content)" title="复制">
                       <el-icon><DocumentCopy /></el-icon>
                     </button>
@@ -459,6 +414,7 @@ import { PRESET_PROMPTS } from '@/types/conversation'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ThinkBlock from '@/components/chat/ThinkBlock.vue'
 import ToolCallDisplay from '@/components/chat/ToolCallDisplay.vue'
+import ToolPanel from '@/components/chat/ToolPanel.vue'
 import { parseMessageContent, parseStreamingThinkContent, estimateThinkTokens } from '@/utils/messageParser'
 import { useToolsStore } from '@/stores/tools'
 import type { ToolCallResult, ToolCall } from '@/types/tool'
@@ -470,6 +426,9 @@ const toolsStore = useToolsStore()
 const messagesAreaRef = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// Scroll state - track if user is at bottom
+const isUserAtBottom = ref(true)
 
 // Attached files state
 interface AttachedFile {
@@ -627,6 +586,7 @@ const confirmEdit = async (index: number) => {
 
   const newContent = editingContent.value.trim()
   // Get the message ID before this index (for delete_after_id)
+  // When index=0 (first message), prevMessageId=0, which will delete all messages (id > 0)
   const prevMessageId = index > 0 ? messages.value[index - 1].id : 0
   cancelEdit()
 
@@ -643,6 +603,7 @@ const confirmEdit = async (index: number) => {
     created_at: new Date().toISOString()
   }
   messages.value.push(tempUserMsg)
+  isUserAtBottom.value = true
 
   // Send the message
   sending.value = true
@@ -654,26 +615,26 @@ const confirmEdit = async (index: number) => {
       max_tokens: settingsForm.max_tokens
     },
     tools: toolsStore.getToolsForModel(),
-    delete_after_id: prevMessageId > 0 ? prevMessageId : undefined
+    delete_after_id: prevMessageId
   })
 }
 
-// Regenerate assistant message
-const regenerateMessage = async (index: number) => {
+// Regenerate from user message
+const regenerateFromUser = async (userIndex: number) => {
   if (!currentConversation.value || sending.value) return
 
-  // Find the user message before this assistant message
-  const userMessageIndex = index - 1
-  if (userMessageIndex < 0 || messages.value[userMessageIndex].role !== 'user') {
-    ElMessage.warning('找不到对应的用户消息')
-    return
-  }
+  const userMessage = messages.value[userIndex]
+  if (userMessage.role !== 'user') return
 
-  const userContent = messages.value[userMessageIndex].content
-  const userMessageId = messages.value[userMessageIndex].id
+  const userContent = userMessage.content
 
-  // Remove messages from the user message onwards (local UI update)
-  messages.value = messages.value.slice(0, userMessageIndex)
+  // Get the message ID before this user message (for delete_after_id)
+  // We need to delete messages AFTER the previous message, which includes the current user message
+  // When userIndex=0 (first message), prevMessageId=0, which will delete all messages (id > 0)
+  const prevMessageId = userIndex > 0 ? messages.value[userIndex - 1].id : 0
+
+  // Remove messages from this user message onwards (local UI update)
+  messages.value = messages.value.slice(0, userIndex)
 
   // Re-add user message
   const tempUserMsg: ExtendedMessage = {
@@ -684,6 +645,7 @@ const regenerateMessage = async (index: number) => {
     created_at: new Date().toISOString()
   }
   messages.value.push(tempUserMsg)
+  isUserAtBottom.value = true
 
   // Send the message
   sending.value = true
@@ -695,7 +657,7 @@ const regenerateMessage = async (index: number) => {
       max_tokens: settingsForm.max_tokens
     },
     tools: toolsStore.getToolsForModel(),
-    delete_after_id: userMessageId > 0 ? userMessageId : undefined
+    delete_after_id: prevMessageId
   })
 }
 
@@ -909,6 +871,8 @@ const sendMessage = async () => {
     created_at: new Date().toISOString()
   }
   messages.value.push(tempUserMsg)
+  // User is sending a message, force scroll to bottom
+  isUserAtBottom.value = true
   scrollToBottom()
 
   // Start the streaming loop with tool call support
@@ -1136,11 +1100,32 @@ const streamWithToolCalls = async (
 }
 
 
-// Scroll to bottom
+// Scroll to bottom (only if user is at bottom)
 const scrollToBottom = () => {
-  if (messagesAreaRef.value) {
+  if (messagesAreaRef.value && isUserAtBottom.value) {
     messagesAreaRef.value.scrollTop = messagesAreaRef.value.scrollHeight
   }
+}
+
+// Check if user is at bottom
+const checkIsAtBottom = () => {
+  if (messagesAreaRef.value) {
+    const { scrollTop, scrollHeight, clientHeight } = messagesAreaRef.value
+    // Consider "at bottom" if within 150px of the bottom (more tolerant)
+    isUserAtBottom.value = scrollHeight - scrollTop - clientHeight < 150
+  }
+}
+
+// Handle scroll event with debounce
+let scrollTimeout: ReturnType<typeof setTimeout> | null = null
+const handleScroll = () => {
+  if (scrollTimeout) {
+    clearTimeout(scrollTimeout)
+  }
+  scrollTimeout = setTimeout(() => {
+    checkIsAtBottom()
+    scrollTimeout = null
+  }, 100)
 }
 
 // File upload functions
@@ -2171,121 +2156,6 @@ onUnmounted(() => {
   font-size: 14px;
   color: #667eea;
   font-weight: 600;
-}
-
-/* Tools Panel */
-/* Tools Panel - 浮动面板 */
-.tools-panel {
-  position: fixed;
-  top: 56px;
-  right: 0;
-  width: 300px;
-  height: calc(100vh - 56px);
-  background: #fff;
-  border-left: 1px solid #e5e7eb;
-  transform: translateX(100%);
-  transition: transform 0.3s ease;
-  z-index: 100;
-  display: flex;
-  flex-direction: column;
-  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.1);
-}
-
-.tools-panel.open {
-  transform: translateX(0);
-}
-
-.tools-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.tools-panel-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #1f2937;
-}
-
-.tools-panel-close {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  color: #6b7280;
-  cursor: pointer;
-  border-radius: 6px;
-}
-
-.tools-panel-close:hover {
-  background: #f3f4f6;
-}
-
-.tools-panel-content {
-  flex: 1;
-  padding: 12px;
-  overflow-y: auto;
-}
-
-.tools-section {
-  margin-bottom: 16px;
-}
-
-.tools-section-title {
-  font-size: 11px;
-  font-weight: 600;
-  color: #6b7280;
-  text-transform: uppercase;
-  margin-bottom: 8px;
-}
-
-.tools-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.tool-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
-  background: #f9fafb;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.tool-item:hover {
-  background: #f3f4f6;
-}
-
-.tool-item.enabled {
-  background: #eef2ff;
-}
-
-.tool-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.tool-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: #374151;
-  font-family: 'SF Mono', 'Monaco', monospace;
-}
-
-.tool-desc {
-  font-size: 11px;
-  color: #6b7280;
-  line-height: 1.3;
 }
 
 /* Icon button active state */

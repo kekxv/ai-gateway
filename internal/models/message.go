@@ -46,7 +46,7 @@ type ChatRequest struct {
 	Stream            bool                 `json:"stream"`
 	Settings          ConversationSettings `json:"settings,omitempty"` // optional override settings
 	Tools             []ToolDefinition     `json:"tools,omitempty"`    // optional tools for function calling
-	DeleteAfterID     uint                 `json:"delete_after_id,omitempty"` // for regenerate: delete messages after this ID
+	DeleteAfterID     *uint                `json:"delete_after_id,omitempty"` // for regenerate: delete messages after this ID (nil = no delete, 0 = delete all)
 }
 
 // ChatStreamEvent represents a streaming event

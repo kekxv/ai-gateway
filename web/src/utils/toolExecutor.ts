@@ -95,10 +95,10 @@ function getCurrentTime(timezone?: string): object {
  */
 function executeJavaScript(code: string): unknown {
   try {
-    // 创建一个安全的执行环境
+    // 支持执行完整的语句块，代码中需要使用 return 返回结果
     const safeEval = new Function(`
       "use strict";
-      return (${code});
+      ${code}
     `)
     return safeEval()
   } catch (error) {

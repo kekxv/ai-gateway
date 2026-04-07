@@ -301,8 +301,9 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 	}
 
 	// Delete messages after specified ID (for regenerate/edit) - must do BEFORE getting prevMessages
-	if req.DeleteAfterID > 0 {
-		if err := h.messageRepo.DeleteAfterID(c.Request.Context(), conversationID, req.DeleteAfterID); err != nil {
+	if req.DeleteAfterID != nil {
+		deleteID := *req.DeleteAfterID
+		if err := h.messageRepo.DeleteAfterID(c.Request.Context(), conversationID, deleteID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

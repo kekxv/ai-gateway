@@ -100,6 +100,16 @@ export const useToolsStore = defineStore('tools', () => {
     toolResults.value.clear()
   }
 
+  // 获取单个工具
+  function getTool(id: string): ToolDefinition | undefined {
+    return allTools.value.find(t => t.id === id)
+  }
+
+  // 检查工具名称是否存在
+  function isToolNameExists(name: string): boolean {
+    return allTools.value.some(t => t.name === name)
+  }
+
   // 初始化时加载
   loadCustomTools()
 
@@ -116,6 +126,8 @@ export const useToolsStore = defineStore('tools', () => {
     getToolsForModel,
     setToolResult,
     getToolResult,
-    clearToolResults
+    clearToolResults,
+    getTool,
+    isToolNameExists
   }
 })

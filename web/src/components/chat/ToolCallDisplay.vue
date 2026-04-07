@@ -1,7 +1,7 @@
 <template>
   <div class="tool-calls">
     <div
-      v-for="toolCall in toolCalls"
+      v-for="toolCall in props.toolCalls"
       :key="toolCall.id"
       class="tool-call-item"
       :class="getStatusClass(toolCall)"
@@ -45,7 +45,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, h, watch, onMounted } from 'vue'
+import { ref, h } from 'vue'
 import { Tools, Check, Close, Loading, ArrowDown, ArrowUp, Clock, Document } from '@element-plus/icons-vue'
 import type { ToolCallResult } from '@/types/tool'
 
