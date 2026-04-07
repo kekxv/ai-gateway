@@ -17,6 +17,7 @@ export interface ConversationSettings {
   top_k?: number
   frequency_penalty?: number
   presence_penalty?: number
+  enable_thinking?: boolean
 }
 
 export interface Message {
@@ -71,6 +72,7 @@ export interface ChatRequest {
     }
   }>
   delete_after_id?: number // for regenerate: delete messages after this ID
+  enable_thinking?: boolean
 }
 
 export interface ChatStreamEvent {

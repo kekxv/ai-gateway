@@ -1,9 +1,10 @@
 /**
  * 工具执行器
- * 执行内置工具并返回结果
+ * 执行内置工具和自定义工具并返回结果
  */
 
-import type { ToolCallResult } from '@/types/tool'
+import type { ToolCallResult, ToolDefinition } from '@/types/tool'
+import { useToolsStore } from '@/stores/tools'
 
 /**
  * 执行工具调用
@@ -22,15 +23,51 @@ export async function executeToolCall(
   }
 
   try {
-    const output = await executeBuiltinTool(toolName, args)
-    result.status = 'success'
-    result.result = output
+    // 先检查是否是自定义工具
+    const toolsStore = useToolsStore()
+    const customTool = toolsStore.customTools.find(t => t.name === toolName)
+
+    if (customTool && customTool.executionCode) {
+      // 执行自定义工具代码
+      const output = await executeCustomTool(customTool, args)
+      result.status = 'success'
+      result.result = output
+    } else {
+      // 执行内置工具
+      const output = await executeBuiltinTool(toolName, args)
+      result.status = 'success'
+      result.result = output
+    }
   } catch (error) {
     result.status = 'error'
     result.error = error instanceof Error ? error.message : String(error)
   }
 
   return result
+}
+
+/**
+ * 执行自定义工具代码
+ */
+async function executeCustomTool(
+  tool: ToolDefinition,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  if (!tool.executionCode) {
+    throw new Error(`自定义工具 "${tool.name}" 没有定义执行代码`)
+  }
+
+  try {
+    // 创建一个安全的执行环境，将参数传入
+    const safeExec = new Function('args', `
+      "use strict";
+      ${tool.executionCode}
+    `)
+    const output = await safeExec(args)
+    return output
+  } catch (error) {
+    throw new Error(`工具 "${tool.name}" 执行错误: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 /**
@@ -44,22 +81,25 @@ async function executeBuiltinTool(
     case 'get_current_time':
       return getCurrentTime(args.timezone as string | undefined)
 
+    case 'get_location':
+      return getLocation(args.enableHighAccuracy as boolean | undefined)
+
     case 'execute_javascript':
       return executeJavaScript(args.code as string)
 
     case 'web_search':
-      return webSearch(args.query as string)
-
-    case 'draw_chart':
-      return drawChart(
-        args.type as string,
-        args.labels as string[],
-        args.data as number[],
-        args.title as string | undefined
+      return webSearch(
+        args.query as string,
+        args.location as string | undefined,
+        args.hl as string | undefined,
+        args.gl as string | undefined
       )
 
-    case 'save_note':
-      return saveNote(args.title as string, args.content as string)
+    case 'fetch_webpage':
+      return fetchWebpage(
+        args.url as string,
+        args.selector as string | undefined
+      )
 
     default:
       throw new Error(`Unknown tool: ${toolName}`)
@@ -91,6 +131,46 @@ function getCurrentTime(timezone?: string): object {
 }
 
 /**
+ * 获取当前地理位置
+ */
+function getLocation(enableHighAccuracy?: boolean): Promise<object> {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('浏览器不支持地理位置功能'))
+      return
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        resolve({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          altitude: position.coords.altitude,
+          altitudeAccuracy: position.coords.altitudeAccuracy,
+          heading: position.coords.heading,
+          speed: position.coords.speed,
+          timestamp: new Date(position.timestamp).toISOString()
+        })
+      },
+      (error) => {
+        const errorMessages: Record<number, string> = {
+          1: '用户拒绝了地理位置请求',
+          2: '无法获取位置信息',
+          3: '获取位置超时'
+        }
+        reject(new Error(errorMessages[error.code] || `定位错误: ${error.message}`))
+      },
+      {
+        enableHighAccuracy: enableHighAccuracy ?? false,
+        timeout: 10000,
+        maximumAge: 60000
+      }
+    )
+  })
+}
+
+/**
  * 执行 JavaScript 代码
  */
 function executeJavaScript(code: string): unknown {
@@ -107,103 +187,110 @@ function executeJavaScript(code: string): unknown {
 }
 
 /**
- * 网页搜索 (模拟)
+ * 网页搜索 (使用 SerpAPI)
  */
-async function webSearch(query: string): Promise<object> {
-  // 这是一个模拟实现，实际项目中可以集成真实的搜索 API
-  return {
-    query,
-    results: [
-      {
-        title: `搜索结果: ${query}`,
-        snippet: `这是关于 "${query}" 的搜索结果摘要。在实际实现中，这里会显示真实的搜索结果。`,
-        url: `https://example.com/search?q=${encodeURIComponent(query)}`
-      }
-    ],
-    note: '这是一个模拟的搜索结果。要启用真实搜索，请配置搜索 API。'
-  }
-}
+async function webSearch(
+  query: string,
+  location?: string,
+  hl?: string,
+  gl?: string
+): Promise<object> {
+  const params = new URLSearchParams({
+    q: query,
+    location: location || 'Austin, Texas, United States',
+    hl: hl || 'en',
+    gl: gl || 'us',
+    google_domain: 'google.com'
+  })
 
-/**
- * 绘制图表
- */
-function drawChart(
-  type: string,
-  labels: string[],
-  data: number[],
-  title?: string
-): object {
-  // 返回图表配置，前端可以根据此配置渲染图表
-  return {
-    type,
-    title: title || 'Chart',
-    data: {
-      labels,
-      datasets: [{
-        data,
-        backgroundColor: [
-          'rgba(99, 102, 241, 0.8)',
-          'rgba(34, 197, 94, 0.8)',
-          'rgba(249, 115, 22, 0.8)',
-          'rgba(236, 72, 153, 0.8)',
-          'rgba(14, 165, 233, 0.8)',
-          'rgba(168, 85, 247, 0.8)'
-        ]
-      }]
-    },
-    config: {
-      responsive: true,
-      plugins: {
-        title: {
-          display: !!title,
-          text: title
-        }
-      }
-    }
-  }
-}
+  const url = `https://serpapi.com/search.json?${params.toString()}`
 
-/**
- * 保存笔记
- */
-function saveNote(title: string, content: string): object {
   try {
-    const notes = JSON.parse(localStorage.getItem('chat_notes') || '[]')
-    const note = {
-      id: Date.now(),
-      title,
-      content,
-      createdAt: new Date().toISOString()
+    const response = await fetch(
+      `https://corsproxy.io/?${encodeURIComponent(url)}`
+    )
+
+    if (!response.ok) {
+      throw new Error(`搜索请求失败: ${response.status}`)
     }
-    notes.push(note)
-    localStorage.setItem('chat_notes', JSON.stringify(notes))
+
+    const data = await response.json()
+
+    // 提取有机搜索结果
+    const results = (data.organic_results || []).map((item: {
+      title: string
+      snippet: string
+      link: string
+    }) => ({
+      title: item.title,
+      snippet: item.snippet || '',
+      url: item.link
+    }))
+
     return {
-      success: true,
-      message: `笔记 "${title}" 已保存`,
-      noteId: note.id
+      query,
+      location: location || 'Austin, Texas, United States',
+      total_results: data.search_information?.total_results || results.length,
+      results: results.slice(0, 10)
     }
   } catch (error) {
-    throw new Error(`保存笔记失败: ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`搜索失败: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
 /**
- * 获取所有笔记
+ * 获取网页内容
  */
-export function getNotes(): object[] {
-  return JSON.parse(localStorage.getItem('chat_notes') || '[]')
-}
-
-/**
- * 删除笔记
- */
-export function deleteNote(id: number): boolean {
+async function fetchWebpage(url: string, selector?: string): Promise<object> {
   try {
-    const notes = JSON.parse(localStorage.getItem('chat_notes') || '[]')
-    const filtered = notes.filter((n: { id: number }) => n.id !== id)
-    localStorage.setItem('chat_notes', JSON.stringify(filtered))
-    return true
-  } catch {
-    return false
+    // 使用 CORS 代理
+    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`
+    const response = await fetch(proxyUrl)
+
+    if (!response.ok) {
+      throw new Error(`请求失败: ${response.status}`)
+    }
+
+    const html = await response.text()
+
+    // 如果指定了选择器，尝试提取内容
+    if (selector) {
+      const parser = new DOMParser()
+      const doc = parser.parseFromString(html, 'text/html')
+      const elements = doc.querySelectorAll(selector)
+      const contents = Array.from(elements).map(el => ({
+        text: el.textContent?.trim() || '',
+        html: el.innerHTML
+      }))
+
+      return {
+        url,
+        selector,
+        matched: contents.length,
+        contents
+      }
+    }
+
+    // 提取页面标题和主要内容
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(html, 'text/html')
+    const title = doc.querySelector('title')?.textContent || ''
+    const description = doc.querySelector('meta[name="description"]')?.getAttribute('content') || ''
+
+    // 获取 body 文本内容（去除脚本和样式）
+    const body = doc.body
+    const scripts = body.querySelectorAll('script, style, nav, footer, header')
+    scripts.forEach(el => el.remove())
+    const textContent = body.textContent?.replace(/\s+/g, ' ').trim().slice(0, 5000) || ''
+
+    return {
+      url,
+      title,
+      description,
+      textContent,
+      htmlLength: html.length
+    }
+  } catch (error) {
+    throw new Error(`获取网页失败: ${error instanceof Error ? error.message : String(error)}`)
   }
 }

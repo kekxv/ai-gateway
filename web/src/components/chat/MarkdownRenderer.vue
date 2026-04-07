@@ -133,7 +133,8 @@ const renderedContent = computed(() => {
   margin: 12px 0;
   border-radius: 8px;
   overflow: hidden;
-  background: #1e293b;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
 }
 
 .markdown-content .code-header {
@@ -141,15 +142,16 @@ const renderedContent = computed(() => {
   justify-content: space-between;
   align-items: center;
   padding: 8px 12px;
-  background: #334155;
-  color: #94a3b8;
+  background: #f3f4f6;
+  color: #6b7280;
   font-size: 12px;
+  border-bottom: 1px solid #e5e7eb;
 }
 
 .markdown-content .copy-btn {
   padding: 2px 8px;
-  background: #475569;
-  color: #e2e8f0;
+  background: #e5e7eb;
+  color: #374151;
   border: none;
   border-radius: 4px;
   cursor: pointer;
@@ -157,7 +159,7 @@ const renderedContent = computed(() => {
 }
 
 .markdown-content .copy-btn:hover {
-  background: #64748b;
+  background: #d1d5db;
 }
 
 .markdown-content pre {
@@ -180,16 +182,19 @@ const renderedContent = computed(() => {
   font-size: 0.9em;
 }
 
-/* Highlight.js 主题调整 */
+/* Highlight.js 主题调整 - 亮色主题 */
 .markdown-content .hljs {
   background: transparent;
-  color: #e2e8f0;
+  color: #374151;
 }
 
-.markdown-content .hljs-keyword { color: #f472b6; }
-.markdown-content .hljs-string { color: #a5f3fc; }
-.markdown-content .hljs-number { color: #fbbf24; }
-.markdown-content .hljs-function { color: #a78bfa; }
-.markdown-content .hljs-comment { color: #64748b; }
-.markdown-content .hljs-variable { color: #94a3b8; }
+.markdown-content .hljs-keyword { color: #d73a49; }
+.markdown-content .hljs-string { color: #032f62; }
+.markdown-content .hljs-number { color: #005cc5; }
+.markdown-content .hljs-function { color: #6f42c1; }
+.markdown-content .hljs-comment { color: #6a737d; }
+.markdown-content .hljs-variable { color: #e36209; }
+.markdown-content .hljs-title { color: #6f42c1; }
+.markdown-content .hljs-params { color: #24292e; }
+.markdown-content .hljs-built_in { color: #005cc5; }
 </style>

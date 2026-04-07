@@ -62,8 +62,8 @@
 
     <!-- Main Content -->
     <main class="main-content">
-      <!-- Tools Panel -->
-      <ToolPanel :is-open="showToolsPanel" @close="showToolsPanel = false" />
+      <!-- Tools Dialog -->
+      <ToolsDialog v-model="showToolsDialog" />
 
       <!-- Header -->
       <header class="chat-header">
@@ -94,7 +94,7 @@
         </div>
 
         <div class="header-right">
-          <button class="icon-btn" @click="showToolsPanel = !showToolsPanel" :class="{ active: showToolsPanel }" title="工具">
+          <button class="icon-btn" @click="showToolsDialog = true" title="工具">
             <el-icon><Operation /></el-icon>
           </button>
           <button class="icon-btn" @click="showSettingsDialog = true" :disabled="!currentConversation" title="设置">
@@ -340,7 +340,32 @@
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
+
+              <el-dropdown trigger="click" @command="setThinkingMode" v-if="currentConversation && !isMobile">
+                <button class="action-btn" :class="{ active: thinkingMode !== 'auto' }">
+                  <el-icon><Cpu /></el-icon>
+                  <span>思维链</span>
+                  <span class="mode-tag">{{ thinkingModeLabel }}</span>
+                </button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="auto" :class="{ 'is-active': thinkingMode === 'auto' }">
+                      <span class="option-label">自动</span>
+                      <span class="option-desc">不设置</span>
+                    </el-dropdown-item>
+                    <el-dropdown-item command="on" :class="{ 'is-active': thinkingMode === 'on' }">
+                      <span class="option-label">开启</span>
+                      <span class="option-desc">强制启用</span>
+                    </el-dropdown-item>
+                    <el-dropdown-item command="off" :class="{ 'is-active': thinkingMode === 'off' }">
+                      <span class="option-label">关闭</span>
+                      <span class="option-desc">强制禁用</span>
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </div>
+
             <div class="input-hint" v-if="!isMobile">
               <span>{{ isMac ? '⌘ + Enter' : 'Ctrl + Enter' }} 发送</span>
             </div>
@@ -406,7 +431,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Setting, ChatLineRound, Monitor,
   Loading, Promotion, MoreFilled, Delete, MagicStick, Close, Menu, Paperclip, Operation,
-  Edit, RefreshRight, DocumentCopy
+  Edit, RefreshRight, DocumentCopy, Cpu
 } from '@element-plus/icons-vue'
 import { conversationApi, modelApi } from '@/api/conversation'
 import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart, ChatRequest } from '@/types/conversation'
@@ -414,7 +439,7 @@ import { PRESET_PROMPTS } from '@/types/conversation'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ThinkBlock from '@/components/chat/ThinkBlock.vue'
 import ToolCallDisplay from '@/components/chat/ToolCallDisplay.vue'
-import ToolPanel from '@/components/chat/ToolPanel.vue'
+import ToolsDialog from '@/components/chat/ToolsDialog.vue'
 import { parseMessageContent, parseStreamingThinkContent, estimateThinkTokens } from '@/utils/messageParser'
 import { useToolsStore } from '@/stores/tools'
 import type { ToolCallResult, ToolCall } from '@/types/tool'
@@ -456,7 +481,7 @@ const presets = ref<PresetPrompt[]>(PRESET_PROMPTS)
 // Streaming state for Think and ToolCalls
 const streamingThinkContent = ref('')
 const streamingToolCallResults = ref<ToolCallResult[]>([])
-const showToolsPanel = ref(false)
+const showToolsDialog = ref(false)
 
 // Track full raw content for parsing (includes think tags)
 const streamingRawContent = ref('')
@@ -518,6 +543,29 @@ const settingsForm = reactive<ConversationSettings & { system_prompt: string }>(
   system_prompt: ''
 })
 
+// Thinking chain mode: 'auto' = not set, 'on' = force enable, 'off' = force disable
+type ThinkingMode = 'auto' | 'on' | 'off'
+const thinkingMode = ref<ThinkingMode>('auto')
+
+const thinkingModeLabel = computed(() => {
+  const labels: Record<ThinkingMode, string> = {
+    auto: '自动',
+    on: '开启',
+    off: '关闭'
+  }
+  return labels[thinkingMode.value]
+})
+
+const setThinkingMode = (mode: ThinkingMode) => {
+  thinkingMode.value = mode
+}
+
+// Get enable_thinking value for API request
+const getEnableThinking = (): boolean | undefined => {
+  if (thinkingMode.value === 'auto') return undefined
+  return thinkingMode.value === 'on'
+}
+
 // Check mobile
 const checkMobile = () => {
   isMobile.value = window.innerWidth < 768
@@ -535,7 +583,8 @@ const isMac = computed(() => {
 const autoResize = () => {
   if (textareaRef.value) {
     textareaRef.value.style.height = 'auto'
-    textareaRef.value.style.height = Math.min(textareaRef.value.scrollHeight, 150) + 'px'
+    // Allow expansion up to 300px (about 10 lines)
+    textareaRef.value.style.height = Math.min(textareaRef.value.scrollHeight, 300) + 'px'
   }
 }
 
@@ -615,7 +664,8 @@ const confirmEdit = async (index: number) => {
       max_tokens: settingsForm.max_tokens
     },
     tools: toolsStore.getToolsForModel(),
-    delete_after_id: prevMessageId
+    delete_after_id: prevMessageId,
+    enable_thinking: getEnableThinking()
   })
 }
 
@@ -657,7 +707,8 @@ const regenerateFromUser = async (userIndex: number) => {
       max_tokens: settingsForm.max_tokens
     },
     tools: toolsStore.getToolsForModel(),
-    delete_after_id: prevMessageId
+    delete_after_id: prevMessageId,
+    enable_thinking: getEnableThinking()
   })
 }
 
@@ -877,10 +928,17 @@ const sendMessage = async () => {
 
   // Start the streaming loop with tool call support
   sending.value = true
-  await streamWithToolCalls(currentConversation.value.id, { content, parts, stream: true, settings: {
-    temperature: settingsForm.temperature,
-    max_tokens: settingsForm.max_tokens
-  }, tools: toolsStore.getToolsForModel() })
+  await streamWithToolCalls(currentConversation.value.id, {
+    content,
+    parts,
+    stream: true,
+    settings: {
+      temperature: settingsForm.temperature,
+      max_tokens: settingsForm.max_tokens
+    },
+    tools: toolsStore.getToolsForModel(),
+    enable_thinking: getEnableThinking()
+  })
 }
 
 // Helper function to save assistant message to backend
@@ -1018,7 +1076,8 @@ const streamWithToolCalls = async (
                 temperature: settingsForm.temperature,
                 max_tokens: settingsForm.max_tokens
               },
-              tools: toolsStore.getToolsForModel()
+              tools: toolsStore.getToolsForModel(),
+              enable_thinking: getEnableThinking()
             },
             true
           ).catch(console.error)
@@ -2048,7 +2107,9 @@ onUnmounted(() => {
   line-height: 1.5;
   color: #1f2937;
   background: transparent;
-  max-height: 150px;
+  max-height: 300px;
+  min-height: 24px;
+  overflow-y: auto;
   font-family: inherit;
 }
 
@@ -2120,6 +2181,41 @@ onUnmounted(() => {
 .action-btn:hover {
   background: #f3f4f6;
   color: #374151;
+}
+
+.action-btn.active {
+  background: #eef2ff;
+  color: #667eea;
+}
+
+.mode-tag {
+  padding: 1px 6px;
+  background: #e5e7eb;
+  border-radius: 4px;
+  font-size: 10px;
+  color: #6b7280;
+}
+
+.action-btn.active .mode-tag {
+  background: #667eea;
+  color: #fff;
+}
+
+/* Dropdown menu item styles */
+.option-label {
+  font-weight: 500;
+  color: #374151;
+}
+
+.option-desc {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+:deep(.el-dropdown-menu__item.is-active) {
+  color: #667eea;
+  background-color: #f5f7ff;
 }
 
 .input-hint {

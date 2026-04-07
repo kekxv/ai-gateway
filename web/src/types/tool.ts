@@ -6,6 +6,7 @@ export interface ToolDefinition {
   parameters: JSONSchema    // 参数 schema
   type: 'custom' | 'builtin'  // 用户自定义 / 内置
   enabled: boolean
+  executionCode?: string    // 执行代码（JavaScript），仅自定义工具
 }
 
 // JSON Schema 定义
@@ -62,6 +63,22 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     }
   },
   {
+    id: 'get_location',
+    name: 'get_location',
+    description: '获取用户当前地理位置（需要用户授权）',
+    type: 'builtin',
+    enabled: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        enableHighAccuracy: {
+          type: 'boolean',
+          description: '是否启用高精度定位，默认 false'
+        }
+      }
+    }
+  },
+  {
     id: 'execute_javascript',
     name: 'execute_javascript',
     description: '执行 JavaScript 代码并返回结果。可用于计算、数据处理等。注意：代码中需要使用 return 语句返回结果。',
@@ -81,7 +98,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     id: 'web_search',
     name: 'web_search',
-    description: '在网络上搜索信息',
+    description: '在网络上搜索信息，返回搜索结果',
     type: 'builtin',
     enabled: true,
     parameters: {
@@ -90,62 +107,42 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
         query: {
           type: 'string',
           description: '搜索关键词'
+        },
+        location: {
+          type: 'string',
+          description: '搜索位置，如: Austin, Texas, United States（可选，有默认值）'
+        },
+        hl: {
+          type: 'string',
+          description: '界面语言，如: en, zh-cn（可选，默认 en）'
+        },
+        gl: {
+          type: 'string',
+          description: '国家/地区，如: us, cn（可选，默认 us）'
         }
       },
       required: ['query']
     }
   },
   {
-    id: 'draw_chart',
-    name: 'draw_chart',
-    description: '绘制图表（柱状图、折线图、饼图等）',
+    id: 'fetch_webpage',
+    name: 'fetch_webpage',
+    description: '获取网页内容，用于读取指定URL的页面数据',
     type: 'builtin',
     enabled: true,
     parameters: {
       type: 'object',
       properties: {
-        type: {
+        url: {
           type: 'string',
-          description: '图表类型：bar, line, pie, doughnut',
-          enum: ['bar', 'line', 'pie', 'doughnut']
+          description: '要获取的网页URL'
         },
-        title: {
+        selector: {
           type: 'string',
-          description: '图表标题'
-        },
-        labels: {
-          type: 'array',
-          description: 'X轴标签数组',
-          items: { type: 'string' }
-        },
-        data: {
-          type: 'array',
-          description: '数据数组',
-          items: { type: 'number' }
+          description: 'CSS选择器，用于提取特定内容（可选）'
         }
       },
-      required: ['type', 'labels', 'data']
-    }
-  },
-  {
-    id: 'save_note',
-    name: 'save_note',
-    description: '保存笔记内容到本地存储',
-    type: 'builtin',
-    enabled: true,
-    parameters: {
-      type: 'object',
-      properties: {
-        title: {
-          type: 'string',
-          description: '笔记标题'
-        },
-        content: {
-          type: 'string',
-          description: '笔记内容'
-        }
-      },
-      required: ['title', 'content']
+      required: ['url']
     }
   }
 ]

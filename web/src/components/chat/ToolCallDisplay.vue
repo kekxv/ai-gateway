@@ -354,13 +354,14 @@ const formatJson = (obj: unknown) => {
 .tool-args-code {
   margin: 0;
   padding: 8px;
-  background: #1e293b;
+  background: #f9fafb;
   border-radius: 4px;
   font-family: 'SF Mono', 'Monaco', monospace;
   font-size: 12px;
   line-height: 1.5;
   overflow-x: auto;
-  color: #e2e8f0;
+  color: #374151;
+  border: 1px solid #e5e7eb;
 }
 
 .tool-args-chart {
@@ -437,13 +438,14 @@ const formatJson = (obj: unknown) => {
 .tool-result-code pre {
   margin: 0;
   padding: 8px;
-  background: #1e293b;
+  background: #f9fafb;
   border-radius: 4px;
   font-family: 'SF Mono', 'Monaco', monospace;
   font-size: 12px;
   line-height: 1.5;
   overflow-x: auto;
-  color: #e2e8f0;
+  color: #374151;
+  border: 1px solid #e5e7eb;
 }
 
 /* 网络搜索结果样式 */

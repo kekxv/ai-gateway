@@ -19,7 +19,7 @@ func TestLogRepository_Create(t *testing.T) {
 	apiKey := test.CreateTestAPIKey(db, &user.ID)
 
 	log := &models.Log{
-		APIKeyID:         apiKey.ID,
+		APIKeyID:         &apiKey.ID,
 		ModelName:        "gpt-4",
 		ProviderName:     "openai",
 		PromptTokens:     100,
@@ -51,7 +51,7 @@ func TestLogRepository_FindByID(t *testing.T) {
 	apiKey := test.CreateTestAPIKey(db, &user.ID)
 
 	log := &models.Log{
-		APIKeyID:     apiKey.ID,
+		APIKeyID:     &apiKey.ID,
 		ModelName:    "test-model",
 		ProviderName: "test-provider",
 		Status:       200,
@@ -81,7 +81,7 @@ func TestLogRepository_List(t *testing.T) {
 	// Create multiple logs
 	for i := 0; i < 25; i++ {
 		log := &models.Log{
-			APIKeyID:     apiKey.ID,
+			APIKeyID:     &apiKey.ID,
 			ModelName:    "gpt-4",
 			ProviderName: "openai",
 			Status:       200,
@@ -116,7 +116,7 @@ func TestLogRepository_GetStatsByProvider(t *testing.T) {
 	// Create logs for different providers
 	for i := 0; i < 5; i++ {
 		log := &models.Log{
-			APIKeyID:         apiKey.ID,
+			APIKeyID:         &apiKey.ID,
 			ModelName:        "gpt-4",
 			ProviderName:     "openai",
 			PromptTokens:     100,
@@ -131,7 +131,7 @@ func TestLogRepository_GetStatsByProvider(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		log := &models.Log{
-			APIKeyID:         apiKey.ID,
+			APIKeyID:         &apiKey.ID,
 			ModelName:        "claude",
 			ProviderName:     "anthropic",
 			PromptTokens:     200,
@@ -169,7 +169,7 @@ func TestLogRepository_GetStatsByModel(t *testing.T) {
 	// Create logs for different models
 	for i := 0; i < 5; i++ {
 		log := &models.Log{
-			APIKeyID:     apiKey.ID,
+			APIKeyID:     &apiKey.ID,
 			ModelName:    "gpt-4",
 			ProviderName: "openai",
 			Status:       200,
@@ -180,7 +180,7 @@ func TestLogRepository_GetStatsByModel(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		log := &models.Log{
-			APIKeyID:     apiKey.ID,
+			APIKeyID:     &apiKey.ID,
 			ModelName:    "gpt-3.5-turbo",
 			ProviderName: "openai",
 			Status:       200,
@@ -214,7 +214,7 @@ func TestLogRepository_GetDailyUsage(t *testing.T) {
 	// Create logs for today
 	for i := 0; i < 5; i++ {
 		log := &models.Log{
-			APIKeyID:     apiKey.ID,
+			APIKeyID:     &apiKey.ID,
 			ModelName:    "gpt-4",
 			ProviderName: "openai",
 			Status:       200,
@@ -227,7 +227,7 @@ func TestLogRepository_GetDailyUsage(t *testing.T) {
 	yesterday := time.Now().AddDate(0, 0, -1)
 	for i := 0; i < 3; i++ {
 		log := &models.Log{
-			APIKeyID:     apiKey.ID,
+			APIKeyID:     &apiKey.ID,
 			ModelName:    "gpt-4",
 			ProviderName: "openai",
 			Status:       200,
@@ -261,7 +261,7 @@ func TestLogRepository_GetTotalStats(t *testing.T) {
 	// Create logs
 	for i := 0; i < 10; i++ {
 		log := &models.Log{
-			APIKeyID:         apiKey.ID,
+			APIKeyID:         &apiKey.ID,
 			ModelName:        "gpt-4",
 			ProviderName:     "openai",
 			PromptTokens:     100,
@@ -307,7 +307,7 @@ func TestLogRepository_GetUserTokenStats(t *testing.T) {
 	// Create logs for this user
 	for i := 0; i < 5; i++ {
 		log := &models.Log{
-			APIKeyID:         apiKey.ID,
+			APIKeyID:         &apiKey.ID,
 			ModelName:        "gpt-4",
 			ProviderName:     "openai",
 			PromptTokens:     100,
@@ -349,7 +349,7 @@ func TestLogRepository_GetUserModelUsage(t *testing.T) {
 	// Create logs for different models
 	for i := 0; i < 3; i++ {
 		log := &models.Log{
-			APIKeyID:     apiKey.ID,
+			APIKeyID:     &apiKey.ID,
 			ModelName:    "gpt-4",
 			ProviderName: "openai",
 			Status:       200,
@@ -360,7 +360,7 @@ func TestLogRepository_GetUserModelUsage(t *testing.T) {
 
 	for i := 0; i < 2; i++ {
 		log := &models.Log{
-			APIKeyID:     apiKey.ID,
+			APIKeyID:     &apiKey.ID,
 			ModelName:    "gpt-3.5-turbo",
 			ProviderName: "openai",
 			Status:       200,
