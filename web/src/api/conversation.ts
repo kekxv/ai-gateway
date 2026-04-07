@@ -1,5 +1,6 @@
 import { api } from './index'
 import type { Conversation, Message, CreateConversationRequest, UpdateConversationRequest, ChatRequest } from '@/types/conversation'
+import type { ToolCall } from '@/types/tool'
 
 export const conversationApi = {
   // List all conversations for current user
@@ -26,12 +27,23 @@ export const conversationApi = {
   getMessages: (id: number) =>
     api.get<{ data: Message[] }>(`/conversations/${id}/messages`),
 
+  // Add a message to a conversation
+  addMessage: (id: number, data: { role: string; content: string; tool_calls?: string; tokens?: number }) =>
+    api.post<{ data: Message }>(`/conversations/${id}/messages`, data),
+
   // Send a message (non-streaming)
   sendMessage: (id: number, data: ChatRequest) =>
     api.post<{ data: Message; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } }>(`/conversations/${id}/chat`, { ...data, stream: false }),
 
   // Send a message with streaming
-  sendMessageStream: async (id: number, data: ChatRequest, onContent: (content: string) => void, onDone: () => void, onError: (error: string) => void) => {
+  sendMessageStream: async (
+    id: number,
+    data: ChatRequest,
+    onContent: (content: string) => void,
+    onDone: () => void,
+    onError: (error: string) => void,
+    onToolCall?: (toolCalls: ToolCall[]) => Promise<void>
+  ) => {
     const token = localStorage.getItem('token')
     const response = await fetch(`${api.defaults.baseURL}/conversations/${id}/chat`, {
       method: 'POST',
@@ -56,11 +68,23 @@ export const conversationApi = {
 
     const decoder = new TextDecoder()
     let buffer = ''
+    let inReasoning = false
+    let toolCalls: ToolCall[] = []
 
     try {
       while (true) {
         const { done, value } = await reader.read()
         if (done) {
+          // Close reasoning block if still open
+          if (inReasoning) {
+            onContent('</think>')
+          }
+          // If there are tool calls and we have a handler, execute them and continue
+          if (toolCalls.length > 0 && onToolCall) {
+            await onToolCall(toolCalls)
+            // Tool execution is handled, stream will continue with tool results
+            return
+          }
           onDone()
           break
         }
@@ -73,13 +97,63 @@ export const conversationApi = {
           if (line.startsWith('data: ')) {
             const jsonData = line.slice(6)
             if (jsonData === '[DONE]') {
+              // Close reasoning block if still open
+              if (inReasoning) {
+                onContent('</think>')
+              }
+              // If there are tool calls and we have a handler, execute them and continue
+              if (toolCalls.length > 0 && onToolCall) {
+                await onToolCall(toolCalls)
+                return
+              }
               onDone()
               break
             }
             try {
               const chunk = JSON.parse(jsonData)
-              if (chunk.choices && chunk.choices[0]?.delta?.content) {
-                onContent(chunk.choices[0].delta.content)
+              if (chunk.choices && chunk.choices[0]?.delta) {
+                const delta = chunk.choices[0].delta
+                // Handle reasoning content
+                // Some models use 'reasoning', some 'reasoning_content'
+                const reasoning = delta.reasoning || delta.reasoning_content
+                
+                if (reasoning) {
+                  // Open think tag on first reasoning chunk
+                  if (!inReasoning) {
+                    inReasoning = true
+                    onContent('<think>')
+                  }
+                  onContent(reasoning)
+                }
+                
+                // Handle regular content
+                // Check if content field exists (can be empty string)
+                if (delta.content !== undefined && delta.content !== null) {
+                  // If we were in reasoning mode, close the think tag first
+                  // This happens when the model starts sending content
+                  // We only close if the content is NOT empty, OR if reasoning is now empty/absent
+                  if (inReasoning && (delta.content !== "" || !reasoning)) {
+                    onContent('</think>')
+                    inReasoning = false
+                  }
+                  
+                  if (delta.content) {
+                    onContent(delta.content)
+                  }
+                }
+                // Handle tool calls
+                if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
+                  for (const tc of delta.tool_calls) {
+                    toolCalls.push({
+                      id: tc.id || `tool_${Date.now()}`,
+                      type: 'function',
+                      function: {
+                        name: tc.function?.name || '',
+                        arguments: tc.function?.arguments || '{}'
+                      }
+                    })
+                  }
+                }
               }
             } catch {
               // Skip invalid JSON

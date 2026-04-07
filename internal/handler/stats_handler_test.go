@@ -51,10 +51,11 @@ func TestGetStatsHandler_WithLogs(t *testing.T) {
 	user := test.CreateTestUser(db)
 	apiKey := test.CreateTestAPIKey(db, &user.ID)
 
+	apiKeyID := apiKey.ID
 	// Create some logs
 	for i := 0; i < 5; i++ {
 		log := &models.Log{
-			APIKeyID:         apiKey.ID,
+			APIKeyID:         &apiKeyID,
 			ModelName:        "gpt-4",
 			ProviderName:     "openai",
 			PromptTokens:     100,

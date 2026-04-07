@@ -62,6 +62,54 @@
 
     <!-- Main Content -->
     <main class="main-content">
+      <!-- Tools Panel -->
+      <div class="tools-panel" :class="{ open: showToolsPanel }">
+        <div class="tools-panel-header">
+          <span class="tools-panel-title">工具</span>
+          <button class="tools-panel-close" @click="showToolsPanel = false">
+            <el-icon><Close /></el-icon>
+          </button>
+        </div>
+        <div class="tools-panel-content">
+          <div class="tools-section">
+            <div class="tools-section-title">内置工具</div>
+            <div class="tools-list">
+              <div
+                v-for="tool in toolsStore.builtinTools"
+                :key="tool.id"
+                class="tool-item"
+                :class="{ enabled: tool.enabled }"
+                @click="toolsStore.toggleTool(tool.id)"
+              >
+                <div class="tool-info">
+                  <span class="tool-name">{{ tool.name }}</span>
+                  <span class="tool-desc">{{ tool.description }}</span>
+                </div>
+                <el-switch :model-value="tool.enabled" size="small" />
+              </div>
+            </div>
+          </div>
+          <div class="tools-section" v-if="toolsStore.customTools.length > 0">
+            <div class="tools-section-title">自定义工具</div>
+            <div class="tools-list">
+              <div
+                v-for="tool in toolsStore.customTools"
+                :key="tool.id"
+                class="tool-item"
+                :class="{ enabled: tool.enabled }"
+                @click="toolsStore.toggleTool(tool.id)"
+              >
+                <div class="tool-info">
+                  <span class="tool-name">{{ tool.name }}</span>
+                  <span class="tool-desc">{{ tool.description }}</span>
+                </div>
+                <el-switch :model-value="tool.enabled" size="small" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Header -->
       <header class="chat-header">
         <div class="header-left">
@@ -91,6 +139,9 @@
         </div>
 
         <div class="header-right">
+          <button class="icon-btn" @click="showToolsPanel = !showToolsPanel" :class="{ active: showToolsPanel }" title="工具">
+            <el-icon><Operation /></el-icon>
+          </button>
           <button class="icon-btn" @click="showSettingsDialog = true" :disabled="!currentConversation" title="设置">
             <el-icon><Setting /></el-icon>
           </button>
@@ -135,7 +186,7 @@
         <!-- Messages -->
         <div v-else class="messages-container">
           <div
-            v-for="message in messages"
+            v-for="(message, index) in messages"
             :key="message.id"
             class="message-block"
             :class="message.role"
@@ -143,44 +194,97 @@
             <!-- User Message -->
             <div v-if="message.role === 'user'" class="user-message">
               <div class="user-bubble">
-                <div class="user-text">{{ message.content }}</div>
+                <div v-if="editingMessageIndex === index" class="edit-mode">
+                  <textarea
+                    ref="editTextareaRef"
+                    v-model="editingContent"
+                    class="edit-textarea"
+                    rows="2"
+                    @keydown="handleEditKeydown($event, index)"
+                  ></textarea>
+                  <div class="edit-actions">
+                    <button class="edit-btn cancel" @click="cancelEdit">取消</button>
+                    <button class="edit-btn confirm" @click="confirmEdit(index)">发送</button>
+                  </div>
+                </div>
+                <div v-else class="user-text">{{ message.content }}</div>
+              </div>
+              <div v-if="editingMessageIndex !== index && !sending" class="message-actions">
+                <button class="action-icon-btn" @click="startEdit(index)" title="编辑">
+                  <el-icon><Edit /></el-icon>
+                </button>
               </div>
             </div>
 
-            <!-- Assistant Message -->
-            <div v-else class="assistant-message">
+            <!-- Assistant Message (exclude tool role messages) -->
+            <div v-else-if="message.role !== 'tool'" class="assistant-message">
               <div class="assistant-avatar">
                 <el-icon><Monitor /></el-icon>
               </div>
               <div class="assistant-content">
-                <div class="assistant-name">AI</div>
-                <div class="assistant-bubble">
-                  <div class="assistant-text">{{ message.content }}</div>
+                <div class="assistant-header">
+                  <div class="assistant-name">AI</div>
+                  <div v-if="!sending" class="message-actions">
+                    <button class="action-icon-btn" @click="regenerateMessage(index)" title="重新生成">
+                      <el-icon><RefreshRight /></el-icon>
+                    </button>
+                    <button class="action-icon-btn" @click="copyMessage(message.content)" title="复制">
+                      <el-icon><DocumentCopy /></el-icon>
+                    </button>
+                  </div>
+                </div>
+                <!-- Think Block -->
+                <ThinkBlock
+                  v-if="message.hasThink"
+                  :content="message.thinkContent || ''"
+                  :tokens="estimateThinkTokens(message.thinkContent || '')"
+                  :default-collapsed="true"
+                  :force-expand="!message.content && (!message.toolCalls || message.toolCalls.length === 0)"
+                />
+                <!-- Tool Calls Display -->
+                <ToolCallDisplay
+                  v-if="message.toolCalls && message.toolCalls.length > 0"
+                  :tool-calls="message.toolCalls"
+                />
+                <!-- Markdown Content -->
+                <div v-if="message.content" class="assistant-bubble">
+                  <MarkdownRenderer :content="message.content" />
                 </div>
               </div>
             </div>
           </div>
 
           <!-- Streaming Message -->
-          <div v-if="streamingContent" class="message-block assistant">
+          <div v-if="streamingContent || streamingThinkContent || streamingToolCallResults.length > 0" class="message-block assistant">
             <div class="assistant-message">
               <div class="assistant-avatar">
                 <el-icon><Monitor /></el-icon>
               </div>
               <div class="assistant-content">
                 <div class="assistant-name">AI</div>
-                <div class="assistant-bubble">
-                  <div class="assistant-text">
-                    {{ streamingContent }}
-                    <span class="cursor">▌</span>
-                  </div>
+                <!-- Streaming Think Block -->
+                <ThinkBlock
+                  v-if="streamingThinkContent"
+                  :content="streamingThinkContent"
+                  :default-collapsed="true"
+                  :force-expand="!streamingContent && streamingToolCallResults.length === 0"
+                />
+                <!-- Streaming Tool Calls Display -->
+                <ToolCallDisplay
+                  v-if="streamingToolCallResults.length > 0"
+                  :tool-calls="streamingToolCallResults"
+                />
+                <!-- Streaming Markdown Content -->
+                <div v-if="streamingContent" class="assistant-bubble">
+                  <MarkdownRenderer :content="streamingContent" />
+                  <span class="cursor" v-if="sending">▌</span>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- Thinking State -->
-          <div v-if="sending && !streamingContent" class="message-block assistant">
+          <!-- Thinking State - only show when no streaming content yet -->
+          <div v-if="sending && !streamingContent && !streamingThinkContent" class="message-block assistant">
             <div class="assistant-message">
               <div class="assistant-avatar thinking">
                 <el-icon class="is-loading"><Loading /></el-icon>
@@ -202,21 +306,18 @@
       <!-- Input Area -->
       <div class="input-area">
         <div class="input-container">
-          <!-- Preset Prompts -->
-          <div class="preset-bar" v-if="currentConversation && !isMobile">
-            <el-dropdown trigger="click" @command="applyPreset" placement="top">
-              <button class="preset-btn">
-                <el-icon><MagicStick /></el-icon>
-                <span>预设</span>
-              </button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item v-for="p in presets" :key="p.id" :command="p.id">
-                    <span class="preset-name">{{ p.name }}</span>
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
+          <!-- Enabled Tools Display -->
+          <div v-if="toolsStore.enabledTools.length > 0" class="enabled-tools-bar">
+            <span class="tools-label">工具:</span>
+            <el-tag
+              v-for="tool in toolsStore.enabledTools"
+              :key="tool.id"
+              size="small"
+              closable
+              @close="toolsStore.toggleTool(tool.id)"
+            >
+              {{ tool.name }}
+            </el-tag>
           </div>
 
           <!-- Input Box -->
@@ -269,8 +370,25 @@
             </button>
           </div>
 
-          <div class="input-hint" v-if="!isMobile">
-            <span>Ctrl + Enter 发送</span>
+          <div class="input-footer">
+            <div class="input-actions">
+              <el-dropdown trigger="click" @command="applyPreset" v-if="currentConversation && !isMobile">
+                <button class="action-btn">
+                  <el-icon><MagicStick /></el-icon>
+                  <span>预设</span>
+                </button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item v-for="p in presets" :key="p.id" :command="p.id">
+                      <span class="preset-name">{{ p.name }}</span>
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+            <div class="input-hint" v-if="!isMobile">
+              <span>{{ isMac ? '⌘ + Enter' : 'Ctrl + Enter' }} 发送</span>
+            </div>
           </div>
         </div>
       </div>
@@ -328,15 +446,25 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Setting, ChatLineRound, Monitor,
-  Loading, Promotion, MoreFilled, Delete, MagicStick, Close, Menu, Paperclip
+  Loading, Promotion, MoreFilled, Delete, MagicStick, Close, Menu, Paperclip, Operation,
+  Edit, RefreshRight, DocumentCopy
 } from '@element-plus/icons-vue'
 import { conversationApi, modelApi } from '@/api/conversation'
-import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart } from '@/types/conversation'
+import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart, ChatRequest } from '@/types/conversation'
 import { PRESET_PROMPTS } from '@/types/conversation'
+import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import ThinkBlock from '@/components/chat/ThinkBlock.vue'
+import ToolCallDisplay from '@/components/chat/ToolCallDisplay.vue'
+import { parseMessageContent, parseStreamingThinkContent, estimateThinkTokens } from '@/utils/messageParser'
+import { useToolsStore } from '@/stores/tools'
+import type { ToolCallResult, ToolCall } from '@/types/tool'
+
+// Tools store
+const toolsStore = useToolsStore()
 
 // Refs
 const messagesAreaRef = ref<HTMLElement | null>(null)
@@ -357,7 +485,7 @@ const isMobile = ref(false)
 const sidebarOpen = ref(false)
 const conversations = ref<Conversation[]>([])
 const currentConversation = ref<Conversation | null>(null)
-const messages = ref<Message[]>([])
+const messages = ref<ExtendedMessage[]>([])
 const models = ref<{ name: string; alias?: string }[]>([])
 const selectedModel = ref('')
 const inputContent = ref('')
@@ -365,6 +493,64 @@ const sending = ref(false)
 const streamingContent = ref('')
 const showSettingsDialog = ref(false)
 const presets = ref<PresetPrompt[]>(PRESET_PROMPTS)
+
+// Streaming state for Think and ToolCalls
+const streamingThinkContent = ref('')
+const streamingToolCallResults = ref<ToolCallResult[]>([])
+const showToolsPanel = ref(false)
+
+// Track full raw content for parsing (includes think tags)
+const streamingRawContent = ref('')
+
+// Edit state
+const editingMessageIndex = ref<number | null>(null)
+const editingContent = ref('')
+const editTextareaRef = ref<HTMLTextAreaElement | null>(null)
+
+// Extended message type with think and tool_calls
+interface ExtendedMessage extends Message {
+  thinkContent?: string
+  hasThink?: boolean
+  toolCalls?: ToolCallResult[]
+}
+
+// Helper function to execute tool calls and send results back to AI
+const executeToolCallsAndContinue = async (
+  toolCalls: ToolCall[],
+  _conversationId: number,
+  onToolResult?: (results: ToolCallResult[]) => void
+): Promise<ToolCallResult[]> => {
+  const results: ToolCallResult[] = toolCalls.map(tc => ({
+    id: tc.id,
+    toolName: tc.function.name,
+    arguments: JSON.parse(tc.function.arguments || '{}'),
+    status: 'running'
+  }))
+
+  // Update UI with running status
+  if (onToolResult) onToolResult(results)
+
+  // Execute each tool
+  for (let i = 0; i < results.length; i++) {
+    const toolCall = results[i]
+    try {
+      const { executeToolCall } = await import('@/utils/toolExecutor')
+      const result = await executeToolCall(toolCall.toolName, toolCall.arguments as Record<string, unknown>)
+      results[i] = result
+    } catch (e) {
+      results[i] = {
+        ...toolCall,
+        status: 'error',
+        error: e instanceof Error ? e.message : String(e)
+      }
+    }
+  }
+
+  // Update UI with final results
+  if (onToolResult) onToolResult(results)
+
+  return results
+}
 
 const settingsForm = reactive<ConversationSettings & { system_prompt: string }>({
   temperature: 0.7,
@@ -381,6 +567,11 @@ const checkMobile = () => {
   }
 }
 
+// Check if macOS
+const isMac = computed(() => {
+  return navigator.platform.toUpperCase().indexOf('MAC') >= 0
+})
+
 // Auto resize textarea
 const autoResize = () => {
   if (textareaRef.value) {
@@ -391,9 +582,131 @@ const autoResize = () => {
 
 // Handle keydown
 const handleKeydown = (e: KeyboardEvent) => {
-  if (e.key === 'Enter' && e.ctrlKey) {
+  // 支持 Ctrl+Enter (Windows/Linux) 和 Command+Enter (macOS)
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault()
     sendMessage()
+  }
+}
+
+// Start editing a message
+const startEdit = (index: number) => {
+  const message = messages.value[index]
+  if (message.role !== 'user') return
+  editingMessageIndex.value = index
+  editingContent.value = message.content
+  nextTick(() => {
+    const textarea = editTextareaRef.value
+    if (textarea && typeof textarea.focus === 'function') {
+      textarea.focus()
+      textarea.style.height = 'auto'
+      textarea.style.height = textarea.scrollHeight + 'px'
+    }
+  })
+}
+
+// Cancel editing
+const cancelEdit = () => {
+  editingMessageIndex.value = null
+  editingContent.value = ''
+}
+
+// Handle keydown in edit mode
+const handleEditKeydown = (e: KeyboardEvent, index: number) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault()
+    confirmEdit(index)
+  } else if (e.key === 'Escape') {
+    cancelEdit()
+  }
+}
+
+// Confirm edit and resend
+const confirmEdit = async (index: number) => {
+  if (!editingContent.value.trim() || !currentConversation.value) return
+
+  const newContent = editingContent.value.trim()
+  // Get the message ID before this index (for delete_after_id)
+  const prevMessageId = index > 0 ? messages.value[index - 1].id : 0
+  cancelEdit()
+
+  // Remove all messages from this index onwards (local UI update)
+  const messagesBeforeEdit = messages.value.slice(0, index)
+  messages.value = messagesBeforeEdit
+
+  // Add the new user message locally
+  const tempUserMsg: ExtendedMessage = {
+    id: 0,
+    conversation_id: currentConversation.value.id,
+    role: 'user',
+    content: newContent,
+    created_at: new Date().toISOString()
+  }
+  messages.value.push(tempUserMsg)
+
+  // Send the message
+  sending.value = true
+  await streamWithToolCalls(currentConversation.value.id, {
+    content: newContent,
+    stream: true,
+    settings: {
+      temperature: settingsForm.temperature,
+      max_tokens: settingsForm.max_tokens
+    },
+    tools: toolsStore.getToolsForModel(),
+    delete_after_id: prevMessageId > 0 ? prevMessageId : undefined
+  })
+}
+
+// Regenerate assistant message
+const regenerateMessage = async (index: number) => {
+  if (!currentConversation.value || sending.value) return
+
+  // Find the user message before this assistant message
+  const userMessageIndex = index - 1
+  if (userMessageIndex < 0 || messages.value[userMessageIndex].role !== 'user') {
+    ElMessage.warning('找不到对应的用户消息')
+    return
+  }
+
+  const userContent = messages.value[userMessageIndex].content
+  const userMessageId = messages.value[userMessageIndex].id
+
+  // Remove messages from the user message onwards (local UI update)
+  messages.value = messages.value.slice(0, userMessageIndex)
+
+  // Re-add user message
+  const tempUserMsg: ExtendedMessage = {
+    id: 0,
+    conversation_id: currentConversation.value.id,
+    role: 'user',
+    content: userContent,
+    created_at: new Date().toISOString()
+  }
+  messages.value.push(tempUserMsg)
+
+  // Send the message
+  sending.value = true
+  await streamWithToolCalls(currentConversation.value.id, {
+    content: userContent,
+    stream: true,
+    settings: {
+      temperature: settingsForm.temperature,
+      max_tokens: settingsForm.max_tokens
+    },
+    tools: toolsStore.getToolsForModel(),
+    delete_after_id: userMessageId > 0 ? userMessageId : undefined
+  })
+}
+
+
+// Copy message content
+const copyMessage = async (content: string) => {
+  try {
+    await navigator.clipboard.writeText(content)
+    ElMessage.success('已复制到剪贴板')
+  } catch {
+    ElMessage.error('复制失败')
   }
 }
 
@@ -455,7 +768,88 @@ const selectConversation = async (conv: Conversation) => {
   // Load messages
   try {
     const response = await conversationApi.getMessages(conv.id)
-    messages.value = response.data.data || []
+    const rawMessages = response.data.data || []
+    
+    // Process messages to re-attach tool results
+    const processedMessages: ExtendedMessage[] = []
+    const toolResultsMap = new Map<string, string>() // toolName -> result content
+
+    // First pass: collect all tool results from the conversation
+    rawMessages.forEach((msg: Message) => {
+      if (msg.role === 'tool' || (msg.role === 'user' && typeof msg.content === 'string' && msg.content.startsWith('Tool: '))) {
+        // Parse Tool: name\nResult: content
+        const lines = msg.content.split('\n')
+        if (lines.length >= 2 && lines[0].startsWith('Tool: ')) {
+          const toolName = lines[0].slice(6).trim()
+          let resultPart = lines.slice(1).join('\n').trim()
+          if (resultPart.startsWith('Result: ')) {
+            resultPart = resultPart.slice(8).trim()
+          }
+          toolResultsMap.set(toolName, resultPart)
+        }
+      }
+    })
+
+    // Second pass: build the message list and attach results
+    rawMessages.forEach((msg: Message) => {
+      // Filter out tool result messages from the main list
+      if (msg.role === 'tool' || (msg.role === 'user' && typeof msg.content === 'string' && msg.content.startsWith('Tool: '))) {
+        return
+      }
+
+      if (msg.role === 'assistant') {
+        const parsed = parseMessageContent(msg.content)
+        let toolCallsParsed: ToolCallResult[] | undefined
+        
+        const rawToolCallsStr = msg.tool_calls || msg.tool_calls_raw
+        if (rawToolCallsStr) {
+          try {
+            const rawToolCalls = typeof rawToolCallsStr === 'string' ? JSON.parse(rawToolCallsStr) : rawToolCallsStr
+            if (Array.isArray(rawToolCalls)) {
+              toolCallsParsed = rawToolCalls.map((tc: any, idx: number) => {
+                const toolName = tc.function?.name || tc.name || 'unknown'
+                // Check if we have a result for this tool call in the map (from pass 1) or in the JSON (from saveAssistantMessage)
+                let result = tc.result || null
+                let status = tc.status || 'success'
+                let error = tc.error || null
+
+                if (!result && toolResultsMap.has(toolName)) {
+                  const rawResult = toolResultsMap.get(toolName)!
+                  try {
+                    result = JSON.parse(rawResult)
+                  } catch {
+                    result = rawResult
+                  }
+                }
+
+                return {
+                  id: tc.id || `tool_${idx}`,
+                  toolName,
+                  arguments: typeof tc.function?.arguments === 'string' ? JSON.parse(tc.function.arguments) : tc.function?.arguments || {},
+                  status,
+                  result,
+                  error
+                }
+              })
+            }
+          } catch (e) {
+            console.warn('Failed to parse tool calls:', e)
+          }
+        }
+
+        processedMessages.push({
+          ...msg,
+          content: parsed.textContent,
+          thinkContent: parsed.thinkContent,
+          hasThink: parsed.hasThink,
+          toolCalls: toolCallsParsed
+        })
+      } else {
+        processedMessages.push(msg as ExtendedMessage)
+      }
+    })
+
+    messages.value = processedMessages
   } catch (error) {
     console.error('Failed to load messages:', error)
     messages.value = []
@@ -484,7 +878,10 @@ const sendMessage = async () => {
   if ((!inputContent.value.trim() && attachedFiles.value.length === 0) || !currentConversation.value || sending.value) return
 
   sending.value = true
+  streamingRawContent.value = ''
   streamingContent.value = ''
+  streamingThinkContent.value = ''
+  streamingToolCallResults.value = []
   const content = inputContent.value.trim()
   inputContent.value = ''
 
@@ -504,7 +901,7 @@ const sendMessage = async () => {
   autoResize()
 
   // Add user message to display immediately
-  const tempUserMsg: Message = {
+  const tempUserMsg: ExtendedMessage = {
     id: 0,
     conversation_id: currentConversation.value.id,
     role: 'user',
@@ -514,41 +911,230 @@ const sendMessage = async () => {
   messages.value.push(tempUserMsg)
   scrollToBottom()
 
+  // Start the streaming loop with tool call support
+  sending.value = true
+  await streamWithToolCalls(currentConversation.value.id, { content, parts, stream: true, settings: {
+    temperature: settingsForm.temperature,
+    max_tokens: settingsForm.max_tokens
+  }, tools: toolsStore.getToolsForModel() })
+}
+
+// Helper function to save assistant message to backend
+const saveAssistantMessage = async (conversationId: number, content: string, toolCalls?: ToolCallResult[]) => {
   try {
-    await conversationApi.sendMessageStream(
-      currentConversation.value.id,
-      { content, parts, stream: true, settings: { temperature: settingsForm.temperature, max_tokens: settingsForm.max_tokens } },
-      (text) => {
-        streamingContent.value += text
-        scrollToBottom()
-      },
-      async () => {
-        sending.value = false
-        streamingContent.value = ''
-        try {
-          const response = await conversationApi.getMessages(currentConversation.value!.id)
-          messages.value = response.data.data || []
-          if (messages.value.length === 2) {
-            loadConversations()
-          }
-        } catch {
-          // Keep current messages
-        }
-        scrollToBottom()
-      },
-      (error) => {
-        sending.value = false
-        streamingContent.value = ''
-        ElMessage.error(error)
-        messages.value = messages.value.filter(m => m.id !== 0)
-      }
-    )
+    let toolCallsStr = ''
+    if (toolCalls && toolCalls.length > 0) {
+      // Convert to format Go backend expects, including result and error
+      const formattedToolCalls = toolCalls.map(tc => ({
+        id: tc.id,
+        type: 'function',
+        function: {
+          name: tc.toolName,
+          arguments: JSON.stringify(tc.arguments)
+        },
+        result: tc.result,
+        error: tc.error,
+        status: tc.status
+      }))
+      toolCallsStr = JSON.stringify(formattedToolCalls)
+    }
+
+    await conversationApi.addMessage(conversationId, {
+      role: 'assistant',
+      content: content,
+      tool_calls: toolCallsStr || undefined,
+      tokens: estimateThinkTokens(content) // Use the utility to estimate tokens
+    })
   } catch (error) {
-    sending.value = false
-    streamingContent.value = ''
-    ElMessage.error('发送失败')
+    console.error('Failed to save assistant message:', error)
   }
 }
+
+// Streaming loop that handles tool calls recursively
+const streamWithToolCalls = async (
+  conversationId: number,
+  requestData: ChatRequest,
+  isToolResultRequest: boolean = false
+) => {
+  // Reset streaming state
+  streamingRawContent.value = ''
+  streamingContent.value = ''
+  streamingThinkContent.value = ''
+  streamingToolCallResults.value = []
+
+  // Track if tool calls were received
+  let receivedToolCalls: ToolCall[] = []
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      conversationApi.sendMessageStream(
+        conversationId,
+        requestData,
+        (text) => {
+          streamingRawContent.value += text
+          const parsed = parseStreamingThinkContent(streamingRawContent.value)
+          streamingContent.value = parsed.text
+          streamingThinkContent.value = parsed.think
+          scrollToBottom()
+        },
+        () => {
+          // Stream completed
+          resolve()
+        },
+        (error) => {
+          ElMessage.error(error)
+          reject(new Error(error))
+        },
+        async (toolCalls) => {
+          // Received tool calls - execute them
+          receivedToolCalls = toolCalls
+          streamingToolCallResults.value = toolCalls.map(tc => ({
+            id: tc.id,
+            toolName: tc.function.name,
+            arguments: JSON.parse(tc.function.arguments || '{}'),
+            status: 'running'
+          }))
+
+          // Execute tools
+          const results = await executeToolCallsAndContinue(
+            toolCalls,
+            conversationId,
+            (updatedResults) => {
+              streamingToolCallResults.value = updatedResults
+            }
+          )
+
+          // Build tool results message to send back to AI
+          const toolResultsContent = results.map(r =>
+            `Tool: ${r.toolName}\nResult: ${JSON.stringify(r.result ?? r.error)}`
+          ).join('\n\n')
+
+          // Add assistant message with tool calls to display
+          const assistantMsg: ExtendedMessage = {
+            id: -Date.now(),
+            conversation_id: conversationId,
+            role: 'assistant',
+            content: streamingContent.value,
+            thinkContent: streamingThinkContent.value,
+            hasThink: streamingThinkContent.value.length > 0,
+            toolCalls: results,
+            created_at: new Date().toISOString()
+          }
+          messages.value.push(assistantMsg)
+
+          // Save this intermediate state to history
+          await saveAssistantMessage(conversationId, streamingRawContent.value, results)
+
+          // Also save the "tool result" message that we're about to send
+          try {
+            await conversationApi.addMessage(conversationId, {
+              role: 'tool',
+              content: toolResultsContent
+            })
+          } catch (e) {
+            console.error('Failed to save tool results message:', e)
+          }
+
+          // Clear streaming state (but keep toolCallResults in the message)
+          streamingRawContent.value = ''
+          streamingContent.value = ''
+          streamingThinkContent.value = ''
+          streamingToolCallResults.value = []
+
+          scrollToBottom()
+
+          // Send tool results back to AI and continue streaming
+          // Await this to keep sending.value = true until the end
+          await streamWithToolCalls(
+            conversationId,
+            {
+              content: toolResultsContent,
+              stream: true,
+              settings: {
+                temperature: settingsForm.temperature,
+                max_tokens: settingsForm.max_tokens
+              },
+              tools: toolsStore.getToolsForModel()
+            },
+            true
+          ).catch(console.error)
+          resolve()
+        }
+      )
+    })
+
+    // If this wasn't a tool result request, finalize the message
+    if (!isToolResultRequest && receivedToolCalls.length === 0) {
+      const finalRawContent = streamingRawContent.value
+      const parsed = parseStreamingThinkContent(finalRawContent)
+
+      const assistantMsg: ExtendedMessage = {
+        id: -Date.now(),
+        conversation_id: currentConversation.value!.id,
+        role: 'assistant',
+        content: parsed.text,
+        thinkContent: parsed.think,
+        hasThink: parsed.think.length > 0,
+        toolCalls: streamingToolCallResults.value,
+        created_at: new Date().toISOString()
+      }
+      messages.value.push(assistantMsg)
+
+      // Save final message to history
+      await saveAssistantMessage(conversationId, finalRawContent, streamingToolCallResults.value)
+
+      // Clear streaming state AFTER adding message
+      await new Promise(resolve => setTimeout(resolve, 50))
+      streamingRawContent.value = ''
+      streamingContent.value = ''
+      streamingThinkContent.value = ''
+
+      // Update conversation list if needed
+      if (messages.value.length <= 3) {
+        loadConversations()
+      }
+    } else if (isToolResultRequest && receivedToolCalls.length === 0) {
+      // Tool result request completed - save the final AI response
+      const finalRawContent = streamingRawContent.value
+      const parsed = parseStreamingThinkContent(finalRawContent)
+
+      const finalContent = streamingContent.value || parsed.text
+      const finalThink = streamingThinkContent.value || parsed.think
+
+      // Save final response to history
+      await saveAssistantMessage(conversationId, finalRawContent)
+
+      // Add new assistant message for AI's response
+      messages.value.push({
+        id: -Date.now(),
+        conversation_id: conversationId,
+        role: 'assistant',
+        content: finalContent,
+        thinkContent: finalThink,
+        hasThink: finalThink.length > 0,
+        created_at: new Date().toISOString()
+      })
+
+      // Clear streaming state
+      streamingRawContent.value = ''
+      streamingContent.value = ''
+      streamingThinkContent.value = ''
+
+      if (messages.value.length <= 3) {
+        loadConversations()
+      }
+
+      scrollToBottom()
+    }
+  } catch (error) {
+    console.error('Streaming error:', error)
+  } finally {
+    if (!isToolResultRequest) {
+      sending.value = false
+    }
+  }
+}
+
 
 // Scroll to bottom
 const scrollToBottom = () => {
@@ -1112,7 +1698,9 @@ onUnmounted(() => {
 /* User Message */
 .user-message {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
 }
 
 .user-bubble {
@@ -1128,6 +1716,105 @@ onUnmounted(() => {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Message Actions */
+.message-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.message-block:hover .message-actions {
+  opacity: 1;
+}
+
+.action-icon-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.action-icon-btn:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+/* Edit Mode */
+.edit-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 300px;
+}
+
+.edit-textarea {
+  width: 100%;
+  min-height: 60px;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: none;
+  outline: none;
+}
+
+.edit-textarea::placeholder {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.edit-btn {
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+}
+
+.edit-btn.cancel {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+.edit-btn.cancel:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.edit-btn.confirm {
+  background: white;
+  color: #667eea;
+}
+
+.edit-btn.confirm:hover {
+  background: #f3f4f6;
+}
+
+/* Assistant Header */
+.assistant-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
 }
 
 /* Assistant Message */
@@ -1161,7 +1848,6 @@ onUnmounted(() => {
   font-size: 13px;
   font-weight: 600;
   color: #6b7280;
-  margin-bottom: 6px;
 }
 
 .assistant-bubble {
@@ -1176,6 +1862,9 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+  background: linear-gradient(135deg, #fff 0%, #fffbeb 100%);
+  border: 1px solid #fef3c7;
+  color: #d97706;
 }
 
 .assistant-text {
@@ -1186,13 +1875,25 @@ onUnmounted(() => {
   word-break: break-word;
 }
 
+/* Override MarkdownRenderer styles in assistant bubble */
+.assistant-bubble :deep(.markdown-content) {
+  font-size: 14px;
+  color: #1f2937;
+}
+
 .cursor {
+  display: inline-block;
+  width: 2px;
+  height: 15px;
+  background-color: #667eea;
+  margin-left: 2px;
+  vertical-align: middle;
   animation: blink 1s infinite;
 }
 
 @keyframes blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 .thinking-indicator {
@@ -1201,8 +1902,8 @@ onUnmounted(() => {
 }
 
 .thinking-indicator span {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   background: #f59e0b;
   border-radius: 50%;
   animation: bounce 1.4s infinite ease-in-out both;
@@ -1233,32 +1934,26 @@ onUnmounted(() => {
   margin: 0 auto;
 }
 
-.preset-bar {
-  margin-bottom: 10px;
-}
-
-.preset-btn {
+/* Enabled Tools Bar */
+.enabled-tools-bar {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
-  background: #f3f4f6;
-  border: none;
-  border-radius: 6px;
-  font-size: 13px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.tools-label {
+  font-size: 12px;
   color: #6b7280;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.preset-btn:hover {
-  background: #e5e7eb;
-}
-
-.preset-name {
   font-weight: 500;
 }
 
+.enabled-tools-bar :deep(.el-tag) {
+  font-size: 11px;
+}
+
+/* Input Box */
 .input-box {
   display: flex;
   align-items: flex-end;
@@ -1408,14 +2103,51 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 
-.input-hint {
-  text-align: center;
+/* Input Footer */
+.input-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-top: 8px;
+  padding: 0 4px;
+}
+
+.input-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.action-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.action-btn:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.input-hint {
+  text-align: right;
 }
 
 .input-hint span {
-  font-size: 12px;
+  font-size: 11px;
   color: #9ca3af;
+}
+
+.preset-name {
+  font-weight: 500;
 }
 
 /* Settings Dialog */
@@ -1439,5 +2171,126 @@ onUnmounted(() => {
   font-size: 14px;
   color: #667eea;
   font-weight: 600;
+}
+
+/* Tools Panel */
+/* Tools Panel - 浮动面板 */
+.tools-panel {
+  position: fixed;
+  top: 56px;
+  right: 0;
+  width: 300px;
+  height: calc(100vh - 56px);
+  background: #fff;
+  border-left: 1px solid #e5e7eb;
+  transform: translateX(100%);
+  transition: transform 0.3s ease;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.1);
+}
+
+.tools-panel.open {
+  transform: translateX(0);
+}
+
+.tools-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.tools-panel-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.tools-panel-close {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.tools-panel-close:hover {
+  background: #f3f4f6;
+}
+
+.tools-panel-content {
+  flex: 1;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.tools-section {
+  margin-bottom: 16px;
+}
+
+.tools-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.tools-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tool-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #f9fafb;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tool-item:hover {
+  background: #f3f4f6;
+}
+
+.tool-item.enabled {
+  background: #eef2ff;
+}
+
+.tool-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tool-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  font-family: 'SF Mono', 'Monaco', monospace;
+}
+
+.tool-desc {
+  font-size: 11px;
+  color: #6b7280;
+  line-height: 1.3;
+}
+
+/* Icon button active state */
+.icon-btn.active {
+  background: #eef2ff;
+  color: #667eea;
 }
 </style>

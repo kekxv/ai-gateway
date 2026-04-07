@@ -601,10 +601,12 @@ func TestConvertOpenAIStreamChunkToAnthropic(t *testing.T) {
 		ID: "chatcmpl-123",
 	}
 	chunk1.Choices = []struct {
-		Index        int `json:"index"`
-		Delta        struct {
-			Role    string `json:"role,omitempty"`
-			Content string `json:"content,omitempty"`
+		Index int `json:"index"`
+		Delta struct {
+			Role      string     `json:"role,omitempty"`
+			Content   string     `json:"content,omitempty"`
+			Reasoning string     `json:"reasoning,omitempty"`
+			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	}{
@@ -640,10 +642,12 @@ func TestConvertOpenAIStreamChunkToAnthropic(t *testing.T) {
 		ID: "chatcmpl-123",
 	}
 	chunk2.Choices = []struct {
-		Index        int `json:"index"`
-		Delta        struct {
-			Role    string `json:"role,omitempty"`
-			Content string `json:"content,omitempty"`
+		Index int `json:"index"`
+		Delta struct {
+			Role      string     `json:"role,omitempty"`
+			Content   string     `json:"content,omitempty"`
+			Reasoning string     `json:"reasoning,omitempty"`
+			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	}{

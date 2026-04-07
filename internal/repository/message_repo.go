@@ -27,7 +27,7 @@ func (r *MessageRepository) GetByConversationID(ctx context.Context, conversatio
 	var messages []models.Message
 	err := r.db.WithContext(ctx).
 		Where("conversation_id = ?", conversationID).
-		Order("created_at ASC").
+		Order("id ASC").
 		Find(&messages).Error
 	return messages, err
 }
@@ -50,4 +50,11 @@ func (r *MessageRepository) GetLastMessage(ctx context.Context, conversationID u
 		return nil, err
 	}
 	return &message, nil
+}
+
+// DeleteAfterID deletes all messages after a specific message ID in a conversation
+func (r *MessageRepository) DeleteAfterID(ctx context.Context, conversationID uint, messageID uint) error {
+	return r.db.WithContext(ctx).
+		Where("conversation_id = ? AND id > ?", conversationID, messageID).
+		Delete(&models.Message{}).Error
 }

@@ -78,13 +78,19 @@ func InitDatabase(dbPath string) (*gorm.DB, error) {
 		db.Exec("ALTER TABLE `LogDetail` ADD COLUMN `createdAt` DATETIME DEFAULT CURRENT_TIMESTAMP")
 	}
 
+	// Add tool_calls column to Message table if not exists
+	if !columnExists(db, "messages", "tool_calls") {
+		db.Exec("ALTER TABLE `messages` ADD COLUMN `tool_calls` TEXT")
+	}
+
 	return db, nil
 }
 
 // columnExists checks if a column exists in a table
 func columnExists(db *gorm.DB, tableName, columnName string) bool {
 	var count int
-	db.Raw("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?", tableName, columnName).Scan(&count)
+	// pragma_table_info doesn't support parameterized table names, use string formatting
+	db.Raw(fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name = ?", tableName), columnName).Scan(&count)
 	return count > 0
 }
 

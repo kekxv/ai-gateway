@@ -22,8 +22,17 @@ export interface ConversationSettings {
 export interface Message {
   id: number
   conversation_id: number
-  role: 'user' | 'assistant' | 'system'
+  role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
+  tool_calls?: string | Array<{
+    id: string
+    type: 'function'
+    function: {
+      name: string
+      arguments: string
+    }
+  }>
+  tool_calls_raw?: string  // JSON string from backend (deprecated, use tool_calls instead)
   tokens?: number
   created_at: string
 }
@@ -53,6 +62,15 @@ export interface ChatRequest {
   parts?: ChatContentPart[]
   stream?: boolean
   settings?: ConversationSettings
+  tools?: Array<{
+    type: string
+    function: {
+      name: string
+      description: string
+      parameters: Record<string, unknown>
+    }
+  }>
+  delete_after_id?: number // for regenerate: delete messages after this ID
 }
 
 export interface ChatStreamEvent {

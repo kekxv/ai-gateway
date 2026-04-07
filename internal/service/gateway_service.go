@@ -102,7 +102,21 @@ type ChatRequest struct {
 	Stream      bool                   `json:"stream,omitempty"`
 	Temperature float64                `json:"temperature,omitempty"`
 	MaxTokens   int                    `json:"max_tokens,omitempty"`
+	Tools       []ToolDefinition       `json:"tools,omitempty"`
 	Extra       map[string]interface{} `json:"-"` // Additional fields
+}
+
+// ToolDefinition represents a tool for function calling
+type ToolDefinition struct {
+	Type     string           `json:"type"` // "function"
+	Function ToolFunctionSpec `json:"function"`
+}
+
+// ToolFunctionSpec represents the function specification
+type ToolFunctionSpec struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	Parameters  map[string]interface{} `json:"parameters,omitempty"` // JSON Schema
 }
 
 // ChatMessageContent can be string or array of content parts (for multimodal)
@@ -180,8 +194,23 @@ func (c ChatMessageContent) HasImage() bool {
 }
 
 type ChatMessage struct {
-	Role    string             `json:"role"`
-	Content ChatMessageContent `json:"content"`
+	Role      string             `json:"role"`
+	Content   ChatMessageContent `json:"content"`
+	ToolCalls []ToolCall         `json:"tool_calls,omitempty"`
+}
+
+// ToolCall represents a tool/function call
+type ToolCall struct {
+	Index    int        `json:"index,omitempty"`
+	ID       string     `json:"id,omitempty"`
+	Type     string     `json:"type"`
+	Function FunctionCall `json:"function"`
+}
+
+// FunctionCall represents a function call
+type FunctionCall struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 type ChatResponse struct {
@@ -215,8 +244,10 @@ type StreamChunk struct {
 	Choices []struct {
 		Index        int `json:"index"`
 		Delta        struct {
-			Role    string `json:"role,omitempty"`
-			Content string `json:"content,omitempty"`
+			Role      string     `json:"role,omitempty"`
+			Content   string     `json:"content,omitempty"`
+			Reasoning string     `json:"reasoning,omitempty"` // For Ollama/Gemma thinking
+			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -269,6 +300,7 @@ func (s *StreamingResponse) GetCapturedData() (content string, usage *Usage, raw
 	scanner := bufio.NewScanner(strings.NewReader(rawData))
 	var contentBuilder strings.Builder
 	usage = &Usage{}
+	inReasoning := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -295,9 +327,24 @@ func (s *StreamingResponse) GetCapturedData() (content string, usage *Usage, raw
 			continue
 		}
 
-		// Extract content from choices
+		// Extract content and reasoning from choices
 		for _, choice := range chunk.Choices {
+			// Handle reasoning tokens
+			if choice.Delta.Reasoning != "" {
+				if !inReasoning {
+					contentBuilder.WriteString("<think>")
+					inReasoning = true
+				}
+				contentBuilder.WriteString(choice.Delta.Reasoning)
+			}
+
+			// Handle regular content tokens
 			if choice.Delta.Content != "" {
+				// If we were in reasoning mode, close the think tag first
+				if inReasoning {
+					contentBuilder.WriteString("</think>")
+					inReasoning = false
+				}
 				contentBuilder.WriteString(choice.Delta.Content)
 			}
 		}
@@ -306,6 +353,11 @@ func (s *StreamingResponse) GetCapturedData() (content string, usage *Usage, raw
 		if chunk.Usage != nil {
 			usage = chunk.Usage
 		}
+	}
+
+	// Close reasoning block if it's still open at the end
+	if inReasoning {
+		contentBuilder.WriteString("</think>")
 	}
 
 	content = contentBuilder.String()

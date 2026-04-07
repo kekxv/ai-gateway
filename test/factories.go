@@ -144,7 +144,7 @@ func CreateTestLog(db *gorm.DB, apiKeyID uint, overrides ...func(*models.Log)) *
 		TotalTokens:      150,
 		Cost:             100,
 		Status:           200,
-		APIKeyID:         apiKeyID,
+		APIKeyID:         &apiKeyID,
 		ModelName:        "gpt-4",
 		ProviderName:     "Test Provider",
 		CreatedAt:        time.Now(),
