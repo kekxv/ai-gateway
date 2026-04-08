@@ -810,9 +810,10 @@ const selectConversation = async (conv: Conversation) => {
     const toolResultsMap = new Map<string, string>() // toolName -> result content
 
     // First pass: collect all tool results from the conversation
+    // Tool results may be saved as role: 'tool' or role: 'user' (by API when sending request)
     rawMessages.forEach((msg: Message) => {
-      if (msg.role === 'tool' || (msg.role === 'user' && typeof msg.content === 'string' && msg.content.startsWith('Tool: '))) {
-        // Parse Tool: name\nResult: content
+      if (msg.role === 'tool' || (msg.role === 'user' && msg.content.startsWith('Tool: '))) {
+        // Parse Tool: name\nResult: content format
         const lines = msg.content.split('\n')
         if (lines.length >= 2 && lines[0].startsWith('Tool: ')) {
           const toolName = lines[0].slice(6).trim()
@@ -828,7 +829,8 @@ const selectConversation = async (conv: Conversation) => {
     // Second pass: build the message list and attach results
     rawMessages.forEach((msg: Message) => {
       // Filter out tool result messages from the main list
-      if (msg.role === 'tool' || (msg.role === 'user' && typeof msg.content === 'string' && msg.content.startsWith('Tool: '))) {
+      // Tool results may be saved as role: 'tool' or role: 'user' (by API when sending request)
+      if (msg.role === 'tool' || (msg.role === 'user' && msg.content.startsWith('Tool: '))) {
         return
       }
 
@@ -843,7 +845,7 @@ const selectConversation = async (conv: Conversation) => {
             if (Array.isArray(rawToolCalls)) {
               toolCallsParsed = rawToolCalls.map((tc: any, idx: number) => {
                 const toolName = tc.function?.name || tc.name || 'unknown'
-                // Check if we have a result for this tool call in the map (from pass 1) or in the JSON (from saveAssistantMessage)
+                // Check if we have a result for this tool call in the map or in the JSON
                 let result = tc.result || null
                 let status = tc.status || 'success'
                 let error = tc.error || null
@@ -996,7 +998,7 @@ const saveAssistantMessage = async (conversationId: number, content: string, too
 
 // Build chat history for API request
 const buildChatHistory = () => {
-  const history: Array<{ role: string; content: string; tool_calls?: any[]; tool_call_id?: string }> = []
+  const history: Array<{ role: string; content: string; tool_calls?: any[] }> = []
 
   // Add system prompt if exists
   if (settingsForm.system_prompt) {
@@ -1034,14 +1036,12 @@ const buildChatHistory = () => {
     })
 
     // If assistant message has tool results, append them as role: 'tool' messages
-    // Use tool_call_id to properly link results to their calls
     if (msg.toolCalls && msg.toolCalls.length > 0) {
       msg.toolCalls.forEach(tc => {
         if (tc.status === 'success' || tc.status === 'error') {
           history.push({
             role: 'tool',
-            tool_call_id: tc.id,
-            content: JSON.stringify(tc.result ?? tc.error)
+            content: `Tool: ${tc.toolName}\nResult: ${JSON.stringify(tc.result ?? tc.error)}`
           })
         }
       })
@@ -1127,11 +1127,6 @@ const streamWithToolCalls = async (
             }
           )
 
-          // Build tool results message to send back to AI
-          const toolResultsContent = results.map(r =>
-            `Tool: ${r.toolName}\nResult: ${JSON.stringify(r.result ?? r.error)}`
-          ).join('\n\n')
-
           // Save current content BEFORE clearing streaming state
           const savedRawContent = streamingRawContent.value
           const savedContent = streamingContent.value
@@ -1160,20 +1155,15 @@ const streamWithToolCalls = async (
           // Save this intermediate state to history (use saved content)
           await saveAssistantMessage(conversationId, savedRawContent, results)
 
-          // Also save the "tool result" message that we're about to send
-          try {
-            await conversationApi.addMessage(conversationId, {
-              role: 'tool',
-              content: toolResultsContent
-            })
-          } catch (e) {
-            console.error('Failed to save tool results message:', e)
-          }
-
           scrollToBottom()
 
+          // Build tool results content to send back to AI
+          const toolResultsContent = results.map(r =>
+            `Tool: ${r.toolName}\nResult: ${JSON.stringify(r.result ?? r.error)}`
+          ).join('\n\n')
+
           // Send tool results back to AI and continue streaming
-          // Await this to keep sending.value = true until the end
+          // API will save this as a user message
           await streamWithToolCalls(
             conversationId,
             {

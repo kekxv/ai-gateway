@@ -403,7 +403,7 @@ const extractContentText = (content: string | object | undefined): string => {
 }
 
 // Helper function to parse tool_calls from message object
-const parseToolCalls = (toolCalls: unknown, toolResultsMap?: Map<string, unknown>): ToolCallResult[] => {
+const parseToolCalls = (toolCalls: unknown, toolResultsMap?: Map<string, { toolName: string; result: unknown }>): ToolCallResult[] => {
   if (!toolCalls) return []
 
   let parsedToolCalls: Array<{ id: string; type: string; function: { name: string; arguments: string } }> = []
@@ -420,26 +420,17 @@ const parseToolCalls = (toolCalls: unknown, toolResultsMap?: Map<string, unknown
 
   return parsedToolCalls.map((tc, idx) => {
     const id = tc.id || `tool_${idx}_${Date.now()}`
+    const toolName = tc.function?.name || 'unknown'
     let result: unknown = undefined
 
-    // Try to get result from toolResultsMap
-    if (toolResultsMap && toolResultsMap.has(id)) {
-      const rawResult = toolResultsMap.get(id)
-      // Try to parse as JSON if it's a string
-      if (typeof rawResult === 'string') {
-        try {
-          result = JSON.parse(rawResult)
-        } catch {
-          result = rawResult
-        }
-      } else {
-        result = rawResult
-      }
+    // Try to get result from toolResultsMap by tool name
+    if (toolResultsMap && toolResultsMap.has(toolName)) {
+      result = toolResultsMap.get(toolName)!.result
     }
 
     return {
       id: id,
-      toolName: tc.function?.name || 'unknown',
+      toolName: toolName,
       arguments: (() => {
         try {
           return typeof tc.function?.arguments === 'string'
@@ -466,8 +457,9 @@ const chatMessages = computed(() => {
     toolCalls?: ToolCallResult[]
   }[] = []
 
-  // First pass: collect all tool call results from tool role messages
-  const toolResultsMap: Map<string, unknown> = new Map()
+  // First pass: collect all tool results from messages
+  // Format: "Tool: xxx\nResult: xxx" (can be in role: 'tool' or role: 'user')
+  const toolResultsMap: Map<string, { toolName: string; result: unknown }> = new Map()
 
   // Collect tool results from request body
   try {
@@ -475,35 +467,28 @@ const chatMessages = computed(() => {
     if (request) {
       const reqObj = typeof request === 'string' ? JSON.parse(request) : request
 
-      // Handle Responses API format (input field)
-      if (reqObj.input && Array.isArray(reqObj.input)) {
-        reqObj.input.forEach((item: { type?: string; role?: string; content?: string | object; tool_call_id?: string; call_id?: string }) => {
-          if (item.role === 'tool') {
-            const toolCallId = item.tool_call_id || item.call_id
-            const contentText = extractContentText(item.content)
-            if (toolCallId) {
+      // Handle messages array
+      const msgs = reqObj.messages || reqObj.input
+      if (Array.isArray(msgs)) {
+        msgs.forEach((msg: { role?: string; content?: string | object }) => {
+          if (msg.role === 'tool' || (msg.role === 'user' && typeof msg.content === 'string' && msg.content.startsWith('Tool: '))) {
+            const content = typeof msg.content === 'string' ? msg.content : ''
+            // Parse "Tool: name\nResult: content" format
+            const lines = content.split('\n')
+            if (lines.length >= 2 && lines[0].startsWith('Tool: ')) {
+              const toolName = lines[0].slice(6).trim()
+              let resultPart = lines.slice(1).join('\n').trim()
+              if (resultPart.startsWith('Result: ')) {
+                resultPart = resultPart.slice(8).trim()
+              }
               // Try to parse as JSON
+              let result: unknown
               try {
-                toolResultsMap.set(toolCallId, JSON.parse(contentText))
+                result = JSON.parse(resultPart)
               } catch {
-                toolResultsMap.set(toolCallId, contentText)
+                result = resultPart
               }
-            }
-          }
-        })
-      }
-      // Handle Chat Completions API format (messages field)
-      else if (reqObj.messages && Array.isArray(reqObj.messages)) {
-        reqObj.messages.forEach((msg: { role: string; content: string | object; tool_call_id?: string }) => {
-          if (msg.role === 'tool') {
-            const toolCallId = msg.tool_call_id
-            const contentText = extractContentText(msg.content)
-            if (toolCallId) {
-              try {
-                toolResultsMap.set(toolCallId, JSON.parse(contentText))
-              } catch {
-                toolResultsMap.set(toolCallId, contentText)
-              }
+              toolResultsMap.set(toolName, { toolName, result })
             }
           }
         })
@@ -513,18 +498,19 @@ const chatMessages = computed(() => {
     // Ignore parse errors
   }
 
-  // Collect tool results from response body (function_call_output in Responses API)
+  // Collect tool results from response body (function_call_output)
   try {
     const response = logDetail.value.detail.responseBody
     if (response) {
       const respObj = typeof response === 'string' ? JSON.parse(response) : response
       if (respObj.output && Array.isArray(respObj.output)) {
-        respObj.output.forEach((item: { type?: string; call_id?: string; output?: string }) => {
-          if (item.type === 'function_call_output' && item.call_id) {
+        respObj.output.forEach((item: { type?: string; call_id?: string; output?: string; name?: string }) => {
+          if (item.type === 'function_call_output' && (item.call_id || item.name)) {
+            const key = item.name || item.call_id || ''
             try {
-              toolResultsMap.set(item.call_id, JSON.parse(item.output || '{}'))
+              toolResultsMap.set(key, { toolName: key, result: JSON.parse(item.output || '{}') })
             } catch {
-              toolResultsMap.set(item.call_id, item.output)
+              toolResultsMap.set(key, { toolName: key, result: item.output })
             }
           }
         })
@@ -534,7 +520,7 @@ const chatMessages = computed(() => {
     // Ignore parse errors
   }
 
-  // Second pass: build chat messages (excluding tool role messages)
+  // Second pass: build chat messages
   try {
     const request = logDetail.value.detail.requestBody
     if (request) {
@@ -542,37 +528,20 @@ const chatMessages = computed(() => {
 
       // Handle Responses API format (input field)
       if (reqObj.input) {
-        // Add instructions as system message if present
         if (reqObj.instructions) {
-          messages.push({
-            role: 'system',
-            content: reqObj.instructions
-          })
+          messages.push({ role: 'system', content: reqObj.instructions })
         }
-
-        // Handle input - can be string or array
         if (typeof reqObj.input === 'string') {
-          messages.push({
-            role: 'user',
-            content: reqObj.input
-          })
+          messages.push({ role: 'user', content: reqObj.input })
         } else if (Array.isArray(reqObj.input)) {
           reqObj.input.forEach((item: { type?: string; role?: string; content?: string | object; tool_calls?: unknown }) => {
-            // Skip tool role messages - results are shown in ToolCallDisplay
-            if (item.role === 'tool') return
-            // Skip system messages to avoid duplicate with instructions
+            if (item.role === 'tool' || (item.role === 'user' && typeof item.content === 'string' && item.content?.startsWith('Tool: '))) return
             if (item.role === 'system') return
 
             if (item.type === 'message' || item.role) {
               const contentText = extractContentText(item.content)
               const parsed = parseMessageContent(contentText)
-              const msg: {
-                role: string
-                content: string
-                thinkContent?: string
-                hasThink?: boolean
-                toolCalls?: ToolCallResult[]
-              } = {
+              const msg: { role: string; content: string; thinkContent?: string; hasThink?: boolean; toolCalls?: ToolCallResult[] } = {
                 role: item.role || 'user',
                 content: parsed.textContent,
                 thinkContent: parsed.thinkContent || undefined,
@@ -580,9 +549,7 @@ const chatMessages = computed(() => {
               }
               if (item.tool_calls) {
                 const toolCalls = parseToolCalls(item.tool_calls, toolResultsMap)
-                if (toolCalls.length > 0) {
-                  msg.toolCalls = toolCalls
-                }
+                if (toolCalls.length > 0) msg.toolCalls = toolCalls
               }
               messages.push(msg)
             }
@@ -592,18 +559,12 @@ const chatMessages = computed(() => {
       // Handle Chat Completions API format (messages field)
       else if (reqObj.messages && Array.isArray(reqObj.messages)) {
         reqObj.messages.forEach((msg: { role: string; content: string | object; tool_calls?: unknown }) => {
-          // Skip tool role messages - results are shown in ToolCallDisplay
-          if (msg.role === 'tool') return
+          // Skip tool result messages
+          if (msg.role === 'tool' || (msg.role === 'user' && typeof msg.content === 'string' && msg.content?.startsWith('Tool: '))) return
 
           const contentText = extractContentText(msg.content)
           const parsed = parseMessageContent(contentText)
-          const parsedMsg: {
-            role: string
-            content: string
-            thinkContent?: string
-            hasThink?: boolean
-            toolCalls?: ToolCallResult[]
-          } = {
+          const parsedMsg: { role: string; content: string; thinkContent?: string; hasThink?: boolean; toolCalls?: ToolCallResult[] } = {
             role: msg.role,
             content: parsed.textContent,
             thinkContent: parsed.thinkContent || undefined,
@@ -611,9 +572,18 @@ const chatMessages = computed(() => {
           }
           if (msg.tool_calls) {
             const toolCalls = parseToolCalls(msg.tool_calls, toolResultsMap)
-            if (toolCalls.length > 0) {
-              parsedMsg.toolCalls = toolCalls
-            }
+            if (toolCalls.length > 0) parsedMsg.toolCalls = toolCalls
+          }
+          // If this is an assistant message with think content but no tool_calls,
+          // and we have tool results collected, attach them here
+          if (msg.role === 'assistant' && !parsedMsg.toolCalls && toolResultsMap.size > 0) {
+            parsedMsg.toolCalls = Array.from(toolResultsMap.values()).map(tr => ({
+              id: `tool_${tr.toolName}_${Date.now()}`,
+              toolName: tr.toolName,
+              arguments: {},
+              result: tr.result,
+              status: 'success' as const
+            }))
           }
           messages.push(parsedMsg)
         })
@@ -632,73 +602,41 @@ const chatMessages = computed(() => {
       // Handle Responses API format (output field)
       if (respObj.output && Array.isArray(respObj.output)) {
         respObj.output.forEach((item: { type?: string; role?: string; content?: object[]; output_text?: string; tool_calls?: unknown; name?: string; arguments?: string; id?: string }) => {
-          // Skip function_call_output - already collected in toolResultsMap
           if (item.type === 'function_call_output') return
 
-          // Handle function_call (tool calls in Responses API)
           if (item.type === 'function_call') {
             const toolCalls = parseToolCalls([{
               id: item.id || '',
               type: 'function',
-              function: {
-                name: item.name || 'unknown',
-                arguments: item.arguments || '{}'
-              }
+              function: { name: item.name || 'unknown', arguments: item.arguments || '{}' }
             }], toolResultsMap)
             if (toolCalls.length > 0) {
-              messages.push({
-                role: 'assistant',
-                content: '',
-                toolCalls: toolCalls
-              })
+              messages.push({ role: 'assistant', content: '', toolCalls })
             }
             return
           }
 
           if (item.type === 'message' && (item.content || item.tool_calls)) {
-            // Extract text from content array
             const text = item.content
-              ? item.content
-                  .filter((c: { type?: string; text?: string }) => c.type === 'output_text' && c.text)
-                  .map((c: { text?: string }) => c.text)
-                  .join('')
+              ? item.content.filter((c: { type?: string; text?: string }) => c.type === 'output_text' && c.text).map((c: { text?: string }) => c.text).join('')
               : ''
-
             const parsed = parseMessageContent(text)
-            const msg: {
-              role: string
-              content: string
-              thinkContent?: string
-              hasThink?: boolean
-              toolCalls?: ToolCallResult[]
-            } = {
+            const msg: { role: string; content: string; thinkContent?: string; hasThink?: boolean; toolCalls?: ToolCallResult[] } = {
               role: item.role || 'assistant',
               content: parsed.textContent,
               thinkContent: parsed.thinkContent || undefined,
               hasThink: parsed.hasThink
             }
-
             if (item.tool_calls) {
               const toolCalls = parseToolCalls(item.tool_calls, toolResultsMap)
-              if (toolCalls.length > 0) {
-                msg.toolCalls = toolCalls
-              }
+              if (toolCalls.length > 0) msg.toolCalls = toolCalls
             }
-
-            if (text || msg.toolCalls) {
-              messages.push(msg)
-            }
+            if (text || msg.toolCalls) messages.push(msg)
           }
         })
-        // Also check output_text at top level
         if (respObj.output_text && messages.filter(m => m.role === 'assistant').length === 0) {
           const parsed = parseMessageContent(respObj.output_text)
-          messages.push({
-            role: 'assistant',
-            content: parsed.textContent,
-            thinkContent: parsed.thinkContent || undefined,
-            hasThink: parsed.hasThink
-          })
+          messages.push({ role: 'assistant', content: parsed.textContent, thinkContent: parsed.thinkContent || undefined, hasThink: parsed.hasThink })
         }
       }
       // Handle Chat Completions API format (choices field)
@@ -707,26 +645,16 @@ const chatMessages = computed(() => {
           if (choice.message) {
             const contentText = extractContentText(choice.message.content)
             const parsed = parseMessageContent(contentText)
-            const msg: {
-              role: string
-              content: string
-              thinkContent?: string
-              hasThink?: boolean
-              toolCalls?: ToolCallResult[]
-            } = {
+            const msg: { role: string; content: string; thinkContent?: string; hasThink?: boolean; toolCalls?: ToolCallResult[] } = {
               role: choice.message.role,
               content: parsed.textContent,
               thinkContent: parsed.thinkContent || undefined,
               hasThink: parsed.hasThink
             }
-
             if (choice.message.tool_calls) {
               const toolCalls = parseToolCalls(choice.message.tool_calls, toolResultsMap)
-              if (toolCalls.length > 0) {
-                msg.toolCalls = toolCalls
-              }
+              if (toolCalls.length > 0) msg.toolCalls = toolCalls
             }
-
             messages.push(msg)
           }
         })

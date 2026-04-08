@@ -64,7 +64,7 @@ export interface ChatRequest {
     content: string
     tool_calls?: string | any[]
   }>
-  content: string
+  content?: string
   parts?: ChatContentPart[]
   stream?: boolean
   settings?: ConversationSettings
