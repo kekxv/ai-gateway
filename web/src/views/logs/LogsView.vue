@@ -193,44 +193,44 @@
             <div
               v-for="(msg, idx) in chatMessages"
               :key="idx"
-              class="chat-message-wrapper"
+              class="message-block"
+              :class="msg.role"
             >
-              <!-- User message - right side -->
-              <div v-if="msg.role === 'user'" class="chat-float-right">
-                <div class="chat-row-reverse">
-                  <div class="chat-avatar-indigo">U</div>
-                  <div class="chat-bubble-wrapper">
-                    <div class="chat-bubble-user-bg">
-                      <div class="chat-role-label-right">User</div>
-                      <div class="chat-content-left">{{ msg.content }}</div>
-                    </div>
+              <!-- System message - right side like user -->
+              <div v-if="msg.role === 'system'" class="system-message">
+                <div class="system-bubble">
+                  <div class="system-label-text">System</div>
+                  <div class="system-content">{{ msg.content }}</div>
+                </div>
+              </div>
+              <!-- User Message -->
+              <div v-else-if="msg.role === 'user'" class="user-message">
+                <div class="user-bubble">{{ msg.content }}</div>
+              </div>
+              <!-- Assistant Message -->
+              <div v-else-if="msg.role === 'assistant'" class="assistant-message">
+                <div class="assistant-avatar">
+                  <el-icon><Monitor /></el-icon>
+                </div>
+                <div class="assistant-content">
+                  <div class="assistant-name">AI</div>
+                  <!-- Think Block -->
+                  <ThinkBlock
+                    v-if="msg.hasThink && msg.thinkContent"
+                    :content="msg.thinkContent"
+                    :tokens="estimateThinkTokens(msg.thinkContent)"
+                    :default-collapsed="true"
+                    :force-expand="!msg.content && (!msg.toolCalls || msg.toolCalls.length === 0)"
+                  />
+                  <!-- Tool Calls Display -->
+                  <ToolCallDisplay
+                    v-if="msg.toolCalls && msg.toolCalls.length > 0"
+                    :tool-calls="msg.toolCalls"
+                  />
+                  <!-- Content -->
+                  <div v-if="msg.content" class="assistant-bubble">
+                    <MarkdownRenderer :content="msg.content" />
                   </div>
-                </div>
-              </div>
-              <!-- Assistant message - left side -->
-              <div v-else-if="msg.role === 'assistant'" class="chat-float-left">
-                <div class="chat-row">
-                  <div class="chat-avatar-green">A</div>
-                  <div class="chat-bubble-wrapper">
-                    <div class="chat-bubble-assistant-bg">
-                      <div class="chat-role-label-left">Assistant</div>
-                      <div class="chat-content">{{ msg.content }}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <!-- System message - center -->
-              <div v-else-if="msg.role === 'system'" class="chat-float-center">
-                <div class="chat-bubble-system-bg">
-                  <div class="chat-role-label-center">System</div>
-                  <div class="chat-content">{{ msg.content }}</div>
-                </div>
-              </div>
-              <!-- Tool message - center -->
-              <div v-else class="chat-float-center">
-                <div class="chat-bubble-tool-bg">
-                  <div class="chat-role-label-center">Tool</div>
-                  <div class="chat-content">{{ msg.content }}</div>
                 </div>
               </div>
             </div>
@@ -270,9 +270,14 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, CopyDocument, Warning, Loading, Document } from '@element-plus/icons-vue'
+import { Delete, CopyDocument, Warning, Loading, Monitor, Document } from '@element-plus/icons-vue'
 import { logApi } from '@/api/log'
 import type { Log, LogDetail } from '@/types/log'
+import type { ToolCallResult } from '@/types/tool'
+import { parseMessageContent, estimateThinkTokens } from '@/utils/messageParser'
+import ThinkBlock from '@/components/chat/ThinkBlock.vue'
+import ToolCallDisplay from '@/components/chat/ToolCallDisplay.vue'
+import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import dayjs from 'dayjs'
 
 const { t } = useI18n()
@@ -397,12 +402,139 @@ const extractContentText = (content: string | object | undefined): string => {
   return ''
 }
 
+// Helper function to parse tool_calls from message object
+const parseToolCalls = (toolCalls: unknown, toolResultsMap?: Map<string, unknown>): ToolCallResult[] => {
+  if (!toolCalls) return []
+
+  let parsedToolCalls: Array<{ id: string; type: string; function: { name: string; arguments: string } }> = []
+
+  if (typeof toolCalls === 'string') {
+    try {
+      parsedToolCalls = JSON.parse(toolCalls)
+    } catch {
+      return []
+    }
+  } else if (Array.isArray(toolCalls)) {
+    parsedToolCalls = toolCalls
+  }
+
+  return parsedToolCalls.map((tc, idx) => {
+    const id = tc.id || `tool_${idx}_${Date.now()}`
+    let result: unknown = undefined
+
+    // Try to get result from toolResultsMap
+    if (toolResultsMap && toolResultsMap.has(id)) {
+      const rawResult = toolResultsMap.get(id)
+      // Try to parse as JSON if it's a string
+      if (typeof rawResult === 'string') {
+        try {
+          result = JSON.parse(rawResult)
+        } catch {
+          result = rawResult
+        }
+      } else {
+        result = rawResult
+      }
+    }
+
+    return {
+      id: id,
+      toolName: tc.function?.name || 'unknown',
+      arguments: (() => {
+        try {
+          return typeof tc.function?.arguments === 'string'
+            ? JSON.parse(tc.function.arguments)
+            : tc.function?.arguments || {}
+        } catch {
+          return {}
+        }
+      })(),
+      result: result,
+      status: 'success' as const
+    }
+  })
+}
+
 // Extract chat messages from request/response
 const chatMessages = computed(() => {
   if (!logDetail.value?.detail) return []
-  const messages: { role: string; content: string }[] = []
+  const messages: {
+    role: string
+    content: string
+    thinkContent?: string
+    hasThink?: boolean
+    toolCalls?: ToolCallResult[]
+  }[] = []
 
-  // Extract from request body
+  // First pass: collect all tool call results from tool role messages
+  const toolResultsMap: Map<string, unknown> = new Map()
+
+  // Collect tool results from request body
+  try {
+    const request = logDetail.value.detail.requestBody
+    if (request) {
+      const reqObj = typeof request === 'string' ? JSON.parse(request) : request
+
+      // Handle Responses API format (input field)
+      if (reqObj.input && Array.isArray(reqObj.input)) {
+        reqObj.input.forEach((item: { type?: string; role?: string; content?: string | object; tool_call_id?: string; call_id?: string }) => {
+          if (item.role === 'tool') {
+            const toolCallId = item.tool_call_id || item.call_id
+            const contentText = extractContentText(item.content)
+            if (toolCallId) {
+              // Try to parse as JSON
+              try {
+                toolResultsMap.set(toolCallId, JSON.parse(contentText))
+              } catch {
+                toolResultsMap.set(toolCallId, contentText)
+              }
+            }
+          }
+        })
+      }
+      // Handle Chat Completions API format (messages field)
+      else if (reqObj.messages && Array.isArray(reqObj.messages)) {
+        reqObj.messages.forEach((msg: { role: string; content: string | object; tool_call_id?: string }) => {
+          if (msg.role === 'tool') {
+            const toolCallId = msg.tool_call_id
+            const contentText = extractContentText(msg.content)
+            if (toolCallId) {
+              try {
+                toolResultsMap.set(toolCallId, JSON.parse(contentText))
+              } catch {
+                toolResultsMap.set(toolCallId, contentText)
+              }
+            }
+          }
+        })
+      }
+    }
+  } catch {
+    // Ignore parse errors
+  }
+
+  // Collect tool results from response body (function_call_output in Responses API)
+  try {
+    const response = logDetail.value.detail.responseBody
+    if (response) {
+      const respObj = typeof response === 'string' ? JSON.parse(response) : response
+      if (respObj.output && Array.isArray(respObj.output)) {
+        respObj.output.forEach((item: { type?: string; call_id?: string; output?: string }) => {
+          if (item.type === 'function_call_output' && item.call_id) {
+            try {
+              toolResultsMap.set(item.call_id, JSON.parse(item.output || '{}'))
+            } catch {
+              toolResultsMap.set(item.call_id, item.output)
+            }
+          }
+        })
+      }
+    }
+  } catch {
+    // Ignore parse errors
+  }
+
+  // Second pass: build chat messages (excluding tool role messages)
   try {
     const request = logDetail.value.detail.requestBody
     if (request) {
@@ -425,24 +557,65 @@ const chatMessages = computed(() => {
             content: reqObj.input
           })
         } else if (Array.isArray(reqObj.input)) {
-          // Input is array of items
-          reqObj.input.forEach((item: { type?: string; role?: string; content?: string | object }) => {
+          reqObj.input.forEach((item: { type?: string; role?: string; content?: string | object; tool_calls?: unknown }) => {
+            // Skip tool role messages - results are shown in ToolCallDisplay
+            if (item.role === 'tool') return
+            // Skip system messages to avoid duplicate with instructions
+            if (item.role === 'system') return
+
             if (item.type === 'message' || item.role) {
-              messages.push({
+              const contentText = extractContentText(item.content)
+              const parsed = parseMessageContent(contentText)
+              const msg: {
+                role: string
+                content: string
+                thinkContent?: string
+                hasThink?: boolean
+                toolCalls?: ToolCallResult[]
+              } = {
                 role: item.role || 'user',
-                content: extractContentText(item.content)
-              })
+                content: parsed.textContent,
+                thinkContent: parsed.thinkContent || undefined,
+                hasThink: parsed.hasThink
+              }
+              if (item.tool_calls) {
+                const toolCalls = parseToolCalls(item.tool_calls, toolResultsMap)
+                if (toolCalls.length > 0) {
+                  msg.toolCalls = toolCalls
+                }
+              }
+              messages.push(msg)
             }
           })
         }
       }
       // Handle Chat Completions API format (messages field)
       else if (reqObj.messages && Array.isArray(reqObj.messages)) {
-        reqObj.messages.forEach((msg: { role: string; content: string | object }) => {
-          messages.push({
+        reqObj.messages.forEach((msg: { role: string; content: string | object; tool_calls?: unknown }) => {
+          // Skip tool role messages - results are shown in ToolCallDisplay
+          if (msg.role === 'tool') return
+
+          const contentText = extractContentText(msg.content)
+          const parsed = parseMessageContent(contentText)
+          const parsedMsg: {
+            role: string
+            content: string
+            thinkContent?: string
+            hasThink?: boolean
+            toolCalls?: ToolCallResult[]
+          } = {
             role: msg.role,
-            content: extractContentText(msg.content)
-          })
+            content: parsed.textContent,
+            thinkContent: parsed.thinkContent || undefined,
+            hasThink: parsed.hasThink
+          }
+          if (msg.tool_calls) {
+            const toolCalls = parseToolCalls(msg.tool_calls, toolResultsMap)
+            if (toolCalls.length > 0) {
+              parsedMsg.toolCalls = toolCalls
+            }
+          }
+          messages.push(parsedMsg)
         })
       }
     }
@@ -458,37 +631,103 @@ const chatMessages = computed(() => {
 
       // Handle Responses API format (output field)
       if (respObj.output && Array.isArray(respObj.output)) {
-        respObj.output.forEach((item: { type?: string; role?: string; content?: object[]; output_text?: string }) => {
-          if (item.type === 'message' && item.content) {
+        respObj.output.forEach((item: { type?: string; role?: string; content?: object[]; output_text?: string; tool_calls?: unknown; name?: string; arguments?: string; id?: string }) => {
+          // Skip function_call_output - already collected in toolResultsMap
+          if (item.type === 'function_call_output') return
+
+          // Handle function_call (tool calls in Responses API)
+          if (item.type === 'function_call') {
+            const toolCalls = parseToolCalls([{
+              id: item.id || '',
+              type: 'function',
+              function: {
+                name: item.name || 'unknown',
+                arguments: item.arguments || '{}'
+              }
+            }], toolResultsMap)
+            if (toolCalls.length > 0) {
+              messages.push({
+                role: 'assistant',
+                content: '',
+                toolCalls: toolCalls
+              })
+            }
+            return
+          }
+
+          if (item.type === 'message' && (item.content || item.tool_calls)) {
             // Extract text from content array
             const text = item.content
-              .filter((c: { type?: string; text?: string }) => c.type === 'output_text' && c.text)
-              .map((c: { text?: string }) => c.text)
-              .join('')
-            if (text) {
-              messages.push({
-                role: item.role || 'assistant',
-                content: text
-              })
+              ? item.content
+                  .filter((c: { type?: string; text?: string }) => c.type === 'output_text' && c.text)
+                  .map((c: { text?: string }) => c.text)
+                  .join('')
+              : ''
+
+            const parsed = parseMessageContent(text)
+            const msg: {
+              role: string
+              content: string
+              thinkContent?: string
+              hasThink?: boolean
+              toolCalls?: ToolCallResult[]
+            } = {
+              role: item.role || 'assistant',
+              content: parsed.textContent,
+              thinkContent: parsed.thinkContent || undefined,
+              hasThink: parsed.hasThink
+            }
+
+            if (item.tool_calls) {
+              const toolCalls = parseToolCalls(item.tool_calls, toolResultsMap)
+              if (toolCalls.length > 0) {
+                msg.toolCalls = toolCalls
+              }
+            }
+
+            if (text || msg.toolCalls) {
+              messages.push(msg)
             }
           }
         })
         // Also check output_text at top level
         if (respObj.output_text && messages.filter(m => m.role === 'assistant').length === 0) {
+          const parsed = parseMessageContent(respObj.output_text)
           messages.push({
             role: 'assistant',
-            content: respObj.output_text
+            content: parsed.textContent,
+            thinkContent: parsed.thinkContent || undefined,
+            hasThink: parsed.hasThink
           })
         }
       }
       // Handle Chat Completions API format (choices field)
       else if (respObj.choices && Array.isArray(respObj.choices)) {
-        respObj.choices.forEach((choice: { message?: { role: string; content: string | object } }) => {
+        respObj.choices.forEach((choice: { message?: { role: string; content: string | object; tool_calls?: unknown } }) => {
           if (choice.message) {
-            messages.push({
+            const contentText = extractContentText(choice.message.content)
+            const parsed = parseMessageContent(contentText)
+            const msg: {
+              role: string
+              content: string
+              thinkContent?: string
+              hasThink?: boolean
+              toolCalls?: ToolCallResult[]
+            } = {
               role: choice.message.role,
-              content: extractContentText(choice.message.content)
-            })
+              content: parsed.textContent,
+              thinkContent: parsed.thinkContent || undefined,
+              hasThink: parsed.hasThink
+            }
+
+            if (choice.message.tool_calls) {
+              const toolCalls = parseToolCalls(choice.message.tool_calls, toolResultsMap)
+              if (toolCalls.length > 0) {
+                msg.toolCalls = toolCalls
+              }
+            }
+
+            messages.push(msg)
           }
         })
       }
@@ -500,6 +739,7 @@ const chatMessages = computed(() => {
   return messages
 })
 
+// Tool call helper functions
 const fetchLogs = async () => {
   loading.value = true
   try {
@@ -691,152 +931,140 @@ const cleanupLogs = async () => {
   color: #9ca3af;
 }
 .chat-body {
-  max-height: 320px;
+  max-height: 500px;
   overflow-y: auto;
-  padding: 16px;
+  padding: 20px 16px;
   background: #fafafa;
 }
 
-/* Chat message styles - WeChat-like style */
-.chat-message-wrapper {
-  margin-bottom: 16px;
+/* Message blocks */
+.message-block {
+  margin-bottom: 20px;
 }
-.chat-message-wrapper::after {
+.message-block::after {
   content: '';
   display: block;
   clear: both;
 }
 
-/* Float layouts */
-.chat-float-right {
-  float: right;
-  max-width: 85%;
-}
-.chat-float-left {
-  float: left;
-  max-width: 85%;
-}
-.chat-float-center {
-  max-width: 85%;
-  margin: 0 auto;
-  clear: both;
-}
-
-/* Row layouts */
-.chat-row-reverse {
+/* User message - right aligned */
+.user-message {
   display: flex;
-  flex-direction: row-reverse;
-  align-items: flex-start;
+  justify-content: flex-end;
+  margin-bottom: 16px;
 }
-.chat-row {
-  display: flex;
-  flex-direction: row;
-  align-items: flex-start;
-}
-
-/* Avatars */
-.chat-avatar-indigo {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
+.user-bubble {
+  max-width: 80%;
   background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
   color: white;
-  font-size: 13px;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  margin-left: 12px;
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+  padding: 12px 16px;
+  border-radius: 18px;
+  border-bottom-right-radius: 4px;
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: break-word;
+  white-space: pre-wrap;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.25);
 }
-.chat-avatar-green {
+
+/* System message - right aligned like user but different style */
+.system-message {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 16px;
+}
+.system-bubble {
+  max-width: 80%;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  color: #78350f;
+  padding: 12px 16px;
+  border-radius: 18px;
+  border-bottom-right-radius: 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.2);
+}
+.system-label-text {
+  font-size: 11px;
+  font-weight: 600;
+  color: #b45309;
+  margin-bottom: 4px;
+}
+.system-content {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Assistant message */
+.assistant-message {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+.assistant-avatar {
   width: 36px;
   height: 36px;
   border-radius: 50%;
   background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
   color: white;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  margin-right: 12px;
   box-shadow: 0 2px 8px rgba(34, 197, 94, 0.3);
 }
-
-/* Bubble wrapper */
-.chat-bubble-wrapper {
-  min-width: 0;
+.assistant-content {
   flex: 1;
+  min-width: 0;
 }
-
-/* Bubble backgrounds with special corner (like WeChat tail) */
-.chat-bubble-user-bg {
-  background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
-  border-radius: 16px;
-  border-top-right-radius: 4px;
-  padding: 12px 16px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+.assistant-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #22c55e;
+  margin-bottom: 6px;
 }
-.chat-bubble-assistant-bg {
-  background: linear-gradient(135deg, #ecfdf5 0%, #dcfce7 100%);
+.assistant-bubble {
+  background: white;
+  border: 1px solid #e5e7eb;
   border-radius: 16px;
   border-top-left-radius: 4px;
   padding: 12px 16px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
-.chat-bubble-system-bg {
-  background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
-  border-left: 3px solid #f59e0b;
-  border-radius: 8px;
-  padding: 12px 16px;
-}
-.chat-bubble-tool-bg {
-  background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
-  border-radius: 8px;
-  padding: 12px 16px;
+
+/* Markdown content inside assistant bubble */
+.assistant-bubble .markdown-content {
+  font-size: 14px;
+  color: #374151;
 }
 
-/* Role labels */
-.chat-role-label-right {
-  font-size: 11px;
-  font-weight: 600;
-  margin-bottom: 4px;
-  text-align: right;
-  color: #6366f1;
+/* Tool message */
+.tool-message {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 16px;
 }
-.chat-role-label-left {
-  font-size: 11px;
-  font-weight: 600;
-  margin-bottom: 4px;
-  text-align: left;
-  color: #22c55e;
+.tool-bubble {
+  max-width: 70%;
+  background: #f3f4f6;
+  border-radius: 12px;
+  padding: 10px 16px;
+  text-align: center;
 }
-.chat-role-label-center {
+.tool-label {
   font-size: 11px;
   font-weight: 600;
-  margin-bottom: 4px;
-  text-align: left;
   color: #6b7280;
+  margin-bottom: 4px;
 }
-
-/* Content */
-.chat-content {
-  font-size: 14px;
-  line-height: 1.6;
+.tool-content {
+  font-size: 13px;
+  color: #4b5563;
   word-break: break-word;
-  white-space: pre-wrap;
-  color: #374151;
-}
-.chat-content-left {
-  font-size: 14px;
-  line-height: 1.6;
-  word-break: break-word;
-  white-space: pre-wrap;
-  text-align: left;
-  color: #374151;
 }
 
 /* Raw card */

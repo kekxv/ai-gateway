@@ -3,10 +3,13 @@
  * 用于解析 Think/Reasoning 内容和普通文本
  */
 
+import type { ToolCall } from '@/types/tool'
+
 interface ParsedContent {
   textContent: string    // 非 Think 内容
   thinkContent: string   // Think 内容
   hasThink: boolean
+  toolCalls?: ToolCall[]
 }
 
 interface StreamingParsedContent {
@@ -178,4 +181,112 @@ export function estimateThinkTokens(content: string): number {
   const chineseChars = (content.match(/[\u4e00-\u9fa5]/g) || []).length
   const otherChars = content.length - chineseChars
   return Math.ceil(chineseChars / 2 + otherChars / 4)
+}
+
+/**
+ * 解析 XML 格式的 Tool Call（必须在 `` 标签内）
+ * 支持格式：
+ * ```
+ * <web_canvas>
+ * width: 375
+ * height: 812
+ * operations: [...]
+ * ```
+ */
+export function parseXmlToolCalls(content: string): { toolCalls: ToolCall[]; cleanedContent: string } {
+  const toolCalls: ToolCall[] = []
+  let cleanedContent = content
+
+  // 匹配 ``` 标签内的内容
+  const toolCallPattern = /```([\s\S]*?)```/g
+
+  let match
+  while ((match = toolCallPattern.exec(content)) !== null) {
+    const innerContent = match[1].trim()
+
+    // 从内部内容提取工具名称和参数
+    // 格式：<tool_name>args...</tool_name>
+    const innerPattern = /^<([a-z_][a-z0-9_]*)>([\s\S]*)$/i
+    const innerMatch = innerContent.match(innerPattern)
+
+    if (innerMatch) {
+      const toolName = innerMatch[1]
+      const toolContent = innerMatch[2].trim()
+
+      // 跳过 think 相关标签
+      if (toolName.toLowerCase().includes('think')) {
+        continue
+      }
+
+      // 解析参数
+      let args: Record<string, unknown> = {}
+      if (toolContent.startsWith('{') || toolContent.startsWith('[')) {
+        try {
+          args = JSON.parse(toolContent)
+        } catch {
+          args = parseYamlStyleArgs(toolContent)
+        }
+      } else {
+        args = parseYamlStyleArgs(toolContent)
+      }
+
+      toolCalls.push({
+        id: `xml_tool_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        type: 'function',
+        function: {
+          name: toolName,
+          arguments: JSON.stringify(args)
+        }
+      })
+    }
+  }
+
+  // 移除 ``` 标签
+  if (toolCalls.length > 0) {
+    cleanedContent = content.replace(toolCallPattern, '').trim()
+  }
+
+  return { toolCalls, cleanedContent }
+}
+
+function parseYamlStyleArgs(content: string): Record<string, unknown> {
+  const args: Record<string, unknown> = {}
+  const lines = content.split('\n')
+
+  for (const line of lines) {
+    const trimmedLine = line.trim()
+    if (!trimmedLine || trimmedLine.startsWith('#')) continue
+
+    const colonIndex = trimmedLine.indexOf(':')
+    if (colonIndex === -1) continue
+
+    const key = trimmedLine.slice(0, colonIndex).trim()
+    let value = trimmedLine.slice(colonIndex + 1).trim()
+    args[key] = parseYamlValue(value)
+  }
+
+  return args
+}
+
+function parseYamlValue(value: string): unknown {
+  if (value === '' || value === 'null') return null
+  if (value === 'true') return true
+  if (value === 'false') return false
+  if (!isNaN(Number(value)) && value !== '') {
+    const num = Number(value)
+    if (Number.isInteger(num) && !value.includes('.')) return num
+    return num
+  }
+  if (value.startsWith('[') || value.startsWith('{')) {
+    try {
+      return JSON.parse(value)
+    } catch {
+      return value
+    }
+  }
+  if ((value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1)
+  }
+  return value
 }

@@ -439,9 +439,12 @@ function executeCanvas(
     createdAt: Date.now()
   })
 
-  // 只返回成功状态，图片已在页面上显示
+  // 只返回成功状态和 canvasId，图片已在页面上显示
   return {
     success: true,
+    canvasId,
+    width: canvasWidth,
+    height: canvasHeight,
     message: `绘图完成，共执行 ${executedOps.length} 个操作，图片已在页面上显示`
   }
 }

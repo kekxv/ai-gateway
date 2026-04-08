@@ -453,7 +453,7 @@ import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ThinkBlock from '@/components/chat/ThinkBlock.vue'
 import ToolCallDisplay from '@/components/chat/ToolCallDisplay.vue'
 import ToolsDialog from '@/components/chat/ToolsDialog.vue'
-import { parseMessageContent, parseStreamingThinkContent, estimateThinkTokens, removeThinkContent } from '@/utils/messageParser'
+import { parseMessageContent, parseStreamingThinkContent, estimateThinkTokens, removeThinkContent, parseXmlToolCalls } from '@/utils/messageParser'
 import { useToolsStore } from '@/stores/tools'
 import type { ToolCallResult, ToolCall } from '@/types/tool'
 
@@ -996,8 +996,8 @@ const saveAssistantMessage = async (conversationId: number, content: string, too
 
 // Build chat history for API request
 const buildChatHistory = () => {
-  const history: Array<{ role: string; content: string; tool_calls?: any[] }> = []
-  
+  const history: Array<{ role: string; content: string; tool_calls?: any[]; tool_call_id?: string }> = []
+
   // Add system prompt if exists
   if (settingsForm.system_prompt) {
     history.push({
@@ -1008,7 +1008,7 @@ const buildChatHistory = () => {
 
   messages.value.forEach(msg => {
     let content = msg.content
-    
+
     // Clean assistant messages (remove think blocks)
     if (msg.role === 'assistant') {
       content = removeThinkContent(msg.content)
@@ -1033,13 +1033,15 @@ const buildChatHistory = () => {
       tool_calls: formattedToolCalls
     })
 
-    // If assistant message has tool results, we need to append them as role: 'tool' messages
+    // If assistant message has tool results, append them as role: 'tool' messages
+    // Use tool_call_id to properly link results to their calls
     if (msg.toolCalls && msg.toolCalls.length > 0) {
       msg.toolCalls.forEach(tc => {
         if (tc.status === 'success' || tc.status === 'error') {
           history.push({
             role: 'tool',
-            content: `Tool: ${tc.toolName}\nResult: ${JSON.stringify(tc.result ?? tc.error)}`
+            tool_call_id: tc.id,
+            content: JSON.stringify(tc.result ?? tc.error)
           })
         }
       })
@@ -1080,7 +1082,26 @@ const streamWithToolCalls = async (
           scrollToBottom()
         },
         () => {
-          // Stream completed
+          // Stream completed - check for XML format tool calls
+          const { toolCalls: xmlToolCalls, cleanedContent } = parseXmlToolCalls(streamingRawContent.value)
+
+          if (xmlToolCalls.length > 0) {
+            // Update streaming content to remove XML tool call tags
+            streamingRawContent.value = cleanedContent
+            const parsed = parseStreamingThinkContent(cleanedContent)
+            streamingContent.value = parsed.text
+            streamingThinkContent.value = parsed.think
+
+            // Process XML tool calls
+            receivedToolCalls = xmlToolCalls
+            streamingToolCallResults.value = xmlToolCalls.map(tc => ({
+              id: tc.id,
+              toolName: tc.function.name,
+              arguments: JSON.parse(tc.function.arguments || '{}'),
+              status: 'running'
+            }))
+          }
+
           resolve()
         },
         (error) => {
@@ -1111,21 +1132,33 @@ const streamWithToolCalls = async (
             `Tool: ${r.toolName}\nResult: ${JSON.stringify(r.result ?? r.error)}`
           ).join('\n\n')
 
+          // Save current content BEFORE clearing streaming state
+          const savedRawContent = streamingRawContent.value
+          const savedContent = streamingContent.value
+          const savedThinkContent = streamingThinkContent.value
+          const savedHasThink = streamingThinkContent.value.length > 0
+
+          // Clear streaming state BEFORE adding message to avoid duplicate display
+          streamingRawContent.value = ''
+          streamingContent.value = ''
+          streamingThinkContent.value = ''
+          streamingToolCallResults.value = []
+
           // Add assistant message with tool calls to display
           const assistantMsg: ExtendedMessage = {
             id: -Date.now(),
             conversation_id: conversationId,
             role: 'assistant',
-            content: streamingContent.value,
-            thinkContent: streamingThinkContent.value,
-            hasThink: streamingThinkContent.value.length > 0,
+            content: savedContent,
+            thinkContent: savedThinkContent,
+            hasThink: savedHasThink,
             toolCalls: results,
             created_at: new Date().toISOString()
           }
           messages.value.push(assistantMsg)
 
-          // Save this intermediate state to history
-          await saveAssistantMessage(conversationId, streamingRawContent.value, results)
+          // Save this intermediate state to history (use saved content)
+          await saveAssistantMessage(conversationId, savedRawContent, results)
 
           // Also save the "tool result" message that we're about to send
           try {
@@ -1136,12 +1169,6 @@ const streamWithToolCalls = async (
           } catch (e) {
             console.error('Failed to save tool results message:', e)
           }
-
-          // Clear streaming state (but keep toolCallResults in the message)
-          streamingRawContent.value = ''
-          streamingContent.value = ''
-          streamingThinkContent.value = ''
-          streamingToolCallResults.value = []
 
           scrollToBottom()
 
@@ -1228,6 +1255,78 @@ const streamWithToolCalls = async (
       }
 
       scrollToBottom()
+    }
+
+    // Handle XML format tool calls detected after stream completion
+    if (receivedToolCalls.length > 0 && !receivedToolCalls[0].id.startsWith('xml_tool_')) {
+      // Standard API tool calls are handled in the onToolCall callback
+    } else if (receivedToolCalls.length > 0) {
+      // XML format tool calls - execute them now
+      const xmlToolCalls = receivedToolCalls
+
+      // Execute tools
+      const results = await executeToolCallsAndContinue(
+        xmlToolCalls,
+        conversationId,
+        (updatedResults) => {
+          streamingToolCallResults.value = updatedResults
+        }
+      )
+
+      // Build tool results message to send back to AI
+      const toolResultsContent = results.map(r =>
+        `Tool: ${r.toolName}\nResult: ${JSON.stringify(r.result ?? r.error)}`
+      ).join('\n\n')
+
+      // Add assistant message with tool calls to display
+      const assistantMsg: ExtendedMessage = {
+        id: -Date.now(),
+        conversation_id: conversationId,
+        role: 'assistant',
+        content: streamingContent.value,
+        thinkContent: streamingThinkContent.value,
+        hasThink: streamingThinkContent.value.length > 0,
+        toolCalls: results,
+        created_at: new Date().toISOString()
+      }
+      messages.value.push(assistantMsg)
+
+      // Save this intermediate state to history
+      await saveAssistantMessage(conversationId, streamingRawContent.value, results)
+
+      // Also save the "tool result" message
+      try {
+        await conversationApi.addMessage(conversationId, {
+          role: 'tool',
+          content: toolResultsContent
+        })
+      } catch (e) {
+        console.error('Failed to save tool results message:', e)
+      }
+
+      // Clear streaming state
+      streamingRawContent.value = ''
+      streamingContent.value = ''
+      streamingThinkContent.value = ''
+      streamingToolCallResults.value = []
+
+      scrollToBottom()
+
+      // Send tool results back to AI and continue streaming
+      await streamWithToolCalls(
+        conversationId,
+        {
+          content: toolResultsContent,
+          stream: true,
+          settings: {
+            temperature: settingsForm.temperature,
+            max_tokens: settingsForm.max_tokens
+          },
+          tools: toolsStore.getToolsForModel(),
+          enable_thinking: getEnableThinking()
+        },
+        true
+      ).catch(console.error)
     }
   } catch (error) {
     console.error('Streaming error:', error)

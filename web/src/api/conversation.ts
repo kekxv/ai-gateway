@@ -45,33 +45,35 @@ export const conversationApi = {
     onToolCall?: (toolCalls: ToolCall[]) => Promise<void>
   ) => {
     const token = localStorage.getItem('token')
-    const response = await fetch(`${api.defaults.baseURL}/conversations/${id}/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({ ...data, stream: true })
-    })
-
-    if (!response.ok) {
-      const errorData = await response.json()
-      onError(errorData.error || 'Request failed')
-      return
-    }
-
-    const reader = response.body?.getReader()
-    if (!reader) {
-      onError('No response body')
-      return
-    }
-
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let inReasoning = false
-    let toolCalls: ToolCall[] = []
+    const baseURL = api.defaults.baseURL || '/api'
 
     try {
+      const response = await fetch(`${baseURL}/conversations/${id}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ ...data, stream: true })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: '请求失败' }))
+        onError(errorData.error || 'Request failed')
+        return
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) {
+        onError('No response body')
+        return
+      }
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let inReasoning = false
+      let toolCalls: ToolCall[] = []
+
       while (true) {
         const { done, value } = await reader.read()
         if (done) {
@@ -116,7 +118,7 @@ export const conversationApi = {
                 // Handle reasoning content
                 // Some models use 'reasoning', some 'reasoning_content'
                 const reasoning = delta.reasoning || delta.reasoning_content
-                
+
                 if (reasoning) {
                   // Open think tag on first reasoning chunk
                   if (!inReasoning) {
@@ -125,7 +127,7 @@ export const conversationApi = {
                   }
                   onContent(reasoning)
                 }
-                
+
                 // Handle regular content
                 // Check if content field exists (can be empty string)
                 if (delta.content !== undefined && delta.content !== null) {
@@ -136,7 +138,7 @@ export const conversationApi = {
                     onContent('</think>')
                     inReasoning = false
                   }
-                  
+
                   if (delta.content) {
                     onContent(delta.content)
                   }

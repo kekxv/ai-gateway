@@ -37,6 +37,8 @@
             :data-url="getCanvasDataUrl(toolCall.result)"
             :width="getCanvasWidth(toolCall.result)"
             :height="getCanvasHeight(toolCall.result)"
+            :operations="getOperations(toolCall)"
+            :background-color="toolCall.arguments?.backgroundColor as string | undefined"
           />
         </div>
         <div v-else-if="toolCall.result !== undefined" class="detail-section">
@@ -59,10 +61,13 @@ import { ref, h, watch } from 'vue'
 import { Tools, Check, Close, Loading, ArrowDown, ArrowUp, Clock, Document, Picture } from '@element-plus/icons-vue'
 import type { ToolCallResult } from '@/types/tool'
 import CanvasDisplay from './CanvasDisplay.vue'
+import { useCanvasStore } from '@/stores/canvas'
 
 const props = defineProps<{
   toolCalls: ToolCallResult[]
 }>()
+
+const canvasStore = useCanvasStore()
 
 const expandedIds = ref(new Set<string>())
 
@@ -114,7 +119,10 @@ const getToolDisplayName = (toolName: string) => {
 const getCanvasId = (result: unknown): string | null => {
   if (!result || typeof result !== 'object') return null
   const data = result as Record<string, unknown>
-  return (data.canvasId as string) || null
+  // 如果结果里有 canvasId，使用它
+  if (data.canvasId) return data.canvasId as string
+  // 否则从 store 获取最新的 canvas
+  return canvasStore.latestCanvasId
 }
 
 // 获取 Canvas dataUrl（可选，可能从 store 获取）
@@ -136,6 +144,18 @@ const getCanvasHeight = (result: unknown): number => {
   if (!result || typeof result !== 'object') return 300
   const data = result as Record<string, unknown>
   return (data.height as number) || 300
+}
+
+// 获取 operations 数组
+const getOperations = (toolCall: ToolCallResult): Array<Record<string, unknown>> | string | undefined => {
+  const ops = toolCall.arguments?.operations
+  if (!ops) return undefined
+  // 如果已经是数组，直接返回
+  if (Array.isArray(ops)) {
+    return ops
+  }
+  // 如果是字符串，尝试解析或直接返回
+  return ops as string
 }
 
 // 渲染参数
@@ -198,7 +218,21 @@ const renderArguments = (toolCall: ToolCallResult) => {
 const renderCanvasArgs = (args: Record<string, unknown>) => {
   const width = args.width || 400
   const height = args.height || 300
-  const operations = args.operations as Array<Record<string, unknown>> || []
+  let operations: Array<Record<string, unknown>> = []
+
+  // 确保 operations 是数组
+  if (Array.isArray(args.operations)) {
+    operations = args.operations as Array<Record<string, unknown>>
+  } else if (typeof args.operations === 'string') {
+    try {
+      const parsed = JSON.parse(args.operations)
+      if (Array.isArray(parsed)) {
+        operations = parsed
+      }
+    } catch {
+      // 解析失败，保持空数组
+    }
+  }
 
   return h('div', { class: 'tool-args-canvas' }, [
     h('div', { class: 'canvas-size' }, `画布尺寸：${width} x ${height}`),
