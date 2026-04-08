@@ -100,7 +100,7 @@ func main() {
 	)
 
 	// Initialize model sync service
-	modelSyncService := service.NewModelSyncService(providerRepo, modelRepo, modelRouteRepo)
+	modelSyncService := service.NewModelSyncService(providerRepo, modelRepo, modelRouteRepo, proxyConfig)
 
 	// Initialize tools service
 	toolsService := service.NewToolsService()

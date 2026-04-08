@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -50,6 +51,16 @@ func NewResponseService(
 	billingService *BillingService,
 	proxyConfig *ProxyConfig,
 ) *ResponseService {
+	// Create custom transport with proxy bypass support
+	transport := &http.Transport{
+		Proxy: func(req *http.Request) (*url.URL, error) {
+			if utils.ShouldBypassProxy(req.URL.String(), proxyConfig.NoProxy) {
+				return nil, nil // Bypass proxy for matched URLs
+			}
+			return http.ProxyFromEnvironment(req)
+		},
+	}
+
 	return &ResponseService{
 		modelRepo:      modelRepo,
 		modelRouteRepo: modelRouteRepo,
@@ -60,7 +71,7 @@ func NewResponseService(
 		logRepo:        logRepo,
 		logDetailRepo:  logDetailRepo,
 		billingService: billingService,
-		httpClient:     &http.Client{Timeout: 240 * time.Second},
+		httpClient:     &http.Client{Timeout: 240 * time.Second, Transport: transport},
 		proxyConfig:    proxyConfig,
 		cache:          NewResponseCache(24 * time.Hour), // 1 day TTL
 	}

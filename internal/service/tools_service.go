@@ -138,6 +138,9 @@ func NewToolsService() *ToolsService {
 	return &ToolsService{
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+			},
 		},
 		webSearchLimit:     10,         // 10 requests per minute
 		webSearchWindow:    time.Minute,

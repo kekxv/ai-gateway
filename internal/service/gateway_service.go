@@ -10,6 +10,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -511,6 +512,16 @@ func NewGatewayService(
 	billingService *BillingService,
 	proxyConfig *ProxyConfig,
 ) *GatewayService {
+	// Create custom transport with proxy bypass support
+	transport := &http.Transport{
+		Proxy: func(req *http.Request) (*url.URL, error) {
+			if utils.ShouldBypassProxy(req.URL.String(), proxyConfig.NoProxy) {
+				return nil, nil // Bypass proxy for matched URLs
+			}
+			return http.ProxyFromEnvironment(req)
+		},
+	}
+
 	return &GatewayService{
 		modelRepo:      modelRepo,
 		modelRouteRepo: modelRouteRepo,
@@ -520,7 +531,7 @@ func NewGatewayService(
 		logRepo:        logRepo,
 		logDetailRepo:  logDetailRepo,
 		billingService: billingService,
-		httpClient:     &http.Client{Timeout: 240 * time.Second},
+		httpClient:     &http.Client{Timeout: 240 * time.Second, Transport: transport},
 		proxyConfig:    proxyConfig,
 	}
 }
@@ -774,8 +785,7 @@ func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey st
 		httpReq.Header.Set(key, value)
 	}
 
-	// TODO: Add proxy support
-
+	
 	return s.httpClient.Do(httpReq)
 }
 

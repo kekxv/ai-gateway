@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/kekxv/ai-gateway/internal/models"
 	"github.com/kekxv/ai-gateway/internal/repository"
+	"github.com/kekxv/ai-gateway/internal/utils"
 )
 
 // SyncResult represents the result of a provider model sync
@@ -30,6 +32,7 @@ type ModelSyncService struct {
 	modelRepo      *repository.ModelRepository
 	modelRouteRepo *repository.ModelRouteRepository
 	httpClient     *http.Client
+	proxyConfig    *ProxyConfig
 }
 
 // NewModelSyncService creates a new model sync service
@@ -37,12 +40,24 @@ func NewModelSyncService(
 	providerRepo *repository.ProviderRepository,
 	modelRepo *repository.ModelRepository,
 	modelRouteRepo *repository.ModelRouteRepository,
+	proxyConfig *ProxyConfig,
 ) *ModelSyncService {
+	// Create custom transport with proxy bypass support
+	transport := &http.Transport{
+		Proxy: func(req *http.Request) (*url.URL, error) {
+			if utils.ShouldBypassProxy(req.URL.String(), proxyConfig.NoProxy) {
+				return nil, nil // Bypass proxy for matched URLs
+			}
+			return http.ProxyFromEnvironment(req)
+		},
+	}
+
 	return &ModelSyncService{
 		providerRepo:   providerRepo,
 		modelRepo:      modelRepo,
 		modelRouteRepo: modelRouteRepo,
-		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		httpClient:     &http.Client{Timeout: 30 * time.Second, Transport: transport},
+		proxyConfig:    proxyConfig,
 	}
 }
 
