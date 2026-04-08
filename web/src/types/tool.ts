@@ -140,9 +140,67 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
         selector: {
           type: 'string',
           description: 'CSS选择器，用于提取特定内容（可选）'
+        },
+        format: {
+          type: 'string',
+          description: '返回格式：text（纯文本）或 html（保留HTML标签），默认 text'
         }
       },
       required: ['url']
     }
-  }
+  },
+  {
+    id: 'web_canvas',
+    name: 'web_canvas',
+    description: '在Canvas画布上进行绘图，支持矩形、圆形、线条、多边形、文本等。绘制结果直接在页面上显示。',
+    type: 'builtin',
+    enabled: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        width: {
+          type: 'number',
+          description: '画布宽度，默认400，范围1-2000'
+        },
+        height: {
+          type: 'number',
+          description: '画布高度，默认300，范围1-2000'
+        },
+        backgroundColor: {
+          type: 'string',
+          description: '背景颜色，如 #ffffff(白色)、#000000(黑色)、transparent(透明)，默认白色'
+        },
+        operations: {
+          type: 'array',
+          description: `绘制操作数组。每个操作需显式设置 fill:true 填充或 stroke:true 描边。
+支持类型：rect(矩形), circle(圆), ellipse(椭圆), line(线), polygon(多边形), text(文本), arc(弧), bezier(贝塞尔曲线), setStyle(设置样式), translate/rotate/scale/save/restore(变换), clear(清空)`,
+          items: {
+            type: 'object'
+          }
+        }
+      },
+      required: ['operations']
+    }
+  },
+  {
+    id: 'execute_javascript',
+    name: 'execute_javascript',
+    description: '执行 JavaScript 代码并返回结果。代码中的 console.log/console.warn/console.error 输出会被捕获并返回。支持 async/await。',
+    type: 'builtin',
+    enabled: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        code: {
+          type: 'string',
+          description: '要执行的 JavaScript 代码，使用 return 返回结果'
+        },
+        timeout: {
+          type: 'number',
+          description: '执行超时时间(毫秒)，默认5000，最大30000'
+        }
+      },
+      required: ['code']
+    }
+  },
 ]

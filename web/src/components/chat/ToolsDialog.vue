@@ -417,76 +417,107 @@ return new Promise((resolve, reject) => {
   );
 });`,
 
-  execute_javascript: `// 执行 JavaScript 代码
-const code = args.code;
-try {
-  const safeEval = new Function(code);
-  return safeEval();
-} catch (error) {
-  return { error: error.message };
-}`,
-
-  web_search: `// 网络搜索 (使用 SerpAPI)
+  web_search: `// 网络搜索 (通过后端代理)
 const query = args.query;
 const location = args.location || 'Austin, Texas, United States';
 const hl = args.hl || 'en';
 const gl = args.gl || 'us';
 
-const params = new URLSearchParams({
-  q: query,
-  location: location,
-  hl: hl,
-  gl: gl,
-  google_domain: 'google.com'
-});
-
-const url = \`https://serpapi.com/search.json?\${params.toString()}\`;
-const response = await fetch(\`https://corsproxy.io/?\${encodeURIComponent(url)}\`);
-const data = await response.json();
-
-// 提取搜索结果
-const results = (data.organic_results || []).map(item => ({
-  title: item.title,
-  snippet: item.snippet || '',
-  url: item.link
-}));
-
-return {
-  query,
-  location,
-  total_results: data.search_information?.total_results || results.length,
-  results: results.slice(0, 10)
-};`,
-
-  fetch_webpage: `// 获取网页内容
-const url = args.url;
-const selector = args.selector;
-
-// 使用 CORS 代理
-const proxyUrl = \`https://corsproxy.io/?\${encodeURIComponent(url)}\`;
-const response = await fetch(proxyUrl);
-const html = await response.text();
-
-// 提取页面内容
-const parser = new DOMParser();
-const doc = parser.parseFromString(html, 'text/html');
-
-if (selector) {
-  const elements = doc.querySelectorAll(selector);
-  const contents = Array.from(elements).map(el => ({
-    text: el.textContent?.trim() || '',
-    html: el.innerHTML
-  }));
-  return { url, selector, matched: contents.length, contents };
+// 获取认证令牌
+const token = localStorage.getItem('token') || '';
+if (!token) {
+  throw new Error('请先登录后再使用搜索功能');
 }
 
-// 获取标题和文本内容
-const title = doc.querySelector('title')?.textContent || '';
-const body = doc.body;
-body.querySelectorAll('script, style, nav, footer').forEach(el => el.remove());
-const textContent = body.textContent?.replace(/\\s+/g, ' ').trim().slice(0, 5000) || '';
+const response = await fetch('/api/tools/web-search', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': \`Bearer \${token}\`
+  },
+  body: JSON.stringify({ query, location, hl, gl })
+});
 
-return { url, title, textContent, htmlLength: html.length };`
+if (response.status === 401) {
+  throw new Error('登录已过期，请重新登录');
+}
+if (response.status === 429) {
+  throw new Error('请求过于频繁，请稍后再试');
+}
+if (!response.ok) {
+  const errorData = await response.json().catch(() => ({ error: '请求失败' }));
+  throw new Error(errorData.error || \`搜索失败: \${response.status}\`);
+}
+
+return await response.json();`,
+
+  fetch_webpage: `// 获取网页内容 (通过后端代理)
+const url = args.url;
+const selector = args.selector;
+const format = args.format || 'text'; // 'text' 或 'html'
+
+// 获取认证令牌
+const token = localStorage.getItem('token') || '';
+if (!token) {
+  throw new Error('请先登录后再使用网页获取功能');
+}
+
+const response = await fetch('/api/tools/fetch-webpage', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': \`Bearer \${token}\`
+  },
+  body: JSON.stringify({ url, selector, format })
+});
+
+if (response.status === 401) {
+  throw new Error('登录已过期，请重新登录');
+}
+if (response.status === 429) {
+  throw new Error('请求过于频繁，请稍后再试');
+}
+if (!response.ok) {
+  const errorData = await response.json().catch(() => ({ error: '请求失败' }));
+  throw new Error(errorData.error || \`获取网页失败: \${response.status}\`);
+}
+
+return await response.json();`,
+
+  web_canvas: `// Canvas 绑定绘图
+// 参数说明:
+// - width: 画布宽度 (1-2000)，默认400
+// - height: 画布高度 (1-2000)，默认300
+// - backgroundColor: 背景色，默认#ffffff，transparent为透明
+// - returnImage: false只返回状态，true返回base64图片
+// - operations: 绑绑定绘图操作数组
+
+// 操作详解:
+// rect - 矩形 {type:'rect', x, y, width, height, fill:true, fillColor, stroke:true, strokeColor, lineWidth}
+// circle - 圆 {type:'circle', x, y, radius, fill:true, fillColor, stroke:true, strokeColor, lineWidth}
+// ellipse - 椭圆 {type:'ellipse', x, y, radiusX, radiusY, rotation, fill, fillColor, stroke, strokeColor}
+// line - 线 {type:'line', x1, y1, x2, y2, color, lineWidth}
+// polygon - 多边形 {type:'polygon', points:[{x,y},...], fill, fillColor, strokeColor, lineWidth}
+// text - 文本 {type:'text', x, y, text, font, color, align, baseline}
+// setStyle - 设置样式 {type:'setStyle', fillStyle, strokeStyle, lineWidth, font, globalAlpha}
+// translate/rotate/scale/save/restore - 变换操作
+// clear - 清空画布
+
+// 重要: fill/stroke 需显式设为 true 才会执行，避免意外覆盖样式
+return { success: true, width: args.width || 400, height: args.height || 300 };`,
+
+  execute_javascript: `// 执行 JavaScript 代码
+// - console.log/warn/error 输出会被捕获
+// - 支持 async/await
+// - timeout: 超时时间(ms)，默认5000，最大30000
+// - 代码中使用 return 返回结果
+
+// 示例:
+// return 1 + 1;  // 简单计算
+// console.log('调试信息'); return {result: 42};  // 带日志
+// const r = await fetch('https://api.github.com'); return r.status;  // 异步
+
+return { success: true };`
 }
 
 const getBuiltinCode = (toolName: string): string => {

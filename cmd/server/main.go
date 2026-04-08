@@ -102,6 +102,9 @@ func main() {
 	// Initialize model sync service
 	modelSyncService := service.NewModelSyncService(providerRepo, modelRepo, modelRouteRepo)
 
+	// Initialize tools service
+	toolsService := service.NewToolsService()
+
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userRepo, logRepo, authService)
@@ -114,6 +117,7 @@ func main() {
 	gatewayHandler := handler.NewGatewayHandler(gatewayService, responseService)
 	anthropicHandler := handler.NewAnthropicHandler(gatewayService)
 	chatHandler := handler.NewChatHandler(conversationRepo, messageRepo, userRepo, gatewayService, billingService)
+	toolsHandler := handler.NewToolsHandler(toolsService)
 
 	// Setup Gin
 	port := 3000
@@ -143,6 +147,7 @@ func main() {
 		GatewayHandler:   gatewayHandler,
 		AnthropicHandler: anthropicHandler,
 		ChatHandler:      chatHandler,
+		ToolsHandler:     toolsHandler,
 		APIKeyRepo:       apiKeyRepo,
 	})
 
@@ -223,6 +228,7 @@ type Dependencies struct {
 	GatewayHandler   *handler.GatewayHandler
 	AnthropicHandler *handler.AnthropicHandler
 	ChatHandler      *handler.ChatHandler
+	ToolsHandler     *handler.ToolsHandler
 	APIKeyRepo       *repository.APIKeyRepository
 }
 
@@ -307,6 +313,10 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 	admin.POST("/conversations/:id/messages", deps.ChatHandler.AddMessage)
 	admin.POST("/conversations/:id/chat", deps.ChatHandler.SendMessage)
 	admin.POST("/chat/upload", deps.ChatHandler.UploadFile)
+
+	// Tools API (JWT required)
+	admin.POST("/tools/web-search", deps.ToolsHandler.WebSearch)
+	admin.POST("/tools/fetch-webpage", deps.ToolsHandler.FetchWebpage)
 
 	// ========== Gateway API (API Key required) ==========
 	v1 := r.Group("/api/v1")

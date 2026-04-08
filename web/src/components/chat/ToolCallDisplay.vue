@@ -16,6 +16,7 @@
         <div class="tool-info">
           <span class="tool-name">{{ getToolDisplayName(toolCall.toolName) }}</span>
           <span class="tool-status">{{ getStatusText(toolCall.status) }}</span>
+          <el-icon v-if="toolCall.status === 'running'" class="is-loading ml-1"><Loading /></el-icon>
         </div>
         <el-icon class="expand-icon">
           <ArrowDown v-if="!expandedIds.has(toolCall.id)" />
@@ -29,7 +30,16 @@
             <component :is="renderArguments(toolCall)" />
           </div>
         </div>
-        <div v-if="toolCall.result !== undefined" class="detail-section">
+        <!-- Canvas 结果特殊显示 -->
+        <div v-if="toolCall.toolName === 'web_canvas' && toolCall.result && getCanvasId(toolCall.result)" class="detail-section canvas-section">
+          <CanvasDisplay
+            :canvas-id="getCanvasId(toolCall.result) || ''"
+            :data-url="getCanvasDataUrl(toolCall.result)"
+            :width="getCanvasWidth(toolCall.result)"
+            :height="getCanvasHeight(toolCall.result)"
+          />
+        </div>
+        <div v-else-if="toolCall.result !== undefined" class="detail-section">
           <div class="detail-label">结果</div>
           <div class="detail-content">
             <component :is="renderResult(toolCall)" />
@@ -45,9 +55,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, h } from 'vue'
-import { Tools, Check, Close, Loading, ArrowDown, ArrowUp, Clock, Document } from '@element-plus/icons-vue'
+import { ref, h, watch } from 'vue'
+import { Tools, Check, Close, Loading, ArrowDown, ArrowUp, Clock, Document, Picture } from '@element-plus/icons-vue'
 import type { ToolCallResult } from '@/types/tool'
+import CanvasDisplay from './CanvasDisplay.vue'
 
 const props = defineProps<{
   toolCalls: ToolCallResult[]
@@ -55,7 +66,14 @@ const props = defineProps<{
 
 const expandedIds = ref(new Set<string>())
 
-// Removed auto-expand all tool calls
+// Auto-expand specific tools (like web_canvas) when they are successful or running
+watch(() => props.toolCalls, (newCalls) => {
+  newCalls.forEach(tc => {
+    if ((tc.toolName === 'web_canvas' || tc.status === 'running') && !expandedIds.value.has(tc.id)) {
+      expandedIds.value.add(tc.id)
+    }
+  })
+}, { deep: true, immediate: true })
 
 const toggleExpand = (id: string) => {
   if (expandedIds.value.has(id)) {
@@ -81,12 +99,43 @@ const getStatusText = (status: ToolCallResult['status']) => {
 const getToolDisplayName = (toolName: string) => {
   const nameMap: Record<string, string> = {
     'get_current_time': '获取时间',
+    'get_location': '获取定位',
     'execute_javascript': '执行代码',
     'web_search': '网络搜索',
+    'fetch_webpage': '获取网页',
+    'web_canvas': 'Canvas 绘图',
     'draw_chart': '绘制图表',
     'save_note': '保存笔记'
   }
   return nameMap[toolName] || toolName
+}
+
+// 获取 Canvas ID（用于从 store 获取图片）
+const getCanvasId = (result: unknown): string | null => {
+  if (!result || typeof result !== 'object') return null
+  const data = result as Record<string, unknown>
+  return (data.canvasId as string) || null
+}
+
+// 获取 Canvas dataUrl（可选，可能从 store 获取）
+const getCanvasDataUrl = (result: unknown): string | undefined => {
+  if (!result || typeof result !== 'object') return undefined
+  const data = result as Record<string, unknown>
+  return data.dataUrl as string | undefined
+}
+
+// 获取 Canvas 宽度
+const getCanvasWidth = (result: unknown): number => {
+  if (!result || typeof result !== 'object') return 400
+  const data = result as Record<string, unknown>
+  return (data.width as number) || 400
+}
+
+// 获取 Canvas 高度
+const getCanvasHeight = (result: unknown): number => {
+  if (!result || typeof result !== 'object') return 300
+  const data = result as Record<string, unknown>
+  return (data.height as number) || 300
 }
 
 // 渲染参数
@@ -100,6 +149,11 @@ const renderArguments = (toolCall: ToolCallResult) => {
         h('span', { class: 'arg-label' }, '时区：'),
         h('span', { class: 'arg-value' }, String(args.timezone || '本地时区'))
       ])
+    case 'get_location':
+      return h('div', { class: 'tool-args-simple' }, [
+        h('span', { class: 'arg-label' }, '高精度：'),
+        h('span', { class: 'arg-value' }, args.enableHighAccuracy ? '是' : '否')
+      ])
     case 'execute_javascript':
       return h('pre', { class: 'tool-args-code' }, String(args.code || ''))
     case 'web_search':
@@ -107,6 +161,19 @@ const renderArguments = (toolCall: ToolCallResult) => {
         h('span', { class: 'arg-label' }, '搜索：'),
         h('span', { class: 'arg-value' }, String(args.query || ''))
       ])
+    case 'fetch_webpage':
+      return h('div', { class: 'tool-args-webpage' }, [
+        h('div', { class: 'webpage-url' }, [
+          h('span', { class: 'arg-label' }, 'URL：'),
+          h('span', { class: 'arg-value' }, String(args.url || ''))
+        ]),
+        args.format ? h('div', { class: 'webpage-format' }, [
+          h('span', { class: 'arg-label' }, '格式：'),
+          h('span', { class: 'arg-value' }, String(args.format))
+        ]) : null
+      ])
+    case 'web_canvas':
+      return renderCanvasArgs(args)
     case 'draw_chart':
       return h('div', { class: 'tool-args-chart' }, [
         h('div', { class: 'chart-arg' }, `类型：${args.type || '未知'}`),
@@ -125,6 +192,26 @@ const renderArguments = (toolCall: ToolCallResult) => {
       }
       return h('pre', { class: 'detail-code' }, formatJson(args))
   }
+}
+
+// 渲染 Canvas 参数
+const renderCanvasArgs = (args: Record<string, unknown>) => {
+  const width = args.width || 400
+  const height = args.height || 300
+  const operations = args.operations as Array<Record<string, unknown>> || []
+
+  return h('div', { class: 'tool-args-canvas' }, [
+    h('div', { class: 'canvas-size' }, `画布尺寸：${width} x ${height}`),
+    h('div', { class: 'canvas-ops' }, [
+      h('span', { class: 'arg-label' }, '操作：'),
+      h('span', { class: 'arg-value' }, `${operations.length} 个绘制操作`)
+    ]),
+    operations.length > 0 ? h('div', { class: 'canvas-op-list' },
+      operations.slice(0, 5).map((op, idx) =>
+        h('span', { class: 'canvas-op-tag', key: idx }, String(op.type || 'unknown'))
+      ).concat(operations.length > 5 ? [h('span', { class: 'canvas-op-more', key: 'more' }, `+${operations.length - 5}`)] : [])
+    ) : null
+  ])
 }
 
 // 渲染结果
@@ -148,6 +235,23 @@ const renderResult = (toolCall: ToolCallResult) => {
         ])
       ])
     }
+    case 'get_location': {
+      const locData = result as { latitude?: number; longitude?: number; accuracy?: number }
+      return h('div', { class: 'tool-result-location' }, [
+        h('div', { class: 'location-row' }, [
+          h('span', { class: 'arg-label' }, '纬度：'),
+          h('span', { class: 'arg-value' }, locData.latitude?.toFixed(6) || '未知')
+        ]),
+        h('div', { class: 'location-row' }, [
+          h('span', { class: 'arg-label' }, '经度：'),
+          h('span', { class: 'arg-value' }, locData.longitude?.toFixed(6) || '未知')
+        ]),
+        locData.accuracy ? h('div', { class: 'location-row' }, [
+          h('span', { class: 'arg-label' }, '精度：'),
+          h('span', { class: 'arg-value' }, `${locData.accuracy.toFixed(0)}m`)
+        ]) : null
+      ])
+    }
     case 'execute_javascript':
       return h('div', { class: 'tool-result-code' }, [
         h('div', { class: 'result-label' }, '执行结果：'),
@@ -155,6 +259,15 @@ const renderResult = (toolCall: ToolCallResult) => {
       ])
     case 'web_search':
       return renderWebSearchResult(result)
+    case 'fetch_webpage':
+      return renderWebpageResult(result)
+    case 'web_canvas': {
+      const canvasData = result as { width?: number; height?: number; message?: string }
+      return h('div', { class: 'tool-result-canvas' }, [
+        h('el-icon', { class: 'canvas-icon' }, [h(Picture)]),
+        h('span', {}, canvasData.message || `Canvas 绘制完成 (${canvasData.width}x${canvasData.height})`)
+      ])
+    }
     case 'draw_chart': {
       const chartData = result as { type?: string; title?: string; data?: unknown }
       return h('div', { class: 'tool-result-chart' }, [
@@ -171,6 +284,33 @@ const renderResult = (toolCall: ToolCallResult) => {
     default:
       return h('pre', { class: 'detail-code' }, formatJson(result))
   }
+}
+
+// 渲染网页获取结果
+const renderWebpageResult = (result: unknown) => {
+  if (!result) {
+    return h('div', { class: 'tool-result-empty' }, '无结果')
+  }
+  const data = result as { title?: string; description?: string; textContent?: string; htmlContent?: string; url?: string; encoding?: string }
+
+  return h('div', { class: 'webpage-result' }, [
+    data.title ? h('div', { class: 'webpage-title' }, [
+      h('span', { class: 'arg-label' }, '标题：'),
+      h('span', { class: 'arg-value' }, data.title)
+    ]) : null,
+    data.url ? h('div', { class: 'webpage-url-row' }, [
+      h('span', { class: 'arg-label' }, 'URL：'),
+      h('a', { href: data.url, target: '_blank', class: 'webpage-link' }, data.url)
+    ]) : null,
+    data.encoding ? h('div', { class: 'webpage-encoding' }, [
+      h('span', { class: 'arg-label' }, '编码：'),
+      h('span', { class: 'arg-value' }, data.encoding)
+    ]) : null,
+    data.textContent ? h('div', { class: 'webpage-content' }, [
+      h('div', { class: 'content-label' }, '内容预览：'),
+      h('div', { class: 'content-text' }, String(data.textContent).slice(0, 500) + (String(data.textContent).length > 500 ? '...' : ''))
+    ]) : null
+  ])
 }
 
 // 渲染网络搜索结果
@@ -537,5 +677,149 @@ const formatJson = (obj: unknown) => {
   text-align: center;
   color: #9ca3af;
   font-size: 13px;
+}
+
+/* Canvas 参数样式 */
+.tool-args-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.canvas-size {
+  color: #374151;
+}
+
+.canvas-ops {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.canvas-op-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.canvas-op-tag {
+  padding: 2px 8px;
+  background: #e0e7ff;
+  color: #3730a3;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: 'SF Mono', 'Monaco', monospace;
+}
+
+.canvas-op-more {
+  padding: 2px 8px;
+  background: #f3f4f6;
+  color: #6b7280;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+/* Canvas 结果样式 */
+.tool-result-canvas {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: linear-gradient(135deg, #fdf4ff 0%, #fae8ff 100%);
+  border-radius: 8px;
+}
+
+.canvas-icon {
+  font-size: 20px;
+  color: #a21caf;
+}
+
+.canvas-section {
+  padding: 0;
+  background: transparent;
+}
+
+/* 网页获取参数样式 */
+.tool-args-webpage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.webpage-url {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.webpage-format {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 网页获取结果样式 */
+.webpage-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.webpage-title,
+.webpage-url-row,
+.webpage-encoding {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.webpage-link {
+  color: #3b82f6;
+  text-decoration: none;
+  font-family: 'SF Mono', 'Monaco', monospace;
+  font-size: 12px;
+}
+
+.webpage-link:hover {
+  text-decoration: underline;
+}
+
+.webpage-content {
+  margin-top: 8px;
+}
+
+.content-label {
+  font-size: 11px;
+  color: #6b7280;
+  margin-bottom: 4px;
+}
+
+.content-text {
+  padding: 8px;
+  background: #f9fafb;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #374151;
+  max-height: 150px;
+  overflow-y: auto;
+  border: 1px solid #e5e7eb;
+}
+
+/* 定位结果样式 */
+.tool-result-location {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+  border-radius: 8px;
+}
+
+.location-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

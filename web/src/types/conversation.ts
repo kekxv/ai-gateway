@@ -59,6 +59,11 @@ export interface ChatContentPart {
 }
 
 export interface ChatRequest {
+  messages?: Array<{
+    role: string
+    content: string
+    tool_calls?: string | any[]
+  }>
   content: string
   parts?: ChatContentPart[]
   stream?: boolean

@@ -212,8 +212,9 @@
           <!-- Streaming Message -->
           <div v-if="streamingContent || streamingThinkContent || streamingToolCallResults.length > 0" class="message-block assistant">
             <div class="assistant-message">
-              <div class="assistant-avatar">
-                <el-icon><Monitor /></el-icon>
+              <div class="assistant-avatar" :class="{ thinking: isAnyToolRunning }">
+                <el-icon v-if="isAnyToolRunning" class="is-loading"><Loading /></el-icon>
+                <el-icon v-else><Monitor /></el-icon>
               </div>
               <div class="assistant-content">
                 <div class="assistant-name">AI</div>
@@ -229,6 +230,15 @@
                   v-if="streamingToolCallResults.length > 0"
                   :tool-calls="streamingToolCallResults"
                 />
+                
+                <!-- Thinking/Calling Indicator inside bubble if no content yet -->
+                <div v-if="isAnyToolRunning && !streamingContent" class="assistant-bubble thinking">
+                  <div class="thinking-indicator">
+                    <span></span><span></span><span></span>
+                  </div>
+                  <span class="thinking-text">正在调用工具...</span>
+                </div>
+
                 <!-- Streaming Markdown Content -->
                 <div v-if="streamingContent" class="assistant-bubble">
                   <MarkdownRenderer :content="streamingContent" />
@@ -238,8 +248,8 @@
             </div>
           </div>
 
-          <!-- Thinking State - only show when no streaming content yet -->
-          <div v-if="sending && !streamingContent && !streamingThinkContent" class="message-block assistant">
+          <!-- Thinking State - only show when no streaming content yet AND no tools running -->
+          <div v-if="sending && !streamingContent && !streamingThinkContent && streamingToolCallResults.length === 0" class="message-block assistant">
             <div class="assistant-message">
               <div class="assistant-avatar thinking">
                 <el-icon class="is-loading"><Loading /></el-icon>
@@ -265,13 +275,16 @@
           <div v-if="toolsStore.enabledTools.length > 0" class="enabled-tools-bar">
             <span class="tools-label">工具:</span>
             <el-tag
-              v-for="tool in toolsStore.enabledTools"
+              v-for="tool in visibleTools"
               :key="tool.id"
               size="small"
               closable
               @close="toolsStore.toggleTool(tool.id)"
             >
               {{ tool.name }}
+            </el-tag>
+            <el-tag v-if="hiddenToolsCount > 0" size="small" type="info" class="more-tools-tag">
+              +{{ hiddenToolsCount }}
             </el-tag>
           </div>
 
@@ -440,12 +453,21 @@ import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ThinkBlock from '@/components/chat/ThinkBlock.vue'
 import ToolCallDisplay from '@/components/chat/ToolCallDisplay.vue'
 import ToolsDialog from '@/components/chat/ToolsDialog.vue'
-import { parseMessageContent, parseStreamingThinkContent, estimateThinkTokens } from '@/utils/messageParser'
+import { parseMessageContent, parseStreamingThinkContent, estimateThinkTokens, removeThinkContent } from '@/utils/messageParser'
 import { useToolsStore } from '@/stores/tools'
 import type { ToolCallResult, ToolCall } from '@/types/tool'
 
 // Tools store
 const toolsStore = useToolsStore()
+
+const isAnyToolRunning = computed(() => 
+  streamingToolCallResults.value.some(tc => tc.status === 'running')
+)
+
+// Visible tools (limit to 3, show count for rest)
+const MAX_VISIBLE_TOOLS = 3
+const visibleTools = computed(() => toolsStore.enabledTools.slice(0, MAX_VISIBLE_TOOLS))
+const hiddenToolsCount = computed(() => Math.max(0, toolsStore.enabledTools.length - MAX_VISIBLE_TOOLS))
 
 // Refs
 const messagesAreaRef = ref<HTMLElement | null>(null)
@@ -972,6 +994,61 @@ const saveAssistantMessage = async (conversationId: number, content: string, too
   }
 }
 
+// Build chat history for API request
+const buildChatHistory = () => {
+  const history: Array<{ role: string; content: string; tool_calls?: any[] }> = []
+  
+  // Add system prompt if exists
+  if (settingsForm.system_prompt) {
+    history.push({
+      role: 'system',
+      content: settingsForm.system_prompt
+    })
+  }
+
+  messages.value.forEach(msg => {
+    let content = msg.content
+    
+    // Clean assistant messages (remove think blocks)
+    if (msg.role === 'assistant') {
+      content = removeThinkContent(msg.content)
+    }
+
+    // Format tool calls if they exist
+    let formattedToolCalls: any[] | undefined = undefined
+    if (msg.toolCalls && msg.toolCalls.length > 0) {
+      formattedToolCalls = msg.toolCalls.map(tc => ({
+        id: tc.id,
+        type: 'function',
+        function: {
+          name: tc.toolName,
+          arguments: JSON.stringify(tc.arguments)
+        }
+      }))
+    }
+
+    history.push({
+      role: msg.role,
+      content: content,
+      tool_calls: formattedToolCalls
+    })
+
+    // If assistant message has tool results, we need to append them as role: 'tool' messages
+    if (msg.toolCalls && msg.toolCalls.length > 0) {
+      msg.toolCalls.forEach(tc => {
+        if (tc.status === 'success' || tc.status === 'error') {
+          history.push({
+            role: 'tool',
+            content: `Tool: ${tc.toolName}\nResult: ${JSON.stringify(tc.result ?? tc.error)}`
+          })
+        }
+      })
+    }
+  })
+
+  return history
+}
+
 // Streaming loop that handles tool calls recursively
 const streamWithToolCalls = async (
   conversationId: number,
@@ -983,6 +1060,9 @@ const streamWithToolCalls = async (
   streamingContent.value = ''
   streamingThinkContent.value = ''
   streamingToolCallResults.value = []
+
+  // Ensure full history is sent
+  requestData.messages = buildChatHistory()
 
   // Track if tool calls were received
   let receivedToolCalls: ToolCall[] = []
@@ -1984,17 +2064,27 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   margin-bottom: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
 }
 
 .tools-label {
   font-size: 12px;
   color: #6b7280;
   font-weight: 500;
+  flex-shrink: 0;
 }
 
 .enabled-tools-bar :deep(.el-tag) {
   font-size: 11px;
+  flex-shrink: 0;
+}
+
+.more-tools-tag {
+  background: #f3f4f6;
+  border-color: #e5e7eb;
+  color: #6b7280;
+  cursor: default;
 }
 
 /* Input Box */
