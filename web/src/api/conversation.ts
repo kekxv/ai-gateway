@@ -42,7 +42,8 @@ export const conversationApi = {
     onContent: (content: string) => void,
     onDone: () => void,
     onError: (error: string) => void,
-    onToolCall?: (toolCalls: ToolCall[]) => Promise<void>
+    onToolCall?: (toolCalls: ToolCall[]) => Promise<void>,
+    abortSignal?: AbortSignal
   ) => {
     const token = localStorage.getItem('token')
     const baseURL = api.defaults.baseURL || '/api'
@@ -54,7 +55,8 @@ export const conversationApi = {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ ...data, stream: true })
+        body: JSON.stringify({ ...data, stream: true }),
+        signal: abortSignal
       })
 
       if (!response.ok) {
@@ -164,6 +166,11 @@ export const conversationApi = {
         }
       }
     } catch (err) {
+      // Don't report error if request was aborted - silently return
+      // The frontend's stopStreaming will handle saving partial content
+      if (err instanceof Error && err.name === 'AbortError') {
+        return
+      }
       onError(err instanceof Error ? err.message : 'Stream error')
     }
   }

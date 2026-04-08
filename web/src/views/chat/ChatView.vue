@@ -210,7 +210,7 @@
           </div>
 
           <!-- Streaming Message -->
-          <div v-if="streamingContent || streamingThinkContent || streamingToolCallResults.length > 0" class="message-block assistant">
+          <div v-if="throttledStreamingContent || throttledStreamingThink || streamingToolCallResults.length > 0" class="message-block assistant">
             <div class="assistant-message">
               <div class="assistant-avatar" :class="{ thinking: isAnyToolRunning }">
                 <el-icon v-if="isAnyToolRunning" class="is-loading"><Loading /></el-icon>
@@ -220,28 +220,26 @@
                 <div class="assistant-name">AI</div>
                 <!-- Streaming Think Block -->
                 <ThinkBlock
-                  v-if="streamingThinkContent"
-                  :content="streamingThinkContent"
+                  v-if="throttledStreamingThink"
+                  :content="throttledStreamingThink"
                   :default-collapsed="true"
-                  :force-expand="!streamingContent && streamingToolCallResults.length === 0"
+                  :force-expand="!throttledStreamingContent && streamingToolCallResults.length === 0"
                 />
                 <!-- Streaming Tool Calls Display -->
                 <ToolCallDisplay
                   v-if="streamingToolCallResults.length > 0"
                   :tool-calls="streamingToolCallResults"
                 />
-                
-                <!-- Thinking/Calling Indicator inside bubble if no content yet -->
-                <div v-if="isAnyToolRunning && !streamingContent" class="assistant-bubble thinking">
-                  <div class="thinking-indicator">
-                    <span></span><span></span><span></span>
-                  </div>
-                  <span class="thinking-text">正在调用工具...</span>
+
+                <!-- Tool Executing Indicator - show when tools are running and no result yet -->
+                <div v-if="isAnyToolRunning" class="tool-executing-indicator">
+                  <el-icon class="is-loading"><Loading /></el-icon>
+                  <span>正在执行工具...</span>
                 </div>
 
                 <!-- Streaming Markdown Content -->
-                <div v-if="streamingContent" class="assistant-bubble">
-                  <MarkdownRenderer :content="streamingContent" />
+                <div v-if="throttledStreamingContent" class="assistant-bubble">
+                  <MarkdownRenderer :content="throttledStreamingContent" />
                   <span class="cursor" v-if="sending">▌</span>
                 </div>
               </div>
@@ -327,14 +325,24 @@
               @paste="handlePaste"
               rows="1"
             ></textarea>
+            <!-- Stop button (show when streaming) -->
             <button
+              v-if="sending"
+              class="stop-btn"
+              @click="stopStreaming"
+              title="停止生成"
+            >
+              <el-icon><Close /></el-icon>
+            </button>
+            <!-- Send button -->
+            <button
+              v-else
               class="send-btn"
-              :class="{ active: (inputContent.trim() || attachedFiles.length > 0) && currentConversation && !sending }"
-              :disabled="(!inputContent.trim() && attachedFiles.length === 0) || !currentConversation || sending"
+              :class="{ active: (inputContent.trim() || attachedFiles.length > 0) && currentConversation }"
+              :disabled="(!inputContent.trim() && attachedFiles.length === 0) || !currentConversation"
               @click="sendMessage"
             >
-              <el-icon v-if="!sending"><Promotion /></el-icon>
-              <el-icon v-else class="is-loading"><Loading /></el-icon>
+              <el-icon><Promotion /></el-icon>
             </button>
           </div>
 
@@ -460,7 +468,24 @@ import type { ToolCallResult, ToolCall } from '@/types/tool'
 // Tools store
 const toolsStore = useToolsStore()
 
-const isAnyToolRunning = computed(() => 
+// Throttle helper
+function throttle<T extends (...args: unknown[]) => void>(fn: T, delay: number): T {
+  let lastCall = 0
+  return ((...args: unknown[]) => {
+    const now = Date.now()
+    if (now - lastCall >= delay) {
+      lastCall = now
+      fn(...args)
+    }
+  }) as T
+}
+
+// Throttled scroll to bottom (max once per 100ms)
+const throttledScrollToBottom = throttle(() => {
+  requestAnimationFrame(() => scrollToBottom())
+}, 100)
+
+const isAnyToolRunning = computed(() =>
   streamingToolCallResults.value.some(tc => tc.status === 'running')
 )
 
@@ -507,6 +532,66 @@ const showToolsDialog = ref(false)
 
 // Track full raw content for parsing (includes think tags)
 const streamingRawContent = ref('')
+
+// Throttled streaming content for rendering (reduce CPU usage)
+const throttledStreamingContent = ref('')
+const throttledStreamingThink = ref('')
+let throttleTimer: ReturnType<typeof setTimeout> | null = null
+
+// Update throttled content at most every 200ms
+const updateThrottledContent = () => {
+  if (throttleTimer) return
+  throttleTimer = setTimeout(() => {
+    throttledStreamingContent.value = streamingContent.value
+    throttledStreamingThink.value = streamingThinkContent.value
+    throttleTimer = null
+  }, 200)
+}
+
+// AbortController for stopping stream
+let abortController: AbortController | null = null
+let userStoppedStream = false  // Flag to track if user manually stopped
+
+// Stop streaming and save partial content
+const stopStreaming = async () => {
+  if (!abortController) return
+
+  userStoppedStream = true  // Mark as user-initiated stop
+  abortController.abort()
+  abortController = null
+
+  // Save partial content if any
+  if (streamingContent.value || streamingThinkContent.value) {
+    const parsed = parseStreamingThinkContent(streamingRawContent.value)
+    const assistantMsg: ExtendedMessage = {
+      id: -Date.now(),
+      conversation_id: currentConversation.value!.id,
+      role: 'assistant',
+      content: parsed.text,
+      thinkContent: parsed.think,
+      hasThink: parsed.think.length > 0,
+      toolCalls: streamingToolCallResults.value.length > 0 ? streamingToolCallResults.value : undefined,
+      created_at: new Date().toISOString()
+    }
+    messages.value.push(assistantMsg)
+
+    // Save to history
+    await saveAssistantMessage(currentConversation.value!.id, streamingRawContent.value, streamingToolCallResults.value.length > 0 ? streamingToolCallResults.value : undefined)
+  }
+
+  // Clear streaming state
+  sending.value = false
+  streamingRawContent.value = ''
+  streamingContent.value = ''
+  streamingThinkContent.value = ''
+  throttledStreamingContent.value = ''
+  throttledStreamingThink.value = ''
+  streamingToolCallResults.value = []
+  if (throttleTimer) {
+    clearTimeout(throttleTimer)
+    throttleTimer = null
+  }
+}
 
 // Edit state
 const editingMessageIndex = ref<number | null>(null)
@@ -918,7 +1003,13 @@ const sendMessage = async () => {
   streamingRawContent.value = ''
   streamingContent.value = ''
   streamingThinkContent.value = ''
+  throttledStreamingContent.value = ''
+  throttledStreamingThink.value = ''
   streamingToolCallResults.value = []
+  if (throttleTimer) {
+    clearTimeout(throttleTimer)
+    throttleTimer = null
+  }
   const content = inputContent.value.trim()
   inputContent.value = ''
 
@@ -1061,10 +1152,20 @@ const streamWithToolCalls = async (
   streamingRawContent.value = ''
   streamingContent.value = ''
   streamingThinkContent.value = ''
+  throttledStreamingContent.value = ''
+  throttledStreamingThink.value = ''
   streamingToolCallResults.value = []
+  if (throttleTimer) {
+    clearTimeout(throttleTimer)
+    throttleTimer = null
+  }
 
   // Ensure full history is sent
   requestData.messages = buildChatHistory()
+
+  // Reset user stop flag and create new AbortController
+  userStoppedStream = false
+  abortController = new AbortController()
 
   // Track if tool calls were received
   let receivedToolCalls: ToolCall[] = []
@@ -1079,7 +1180,8 @@ const streamWithToolCalls = async (
           const parsed = parseStreamingThinkContent(streamingRawContent.value)
           streamingContent.value = parsed.text
           streamingThinkContent.value = parsed.think
-          scrollToBottom()
+          updateThrottledContent()  // Throttled update for rendering
+          throttledScrollToBottom()
         },
         () => {
           // Stream completed - check for XML format tool calls
@@ -1091,6 +1193,8 @@ const streamWithToolCalls = async (
             const parsed = parseStreamingThinkContent(cleanedContent)
             streamingContent.value = parsed.text
             streamingThinkContent.value = parsed.think
+            throttledStreamingContent.value = parsed.text
+            throttledStreamingThink.value = parsed.think
 
             // Process XML tool calls
             receivedToolCalls = xmlToolCalls
@@ -1100,6 +1204,16 @@ const streamWithToolCalls = async (
               arguments: JSON.parse(tc.function.arguments || '{}'),
               status: 'running'
             }))
+          } else {
+            // No tool calls, update throttled content immediately
+            throttledStreamingContent.value = streamingContent.value
+            throttledStreamingThink.value = streamingThinkContent.value
+          }
+
+          // Clear throttle timer
+          if (throttleTimer) {
+            clearTimeout(throttleTimer)
+            throttleTimer = null
           }
 
           resolve()
@@ -1127,6 +1241,12 @@ const streamWithToolCalls = async (
             }
           )
 
+          // Check if user stopped during tool execution
+          if (userStoppedStream) {
+            resolve()
+            return
+          }
+
           // Save current content BEFORE clearing streaming state
           const savedRawContent = streamingRawContent.value
           const savedContent = streamingContent.value
@@ -1137,7 +1257,13 @@ const streamWithToolCalls = async (
           streamingRawContent.value = ''
           streamingContent.value = ''
           streamingThinkContent.value = ''
+          throttledStreamingContent.value = ''
+          throttledStreamingThink.value = ''
           streamingToolCallResults.value = []
+          if (throttleTimer) {
+            clearTimeout(throttleTimer)
+            throttleTimer = null
+          }
 
           // Add assistant message with tool calls to display
           const assistantMsg: ExtendedMessage = {
@@ -1179,12 +1305,14 @@ const streamWithToolCalls = async (
             true
           ).catch(console.error)
           resolve()
-        }
+        },
+        abortController?.signal
       )
     })
 
     // If this wasn't a tool result request, finalize the message
-    if (!isToolResultRequest && receivedToolCalls.length === 0) {
+    // Skip if user manually stopped the stream (stopStreaming already saved)
+    if (!isToolResultRequest && receivedToolCalls.length === 0 && !userStoppedStream) {
       const finalRawContent = streamingRawContent.value
       const parsed = parseStreamingThinkContent(finalRawContent)
 
@@ -1208,12 +1336,18 @@ const streamWithToolCalls = async (
       streamingRawContent.value = ''
       streamingContent.value = ''
       streamingThinkContent.value = ''
+      throttledStreamingContent.value = ''
+      throttledStreamingThink.value = ''
+      if (throttleTimer) {
+        clearTimeout(throttleTimer)
+        throttleTimer = null
+      }
 
       // Update conversation list if needed
       if (messages.value.length <= 3) {
         loadConversations()
       }
-    } else if (isToolResultRequest && receivedToolCalls.length === 0) {
+    } else if (isToolResultRequest && receivedToolCalls.length === 0 && !userStoppedStream) {
       // Tool result request completed - save the final AI response
       const finalRawContent = streamingRawContent.value
       const parsed = parseStreamingThinkContent(finalRawContent)
@@ -1239,6 +1373,12 @@ const streamWithToolCalls = async (
       streamingRawContent.value = ''
       streamingContent.value = ''
       streamingThinkContent.value = ''
+      throttledStreamingContent.value = ''
+      throttledStreamingThink.value = ''
+      if (throttleTimer) {
+        clearTimeout(throttleTimer)
+        throttleTimer = null
+      }
 
       if (messages.value.length <= 3) {
         loadConversations()
@@ -1250,8 +1390,8 @@ const streamWithToolCalls = async (
     // Handle XML format tool calls detected after stream completion
     if (receivedToolCalls.length > 0 && !receivedToolCalls[0].id.startsWith('xml_tool_')) {
       // Standard API tool calls are handled in the onToolCall callback
-    } else if (receivedToolCalls.length > 0) {
-      // XML format tool calls - execute them now
+    } else if (receivedToolCalls.length > 0 && !userStoppedStream) {
+      // XML format tool calls - execute them now (skip if user stopped)
       const xmlToolCalls = receivedToolCalls
 
       // Execute tools
@@ -1298,7 +1438,13 @@ const streamWithToolCalls = async (
       streamingRawContent.value = ''
       streamingContent.value = ''
       streamingThinkContent.value = ''
+      throttledStreamingContent.value = ''
+      throttledStreamingThink.value = ''
       streamingToolCallResults.value = []
+      if (throttleTimer) {
+        clearTimeout(throttleTimer)
+        throttleTimer = null
+      }
 
       scrollToBottom()
 
@@ -1484,6 +1630,11 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', checkMobile)
+  // Stop any ongoing stream when leaving the page
+  if (abortController) {
+    abortController.abort()
+    abortController = null
+  }
 })
 </script>
 
@@ -2135,6 +2286,31 @@ onUnmounted(() => {
   color: #6b7280;
 }
 
+/* Tool Executing Indicator */
+.tool-executing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border-radius: 12px;
+  margin-top: 8px;
+  font-size: 14px;
+  color: #92400e;
+  font-weight: 500;
+  animation: pulse-bg 1.5s ease-in-out infinite;
+}
+
+.tool-executing-indicator .el-icon {
+  font-size: 18px;
+  color: #d97706;
+}
+
+@keyframes pulse-bg {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
 /* Input Area */
 .input-area {
   padding: 12px 16px 16px;
@@ -2326,6 +2502,26 @@ onUnmounted(() => {
 
 .send-btn:disabled {
   cursor: not-allowed;
+}
+
+.stop-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.stop-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
 }
 
 /* Input Footer */

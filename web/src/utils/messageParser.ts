@@ -1,36 +1,29 @@
-/**
- * 消息内容解析工具
- * 用于解析 Think/Reasoning 内容和普通文本
- */
-
 import type { ToolCall } from '@/types/tool'
 
-interface ParsedContent {
-  textContent: string    // 非 Think 内容
-  thinkContent: string   // Think 内容
-  hasThink: boolean
-  toolCalls?: ToolCall[]
-}
+// Think tags
+const THINK_START_TAG = '<think>'
+const THINK_END_TAG = '</think>'
 
-interface StreamingParsedContent {
+// Streaming parsed content
+export interface StreamingParsedContent {
   text: string
   think: string
   inThinkBlock: boolean
 }
 
 /**
- * 解析消息中的 Think 内容
+ * 解析消息内容，提取 Think 块
  */
-export function parseMessageContent(content: string): ParsedContent {
+export function parseMessageContent(content: string): {
+  textContent: string
+  thinkContent: string
+  hasThink: boolean
+} {
   if (!content) {
     return { textContent: '', thinkContent: '', hasThink: false }
   }
 
-  // 检查是否包含 think 标签
-  const thinkStartTag = '<think>'
-  const thinkEndTag = '</think>'
-  
-  if (!content.includes(thinkStartTag)) {
+  if (!content.includes(THINK_START_TAG)) {
     return { textContent: content, thinkContent: '', hasThink: false }
   }
 
@@ -40,18 +33,18 @@ export function parseMessageContent(content: string): ParsedContent {
   let hasThink = false
 
   // 循环查找所有的 think 块
-  let startIndex = content.indexOf(thinkStartTag)
+  let startIndex = content.indexOf(THINK_START_TAG)
   while (startIndex !== -1) {
     // 将上一个块结束到当前 think 开始之间的内容添加到普通文本
     textContent += content.slice(lastIndex, startIndex)
-    
-    const endSearchIndex = startIndex + thinkStartTag.length
-    let endIndex = content.indexOf(thinkEndTag, endSearchIndex)
-    
+
+    const endSearchIndex = startIndex + THINK_START_TAG.length
+    let endIndex = content.indexOf(THINK_END_TAG, endSearchIndex)
+
     if (endIndex !== -1) {
       // 找到了结束标签
       thinkContent += content.slice(endSearchIndex, endIndex).trim() + '\n'
-      lastIndex = endIndex + thinkEndTag.length
+      lastIndex = endIndex + THINK_END_TAG.length
       hasThink = true
     } else {
       // 没找到结束标签，将剩余所有内容视为 think 内容
@@ -60,8 +53,8 @@ export function parseMessageContent(content: string): ParsedContent {
       hasThink = true
       break
     }
-    
-    startIndex = content.indexOf(thinkStartTag, lastIndex)
+
+    startIndex = content.indexOf(THINK_START_TAG, lastIndex)
   }
 
   // 添加最后剩余的普通文本
@@ -78,78 +71,74 @@ export function parseMessageContent(content: string): ParsedContent {
 
 /**
  * 流式解析 Think 内容
- * 实时解析正在生成的内容
+ * 优化版本：使用 indexOf 替代逐字符遍历
  */
 export function parseStreamingThinkContent(content: string): StreamingParsedContent {
   if (!content) {
     return { text: '', think: '', inThinkBlock: false }
   }
 
-  let thinkContent = ''
+  const thinkStartTags = ['<think>', '<|begin_of_thought|>', '<reasoning>']
+  const thinkEndTags = ['</think>', '<|end_of_thought|>', '</reasoning>']
+
   let textContent = ''
+  let thinkContent = ''
   let inThinkBlock = false
+  let pos = 0
 
-  // 简单的状态机解析 - 逐个字符检查标签
-  for (let i = 0; i < content.length; i++) {
-    const remaining = content.slice(i)
-
-    // 检查是否进入 think 块
+  while (pos < content.length) {
     if (!inThinkBlock) {
-      // 检查各种开始标签
-      let tagLength = 0
+      // Look for any think start tag
+      let foundStart = -1
+      let startTagLen = 0
 
-      // <think> (7 chars)
-      if (remaining.toLowerCase().startsWith('<think>')) {
-        tagLength = 7
-      }
-      // <|begin_of_thought|> (20 chars)
-      else if (remaining.toLowerCase().startsWith('<|begin_of_thought|>')) {
-        tagLength = 20
-      }
-      // <reasoning> (11 chars)
-      else if (remaining.toLowerCase().startsWith('<reasoning>')) {
-        tagLength = 11
+      for (let i = 0; i < thinkStartTags.length; i++) {
+        const idx = content.indexOf(thinkStartTags[i], pos)
+        if (idx !== -1 && (foundStart === -1 || idx < foundStart)) {
+          foundStart = idx
+          startTagLen = thinkStartTags[i].length
+        }
       }
 
-      if (tagLength > 0) {
+      if (foundStart !== -1) {
+        // Add text before the tag
+        textContent += content.slice(pos, foundStart)
+        pos = foundStart + startTagLen
         inThinkBlock = true
-        i += tagLength - 1 // -1 because loop will increment
-        continue
+      } else {
+        // No more think tags, add rest as text
+        textContent += content.slice(pos)
+        break
       }
-
-      // 不在 think 块内，添加到普通文本
-      textContent += content[i]
     } else {
-      // 在 think 块内，检查结束标签
-      let tagLength = 0
+      // Look for any think end tag
+      let foundEnd = -1
+      let endTagLen = 0
 
-      // </think> (8 chars)
-      if (remaining.toLowerCase().startsWith('</think>')) {
-        tagLength = 8
-      }
-      // <|end_of_thought|> (18 chars)
-      else if (remaining.toLowerCase().startsWith('<|end_of_thought|>')) {
-        tagLength = 18
-      }
-      // </reasoning> (12 chars)
-      else if (remaining.toLowerCase().startsWith('</reasoning>')) {
-        tagLength = 12
+      for (let i = 0; i < thinkEndTags.length; i++) {
+        const idx = content.indexOf(thinkEndTags[i], pos)
+        if (idx !== -1 && (foundEnd === -1 || idx < foundEnd)) {
+          foundEnd = idx
+          endTagLen = thinkEndTags[i].length
+        }
       }
 
-      if (tagLength > 0) {
+      if (foundEnd !== -1) {
+        // Add think content
+        thinkContent += content.slice(pos, foundEnd)
+        pos = foundEnd + endTagLen
         inThinkBlock = false
-        i += tagLength - 1 // -1 because loop will increment
-        continue
+      } else {
+        // No end tag found, rest is think content
+        thinkContent += content.slice(pos)
+        break
       }
-
-      // 仍在 think 块内，添加到思考内容
-      thinkContent += content[i]
     }
   }
 
   return {
-    text: textContent,
-    think: thinkContent,
+    text: textContent.trim(),
+    think: thinkContent.trim(),
     inThinkBlock
   }
 }
@@ -184,7 +173,7 @@ export function estimateThinkTokens(content: string): number {
 }
 
 /**
- * 解析 XML 格式的 Tool Call（必须在 `` 标签内）
+ * 解析 XML 格式的 Tool Call（必须在 ``` 标签内）
  * 支持格式：
  * ```
  * <web_canvas>

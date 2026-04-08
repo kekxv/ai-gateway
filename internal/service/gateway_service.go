@@ -259,9 +259,9 @@ type StreamingResponse struct {
 	ResponseBody   *http.Response
 	capturedBuffer *bytes.Buffer
 	reader         *bufio.Reader
+	ctx            context.Context // Context for cancellation detection
 
 	// For logging after streaming is complete
-	ctx            context.Context // Store context to detect client disconnect
 	logID          uint            // ID of the initial log entry
 	apiKey         *models.GatewayAPIKey
 	model          *models.Model
@@ -275,16 +275,29 @@ type StreamingResponse struct {
 }
 
 // NewStreamingResponse creates a new streaming response wrapper
-func NewStreamingResponse(resp *http.Response) *StreamingResponse {
+func NewStreamingResponse(resp *http.Response, ctx context.Context) *StreamingResponse {
 	return &StreamingResponse{
 		ResponseBody:   resp,
 		capturedBuffer: &bytes.Buffer{},
 		reader:         bufio.NewReader(resp.Body),
+		ctx:            ctx,
 	}
 }
 
 // Read implements io.Reader for streaming
+// It checks for context cancellation to stop reading when client disconnects
 func (s *StreamingResponse) Read(p []byte) (n int, err error) {
+	// Check if context is cancelled (client disconnected)
+	if s.ctx != nil {
+		select {
+		case <-s.ctx.Done():
+			// Context cancelled, close response body and return error
+			s.ResponseBody.Body.Close()
+			return 0, s.ctx.Err()
+		default:
+		}
+	}
+
 	n, err = s.reader.Read(p)
 	if n > 0 {
 		s.capturedBuffer.Write(p[:n])
@@ -614,9 +627,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 
 	// Handle streaming response
 	if stream {
-		streamResp := NewStreamingResponse(resp)
-		// Store context for later logging
-		streamResp.ctx = ctx
+		streamResp := NewStreamingResponse(resp, ctx)
 		streamResp.logID = logEntry.ID
 		streamResp.apiKey = apiKey
 		streamResp.model = model
