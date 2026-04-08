@@ -1,6 +1,6 @@
 module github.com/kekxv/ai-gateway
 
-go 1.25.0
+go 1.24
 
 require (
 	github.com/gin-gonic/gin v1.9.1
