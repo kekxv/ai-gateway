@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"io"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -42,6 +43,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	// Pass request headers for forwarding and logging
 	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), apiKey, &req, stream, c.Request.Header)
 	if err != nil {
+		log.Printf("[ChatCompletions] Error: %v, Model: %s, Stream: %v", err, req.Model, stream)
 		switch err {
 		case service.ErrModelNotFound:
 			c.JSON(http.StatusNotFound, gin.H{"error": "Model not found"})

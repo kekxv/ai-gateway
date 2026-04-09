@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -922,22 +923,26 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	// 1. Find model (supports alias and :latest)
 	model, err := s.findModel(ctx, req.Model)
 	if err != nil {
+		log.Printf("[HandleChatCompletions] Model not found: %s, error: %v", req.Model, err)
 		return nil, ErrModelNotFound
 	}
 
 	// 2. Select route (weighted random)
 	route, err := s.selectRoute(ctx, model.ID)
 	if err != nil {
+		log.Printf("[HandleChatCompletions] No route available: model=%s, modelID=%d, error: %v", model.Name, model.ID, err)
 		return nil, ErrNoRouteAvailable
 	}
 
 	// 3. Check permission
 	if err := s.checkPermission(ctx, apiKey, model.ID); err != nil {
+		log.Printf("[HandleChatCompletions] Permission denied: apiKeyID=%d, modelID=%d, error: %v", apiKey.ID, model.ID, err)
 		return nil, err
 	}
 
 	// 4. Check balance
 	if err := s.checkBalance(ctx, apiKey.UserID, model); err != nil {
+		log.Printf("[HandleChatCompletions] Insufficient balance: userID=%v, model=%s", apiKey.UserID, model.Name)
 		return nil, err
 	}
 
@@ -994,9 +999,14 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	// 5. Build upstream request
 	targetURL := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(route.Provider.BaseURL, "/"))
 
+	// Always use Model.Name for upstream request (not alias)
+	upstreamReq := *req
+	upstreamReq.Model = route.Model.Name
+
 	// 6. Send upstream request with forwarded headers
-	resp, err := s.sendUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req, stream, forwardHeaders)
+	resp, err := s.sendUpstreamRequest(ctx, targetURL, route.Provider.APIKey, &upstreamReq, stream, forwardHeaders)
 	if err != nil {
+		log.Printf("[HandleChatCompletions] Upstream request failed: %v, URL: %s, Model: %s", err, targetURL, model.Name)
 		latency := int(time.Since(startTime).Milliseconds())
 		updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
 		return nil, ErrUpstreamFailed
@@ -1004,9 +1014,12 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 
 	// Handle error responses
 	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		log.Printf("[HandleChatCompletions] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
 		latency := int(time.Since(startTime).Milliseconds())
 		s.handleUpstreamError(ctx, resp, route)
-		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, "Upstream error", nil)
+		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
 		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 	}
 
@@ -1044,6 +1057,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	body, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
+		log.Printf("[HandleChatCompletions] Read response body failed: %v", err)
 		latency := int(time.Since(startTime).Milliseconds())
 		updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil)
 		return nil, err
@@ -1051,8 +1065,9 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 
 	var chatResp ChatResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
+		log.Printf("[HandleChatCompletions] Parse response failed: %v, body: %s", err, string(body))
 		latency := int(time.Since(startTime).Milliseconds())
-		updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil)
+		updateLog(latency, 0, 0, 0, 0, 500, fmt.Sprintf("Parse error: %v, body: %s", err, string(body)), nil)
 		return nil, err
 	}
 
@@ -1156,11 +1171,13 @@ func (s *GatewayService) checkBalance(ctx context.Context, userID *uint, model *
 func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey string, req *ChatRequest, stream bool, forwardHeaders map[string]string) (*http.Response, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
+		log.Printf("[sendUpstreamRequest] Marshal request failed: %v", err)
 		return nil, err
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
+		log.Printf("[sendUpstreamRequest] Create request failed: %v, URL: %s", err, url)
 		return nil, err
 	}
 
@@ -1172,7 +1189,7 @@ func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey st
 		httpReq.Header.Set(key, value)
 	}
 
-	
+	log.Printf("[sendUpstreamRequest] Sending request to: %s, stream: %v, model: %s", url, stream, req.Model)
 	return s.httpClient.Do(httpReq)
 }
 

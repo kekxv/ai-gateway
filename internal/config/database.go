@@ -83,6 +83,35 @@ func InitDatabase(dbPath string) (*gorm.DB, error) {
 		db.Exec("ALTER TABLE `messages` ADD COLUMN `tool_calls` TEXT")
 	}
 
+	// Migrate alias data to ModelAlias table (only when table is newly created)
+	// Use raw SQL to create table to avoid GORM SQLite AutoMigrate bug with foreign keys
+	if !db.Migrator().HasTable(&models.ModelAlias{}) {
+		// Create table directly with SQL
+		err := db.Exec(`
+			CREATE TABLE IF NOT EXISTS ModelAlias (
+				modelId INTEGER NOT NULL,
+				alias TEXT NOT NULL,
+				createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+				PRIMARY KEY (modelId, alias),
+				FOREIGN KEY (modelId) REFERENCES Model(id) ON DELETE CASCADE
+			)
+		`).Error
+		if err != nil {
+			return nil, fmt.Errorf("failed to create ModelAlias table: %w", err)
+		}
+
+		// Create index
+		db.Exec(`CREATE INDEX IF NOT EXISTS idx_model_alias_model_id ON ModelAlias(modelId)`)
+
+		// Create default alias records for each model (using model's name)
+		db.Exec(`INSERT INTO ModelAlias (modelId, alias, createdAt) SELECT id, name, createdAt FROM Model`)
+
+		// Migrate existing alias field data (if different from name)
+		db.Exec(`INSERT INTO ModelAlias (modelId, alias, createdAt)
+			SELECT id, alias, createdAt FROM Model
+			WHERE alias IS NOT NULL AND alias != '' AND alias != name`)
+	}
+
 	return db, nil
 }
 

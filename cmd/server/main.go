@@ -51,6 +51,7 @@ func main() {
 	apiKeyRepo := repository.NewAPIKeyRepository(db)
 	modelRepo := repository.NewModelRepository(db)
 	modelRouteRepo := repository.NewModelRouteRepository(db)
+	modelAliasRepo := repository.NewModelAliasRepository(db)
 	providerRepo := repository.NewProviderRepository(db)
 	channelRepo := repository.NewChannelRepository(db)
 	logRepo := repository.NewLogRepository(db)
@@ -110,7 +111,7 @@ func main() {
 	userHandler := handler.NewUserHandler(userRepo, logRepo, authService)
 	providerHandler := handler.NewProviderHandler(providerRepo, modelRepo, modelRouteRepo, modelSyncService)
 	channelHandler := handler.NewChannelHandler(channelRepo)
-	modelHandler := handler.NewModelHandler(modelRepo, modelRouteRepo, channelRepo)
+	modelHandler := handler.NewModelHandler(modelRepo, modelRouteRepo, modelAliasRepo, channelRepo)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyRepo, authService)
 	logHandler := handler.NewLogHandler(logRepo, logDetailRepo)
 	statsHandler := handler.NewStatsHandler(logRepo, userRepo, modelRepo, providerRepo)
@@ -283,6 +284,7 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 	admin.PUT("/models/:id", deps.ModelHandler.UpdateModel)
 	admin.DELETE("/models/:id", deps.ModelHandler.DeleteModel)
 	admin.GET("/models/:id/routes", deps.ModelHandler.GetModelRoutes)
+	admin.PUT("/models/:id/routes", deps.ModelHandler.UpdateModelRoutes)
 
 	// Model routes
 	admin.POST("/model-routes", func(c *gin.Context) {

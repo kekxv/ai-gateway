@@ -43,7 +43,9 @@ func (r *ModelRepository) FindByNameOrAlias(ctx context.Context, name string) (*
 	var model models.Model
 	err := r.db.WithContext(ctx).
 		Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).
-		Where("name = ? OR alias = ?", name, name).First(&model).Error
+		Joins("JOIN ModelAlias ma ON ma.modelId = Model.id").
+		Where("ma.alias = ?", name).
+		First(&model).Error
 	if err != nil {
 		return nil, err
 	}
@@ -147,6 +149,7 @@ func (r *ModelRouteRepository) FindEligibleRoutes(ctx context.Context, modelID u
 	var routes []models.ModelRoute
 	err := r.db.WithContext(ctx).
 		Preload("Provider").
+		Preload("Model").
 		Joins("JOIN Provider p ON ModelRoute.providerId = p.id").
 		Where("ModelRoute.modelId = ?", modelID).
 		Where("p.disabled = FALSE").
@@ -200,4 +203,22 @@ func (r *ModelRouteRepository) FindByProviderID(ctx context.Context, providerID 
 // Delete deletes a model route by ID
 func (r *ModelRouteRepository) Delete(ctx context.Context, id uint) error {
 	return r.db.WithContext(ctx).Delete(&models.ModelRoute{}, id).Error
+}
+
+// UpdateRoutesForModel updates all routes for a model (delete old, create new)
+func (r *ModelRouteRepository) UpdateRoutesForModel(ctx context.Context, modelID uint, routes []models.ModelRoute) error {
+	// Delete existing routes for this model
+	if err := r.db.WithContext(ctx).Where("modelId = ?", modelID).Delete(&models.ModelRoute{}).Error; err != nil {
+		return err
+	}
+
+	// Create new routes
+	if len(routes) > 0 {
+		for i := range routes {
+			routes[i].ModelID = modelID
+		}
+		return r.db.WithContext(ctx).Create(&routes).Error
+	}
+
+	return nil
 }

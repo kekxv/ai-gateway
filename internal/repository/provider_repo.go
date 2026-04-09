@@ -172,6 +172,13 @@ func (r *ChannelRepository) GetChannelsByModelID(ctx context.Context, modelID ui
 	return bindings, err
 }
 
+// DeleteModelBindings removes all channel associations for a model
+func (r *ChannelRepository) DeleteModelBindings(ctx context.Context, modelID uint) error {
+	return r.db.WithContext(ctx).
+		Where("modelId = ?", modelID).
+		Delete(&models.ChannelAllowedModel{}).Error
+}
+
 // ChannelWithRelations represents a channel with its associated providers and models
 type ChannelWithRelations struct {
 	ID            uint                   `json:"id"`

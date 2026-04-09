@@ -774,16 +774,18 @@ func (h *ChannelHandler) BindModels(c *gin.Context) {
 
 // ModelHandler
 type ModelHandler struct {
-	modelRepo      *repository.ModelRepository
-	modelRouteRepo *repository.ModelRouteRepository
-	channelRepo    *repository.ChannelRepository
+	modelRepo       *repository.ModelRepository
+	modelRouteRepo  *repository.ModelRouteRepository
+	modelAliasRepo  *repository.ModelAliasRepository
+	channelRepo     *repository.ChannelRepository
 }
 
-func NewModelHandler(modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository, channelRepo *repository.ChannelRepository) *ModelHandler {
+func NewModelHandler(modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository, modelAliasRepo *repository.ModelAliasRepository, channelRepo *repository.ChannelRepository) *ModelHandler {
 	return &ModelHandler{
-		modelRepo:      modelRepo,
-		modelRouteRepo: modelRouteRepo,
-		channelRepo:    channelRepo,
+		modelRepo:       modelRepo,
+		modelRouteRepo:  modelRouteRepo,
+		modelAliasRepo:  modelAliasRepo,
+		channelRepo:     channelRepo,
 	}
 }
 
@@ -815,9 +817,9 @@ func (h *ModelHandler) ListModels(c *gin.Context) {
 
 func (h *ModelHandler) CreateModel(c *gin.Context) {
 	var req struct {
-		Name                 string `json:"name" binding:"required"`
-		Alias                string `json:"alias"`
-		Description          string `json:"description"`
+		Name                  string   `json:"name" binding:"required"`
+		Aliases               []string `json:"aliases"`
+		Description           string   `json:"description"`
 		InputTokenPrice      int64  `json:"inputTokenPrice"`
 		InputTokenPriceSnake int64  `json:"input_price"`
 		OutputTokenPrice     int64  `json:"outputTokenPrice"`
@@ -828,6 +830,8 @@ func (h *ModelHandler) CreateModel(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	ctx := c.Request.Context()
 
 	// Support both camelCase and snake_case
 	inputPrice := req.InputTokenPrice
@@ -840,21 +844,50 @@ func (h *ModelHandler) CreateModel(c *gin.Context) {
 	}
 
 	model := &models.Model{
-		Name:            req.Name,
-		Alias:           req.Alias,
-		Description:     req.Description,
-		InputTokenPrice: inputPrice,
+		Name:             req.Name,
+		Description:      req.Description,
+		InputTokenPrice:  inputPrice,
 		OutputTokenPrice: outputPrice,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
 	}
 
-	if err := h.modelRepo.Create(c.Request.Context(), model); err != nil {
+	if err := h.modelRepo.Create(ctx, model); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusCreated, model)
+	// Create default alias (model name)
+	h.modelAliasRepo.Create(ctx, &models.ModelAlias{
+		ModelID: model.ID,
+		Alias:   model.Name,
+	})
+
+	// Create additional aliases
+	for _, alias := range req.Aliases {
+		if alias == model.Name {
+			continue // Skip name alias, already created
+		}
+		h.modelAliasRepo.Create(ctx, &models.ModelAlias{
+			ModelID: model.ID,
+			Alias:   alias,
+		})
+	}
+
+	// Return model with aliases
+	aliases, _ := h.modelAliasRepo.GetAliases(ctx, model.ID)
+	response := map[string]interface{}{
+		"id":               model.ID,
+		"name":             model.Name,
+		"aliases":          aliases,
+		"description":      model.Description,
+		"inputTokenPrice":  model.InputTokenPrice,
+		"outputTokenPrice": model.OutputTokenPrice,
+		"userId":           model.UserID,
+		"createdAt":        model.CreatedAt,
+		"updatedAt":        model.UpdatedAt,
+	}
+	c.JSON(http.StatusCreated, response)
 }
 
 func (h *ModelHandler) GetModel(c *gin.Context) {
@@ -873,9 +906,9 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 	id := parseUintParam(c.Param("id"))
 
 	var req struct {
-		Name                 string `json:"name"`
-		Alias                string `json:"alias"`
-		Description          string `json:"description"`
+		Name                  string   `json:"name"`
+		Aliases               []string `json:"aliases"`
+		Description           string   `json:"description"`
 		InputTokenPrice      int64  `json:"inputTokenPrice"`
 		InputTokenPriceSnake int64  `json:"input_price"`
 		OutputTokenPrice     int64  `json:"outputTokenPrice"`
@@ -887,7 +920,8 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 		return
 	}
 
-	model, err := h.modelRepo.FindByID(c.Request.Context(), id)
+	ctx := c.Request.Context()
+	model, err := h.modelRepo.FindByID(ctx, id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Model not found"})
 		return
@@ -896,7 +930,7 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 	if req.Name != "" {
 		model.Name = req.Name
 	}
-	model.Alias = req.Alias
+	// Support both camelCase and snake_case
 	model.Description = req.Description
 	// Support both camelCase and snake_case
 	if req.InputTokenPrice != 0 {
@@ -910,12 +944,30 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 		model.OutputTokenPrice = req.OutputTokenPriceSnake
 	}
 
-	if err := h.modelRepo.Update(c.Request.Context(), model); err != nil {
+	if err := h.modelRepo.Update(ctx, model); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, model)
+	// Update aliases
+	if req.Aliases != nil {
+		h.modelAliasRepo.UpdateAliases(ctx, model.ID, model.Name, req.Aliases)
+	}
+
+	// Return model with aliases
+	aliases, _ := h.modelAliasRepo.GetAliases(ctx, model.ID)
+	response := map[string]interface{}{
+		"id":               model.ID,
+		"name":             model.Name,
+		"aliases":          aliases,
+		"description":      model.Description,
+		"inputTokenPrice":  model.InputTokenPrice,
+		"outputTokenPrice": model.OutputTokenPrice,
+		"userId":           model.UserID,
+		"createdAt":        model.CreatedAt,
+		"updatedAt":        model.UpdatedAt,
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func (h *ModelHandler) DeleteModel(c *gin.Context) {
@@ -945,6 +997,9 @@ func (h *ModelHandler) DeleteModel(c *gin.Context) {
 		h.modelRouteRepo.Delete(ctx, route.ID)
 	}
 
+	// Delete aliases
+	h.modelAliasRepo.DeleteByModelID(ctx, id)
+
 	// Delete model
 	if err := h.modelRepo.Delete(ctx, id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -960,6 +1015,65 @@ func (h *ModelHandler) GetModelRoutes(c *gin.Context) {
 	routes, err := h.modelRouteRepo.FindByModel(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, routes)
+}
+
+func (h *ModelHandler) UpdateModelRoutes(c *gin.Context) {
+	id := parseUintParam(c.Param("id"))
+
+	var req struct {
+		Routes []models.ModelRoute `json:"routes"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// If routes are empty, perform cleanup
+	if len(req.Routes) == 0 {
+		// Delete all routes for this model
+		h.modelRouteRepo.UpdateRoutesForModel(ctx, id, req.Routes)
+
+		// Check for channel bindings
+		channelBindings, _ := h.channelRepo.GetChannelsByModelID(ctx, id)
+		if len(channelBindings) > 0 {
+			// Model has channel bindings, just clear routes but keep model
+			c.JSON(http.StatusOK, gin.H{
+				"message":         "Routes cleared, model retained due to channel bindings",
+				"channelBindings": len(channelBindings),
+			})
+			return
+		}
+
+		// Delete aliases
+		h.modelAliasRepo.DeleteByModelID(ctx, id)
+
+		// Delete the orphaned model
+		h.modelRepo.Delete(ctx, id)
+
+		c.JSON(http.StatusOK, gin.H{
+			"message":      "Routes cleared and orphaned model deleted",
+			"modelDeleted": true,
+		})
+		return
+	}
+
+	// Normal update with routes
+	if err := h.modelRouteRepo.UpdateRoutesForModel(ctx, id, req.Routes); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Return updated routes
+	routes, err := h.modelRouteRepo.FindByModel(ctx, id)
+	if err != nil {
+		c.JSON(http.StatusOK, req.Routes)
 		return
 	}
 

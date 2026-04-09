@@ -25,7 +25,7 @@ export interface ModelRoute {
 export interface Model {
   id: number
   name: string
-  alias?: string
+  aliases?: string[]
   description?: string
   inputTokenPrice: number
   input_price?: number
@@ -42,7 +42,7 @@ export interface Model {
 
 export interface CreateModelRequest {
   name: string
-  alias?: string
+  aliases?: string[]
   description?: string
   input_price?: number
   output_price?: number
@@ -50,7 +50,7 @@ export interface CreateModelRequest {
 
 export interface UpdateModelRequest {
   name?: string
-  alias?: string
+  aliases?: string[]
   description?: string
   input_price?: number
   output_price?: number

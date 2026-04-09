@@ -35,7 +35,11 @@
           <div class="flex items-start justify-between mb-3">
             <div class="flex-1 min-w-0">
               <h3 class="font-semibold text-gray-800 truncate">{{ model.name }}</h3>
-              <p v-if="model.alias" class="text-sm text-gray-500 truncate">{{ model.alias }}</p>
+              <div v-if="model.aliases?.length" class="flex flex-wrap gap-1 mt-1">
+                <el-tag v-for="alias in model.aliases.filter(a => a !== model.name)" :key="alias" size="small" type="info">
+                  {{ alias }}
+                </el-tag>
+              </div>
             </div>
             <el-tag v-if="model.modelRoutes?.length" type="success" size="small">
               {{ model.modelRoutes.length }} routes
@@ -121,7 +125,8 @@
           <el-input v-model="form.name" placeholder="e.g., gpt-4, claude-3-opus" />
         </el-form-item>
         <el-form-item :label="t('model.alias')">
-          <el-input v-model="form.alias" placeholder="Optional alias" />
+          <el-select v-model="form.aliases" multiple filterable allow-create default-first-option placeholder="Add aliases (press Enter to add)">
+          </el-select>
         </el-form-item>
         <el-form-item :label="t('model.description')">
           <el-input v-model="form.description" type="textarea" :rows="2" placeholder="Model description" />
@@ -230,7 +235,7 @@ const pagination = reactive({
 
 const form = reactive({
   name: '',
-  alias: '',
+  aliases: [] as string[],
   description: '',
   input_price: 0,
   output_price: 0
@@ -251,7 +256,7 @@ const filteredModels = computed(() => {
     const term = searchTerm.value.toLowerCase()
     result = result.filter(m =>
       m.name.toLowerCase().includes(term) ||
-      (m.alias?.toLowerCase().includes(term)) ||
+      (m.aliases?.some(a => a.toLowerCase().includes(term))) ||
       (m.description?.toLowerCase().includes(term))
     )
   }
@@ -300,7 +305,7 @@ const fetchProviders = async () => {
 
 const resetForm = () => {
   form.name = ''
-  form.alias = ''
+  form.aliases = []
   form.description = ''
   form.input_price = 0
   form.output_price = 0
@@ -316,7 +321,7 @@ const openEditDialog = (model: Model) => {
   isEdit.value = true
   selectedModel.value = model
   form.name = model.name
-  form.alias = model.alias || ''
+  form.aliases = model.aliases || []
   form.description = model.description || ''
   form.input_price = model.inputTokenPrice || model.input_price || 0
   form.output_price = model.outputTokenPrice || model.output_price || 0
@@ -336,7 +341,7 @@ const submitForm = async () => {
     if (isEdit.value && selectedModel.value) {
       await modelApi.update(selectedModel.value.id, {
         name: form.name,
-        alias: form.alias,
+        aliases: form.aliases,
         description: form.description,
         input_price: form.input_price,
         output_price: form.output_price
@@ -344,7 +349,7 @@ const submitForm = async () => {
     } else {
       await modelApi.create({
         name: form.name,
-        alias: form.alias,
+        aliases: form.aliases,
         description: form.description,
         input_price: form.input_price,
         output_price: form.output_price
