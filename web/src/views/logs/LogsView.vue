@@ -144,13 +144,37 @@
           </div>
         </div>
 
-        <!-- Request Headers -->
+        <!-- View Mode Toggle -->
+        <div class="flex gap-2">
+          <el-button
+            :type="viewMode === 'chat' ? 'primary' : 'default'"
+            size="small"
+            @click="viewMode = 'chat'"
+          >
+            <el-icon class="mr-1"><ChatDotRound /></el-icon>
+            对话模式
+          </el-button>
+          <el-button
+            :type="viewMode === 'meta' ? 'primary' : 'default'"
+            size="small"
+            @click="viewMode = 'meta'"
+          >
+            <el-icon class="mr-1"><DataLine /></el-icon>
+            元数据模式
+          </el-button>
+        </div>
+
+        <!-- Request Headers (Collapsible) - always show -->
         <div v-if="parsedRequestHeaders && Object.keys(parsedRequestHeaders).length > 0" class="headers-card">
-          <div class="headers-header">
-            <el-icon class="text-blue-500"><Document /></el-icon>
-            <span class="font-medium">请求头</span>
+          <div class="headers-header cursor-pointer select-none" @click="requestHeadersCollapsed = !requestHeadersCollapsed">
+            <div class="flex items-center gap-2">
+              <el-icon class="text-blue-500"><Document /></el-icon>
+              <span class="font-medium">请求头</span>
+              <span class="text-xs text-gray-400">({{ Object.keys(parsedRequestHeaders).length }} 项)</span>
+            </div>
+            <el-icon :class="{ 'rotate-180': !requestHeadersCollapsed }" class="transition-transform"><ArrowDown /></el-icon>
           </div>
-          <div class="headers-body">
+          <div v-show="!requestHeadersCollapsed" class="headers-body">
             <div v-for="(value, key) in parsedRequestHeaders" :key="key" class="headers-row">
               <span class="headers-key">{{ key }}</span>
               <span class="headers-value">{{ value }}</span>
@@ -158,13 +182,17 @@
           </div>
         </div>
 
-        <!-- Response Headers -->
+        <!-- Response Headers (Collapsible) - always show -->
         <div v-if="parsedResponseHeaders && Object.keys(parsedResponseHeaders).length > 0" class="headers-card headers-card-green">
-          <div class="headers-header">
-            <el-icon class="text-green-500"><Document /></el-icon>
-            <span class="font-medium">响应头</span>
+          <div class="headers-header cursor-pointer select-none" @click="responseHeadersCollapsed = !responseHeadersCollapsed">
+            <div class="flex items-center gap-2">
+              <el-icon class="text-green-500"><Document /></el-icon>
+              <span class="font-medium">响应头</span>
+              <span class="text-xs text-gray-400">({{ Object.keys(parsedResponseHeaders).length }} 项)</span>
+            </div>
+            <el-icon :class="{ 'rotate-180': !responseHeadersCollapsed }" class="transition-transform"><ArrowDown /></el-icon>
           </div>
-          <div class="headers-body">
+          <div v-show="!responseHeadersCollapsed" class="headers-body">
             <div v-for="(value, key) in parsedResponseHeaders" :key="key" class="headers-row">
               <span class="headers-key">{{ key }}</span>
               <span class="headers-value">{{ value }}</span>
@@ -172,7 +200,7 @@
           </div>
         </div>
 
-        <!-- Error Message (show if exists) -->
+        <!-- Error Message (show if exists) - always show -->
         <div v-if="logDetail.errorMessage || logDetail.error_message" class="error-card">
           <div class="flex items-start gap-3">
             <el-icon class="text-red-500 text-xl mt-0.5"><Warning /></el-icon>
@@ -182,6 +210,9 @@
             </div>
           </div>
         </div>
+
+        <!-- Chat Mode - request/response body as chat messages -->
+        <template v-if="viewMode === 'chat'">
 
         <!-- Chat Messages (show when available) -->
         <div v-if="chatMessages.length > 0" class="chat-container">
@@ -258,6 +289,32 @@
             <pre class="raw-body">{{ formatJson(logDetail.detail.responseBody) }}</pre>
           </div>
         </template>
+        </template>
+
+        <!-- Meta Mode - request/response body with syntax highlighting -->
+        <template v-else-if="viewMode === 'meta'">
+          <!-- Request Body (highlighted) -->
+          <div v-if="logDetail.detail?.requestBody" class="meta-card">
+            <div class="meta-header">
+              <span class="font-medium">请求体</span>
+              <el-button size="small" text @click="copyToClipboard(logDetail.detail.requestBody)">
+                <el-icon><CopyDocument /></el-icon>
+              </el-button>
+            </div>
+            <pre class="meta-body" v-html="highlightJson(logDetail.detail.requestBody)"></pre>
+          </div>
+
+          <!-- Response Body (highlighted) -->
+          <div v-if="logDetail.detail?.responseBody" class="meta-card">
+            <div class="meta-header">
+              <span class="font-medium">响应体</span>
+              <el-button size="small" text @click="copyToClipboard(logDetail.detail.responseBody)">
+                <el-icon><CopyDocument /></el-icon>
+              </el-button>
+            </div>
+            <pre class="meta-body" v-html="highlightJson(logDetail.detail.responseBody)"></pre>
+          </div>
+        </template>
       </div>
       <template #footer>
         <el-button @click="detailDialogVisible = false">关闭</el-button>
@@ -270,7 +327,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, CopyDocument, Warning, Loading, Monitor, Document } from '@element-plus/icons-vue'
+import { Delete, CopyDocument, Warning, Loading, Monitor, Document, ChatDotRound, DataLine, ArrowDown } from '@element-plus/icons-vue'
 import { logApi } from '@/api/log'
 import type { Log, LogDetail } from '@/types/log'
 import type { ToolCallResult } from '@/types/tool'
@@ -279,6 +336,8 @@ import ThinkBlock from '@/components/chat/ThinkBlock.vue'
 import ToolCallDisplay from '@/components/chat/ToolCallDisplay.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import dayjs from 'dayjs'
+import 'highlight.js/styles/github.css'
+import hljs from 'highlight.js'
 
 const { t } = useI18n()
 const loading = ref(false)
@@ -286,6 +345,13 @@ const logs = ref<Log[]>([])
 const logDetail = ref<LogDetail | null>(null)
 const detailDialogVisible = ref(false)
 const isMobile = ref(false)
+
+// 显示模式：'chat' 对话模式, 'meta' 元数据模式
+const viewMode = ref<'chat' | 'meta'>('chat')
+
+// 折叠状态
+const requestHeadersCollapsed = ref(true)
+const responseHeadersCollapsed = ref(true)
 
 // Parse headers JSON
 const parsedRequestHeaders = computed(() => {
@@ -305,6 +371,18 @@ const parsedResponseHeaders = computed(() => {
     return null
   }
 })
+
+// 语法高亮 JSON
+const highlightJson = (json: string | object | null | undefined): string => {
+  if (!json) return ''
+  try {
+    const obj = typeof json === 'string' ? JSON.parse(json) : json
+    const formatted = JSON.stringify(obj, null, 2)
+    return hljs.highlight(formatted, { language: 'json' }).value
+  } catch {
+    return String(json)
+  }
+}
 
 const checkMobile = () => {
   isMobile.value = window.innerWidth < 768
@@ -799,17 +877,6 @@ const cleanupLogs = async () => {
   background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
   border-color: #bbf7d0;
 }
-.headers-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  border-bottom: 1px solid #bfdbfe;
-  font-size: 14px;
-}
-.headers-card.headers-card-green .headers-header {
-  border-color: #bbf7d0;
-}
 .headers-body {
   padding: 12px 16px;
   max-height: 200px;
@@ -1033,5 +1100,69 @@ const cleanupLogs = async () => {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* Headers header with collapse support */
+.headers-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #bfdbfe;
+  font-size: 14px;
+  justify-content: space-between;
+}
+.headers-card-green .headers-header {
+  border-color: #bbf7d0;
+}
+
+/* Meta card for metadata mode */
+.meta-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+.meta-header {
+  background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
+  padding: 10px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+}
+.meta-body {
+  background: #fafafa;
+  padding: 16px;
+  font-size: 12px;
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Consolas', monospace;
+  overflow: auto;
+  max-height: 400px;
+  margin: 0;
+  color: #4b5563;
+  white-space: pre;
+  word-break: break-all;
+}
+.meta-body :deep(.hljs) {
+  background: transparent;
+  color: #4b5563;
+}
+.meta-body :deep(.hljs-keyword) { color: #0000ff; }
+.meta-body :deep(.hljs-string) { color: #a31515; }
+.meta-body :deep(.hljs-number) { color: #098658; }
+.meta-body :deep(.hljs-boolean) { color: #0000ff; }
+.meta-body :deep(.hljs-null) { color: #0000ff; }
+.meta-body :deep(.hljs-attr) { color: #0451a5; }
+.meta-body :deep(.hljs-punctuation) { color: #4b5563; }
+
+/* Rotate animation for collapse icon */
+.rotate-180 {
+  transform: rotate(180deg);
+}
+.transition-transform {
+  transition: transform 0.2s ease;
 }
 </style>
