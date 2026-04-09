@@ -35,6 +35,16 @@ var excludedHeaders = []string{
 	"host",
 	"content-length",
 	"content-type", // We set our own
+	"x-real-ip",
+	"x-forwarded-proto",
+	"x-forwarded-host",
+	"x-forwarded-for",
+	"te",
+	"trailer",
+	"upgrade",
+	"proxy-authorization",
+	"proxy-authenticate",
+	"proxy-connection",
 }
 
 // extractForwardableHeaders extracts headers that should be forwarded to upstream
