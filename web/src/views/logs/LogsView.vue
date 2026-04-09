@@ -641,7 +641,7 @@ const chatMessages = computed(() => {
       }
       // Handle Chat Completions API format (choices field)
       else if (respObj.choices && Array.isArray(respObj.choices)) {
-        respObj.choices.forEach((choice: { message?: { role: string; content: string | object; tool_calls?: unknown } }) => {
+        respObj.choices.forEach((choice: { message?: { role: string; content: string | object; reasoning?: string; tool_calls?: unknown } }) => {
           if (choice.message) {
             const contentText = extractContentText(choice.message.content)
             const parsed = parseMessageContent(contentText)
@@ -650,6 +650,15 @@ const chatMessages = computed(() => {
               content: parsed.textContent,
               thinkContent: parsed.thinkContent || undefined,
               hasThink: parsed.hasThink
+            }
+            // 处理 reasoning 字段（OpenAI/Ollama 格式的思考内容）
+            if (choice.message.reasoning) {
+              if (msg.thinkContent) {
+                msg.thinkContent = choice.message.reasoning + '\n' + msg.thinkContent
+              } else {
+                msg.thinkContent = choice.message.reasoning
+              }
+              msg.hasThink = true
             }
             if (choice.message.tool_calls) {
               const toolCalls = parseToolCalls(choice.message.tool_calls, toolResultsMap)

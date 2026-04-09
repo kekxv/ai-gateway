@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kekxv/ai-gateway/internal/models"
@@ -255,6 +256,353 @@ type StreamChunk struct {
 	Usage *Usage `json:"usage,omitempty"`
 }
 
+// RealtimeLogUpdater 实时日志更新器，使用防抖机制
+type RealtimeLogUpdater struct {
+	logRepo       *repository.LogRepository
+	logDetailRepo *repository.LogDetailRepository
+	logID         uint
+	apiKey        *models.GatewayAPIKey
+	model         *models.Model
+
+	// 数据通道
+	dataChan chan []byte   // 接收新数据
+	doneChan chan struct{} // 流结束信号
+
+	// 防抖
+	debounceDur  time.Duration // 200ms 防抖延迟
+	maxInterval  time.Duration // 1s 最大写入间隔
+
+	// 累计内容（并发安全）
+	contentMu    sync.Mutex
+	rawBuffer    strings.Builder // 原始数据缓冲（用于按行解析）
+	content      strings.Builder // 普通内容
+	reasoning    strings.Builder // 思考内容
+	toolCalls    []ToolCall      // 工具调用（按 index 累加）
+	role         string          // 角色
+	usage        *Usage          // token 使用量
+	finishReason string          // 结束原因
+
+	// 控制
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+}
+
+// NewRealtimeLogUpdater 创建实时日志更新器
+func NewRealtimeLogUpdater(
+	logRepo *repository.LogRepository,
+	logDetailRepo *repository.LogDetailRepository,
+	logID uint,
+	apiKey *models.GatewayAPIKey,
+	model *models.Model,
+	debounceDur time.Duration,
+) *RealtimeLogUpdater {
+	if debounceDur == 0 {
+		debounceDur = 200 * time.Millisecond
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	u := &RealtimeLogUpdater{
+		logRepo:       logRepo,
+		logDetailRepo: logDetailRepo,
+		logID:         logID,
+		apiKey:        apiKey,
+		model:         model,
+		dataChan:      make(chan []byte, 100),
+		doneChan:      make(chan struct{}),
+		debounceDur:   debounceDur,
+		maxInterval:   time.Second, // 最大 1 秒写入一次
+		role:          "assistant", // 默认角色
+		usage:         &Usage{},
+		ctx:           ctx,
+		cancel:        cancel,
+	}
+
+	u.wg.Add(1)
+	go u.runDebouncer()
+
+	return u
+}
+
+// runDebouncer 防抖处理循环
+func (u *RealtimeLogUpdater) runDebouncer() {
+	defer u.wg.Done()
+
+	debounceTimer := time.NewTimer(u.debounceDur)
+	if !debounceTimer.Stop() {
+		<-debounceTimer.C
+	}
+
+	maxIntervalTimer := time.NewTimer(u.maxInterval)
+	if !maxIntervalTimer.Stop() {
+		<-maxIntervalTimer.C
+	}
+
+	lastFlushTime := time.Now()
+
+	for {
+		select {
+		case data := <-u.dataChan:
+			// 解析 SSE 并更新累计内容
+			u.parseAndUpdateContent(data)
+
+			// 检查是否超过最大间隔
+			if time.Since(lastFlushTime) >= u.maxInterval {
+				u.flushToDatabase()
+				lastFlushTime = time.Now()
+				// 重置两个计时器
+				debounceTimer.Stop()
+				maxIntervalTimer.Reset(u.maxInterval)
+			} else {
+				// 重置防抖计时器
+				debounceTimer.Stop()
+				debounceTimer.Reset(u.debounceDur)
+			}
+
+		case <-debounceTimer.C:
+			// 防抖触发，写入数据库
+			u.flushToDatabase()
+			lastFlushTime = time.Now()
+			maxIntervalTimer.Reset(u.maxInterval)
+
+		case <-maxIntervalTimer.C:
+			// 最大间隔触发，写入数据库
+			u.flushToDatabase()
+			lastFlushTime = time.Now()
+			maxIntervalTimer.Reset(u.maxInterval)
+
+		case <-u.doneChan:
+			// 流结束，确保最后一次写入
+			debounceTimer.Stop()
+			maxIntervalTimer.Stop()
+			u.flushToDatabase()
+			return
+
+		case <-u.ctx.Done():
+			debounceTimer.Stop()
+			maxIntervalTimer.Stop()
+			return
+		}
+	}
+}
+
+// PushData 非阻塞推送数据
+func (u *RealtimeLogUpdater) PushData(data []byte) {
+	if u == nil {
+		return
+	}
+	select {
+	case u.dataChan <- data:
+	default:
+		// 通道满，丢弃（避免阻塞）
+	}
+}
+
+// parseAndUpdateContent 解析 SSE 数据并累计内容
+func (u *RealtimeLogUpdater) parseAndUpdateContent(data []byte) {
+	u.contentMu.Lock()
+	defer u.contentMu.Unlock()
+
+	// 将新数据追加到 rawBuffer
+	u.rawBuffer.Write(data)
+
+	// 从 rawBuffer 中提取完整的行
+	rawData := u.rawBuffer.String()
+	lastNewline := strings.LastIndex(rawData, "\n")
+	if lastNewline == -1 {
+		// 没有完整的行，等待更多数据
+		return
+	}
+
+	// 提取完整的行
+	completeLines := rawData[:lastNewline+1]
+	// 保留未完成的行
+	u.rawBuffer.Reset()
+	u.rawBuffer.WriteString(rawData[lastNewline+1:])
+
+	// 解析完整的行
+	scanner := bufio.NewScanner(strings.NewReader(completeLines))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		dataStr := strings.TrimPrefix(line, "data: ")
+		if dataStr == "[DONE]" {
+			continue
+		}
+
+		var chunk StreamChunk
+		if err := json.Unmarshal([]byte(dataStr), &chunk); err != nil {
+			continue
+		}
+
+		for _, choice := range chunk.Choices {
+			// 累加角色
+			if choice.Delta.Role != "" {
+				u.role = choice.Delta.Role
+			}
+			// 累加普通内容
+			if choice.Delta.Content != "" {
+				u.content.WriteString(choice.Delta.Content)
+			}
+			// 累加思考内容（reasoning）
+			if choice.Delta.Reasoning != "" {
+				u.reasoning.WriteString(choice.Delta.Reasoning)
+			}
+			// 累加工具调用（按 index 合并）
+			for _, tc := range choice.Delta.ToolCalls {
+				u.mergeToolCall(tc)
+			}
+			// 结束原因
+			if choice.FinishReason != nil {
+				u.finishReason = *choice.FinishReason
+			}
+		}
+		// 更新 usage
+		if chunk.Usage != nil {
+			u.usage = chunk.Usage
+		}
+	}
+}
+
+// mergeToolCall 按 index 合并工具调用（arguments 是增量拼接）
+func (u *RealtimeLogUpdater) mergeToolCall(tc ToolCall) {
+	if tc.Index >= len(u.toolCalls) {
+		// 扩展数组
+		for i := len(u.toolCalls); i <= tc.Index; i++ {
+			u.toolCalls = append(u.toolCalls, ToolCall{})
+		}
+	}
+	existing := &u.toolCalls[tc.Index]
+	if tc.ID != "" {
+		existing.ID = tc.ID
+	}
+	if tc.Type != "" {
+		existing.Type = tc.Type
+	}
+	if tc.Function.Name != "" {
+		existing.Function.Name = tc.Function.Name
+	}
+	if tc.Function.Arguments != "" {
+		existing.Function.Arguments += tc.Function.Arguments
+	}
+}
+
+// flushToDatabase 写入数据库（Log + LogDetail）
+func (u *RealtimeLogUpdater) flushToDatabase() {
+	if u.logID == 0 || u.logRepo == nil {
+		return
+	}
+
+	u.contentMu.Lock()
+	content := u.content.String()
+	reasoning := u.reasoning.String()
+	toolCalls := u.toolCalls
+	usage := u.usage
+	role := u.role
+	u.contentMu.Unlock()
+
+	// 计算 completion tokens
+	completionTokens := usage.CompletionTokens
+	if completionTokens == 0 {
+		// 粗略估计：content + reasoning + tool_calls arguments
+		totalLen := len(content) + len(reasoning)
+		for _, tc := range toolCalls {
+			totalLen += len(tc.Function.Arguments)
+		}
+		completionTokens = totalLen / 4
+	}
+
+	// 更新 Log 表（token 使用量）
+	updates := map[string]interface{}{
+		"completionTokens": completionTokens,
+		"totalTokens":      usage.PromptTokens + completionTokens,
+	}
+	if usage.PromptTokens > 0 {
+		updates["promptTokens"] = usage.PromptTokens
+	}
+	u.logRepo.UpdateByID(u.ctx, u.logID, updates)
+
+	// 更新 LogDetail 表（完整响应体）
+	if u.apiKey != nil && u.apiKey.LogDetails && u.logDetailRepo != nil && u.model != nil {
+		// 构建消息对象
+		message := map[string]interface{}{
+			"role":    role,
+			"content": content,
+		}
+		if reasoning != "" {
+			message["reasoning"] = reasoning
+		}
+		if len(toolCalls) > 0 {
+			// 过滤掉空的 tool calls
+			validToolCalls := make([]ToolCall, 0)
+			for _, tc := range toolCalls {
+				if tc.ID != "" || tc.Function.Name != "" {
+					validToolCalls = append(validToolCalls, tc)
+				}
+			}
+			if len(validToolCalls) > 0 {
+				message["tool_calls"] = validToolCalls
+			}
+		}
+
+		respObj := map[string]interface{}{
+			"id":      "",
+			"object":  "chat.completion",
+			"created": time.Now().Unix(),
+			"model":   u.model.Name,
+			"choices": []map[string]interface{}{
+				{
+					"index":         0,
+					"message":       message,
+					"finish_reason": nil,
+				},
+			},
+		}
+		if usage.PromptTokens > 0 || completionTokens > 0 {
+			respObj["usage"] = map[string]int{
+				"prompt_tokens":     usage.PromptTokens,
+				"completion_tokens": completionTokens,
+				"total_tokens":      usage.PromptTokens + completionTokens,
+			}
+		}
+
+		respBody, _ := json.Marshal(respObj)
+		respGz, _ := utils.GzipCompress(respBody)
+		u.logDetailRepo.UpdateResponseBody(u.ctx, u.logID, respGz)
+	}
+}
+
+// Close 关闭更新器，确保最后一次写入完成
+func (u *RealtimeLogUpdater) Close() {
+	if u == nil {
+		return
+	}
+
+	// 发送流结束信号
+	close(u.doneChan)
+
+	// 等待 goroutine 完成
+	done := make(chan struct{})
+	go func() {
+		u.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		// 超时保护
+	}
+
+	u.cancel()
+}
+
 // StreamingResponse wraps an HTTP response for streaming with logging support
 type StreamingResponse struct {
 	ResponseBody   *http.Response
@@ -273,6 +621,9 @@ type StreamingResponse struct {
 	logDetailRepo  *repository.LogDetailRepository
 	billingService *BillingService
 	responseHeaders map[string]string // Response headers for logging
+
+	// 实时日志更新器
+	realtimeLogger *RealtimeLogUpdater
 }
 
 // NewStreamingResponse creates a new streaming response wrapper
@@ -302,6 +653,13 @@ func (s *StreamingResponse) Read(p []byte) (n int, err error) {
 	n, err = s.reader.Read(p)
 	if n > 0 {
 		s.capturedBuffer.Write(p[:n])
+
+		// 推送数据到实时日志更新器
+		if s.realtimeLogger != nil {
+			dataCopy := make([]byte, n)
+			copy(dataCopy, p[:n])
+			s.realtimeLogger.PushData(dataCopy)
+		}
 	}
 	return
 }
@@ -478,6 +836,12 @@ func (s *StreamingResponse) Close() error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
+	// 先关闭实时日志更新器，确保最后一次写入完成
+	if s.realtimeLogger != nil {
+		s.realtimeLogger.Close()
+	}
+
 	s.LogAfterComplete(ctx)
 	return s.ResponseBody.Body.Close()
 }
@@ -650,6 +1014,19 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		streamResp.billingService = s.billingService
 		// Extract response headers
 		streamResp.responseHeaders = extractResponseHeaders(resp.Header)
+
+		// 初始化实时日志更新器
+		if logEntry.ID != 0 {
+			streamResp.realtimeLogger = NewRealtimeLogUpdater(
+				s.logRepo,
+				s.logDetailRepo,
+				logEntry.ID,
+				apiKey,
+				model,
+				200*time.Millisecond,
+			)
+		}
+
 		return streamResp, nil
 	}
 
