@@ -227,31 +227,98 @@
               class="message-block"
               :class="msg.role"
             >
-              <!-- System message - right side like user -->
-              <div v-if="msg.role === 'system'" class="system-message">
-                <div class="system-bubble">
-                  <div class="system-label-text">System</div>
-                  <div class="system-content">{{ msg.content }}</div>
-                </div>
-              </div>
               <!-- User Message -->
-              <div v-else-if="msg.role === 'user'" class="user-message">
-                <div class="user-bubble">{{ msg.content }}</div>
-              </div>
-              <!-- Assistant Message -->
-              <div v-else-if="msg.role === 'assistant'" class="assistant-message">
-                <div class="assistant-avatar">
-                  <el-icon><Monitor /></el-icon>
+              <div v-if="msg.role === 'user'" class="msg-card msg-card-user">
+                <div class="msg-header" @click="toggleMessage(idx)">
+                  <div class="msg-icon msg-icon-user">
+                    <el-icon><User /></el-icon>
+                  </div>
+                  <span class="msg-label">用户</span>
+                  <span v-if="collapsedMessages.has(idx)" class="msg-preview">{{ getPreviewText(msg.content) }}</span>
+                  <div class="msg-header-actions">
+                    <el-tooltip content="复制原文" placement="top">
+                      <el-button size="small" text @click.stop="copyMessage('text', msg)">
+                        <el-icon><Document /></el-icon>
+                      </el-button>
+                    </el-tooltip>
+                    <el-tooltip content="复制MD" placement="top">
+                      <el-button size="small" text @click.stop="copyMessage('markdown', msg)">
+                        <el-icon><DocumentCopy /></el-icon>
+                      </el-button>
+                    </el-tooltip>
+                  </div>
+                  <el-icon class="expand-icon">
+                    <ArrowDown v-if="collapsedMessages.has(idx)" />
+                    <ArrowUp v-else />
+                  </el-icon>
                 </div>
-                <div class="assistant-content">
-                  <div class="assistant-name">AI</div>
+                <div v-show="!collapsedMessages.has(idx)" class="msg-content">
+                  <div class="msg-text">{{ msg.content }}</div>
+                </div>
+              </div>
+
+              <!-- System Message -->
+              <div v-else-if="msg.role === 'system'" class="msg-card msg-card-system">
+                <div class="msg-header" @click="toggleMessage(idx)">
+                  <div class="msg-icon msg-icon-system">
+                    <el-icon><Setting /></el-icon>
+                  </div>
+                  <span class="msg-label">System</span>
+                  <span v-if="collapsedMessages.has(idx)" class="msg-preview">{{ getPreviewText(msg.content) }}</span>
+                  <div class="msg-header-actions">
+                    <el-tooltip content="复制原文" placement="top">
+                      <el-button size="small" text @click.stop="copyMessage('text', msg)">
+                        <el-icon><Document /></el-icon>
+                      </el-button>
+                    </el-tooltip>
+                    <el-tooltip content="复制MD" placement="top">
+                      <el-button size="small" text @click.stop="copyMessage('markdown', msg)">
+                        <el-icon><DocumentCopy /></el-icon>
+                      </el-button>
+                    </el-tooltip>
+                  </div>
+                  <el-icon class="expand-icon">
+                    <ArrowDown v-if="collapsedMessages.has(idx)" />
+                    <ArrowUp v-else />
+                  </el-icon>
+                </div>
+                <div v-show="!collapsedMessages.has(idx)" class="msg-content">
+                  <div class="msg-text">{{ msg.content }}</div>
+                </div>
+              </div>
+
+              <!-- Assistant Message -->
+              <div v-else-if="msg.role === 'assistant'" class="msg-card msg-card-assistant">
+                <div class="msg-header" @click="toggleMessage(idx)">
+                  <div class="msg-icon msg-icon-assistant">
+                    <el-icon><Monitor /></el-icon>
+                  </div>
+                  <span class="msg-label">AI</span>
+                  <span v-if="collapsedMessages.has(idx)" class="msg-preview">{{ getPreviewText(msg.content) }}</span>
+                  <div class="msg-header-actions">
+                    <el-tooltip content="复制原文" placement="top">
+                      <el-button size="small" text @click.stop="copyMessage('text', msg)">
+                        <el-icon><Document /></el-icon>
+                      </el-button>
+                    </el-tooltip>
+                    <el-tooltip content="复制MD" placement="top">
+                      <el-button size="small" text @click.stop="copyMessage('markdown', msg)">
+                        <el-icon><DocumentCopy /></el-icon>
+                      </el-button>
+                    </el-tooltip>
+                  </div>
+                  <el-icon class="expand-icon">
+                    <ArrowDown v-if="collapsedMessages.has(idx)" />
+                    <ArrowUp v-else />
+                  </el-icon>
+                </div>
+                <div v-show="!collapsedMessages.has(idx)" class="msg-content">
                   <!-- Think Block -->
                   <ThinkBlock
                     v-if="msg.hasThink && msg.thinkContent"
                     :content="msg.thinkContent"
                     :tokens="estimateThinkTokens(msg.thinkContent)"
                     :default-collapsed="true"
-                    :force-expand="!msg.content && (!msg.toolCalls || msg.toolCalls.length === 0)"
                   />
                   <!-- Tool Calls Display -->
                   <ToolCallDisplay
@@ -259,7 +326,7 @@
                     :tool-calls="msg.toolCalls"
                   />
                   <!-- Content -->
-                  <div v-if="msg.content" class="assistant-bubble">
+                  <div v-if="msg.content" class="msg-text msg-markdown">
                     <MarkdownRenderer :content="msg.content" />
                   </div>
                 </div>
@@ -324,10 +391,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, CopyDocument, Warning, Loading, Monitor, Document, ChatDotRound, DataLine, ArrowDown } from '@element-plus/icons-vue'
+import { Delete, CopyDocument, Warning, Loading, Monitor, Document, ChatDotRound, DataLine, ArrowDown, ArrowUp, User, Setting, DocumentCopy } from '@element-plus/icons-vue'
 import { logApi } from '@/api/log'
 import type { Log, LogDetail } from '@/types/log'
 import type { ToolCallResult } from '@/types/tool'
@@ -352,6 +419,18 @@ const viewMode = ref<'chat' | 'meta'>('chat')
 // 折叠状态
 const requestHeadersCollapsed = ref(true)
 const responseHeadersCollapsed = ref(true)
+const collapsedMessages = ref<Set<number>>(new Set())
+
+// Auto collapse long messages when detail loads
+const initMessageCollapse = () => {
+  collapsedMessages.value = new Set()
+  chatMessages.value.forEach((msg, idx) => {
+    // Auto collapse if content is long (> 200 chars)
+    if (msg.content && msg.content.length > 200) {
+      collapsedMessages.value.add(idx)
+    }
+  })
+}
 
 // Parse headers JSON
 const parsedRequestHeaders = computed(() => {
@@ -453,6 +532,50 @@ const copyToClipboard = async (text: string | object | null | undefined) => {
   } catch {
     ElMessage.error('复制失败')
   }
+}
+
+// Toggle message collapse
+const toggleMessage = (idx: number) => {
+  if (collapsedMessages.value.has(idx)) {
+    collapsedMessages.value.delete(idx)
+  } else {
+    collapsedMessages.value.add(idx)
+  }
+}
+
+// Get preview text for collapsed message
+const getPreviewText = (content: string): string => {
+  if (!content) return ''
+  const maxLen = 60
+  const text = content.replace(/\n/g, ' ').trim()
+  return text.length > maxLen ? text.slice(0, maxLen) + '...' : text
+}
+
+// Copy message content
+const copyMessage = async (format: string, msg: { role: string; content: string; thinkContent?: string }) => {
+  let text = ''
+  if (format === 'text') {
+    // Plain text format
+    if (msg.thinkContent) {
+      text = `[思考]\n${msg.thinkContent}\n\n[回复]\n${msg.content}`
+    } else {
+      text = msg.content
+    }
+  } else if (format === 'markdown') {
+    // Markdown format
+    if (msg.role === 'user') {
+      text = `**用户:**\n\n${msg.content}`
+    } else if (msg.role === 'assistant') {
+      if (msg.thinkContent) {
+        text = `**AI:**\n\n<details>\n<summary>思考过程</summary>\n\n${msg.thinkContent}\n\n</details>\n\n${msg.content}`
+      } else {
+        text = `**AI:**\n\n${msg.content}`
+      }
+    } else {
+      text = `**System:**\n\n${msg.content}`
+    }
+  }
+  await copyToClipboard(text)
 }
 
 // Helper function to extract text from content
@@ -799,6 +922,9 @@ const viewDetail = async (log: Log) => {
       detail: data.detail || undefined
     }
     detailDialogVisible.value = true
+    // Initialize collapse state for long messages
+    await nextTick()
+    initMessageCollapse()
   } catch (error) {
     ElMessage.error(t('common.error'))
   }
@@ -937,107 +1063,137 @@ const cleanupLogs = async () => {
 .chat-body {
   max-height: 500px;
   overflow-y: auto;
-  padding: 20px 16px;
+  padding: 16px;
   background: #fafafa;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 /* Message blocks */
 .message-block {
-  margin-bottom: 20px;
-}
-.message-block::after {
-  content: '';
-  display: block;
-  clear: both;
+  margin-bottom: 12px;
 }
 
-/* User message - right aligned */
-.user-message {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 16px;
-}
-.user-bubble {
-  max-width: 80%;
-  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-  color: white;
-  padding: 12px 16px;
-  border-radius: 18px;
-  border-bottom-right-radius: 4px;
-  font-size: 14px;
-  line-height: 1.6;
-  word-break: break-word;
-  white-space: pre-wrap;
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.25);
+/* Message card styles */
+.msg-card {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid;
 }
 
-/* System message - right aligned like user but different style */
-.system-message {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 16px;
+.msg-card-user {
+  border-color: #c7d2fe;
+  background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
 }
-.system-bubble {
-  max-width: 80%;
+
+.msg-card-system {
+  border-color: #fde68a;
   background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
-  color: #78350f;
-  padding: 12px 16px;
-  border-radius: 18px;
-  border-bottom-right-radius: 4px;
-  font-size: 13px;
-  line-height: 1.5;
-  word-break: break-word;
-  white-space: pre-wrap;
-  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.2);
-}
-.system-label-text {
-  font-size: 11px;
-  font-weight: 600;
-  color: #b45309;
-  margin-bottom: 4px;
-}
-.system-content {
-  font-size: 13px;
-  line-height: 1.5;
 }
 
-/* Assistant message */
-.assistant-message {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  margin-bottom: 16px;
+.msg-card-assistant {
+  border-color: #bbf7d0;
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
 }
-.assistant-avatar {
-  width: 36px;
-  height: 36px;
+
+.msg-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s;
+}
+
+.msg-header:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.msg-icon {
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
   color: white;
-  font-size: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(34, 197, 94, 0.3);
 }
-.assistant-content {
+
+.msg-icon-user {
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+}
+
+.msg-icon-system {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+}
+
+.msg-icon-assistant {
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+}
+
+.msg-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.msg-card-user .msg-label { color: #4f46e5; }
+.msg-card-system .msg-label { color: #b45309; }
+.msg-card-assistant .msg-label { color: #16a34a; }
+
+.msg-preview {
   flex: 1;
-  min-width: 0;
-}
-.assistant-name {
   font-size: 12px;
-  font-weight: 600;
-  color: #22c55e;
-  margin-bottom: 6px;
+  color: #6b7280;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.assistant-bubble {
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 16px;
-  border-top-left-radius: 4px;
+
+.msg-header-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: 8px;
+}
+
+.expand-icon {
+  margin-left: auto;
+  font-size: 14px;
+  transition: transform 0.2s;
+}
+
+.msg-card-user .expand-icon { color: #6366f1; }
+.msg-card-system .expand-icon { color: #f59e0b; }
+.msg-card-assistant .expand-icon { color: #22c55e; }
+
+.msg-content {
   padding: 12px 16px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  border-top: 1px solid;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.msg-card-user .msg-content { border-color: #c7d2fe; }
+.msg-card-system .msg-content { border-color: #fde68a; }
+.msg-card-assistant .msg-content { border-color: #bbf7d0; }
+
+.msg-text {
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.msg-card-user .msg-text { color: #3730a3; }
+.msg-card-system .msg-text { color: #78350f; }
+.msg-card-assistant .msg-text { color: #166534; }
+
+.msg-markdown {
+  background: white;
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
 }
 
 /* Markdown content inside assistant bubble */
