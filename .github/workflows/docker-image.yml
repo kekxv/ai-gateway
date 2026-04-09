@@ -124,11 +124,7 @@ jobs:
         TAG="v${VERSION}"
 
         echo "Creating tag: $TAG"
-        git tag -a "$TAG" -m "Release $TAG
-
-- Automated release by GitHub Actions
-- Built from commit: ${{ github.sha }}
-- Build number: ${{ github.run_number }}"
+        git tag -a "$TAG" -m "Release $TAG" -m "Automated release by GitHub Actions" -m "Built from commit: ${{ github.sha }}" -m "Build number: ${{ github.run_number }}"
 
         echo "Pushing tag: $TAG"
         git push origin "$TAG"
