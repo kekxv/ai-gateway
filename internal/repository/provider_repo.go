@@ -25,6 +25,27 @@ func (r *ProviderRepository) FindByID(ctx context.Context, id uint) (*models.Pro
 	return &provider, nil
 }
 
+// FindByIDWithTypes returns a provider with its ProviderTypes preloaded
+func (r *ProviderRepository) FindByIDWithTypes(ctx context.Context, id uint) (*models.Provider, error) {
+	var provider models.Provider
+	err := r.db.WithContext(ctx).
+		Preload("ProviderTypes").
+		First(&provider, id).Error
+	if err != nil {
+		return nil, err
+	}
+	// Populate TypesList from ProviderTypes
+	if len(provider.ProviderTypes) > 0 {
+		provider.TypesList = make([]string, len(provider.ProviderTypes))
+		for i, pt := range provider.ProviderTypes {
+			provider.TypesList[i] = pt.Type
+		}
+	} else {
+		provider.TypesList = provider.GetTypes()
+	}
+	return &provider, nil
+}
+
 func (r *ProviderRepository) List(ctx context.Context, userID *uint) ([]models.Provider, error) {
 	var providers []models.Provider
 	query := r.db.WithContext(ctx)

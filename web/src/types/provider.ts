@@ -1,4 +1,10 @@
 // Provider types
+export interface ProviderType {
+  type: string
+  baseURL: string
+  createdAt?: string
+}
+
 export interface Provider {
   id: number
   name: string
@@ -9,6 +15,7 @@ export interface Provider {
   type: string
   types?: string
   typesList?: string[]
+  providerTypes?: ProviderType[]
   autoLoadModels: boolean
   auto_load_models?: boolean
   disabled?: boolean
@@ -26,6 +33,7 @@ export interface CreateProviderRequest {
   type?: string
   types?: string
   typesList?: string[]
+  providerTypes?: ProviderType[]
   autoLoadModels?: boolean
   auto_load_models?: boolean
   disabled?: boolean
@@ -41,6 +49,7 @@ export interface UpdateProviderRequest {
   type?: string
   types?: string
   typesList?: string[]
+  providerTypes?: ProviderType[]
   autoLoadModels?: boolean
   auto_load_models?: boolean
   disabled?: boolean

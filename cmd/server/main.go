@@ -53,6 +53,7 @@ func main() {
 	modelRouteRepo := repository.NewModelRouteRepository(db)
 	modelAliasRepo := repository.NewModelAliasRepository(db)
 	providerRepo := repository.NewProviderRepository(db)
+	providerTypeRepo := repository.NewProviderTypeRepository(db)
 	channelRepo := repository.NewChannelRepository(db)
 	logRepo := repository.NewLogRepository(db)
 	logDetailRepo := repository.NewLogDetailRepository(db)
@@ -109,7 +110,7 @@ func main() {
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userRepo, logRepo, authService)
-	providerHandler := handler.NewProviderHandler(providerRepo, modelRepo, modelRouteRepo, modelSyncService)
+	providerHandler := handler.NewProviderHandler(providerRepo, providerTypeRepo, modelRepo, modelRouteRepo, modelSyncService)
 	channelHandler := handler.NewChannelHandler(channelRepo)
 	modelHandler := handler.NewModelHandler(modelRepo, modelRouteRepo, modelAliasRepo, channelRepo)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyRepo, authService)

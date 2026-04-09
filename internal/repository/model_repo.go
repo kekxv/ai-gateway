@@ -148,7 +148,7 @@ func NewModelRouteRepository(db *gorm.DB) *ModelRouteRepository {
 func (r *ModelRouteRepository) FindEligibleRoutes(ctx context.Context, modelID uint) ([]models.ModelRoute, error) {
 	var routes []models.ModelRoute
 	err := r.db.WithContext(ctx).
-		Preload("Provider").
+		Preload("Provider.ProviderTypes").
 		Preload("Model").
 		Joins("JOIN Provider p ON ModelRoute.providerId = p.id").
 		Where("ModelRoute.modelId = ?", modelID).

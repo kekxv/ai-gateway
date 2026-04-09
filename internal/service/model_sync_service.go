@@ -108,8 +108,11 @@ func (s *ModelSyncService) SyncProviderModels(ctx context.Context, providerID ui
 		}
 		remoteModelNames[modelName] = true
 
-		// Check if model exists
-		existingModel, _ := s.modelRepo.FindByNameOrAlias(ctx, modelName)
+		// Check if model exists (by name first, then by alias)
+		existingModel, _ := s.modelRepo.FindByName(ctx, modelName)
+		if existingModel == nil {
+			existingModel, _ = s.modelRepo.FindByNameOrAlias(ctx, modelName)
+		}
 		if existingModel == nil {
 			// Create new model
 			description := ""

@@ -997,7 +997,16 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	}
 
 	// 5. Build upstream request
-	targetURL := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(route.Provider.BaseURL, "/"))
+	// Determine provider type to use (primary type from ProviderTypes or default)
+	providerType := "openai" // default
+	if len(route.Provider.ProviderTypes) > 0 {
+		providerType = route.Provider.ProviderTypes[0].Type
+	} else if route.Provider.Type != "" {
+		providerType = route.Provider.Type
+	}
+	// Get base URL for the specific type (with fallback to default)
+	baseURL := route.Provider.GetBaseURLForType(providerType)
+	targetURL := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(baseURL, "/"))
 
 	// Always use Model.Name for upstream request (not alias)
 	upstreamReq := *req

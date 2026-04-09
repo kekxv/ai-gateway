@@ -25,7 +25,12 @@
         <div class="flex items-start justify-between mb-3 gap-2">
           <div class="flex-1 min-w-0">
             <h3 class="font-semibold text-gray-800 truncate">{{ provider.name }}</h3>
-            <p class="text-sm text-gray-500 truncate mt-1">{{ provider.base_url || provider.baseURL }}</p>
+            <div v-if="provider.providerTypes && provider.providerTypes.length > 0" class="mt-1 space-y-1">
+              <div v-for="pt in provider.providerTypes" :key="pt.type" class="text-sm text-gray-500 truncate">
+                <span class="font-medium text-gray-600">{{ pt.type }}:</span> {{ pt.baseURL }}
+              </div>
+            </div>
+            <p v-else class="text-sm text-gray-500 truncate mt-1">{{ provider.base_url || provider.baseURL }}</p>
           </div>
           <el-tag :type="provider.disabled ? 'danger' : 'success'" size="small" class="shrink-0">
             {{ provider.disabled ? t('common.disabled') : t('common.enabled') }}
@@ -80,22 +85,32 @@
     </div>
 
     <!-- Create/Edit Dialog -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? t('provider.editTitle') : t('provider.createTitle')" :width="isMobile ? '90%' : '500px'">
+    <el-dialog v-model="dialogVisible" :title="isEdit ? t('provider.editTitle') : t('provider.createTitle')" :width="isMobile ? '90%' : '600px'">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" label-position="top">
         <el-form-item :label="t('provider.name')" prop="name">
           <el-input v-model="form.name" />
         </el-form-item>
-        <el-form-item :label="t('provider.baseURL')" prop="base_url">
-          <el-input v-model="form.base_url" placeholder="https://api.openai.com/v1" />
-        </el-form-item>
         <el-form-item :label="t('provider.type')" prop="typesList">
-          <el-select v-model="form.typesList" multiple class="w-full" placeholder="Select provider types">
+          <el-select v-model="form.typesList" multiple class="w-full" placeholder="Select provider types" @change="handleTypesChange">
             <el-option label="OpenAI" value="openai" />
             <el-option label="Anthropic/Claude" value="anthropic" />
             <el-option label="Gemini" value="gemini" />
             <el-option label="Custom" value="custom" />
           </el-select>
         </el-form-item>
+        <!-- Type-specific Base URLs -->
+        <div v-for="typeName in form.typesList" :key="typeName" class="mb-4">
+          <el-form-item :label="typeName + ' Base URL'">
+            <el-input
+              v-model="form.providerTypeMap[typeName]"
+              :placeholder="getDefaultBaseURL(typeName)"
+            >
+              <template #prepend>
+                <el-tag size="small">{{ typeName }}</el-tag>
+              </template>
+            </el-input>
+          </el-form-item>
+        </div>
         <el-form-item label="API Key" prop="api_key">
           <el-input v-model="form.api_key" type="password" show-password />
         </el-form-item>
@@ -226,14 +241,14 @@ const form = reactive({
   name: '',
   base_url: '',
   typesList: [] as string[],
+  providerTypeMap: {} as Record<string, string>,
   auto_load_models: false,
   disabled: false,
   api_key: ''
 })
 
 const rules: FormRules = {
-  name: [{ required: true, message: 'Name is required', trigger: 'blur' }],
-  base_url: [{ required: true, message: 'Base URL is required', trigger: 'blur' }]
+  name: [{ required: true, message: 'Name is required', trigger: 'blur' }]
 }
 
 const filteredModels = computed(() => {
@@ -274,9 +289,36 @@ const resetForm = () => {
   form.name = ''
   form.base_url = ''
   form.typesList = ['openai']
+  form.providerTypeMap = { openai: '' }
   form.auto_load_models = false
   form.disabled = false
   form.api_key = ''
+}
+
+const getDefaultBaseURL = (typeName: string): string => {
+  const defaults: Record<string, string> = {
+    openai: 'https://api.openai.com/v1',
+    anthropic: 'https://api.anthropic.com/v1',
+    gemini: 'https://generativelanguage.googleapis.com/v1beta',
+    custom: ''
+  }
+  return defaults[typeName] || ''
+}
+
+const handleTypesChange = (types: string[]) => {
+  // Initialize providerTypeMap for new types
+  for (const t of types) {
+    if (!(t in form.providerTypeMap)) {
+      form.providerTypeMap[t] = ''
+    }
+  }
+  // Remove entries for unselected types
+  const typeSet = new Set(types)
+  for (const key of Object.keys(form.providerTypeMap)) {
+    if (!typeSet.has(key)) {
+      delete form.providerTypeMap[key]
+    }
+  }
 }
 
 const openCreateDialog = () => {
@@ -289,11 +331,23 @@ const openEditDialog = (provider: Provider) => {
   isEdit.value = true
   selectedProvider.value = provider
   form.name = provider.name
-  form.base_url = provider.base_url ?? provider.baseURL ?? ''
   form.typesList = provider.typesList || (provider.type ? [provider.type] : ['openai'])
   form.auto_load_models = provider.auto_load_models ?? provider.autoLoadModels ?? false
   form.disabled = provider.disabled ?? false
   form.api_key = ''
+  // Initialize providerTypeMap from providerTypes
+  form.providerTypeMap = {}
+  if (provider.providerTypes && provider.providerTypes.length > 0) {
+    for (const pt of provider.providerTypes) {
+      form.providerTypeMap[pt.type] = pt.baseURL
+    }
+  } else {
+    // Fallback to default baseURL for all types
+    const defaultBaseURL = provider.base_url ?? provider.baseURL ?? ''
+    for (const t of form.typesList) {
+      form.providerTypeMap[t] = defaultBaseURL
+    }
+  }
   dialogVisible.value = true
 }
 
@@ -307,11 +361,19 @@ const submitForm = async () => {
 
   submitting.value = true
   try {
+    // Build providerTypes array from providerTypeMap
+    const providerTypes = form.typesList
+      .filter(t => form.providerTypeMap[t])
+      .map(t => ({
+        type: t,
+        baseURL: form.providerTypeMap[t] || getDefaultBaseURL(t)
+      }))
+
     if (isEdit.value && selectedProvider.value) {
       await providerApi.update(selectedProvider.value.id, {
         name: form.name,
-        base_url: form.base_url,
         typesList: form.typesList,
+        providerTypes,
         auto_load_models: form.auto_load_models,
         disabled: form.disabled,
         api_key: form.api_key || undefined
@@ -319,8 +381,8 @@ const submitForm = async () => {
     } else {
       await providerApi.create({
         name: form.name,
-        base_url: form.base_url,
         typesList: form.typesList,
+        providerTypes,
         auto_load_models: form.auto_load_models,
         disabled: form.disabled,
         api_key: form.api_key

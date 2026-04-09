@@ -14,18 +14,20 @@ import (
 )
 
 type ProviderHandler struct {
-	providerRepo     *repository.ProviderRepository
-	modelRepo        *repository.ModelRepository
-	modelRouteRepo   *repository.ModelRouteRepository
-	modelSyncService *service.ModelSyncService
+	providerRepo       *repository.ProviderRepository
+	providerTypeRepo   *repository.ProviderTypeRepository
+	modelRepo          *repository.ModelRepository
+	modelRouteRepo     *repository.ModelRouteRepository
+	modelSyncService   *service.ModelSyncService
 }
 
-func NewProviderHandler(providerRepo *repository.ProviderRepository, modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository, modelSyncService *service.ModelSyncService) *ProviderHandler {
+func NewProviderHandler(providerRepo *repository.ProviderRepository, providerTypeRepo *repository.ProviderTypeRepository, modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository, modelSyncService *service.ModelSyncService) *ProviderHandler {
 	return &ProviderHandler{
-		providerRepo:     providerRepo,
-		modelRepo:        modelRepo,
-		modelRouteRepo:   modelRouteRepo,
-		modelSyncService: modelSyncService,
+		providerRepo:       providerRepo,
+		providerTypeRepo:   providerTypeRepo,
+		modelRepo:          modelRepo,
+		modelRouteRepo:     modelRouteRepo,
+		modelSyncService:   modelSyncService,
 	}
 }
 
@@ -35,10 +37,20 @@ func (h *ProviderHandler) ListProviders(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// Mask API keys and populate TypesList
+	// Mask API keys, populate TypesList, and load ProviderTypes
 	for i := range providers {
 		providers[i].APIKeyMasked = models.MaskAPIKey(providers[i].APIKey)
-		providers[i].TypesList = providers[i].GetTypes()
+		// Load ProviderTypes for each provider
+		providerTypes, _ := h.providerTypeRepo.FindByProviderID(c.Request.Context(), providers[i].ID)
+		providers[i].ProviderTypes = providerTypes
+		if len(providerTypes) > 0 {
+			providers[i].TypesList = make([]string, len(providerTypes))
+			for j, pt := range providerTypes {
+				providers[i].TypesList[j] = pt.Type
+			}
+		} else {
+			providers[i].TypesList = providers[i].GetTypes()
+		}
 	}
 	c.JSON(http.StatusOK, providers)
 }
@@ -53,6 +65,10 @@ func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 		Type               string   `json:"type"`
 		Types              string   `json:"types"`     // JSON array string
 		TypesList          []string `json:"typesList"` // Array format
+		ProviderTypes      []struct {
+			Type    string `json:"type"`
+			BaseURL string `json:"baseURL"`
+		} `json:"providerTypes"` // Type-specific base URLs
 		AutoLoadModels     bool     `json:"autoLoadModels"`
 		AutoLoadModelsSnake bool    `json:"auto_load_models"`
 		Disabled           bool     `json:"disabled"`
@@ -96,9 +112,37 @@ func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 		provider.SetTypes([]string{"openai"}) // Default
 	}
 
-	if err := h.providerRepo.Create(c.Request.Context(), provider); err != nil {
+	ctx := c.Request.Context()
+
+	if err := h.providerRepo.Create(ctx, provider); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	// Handle ProviderTypes (type-specific base URLs)
+	if len(req.ProviderTypes) > 0 {
+		providerTypes := make([]models.ProviderType, len(req.ProviderTypes))
+		for i, pt := range req.ProviderTypes {
+			providerTypes[i] = models.ProviderType{
+				ProviderID: provider.ID,
+				Type:       pt.Type,
+				BaseURL:    pt.BaseURL,
+			}
+		}
+		h.providerTypeRepo.UpdateProviderTypes(ctx, provider.ID, providerTypes)
+		provider.ProviderTypes = providerTypes
+	} else if baseURL != "" {
+		// Create default ProviderType from base URL
+		typesList := provider.GetTypes()
+		if len(typesList) > 0 {
+			defaultType := models.ProviderType{
+				ProviderID: provider.ID,
+				Type:       typesList[0],
+				BaseURL:    baseURL,
+			}
+			h.providerTypeRepo.Create(ctx, &defaultType)
+			provider.ProviderTypes = []models.ProviderType{defaultType}
+		}
 	}
 
 	// Mask API key in response and populate TypesList
@@ -110,7 +154,7 @@ func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 func (h *ProviderHandler) GetProvider(c *gin.Context) {
 	id := parseUintParam(c.Param("id"))
 
-	provider, err := h.providerRepo.FindByID(c.Request.Context(), id)
+	provider, err := h.providerRepo.FindByIDWithTypes(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Provider not found"})
 		return
@@ -133,6 +177,10 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 		Type               string   `json:"type"`
 		Types              string   `json:"types"`     // JSON array string
 		TypesList          []string `json:"typesList"` // Array format
+		ProviderTypes      []struct {
+			Type    string `json:"type"`
+			BaseURL string `json:"baseURL"`
+		} `json:"providerTypes"` // Type-specific base URLs
 		AutoLoadModels     bool     `json:"autoLoadModels"`
 		AutoLoadModelsSnake bool    `json:"auto_load_models"`
 		Disabled           bool     `json:"disabled"`
@@ -143,7 +191,9 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 		return
 	}
 
-	provider, err := h.providerRepo.FindByID(c.Request.Context(), id)
+	ctx := c.Request.Context()
+
+	provider, err := h.providerRepo.FindByIDWithTypes(ctx, id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Provider not found"})
 		return
@@ -181,9 +231,23 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 	provider.AutoLoadModels = req.AutoLoadModels || req.AutoLoadModelsSnake
 	provider.Disabled = req.Disabled
 
-	if err := h.providerRepo.Update(c.Request.Context(), provider); err != nil {
+	if err := h.providerRepo.Update(ctx, provider); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	// Handle ProviderTypes (type-specific base URLs)
+	if len(req.ProviderTypes) > 0 {
+		providerTypes := make([]models.ProviderType, len(req.ProviderTypes))
+		for i, pt := range req.ProviderTypes {
+			providerTypes[i] = models.ProviderType{
+				ProviderID: provider.ID,
+				Type:       pt.Type,
+				BaseURL:    pt.BaseURL,
+			}
+		}
+		h.providerTypeRepo.UpdateProviderTypes(ctx, provider.ID, providerTypes)
+		provider.ProviderTypes = providerTypes
 	}
 
 	// Mask API key in response and populate TypesList
@@ -415,8 +479,11 @@ func (h *ProviderHandler) SyncModels(c *gin.Context) {
 		}
 		remoteModelNames[modelName] = true
 
-		// Check if model exists
-		existingModel, _ := h.modelRepo.FindByNameOrAlias(ctx, modelName)
+		// Check if model exists (by name first, then by alias)
+		existingModel, _ := h.modelRepo.FindByName(ctx, modelName)
+		if existingModel == nil {
+			existingModel, _ = h.modelRepo.FindByNameOrAlias(ctx, modelName)
+		}
 		if existingModel == nil {
 			// Create new model
 			description := ""
@@ -521,8 +588,11 @@ func (h *ProviderHandler) AddModels(c *gin.Context) {
 			continue
 		}
 
-		// Check if model exists
-		existingModel, _ := h.modelRepo.FindByNameOrAlias(ctx, m.Name)
+		// Check if model exists (by name first, then by alias)
+		existingModel, _ := h.modelRepo.FindByName(ctx, m.Name)
+		if existingModel == nil {
+			existingModel, _ = h.modelRepo.FindByNameOrAlias(ctx, m.Name)
+		}
 		if existingModel == nil {
 			// Create new model
 			newModel := &models.Model{

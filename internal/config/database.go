@@ -112,6 +112,42 @@ func InitDatabase(dbPath string) (*gorm.DB, error) {
 			WHERE alias IS NOT NULL AND alias != '' AND alias != name`)
 	}
 
+	// Fix any models that don't have alias records (run every time)
+	db.Exec(`
+		INSERT OR IGNORE INTO ModelAlias (modelId, alias, createdAt)
+		SELECT id, name, createdAt FROM Model
+	`)
+
+	// Create ProviderType table for type-specific base URLs
+	if !db.Migrator().HasTable(&models.ProviderType{}) {
+		// Create table directly with SQL to avoid GORM SQLite AutoMigrate bug
+		err := db.Exec(`
+			CREATE TABLE IF NOT EXISTS ProviderType (
+				providerId INTEGER NOT NULL,
+				type TEXT NOT NULL,
+				baseURL TEXT NOT NULL,
+				createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+				PRIMARY KEY (providerId, type),
+				FOREIGN KEY (providerId) REFERENCES Provider(id) ON DELETE CASCADE
+			)
+		`).Error
+		if err != nil {
+			return nil, fmt.Errorf("failed to create ProviderType table: %w", err)
+		}
+
+		// Create index
+		db.Exec(`CREATE INDEX IF NOT EXISTS idx_provider_type_provider_id ON ProviderType(providerId)`)
+
+		// Migrate existing data: create ProviderType records for each provider
+		// Use COALESCE to handle empty/NULL type field
+		db.Exec(`
+			INSERT INTO ProviderType (providerId, type, baseURL, createdAt)
+			SELECT id, COALESCE(NULLIF(type, ''), 'openai'), baseURL, createdAt
+			FROM Provider
+			WHERE baseURL IS NOT NULL AND baseURL != ''
+		`)
+	}
+
 	return db, nil
 }
 

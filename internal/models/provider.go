@@ -9,7 +9,7 @@ import (
 type Provider struct {
 	ID            uint      `gorm:"primaryKey" json:"id"`
 	Name          string    `gorm:"unique;not null" json:"name"`
-	BaseURL       string    `gorm:"column:baseURL;not null" json:"baseURL"`
+	BaseURL       string    `gorm:"column:baseURL" json:"baseURL"` // Default BaseURL (fallback when type-specific not found)
 	APIKey        string    `gorm:"column:apiKey" json:"-"` // 不直接暴露到 JSON
 	Type          string    `gorm:"column:type" json:"type"` // Deprecated: use Types instead
 	Types         string    `gorm:"column:types;type:text" json:"types"` // JSON array: ["openai", "anthropic"]
@@ -27,6 +27,7 @@ type Provider struct {
 	// Associations
 	User          *User         `gorm:"foreignKey:UserID" json:"user,omitempty"`
 	ProviderModels []ProviderModel `gorm:"foreignKey:ProviderID" json:"-"`
+	ProviderTypes  []ProviderType  `gorm:"foreignKey:ProviderID" json:"providerTypes,omitempty"`
 }
 
 func (Provider) TableName() string {
@@ -69,6 +70,19 @@ func (p *Provider) SetTypes(types []string) {
 		p.Type = types[0] // Primary type for backward compatibility
 	}
 	p.TypesList = types
+}
+
+// GetBaseURLForType returns the appropriate base URL for a given type
+// Priority: type-specific base URL > default base URL
+func (p *Provider) GetBaseURLForType(typeName string) string {
+	// Check if provider has type-specific configurations
+	for _, pt := range p.ProviderTypes {
+		if pt.Type == typeName {
+			return pt.BaseURL
+		}
+	}
+	// Fallback to default BaseURL
+	return p.BaseURL
 }
 
 // MaskAPIKey returns a masked version of the API key for display
