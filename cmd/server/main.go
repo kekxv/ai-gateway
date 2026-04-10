@@ -346,4 +346,5 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 	anthropic := r.Group("/api/anthropic/v1")
 		anthropic.Use(middleware.APIKeyAuth(deps.APIKeyRepo))
 		anthropic.POST("/messages", deps.AnthropicHandler.CreateMessages)
+		anthropic.POST("/messages/count_tokens", deps.AnthropicHandler.CountTokens)
 }

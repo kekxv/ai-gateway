@@ -470,6 +470,15 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 		c.Stream(func(w io.Writer) bool {
 			buf := make([]byte, 1024)
 			n, err := streamResp.Read(buf)
+			if n > 0 {
+				// Write SSE format
+				data := buf[:n]
+				w.Write(data)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}
+			
 			if err != nil {
 				// Stream ended.
 				// Logic for splicing and saving is now moved to frontend via AddMessage.
@@ -483,10 +492,6 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 				}
 				return false
 			}
-
-			// Write SSE format
-			data := buf[:n]
-			w.Write(data)
 
 			return true
 		})

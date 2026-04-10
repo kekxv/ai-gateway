@@ -618,7 +618,6 @@ func (u *RealtimeLogUpdater) Close() {
 type StreamingResponse struct {
 	ResponseBody   *http.Response
 	capturedBuffer *bytes.Buffer
-	reader         *bufio.Reader
 	ctx            context.Context // Context for cancellation detection
 
 	// For logging after streaming is complete
@@ -638,6 +637,9 @@ type StreamingResponse struct {
 
 	// Protocol indicator for Anthropic streaming
 	isAnthropicStream bool // true if upstream returns Anthropic format, false if OpenAI format
+
+	// Estimated prompt tokens for fallback (used when upstream doesn't provide token usage)
+	estimatedPromptTokens int
 }
 
 // NewStreamingResponse creates a new streaming response wrapper
@@ -645,7 +647,6 @@ func NewStreamingResponse(resp *http.Response, ctx context.Context) *StreamingRe
 	return &StreamingResponse{
 		ResponseBody:   resp,
 		capturedBuffer: &bytes.Buffer{},
-		reader:         bufio.NewReader(resp.Body),
 		ctx:            ctx,
 	}
 }
@@ -664,7 +665,7 @@ func (s *StreamingResponse) Read(p []byte) (n int, err error) {
 		}
 	}
 
-	n, err = s.reader.Read(p)
+	n, err = s.ResponseBody.Body.Read(p)
 	if n > 0 {
 		s.capturedBuffer.Write(p[:n])
 
@@ -687,7 +688,12 @@ func (s *StreamingResponse) IsAnthropicStream() bool {
 func (s *StreamingResponse) GetCapturedData() (content string, usage *Usage, rawData string) {
 	rawData = s.capturedBuffer.String()
 
-	// Parse SSE format
+	// Check if this is an Anthropic stream
+	if s.isAnthropicStream {
+		return s.getAnthropicCapturedData(rawData)
+	}
+
+	// Parse OpenAI SSE format
 	scanner := bufio.NewScanner(strings.NewReader(rawData))
 	var contentBuilder strings.Builder
 	usage = &Usage{}
@@ -755,6 +761,152 @@ func (s *StreamingResponse) GetCapturedData() (content string, usage *Usage, raw
 	return
 }
 
+// getAnthropicCapturedData parses Anthropic SSE format and extracts content and usage
+func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content string, usage *Usage, raw string) {
+	raw = rawData
+	usage = &Usage{}
+	var contentBuilder strings.Builder
+
+	scanner := bufio.NewScanner(strings.NewReader(rawData))
+	var currentBlockIndex int = -1
+	var blockTexts = make(map[int]*strings.Builder) // track text per content block
+	var inputTokens int = 0
+	var outputTokens int = 0
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Skip empty lines
+		if line == "" {
+			continue
+		}
+
+		// Parse SSE format: event: xxx\ndata: xxx
+		var eventType string
+		var eventData string
+
+		if strings.HasPrefix(line, "event: ") {
+			eventType = strings.TrimPrefix(line, "event: ")
+			// Read next line for data
+			if scanner.Scan() {
+				dataLine := scanner.Text()
+				if strings.HasPrefix(dataLine, "data: ") {
+					eventData = strings.TrimPrefix(dataLine, "data: ")
+				}
+			}
+		} else if strings.HasPrefix(line, "data: ") {
+			// Some providers might send data without event prefix
+			eventData = strings.TrimPrefix(line, "data: ")
+		}
+
+		if eventData == "" {
+			continue
+		}
+
+		// Parse the event data as JSON to detect type if not provided
+		var baseEvent struct {
+			Type string `json:"type"`
+		}
+		if eventType == "" && json.Unmarshal([]byte(eventData), &baseEvent) == nil {
+			eventType = baseEvent.Type
+		}
+
+		switch eventType {
+		case "message_start":
+			var event struct {
+				Message struct {
+					Usage struct {
+						InputTokens  int `json:"input_tokens"`
+						OutputTokens int `json:"output_tokens"`
+					} `json:"usage"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(eventData), &event); err == nil {
+				inputTokens = event.Message.Usage.InputTokens
+				outputTokens = event.Message.Usage.OutputTokens
+			}
+
+		case "content_block_start":
+			var event struct {
+				Index int `json:"index"`
+				ContentBlock struct {
+					Type string `json:"type"`
+				} `json:"content_block"`
+			}
+			if err := json.Unmarshal([]byte(eventData), &event); err == nil {
+				currentBlockIndex = event.Index
+				if event.ContentBlock.Type == "text" {
+					blockTexts[currentBlockIndex] = &strings.Builder{}
+				}
+			}
+
+		case "content_block_delta":
+			var event struct {
+				Index int `json:"index"`
+				Delta struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"delta"`
+			}
+			if err := json.Unmarshal([]byte(eventData), &event); err == nil {
+				if event.Delta.Type == "text_delta" && event.Delta.Text != "" {
+					if builder, ok := blockTexts[event.Index]; ok {
+						builder.WriteString(event.Delta.Text)
+					} else {
+						// Fallback: write directly to content
+						contentBuilder.WriteString(event.Delta.Text)
+					}
+				}
+			}
+
+		case "content_block_stop":
+			// Content block finished, flush its text to main content
+			var event struct {
+				Index int `json:"index"`
+			}
+			if err := json.Unmarshal([]byte(eventData), &event); err == nil {
+				if builder, ok := blockTexts[event.Index]; ok {
+					contentBuilder.WriteString(builder.String())
+					delete(blockTexts, event.Index)
+				}
+			}
+
+		case "message_delta":
+			var event struct {
+				Usage struct {
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			}
+			if err := json.Unmarshal([]byte(eventData), &event); err == nil {
+				outputTokens = event.Usage.OutputTokens
+			}
+
+		case "message_stop":
+			// Message finished, nothing specific to extract
+		}
+	}
+
+	// Flush any remaining block texts
+	for _, builder := range blockTexts {
+		contentBuilder.WriteString(builder.String())
+	}
+
+	content = contentBuilder.String()
+
+	// Set usage values
+	usage.PromptTokens = inputTokens
+	usage.CompletionTokens = outputTokens
+	usage.TotalTokens = inputTokens + outputTokens
+
+	// Fallback: estimate tokens if not provided
+	if usage.CompletionTokens == 0 && content != "" {
+		usage.CompletionTokens = len(content) / 4
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+
+	return
+}
+
 // LogAfterComplete updates the log entry after streaming is complete
 func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 	if s.logRepo == nil || s.logID == 0 {
@@ -776,18 +928,49 @@ func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 	content, usage, _ := s.GetCapturedData()
 	latency := time.Since(s.startTime).Milliseconds()
 
+	// Estimate prompt tokens if not provided
+	promptTokens := usage.PromptTokens
+	if promptTokens == 0 {
+		// Try estimatedPromptTokens first (for Anthropic direct forwarding)
+		if s.estimatedPromptTokens > 0 {
+			promptTokens = s.estimatedPromptTokens
+		} else if s.request != nil {
+			// Estimate from request content (~4 chars per token)
+			totalChars := 0
+			for _, msg := range s.request.Messages {
+				totalChars += len(msg.Role)
+				// Handle content
+				if msg.Content.StringContent != "" {
+					totalChars += len(msg.Content.StringContent)
+				}
+				for _, part := range msg.Content.Parts {
+					if part.Type == "text" {
+						totalChars += len(part.Text)
+					}
+				}
+			}
+			promptTokens = totalChars / 4
+			if promptTokens < 1 && totalChars > 0 {
+				promptTokens = 1
+			}
+		}
+	}
+
 	// Estimate completion tokens if not provided
 	completionTokens := usage.CompletionTokens
 	if completionTokens == 0 && content != "" {
 		// Rough estimate: ~4 characters per token
 		completionTokens = len(content) / 4
+		if completionTokens < 1 {
+			completionTokens = 1
+		}
 	}
 
 	// Calculate cost
 	var cost int64
 	if s.model != nil {
 		cost = s.billingService.CalculateCost(
-			usage.PromptTokens,
+			promptTokens,
 			completionTokens,
 			s.model.InputTokenPrice,
 			s.model.OutputTokenPrice,
@@ -802,9 +985,9 @@ func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 	// Update log entry
 	updates := map[string]interface{}{
 		"latency":           int(latency),
-		"promptTokens":     usage.PromptTokens,
+		"promptTokens":     promptTokens,
 		"completionTokens": completionTokens,
-		"totalTokens":      usage.PromptTokens + completionTokens,
+		"totalTokens":      promptTokens + completionTokens,
 		"cost":              cost,
 		"status":            status,
 	}
@@ -1360,6 +1543,39 @@ func (s *GatewayService) determineChannelOwner(ctx context.Context, apiKey *mode
 	return nil, nil
 }
 
+// estimateAnthropicPromptTokens estimates prompt tokens from Anthropic request
+func estimateAnthropicPromptTokens(req *models.AnthropicMessagesRequest) int {
+	totalChars := 0
+
+	// Count system
+	if !req.System.IsEmpty() {
+		totalChars += len(req.System.GetText())
+	}
+
+	// Count messages
+	for _, msg := range req.Messages {
+		totalChars += len(msg.Role)
+		if !msg.Content.IsEmpty() {
+			// Handle simple string content
+			if msg.Content.StringContent != "" {
+				totalChars += len(msg.Content.StringContent)
+			}
+			// Handle content blocks
+			for _, block := range msg.Content.Blocks {
+				if block.Type == "text" {
+					totalChars += len(block.Text)
+				}
+			}
+		}
+	}
+
+	estimated := totalChars / 4
+	if estimated < 1 && totalChars > 0 {
+		estimated = 1
+	}
+	return estimated
+}
+
 // weightedRandomSelect selects an index based on weights
 func weightedRandomSelect(weights []int) int {
 	total := 0
@@ -1385,7 +1601,8 @@ func weightedRandomSelect(weights []int) int {
 
 // HandleAnthropicMessages handles Anthropic Messages API requests
 // Supports direct forwarding if provider supports anthropic type, otherwise converts to OpenAI format
-func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *models.GatewayAPIKey, req *models.AnthropicMessagesRequest, stream bool, requestHeaders http.Header) (interface{}, error) {
+// rawReqBody is the original request body for direct forwarding (preserves exact format)
+func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *models.GatewayAPIKey, req *models.AnthropicMessagesRequest, rawReqBody []byte, stream bool, requestHeaders http.Header, rawQuery string) (interface{}, error) {
 	startTime := time.Now()
 
 	// Extract and filter headers for forwarding and logging
@@ -1429,8 +1646,8 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		if err := s.logRepo.Create(ctx, logEntry); err != nil {
 			logEntry.ID = 0
 		} else if apiKey.LogDetails {
-			reqBody, _ := json.Marshal(req)
-			reqGz, _ := utils.GzipCompress(reqBody)
+			// Store raw request body (preserves original format)
+			reqGz, _ := utils.GzipCompress(rawReqBody)
 			detail := &models.LogDetail{
 				LogID:       logEntry.ID,
 				RequestBody: reqGz,
@@ -1475,17 +1692,36 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		// Direct forwarding - provider supports anthropic
 		baseURL := route.Provider.GetBaseURLForType("anthropic")
 		targetURL := fmt.Sprintf("%s/messages", strings.TrimSuffix(baseURL, "/"))
+		if rawQuery != "" {
+			targetURL = fmt.Sprintf("%s?%s", targetURL, rawQuery)
+		}
 
 		log.Printf("[HandleAnthropicMessages] Provider '%s' supports anthropic, direct forwarding to: %s", route.Provider.Name, targetURL)
 
-		// Update model name in request
-		upstreamReq := *req
-		upstreamReq.Model = upstreamModelName
+		// Update model name in raw request body for direct forwarding
+		var rawReqBodyModified []byte
+		if upstreamModelName != req.Model {
+			// Parse raw request, update model name, and re-encode
+			var reqMap map[string]interface{}
+			if err := json.Unmarshal(rawReqBody, &reqMap); err == nil {
+				reqMap["model"] = upstreamModelName
+				rawReqBodyModified, _ = json.Marshal(reqMap)
+			} else {
+				// If parsing fails, use original body
+				rawReqBodyModified = rawReqBody
+			}
+		} else {
+			rawReqBodyModified = rawReqBody
+		}
 
-		// Send Anthropic format request
-		resp, err := s.sendAnthropicUpstreamRequest(ctx, targetURL, route.Provider.APIKey, &upstreamReq, stream, forwardHeaders)
+		// Send Anthropic format request using raw body (preserves exact format)
+		headers := map[string]string{
+			"x-api-key":          route.Provider.APIKey,
+			"anthropic-version":  "2023-06-01",
+		}
+		resp, err := s.sendRawUpstreamRequest(ctx, targetURL, route.Provider.APIKey, rawReqBodyModified, stream, forwardHeaders, headers)
 		if err != nil {
-			log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s", err, targetURL)
+			log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s, Request body: %s", err, targetURL, string(rawReqBodyModified))
 			latency := int(time.Since(startTime).Milliseconds())
 			updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
 			return nil, ErrUpstreamFailed
@@ -1494,7 +1730,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		if resp.StatusCode >= 400 {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
+			log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s, Request body: %s", resp.StatusCode, string(body), targetURL, string(rawReqBodyModified))
 			latency := int(time.Since(startTime).Milliseconds())
 			s.handleUpstreamError(ctx, resp, route)
 			updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
@@ -1515,16 +1751,12 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			streamResp.billingService = s.billingService
 			streamResp.responseHeaders = extractResponseHeaders(resp.Header)
 
-			if logEntry.ID != 0 {
-				streamResp.realtimeLogger = NewRealtimeLogUpdater(
-					s.logRepo,
-					s.logDetailRepo,
-					logEntry.ID,
-					apiKey,
-					model,
-					200*time.Millisecond,
-				)
-			}
+			// Estimate prompt tokens for fallback
+			streamResp.estimatedPromptTokens = estimateAnthropicPromptTokens(req)
+
+			// Note: realtimeLogger is NOT set for Anthropic direct forwarding
+			// because RealtimeLogUpdater only supports OpenAI SSE format.
+			// Token counting will be done in LogAfterComplete using getAnthropicCapturedData.
 
 			log.Printf("[HandleAnthropicMessages] Response type: anthropic (direct stream)")
 			return streamResp, nil
@@ -1668,6 +1900,7 @@ func (s *GatewayService) sendAnthropicUpstreamRequest(ctx context.Context, url, 
 		return nil, err
 	}
 
+
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		log.Printf("[sendAnthropicUpstreamRequest] Create request failed: %v, URL: %s", err, url)
@@ -1687,14 +1920,81 @@ func (s *GatewayService) sendAnthropicUpstreamRequest(ctx context.Context, url, 
 	return s.httpClient.Do(httpReq)
 }
 
+// sendRawUpstreamRequest sends a raw JSON request to upstream, preserving the original format
+// This is useful when the upstream has different field requirements
+func (s *GatewayService) sendRawUpstreamRequest(ctx context.Context, url, apiKey string, reqBody []byte, stream bool, forwardHeaders map[string]string, headers map[string]string) (*http.Response, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
+	if err != nil {
+		log.Printf("[sendRawUpstreamRequest] Create request failed: %v, URL: %s", err, url)
+		return nil, err
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Set custom headers (e.g., x-api-key, anthropic-version)
+	for key, value := range headers {
+		httpReq.Header.Set(key, value)
+	}
+
+	// Forward additional headers
+	for key, value := range forwardHeaders {
+		httpReq.Header.Set(key, value)
+	}
+
+	// Extract model from request for logging
+	var reqMap map[string]interface{}
+	if err := json.Unmarshal(reqBody, &reqMap); err == nil {
+		modelName, _ := reqMap["model"].(string)
+		log.Printf("[sendRawUpstreamRequest] Sending request to: %s, stream: %v, model: %s", url, stream, modelName)
+	} else {
+		log.Printf("[sendRawUpstreamRequest] Sending request to: %s, stream: %v", url, stream)
+	}
+
+	return s.httpClient.Do(httpReq)
+}
+
 // updateAnthropicLogAndCalculateCost updates log and calculates cost for Anthropic format responses
 func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, req *models.AnthropicMessagesRequest, resp *models.AnthropicMessagesResponse, latency int, logID uint, respHeaders map[string]string) {
 	var promptTokens, completionTokens, totalTokens int
 	if resp.Usage != nil {
 		promptTokens = resp.Usage.InputTokens
 		completionTokens = resp.Usage.OutputTokens
-		totalTokens = promptTokens + completionTokens
 	}
+
+	// Fallback: estimate tokens if not provided
+	if promptTokens == 0 && req != nil {
+		// Estimate input tokens from request content (~4 chars per token)
+		totalChars := 0
+		if !req.System.IsEmpty() {
+			totalChars += len(req.System.GetText())
+		}
+		for _, msg := range req.Messages {
+			totalChars += len(msg.Role)
+			if !msg.Content.IsEmpty() {
+				totalChars += len(msg.Content.GetText())
+			}
+		}
+		promptTokens = totalChars / 4
+		if promptTokens < 1 {
+			promptTokens = 1
+		}
+	}
+
+	if completionTokens == 0 && resp != nil {
+		// Estimate output tokens from response content (~4 chars per token)
+		totalChars := 0
+		for _, block := range resp.Content {
+			if block.Type == "text" {
+				totalChars += len(block.Text)
+			}
+		}
+		completionTokens = totalChars / 4
+		if completionTokens < 1 && totalChars > 0 {
+			completionTokens = 1
+		}
+	}
+
+	totalTokens = promptTokens + completionTokens
 
 	cost := s.billingService.CalculateCost(promptTokens, completionTokens, model.InputTokenPrice, model.OutputTokenPrice)
 
@@ -1729,5 +2029,152 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 			respGz, _ := utils.GzipCompress(respBody)
 			s.logDetailRepo.UpdateResponseBody(ctx, logID, respGz)
 		}
+	}
+}
+// HandleAnthropicCountTokens handles Anthropic count_tokens API requests
+func (s *GatewayService) HandleAnthropicCountTokens(ctx context.Context, apiKey *models.GatewayAPIKey, rawReqBody []byte, requestHeaders http.Header) (interface{}, error) {
+	// Parse request to get model name
+	var req struct {
+		Model    string `json:"model"`
+		Messages []struct {
+			Role    string      `json:"role"`
+			Content interface{} `json:"content"`
+		} `json:"messages"`
+		System interface{} `json:"system,omitempty"`
+	}
+	if err := json.Unmarshal(rawReqBody, &req); err != nil {
+		return nil, fmt.Errorf("invalid request body: %w", err)
+	}
+
+	if req.Model == "" {
+		return nil, fmt.Errorf("missing required field: model")
+	}
+
+	// Find model
+	model, err := s.findModel(ctx, req.Model)
+	if err != nil {
+		log.Printf("[HandleAnthropicCountTokens] Model not found: %s, error: %v", req.Model, err)
+		return nil, ErrModelNotFound
+	}
+
+	// Select route
+	route, err := s.selectRoute(ctx, model.ID)
+	if err != nil {
+		log.Printf("[HandleAnthropicCountTokens] No route available: model=%s, error: %v", model.Name, err)
+		return nil, ErrNoRouteAvailable
+	}
+
+	// Check permission
+	if err := s.checkPermission(ctx, apiKey, model.ID); err != nil {
+		return nil, err
+	}
+
+	// Extract forward headers
+	forwardHeaders, _ := extractForwardableHeaders(requestHeaders)
+
+	// Determine if provider supports anthropic protocol
+	providerSupportsAnthropic := route.Provider.HasType("anthropic")
+
+	if providerSupportsAnthropic {
+		// Direct forwarding to Anthropic endpoint
+		baseURL := route.Provider.GetBaseURLForType("anthropic")
+		targetURL := fmt.Sprintf("%s/messages/count_tokens", strings.TrimSuffix(baseURL, "/"))
+
+		log.Printf("[HandleAnthropicCountTokens] Provider '%s' supports anthropic, direct forwarding to: %s", route.Provider.Name, targetURL)
+
+		headers := map[string]string{
+			"x-api-key":         route.Provider.APIKey,
+			"anthropic-version": "2023-06-01",
+		}
+
+		resp, err := s.sendRawUpstreamRequest(ctx, targetURL, route.Provider.APIKey, rawReqBody, false, forwardHeaders, headers)
+		if err != nil {
+			log.Printf("[HandleAnthropicCountTokens] Upstream request failed: %v, URL: %s, falling back to local estimation", err, targetURL)
+			// Fallback to local estimation
+			return s.estimateAnthropicTokens(req), nil
+		}
+
+		if resp.StatusCode >= 400 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			log.Printf("[HandleAnthropicCountTokens] Upstream error: status=%d, body=%s, URL: %s, falling back to local estimation", resp.StatusCode, string(body), targetURL)
+			// Fallback to local estimation (provider might not support count_tokens endpoint)
+			return s.estimateAnthropicTokens(req), nil
+		}
+
+		// Parse response
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			log.Printf("[HandleAnthropicCountTokens] Failed to read response body: %v, falling back to local estimation", err)
+			return s.estimateAnthropicTokens(req), nil
+		}
+
+		var result map[string]interface{}
+		if err := json.Unmarshal(body, &result); err != nil {
+			log.Printf("[HandleAnthropicCountTokens] Failed to parse response: %v, falling back to local estimation", err)
+			return s.estimateAnthropicTokens(req), nil
+		}
+
+		return result, nil
+	}
+
+	// Provider doesn't support anthropic - estimate tokens locally
+	log.Printf("[HandleAnthropicCountTokens] Provider '%s' doesn't support anthropic, estimating tokens locally", route.Provider.Name)
+	return s.estimateAnthropicTokens(req), nil
+}
+
+// estimateAnthropicTokens estimates token count from Anthropic request
+func (s *GatewayService) estimateAnthropicTokens(req struct {
+	Model    string `json:"model"`
+	Messages []struct {
+		Role    string      `json:"role"`
+		Content interface{} `json:"content"`
+	} `json:"messages"`
+	System interface{} `json:"system,omitempty"`
+}) map[string]interface{} {
+	// Simple token estimation: ~4 characters per token
+	totalChars := 0
+
+	// Count system
+	if req.System != nil {
+		switch v := req.System.(type) {
+		case string:
+			totalChars += len(v)
+		case []interface{}:
+			for _, block := range v {
+				if b, ok := block.(map[string]interface{}); ok {
+					if text, ok := b["text"].(string); ok {
+						totalChars += len(text)
+					}
+				}
+			}
+		}
+	}
+
+	// Count messages
+	for _, msg := range req.Messages {
+		totalChars += len(msg.Role)
+		switch v := msg.Content.(type) {
+		case string:
+			totalChars += len(v)
+		case []interface{}:
+			for _, part := range v {
+				if p, ok := part.(map[string]interface{}); ok {
+					if text, ok := p["text"].(string); ok {
+						totalChars += len(text)
+					}
+				}
+			}
+		}
+	}
+
+	estimatedTokens := totalChars / 4
+	if estimatedTokens < 1 {
+		estimatedTokens = 1
+	}
+
+	return map[string]interface{}{
+		"input_tokens": estimatedTokens,
 	}
 }

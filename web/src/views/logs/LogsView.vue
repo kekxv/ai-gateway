@@ -583,10 +583,14 @@ const extractContentText = (content: string | object | undefined): string => {
   if (!content) return ''
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
-    // Handle [{type: "text", text: "..."}] format
+    // Handle [{type: "text", text: "..."}] format (Anthropic/OpenAI multimodal)
     return content
-      .map((item: { type?: string; text?: string }) => {
+      .map((item: { type?: string; text?: string; thinking?: string; source?: { url?: string; media_type?: string } }) => {
         if (item.type === 'text' && item.text) return item.text
+        if (item.type === 'thinking' && item.thinking) return `[思考] ${item.thinking}`
+        if (item.type === 'image' && item.source) return `[图片: ${item.source.url || item.source.media_type || ''}]`
+        if (item.type === 'video' && item.source) return `[视频: ${item.source.url || item.source.media_type || ''}]`
+        // tool_use and tool_result are handled separately via toolCalls array
         return ''
       })
       .join('')
@@ -629,22 +633,68 @@ const parseToolCalls = (toolCalls: unknown, toolResultsMap?: Map<string, { toolN
       result = toolResultsMap.get(toolName)!.result
     }
 
+    // Parse arguments
+    let args: Record<string, unknown> = {}
+    if (tc.function?.arguments) {
+      try {
+        args = typeof tc.function.arguments === 'string'
+          ? JSON.parse(tc.function.arguments)
+          : tc.function.arguments
+      } catch {
+        args = { raw: tc.function.arguments }
+      }
+    }
+
     return {
-      id: id,
-      toolName: toolName,
-      arguments: (() => {
-        try {
-          return typeof tc.function?.arguments === 'string'
-            ? JSON.parse(tc.function.arguments)
-            : tc.function?.arguments || {}
-        } catch {
-          return {}
-        }
-      })(),
-      result: result,
+      id,
+      toolName,
+      arguments: args,
+      result,
       status: 'success' as const
     }
   })
+}
+
+// Helper function to extract tool calls from Anthropic content array
+const extractToolCallsFromContent = (content: unknown, toolResultsMap?: Map<string, { toolName: string; result: unknown }>): ToolCallResult[] => {
+  if (!content || !Array.isArray(content)) return []
+
+  const toolCalls: ToolCallResult[] = []
+
+  content.forEach((block: { type?: string; name?: string; id?: string; input?: unknown }, idx: number) => {
+    if (block.type === 'tool_use' && block.name) {
+      toolCalls.push({
+        id: block.id || `tool_${block.name}_${idx}_${Date.now()}`,
+        toolName: block.name,
+        arguments: (block.input as Record<string, unknown>) || {},
+        result: toolResultsMap?.get(block.name)?.result,
+        status: 'success' as const
+      })
+    }
+  })
+
+  return toolCalls
+}
+
+// Helper function to extract tool results from Anthropic content array
+const extractToolResultsFromContent = (content: unknown): Map<string, { toolName: string; result: unknown }> => {
+  const results = new Map<string, { toolName: string; result: unknown }>()
+
+  if (!content || !Array.isArray(content)) return results
+
+  content.forEach((block: { type?: string; tool_use_id?: string; name?: string; content?: unknown }) => {
+    if (block.type === 'tool_result') {
+      const key = block.tool_use_id || block.name || ''
+      if (key) {
+        results.set(key, {
+          toolName: key,
+          result: block.content
+        })
+      }
+    }
+  })
+
+  return results
 }
 
 // Extract chat messages from request/response
@@ -672,6 +722,7 @@ const chatMessages = computed(() => {
       const msgs = reqObj.messages || reqObj.input
       if (Array.isArray(msgs)) {
         msgs.forEach((msg: { role?: string; content?: string | object }) => {
+          // Handle tool role with string content
           if (msg.role === 'tool' || (msg.role === 'user' && typeof msg.content === 'string' && msg.content.startsWith('Tool: '))) {
             const content = typeof msg.content === 'string' ? msg.content : ''
             // Parse "Tool: name\nResult: content" format
@@ -691,6 +742,13 @@ const chatMessages = computed(() => {
               }
               toolResultsMap.set(toolName, { toolName, result })
             }
+          }
+          // Handle Anthropic tool_result in content array
+          if (Array.isArray(msg.content)) {
+            const contentResults = extractToolResultsFromContent(msg.content)
+            contentResults.forEach((value, key) => {
+              toolResultsMap.set(key, value)
+            })
           }
         })
       }
@@ -759,9 +817,18 @@ const chatMessages = computed(() => {
       }
       // Handle Chat Completions API format (messages field)
       else if (reqObj.messages && Array.isArray(reqObj.messages)) {
+        // Handle Anthropic system field
+        if (reqObj.system) {
+          const systemText = typeof reqObj.system === 'string'
+            ? reqObj.system
+            : extractContentText(reqObj.system)
+          if (systemText) {
+            messages.push({ role: 'system', content: systemText })
+          }
+        }
         reqObj.messages.forEach((msg: { role: string; content: string | object; tool_calls?: unknown }) => {
-          // Skip tool result messages
-          if (msg.role === 'tool' || (msg.role === 'user' && typeof msg.content === 'string' && msg.content?.startsWith('Tool: '))) return
+          // Skip tool result messages (but not if content is array with tool_result)
+          if (msg.role === 'tool' && typeof msg.content === 'string' && msg.content?.startsWith('Tool: ')) return
 
           const contentText = extractContentText(msg.content)
           const parsed = parseMessageContent(contentText)
@@ -771,10 +838,21 @@ const chatMessages = computed(() => {
             thinkContent: parsed.thinkContent || undefined,
             hasThink: parsed.hasThink
           }
+
+          // Extract tool_calls from OpenAI format
           if (msg.tool_calls) {
             const toolCalls = parseToolCalls(msg.tool_calls, toolResultsMap)
             if (toolCalls.length > 0) parsedMsg.toolCalls = toolCalls
           }
+
+          // Extract tool_use from Anthropic content array
+          if (Array.isArray(msg.content)) {
+            const toolCallsFromContent = extractToolCallsFromContent(msg.content, toolResultsMap)
+            if (toolCallsFromContent.length > 0) {
+              parsedMsg.toolCalls = toolCallsFromContent
+            }
+          }
+
           // If this is an assistant message with think content but no tool_calls,
           // and we have tool results collected, attach them here
           if (msg.role === 'assistant' && !parsedMsg.toolCalls && toolResultsMap.size > 0) {
@@ -868,6 +946,42 @@ const chatMessages = computed(() => {
             messages.push(msg)
           }
         })
+      }
+      // Handle Anthropic Messages API format (content field with type: "message")
+      else if (respObj.type === 'message' && respObj.content && Array.isArray(respObj.content)) {
+        let textContent = ''
+        let thinkContent = ''
+        const toolCalls: ToolCallResult[] = []
+
+        respObj.content.forEach((block: { type?: string; text?: string; thinking?: string; name?: string; input?: unknown; id?: string }) => {
+          if (block.type === 'text' && block.text) {
+            textContent += block.text
+          } else if (block.type === 'thinking' && block.thinking) {
+            thinkContent += block.thinking
+          } else if (block.type === 'tool_use' && block.name) {
+            toolCalls.push({
+              id: block.id || `tool_${block.name}_${Date.now()}`,
+              toolName: block.name,
+              arguments: block.input as Record<string, unknown> || {},
+              result: toolResultsMap.get(block.name)?.result,
+              status: 'success' as const
+            })
+          }
+        })
+
+        const parsed = parseMessageContent(textContent)
+        const msg: { role: string; content: string; thinkContent?: string; hasThink?: boolean; toolCalls?: ToolCallResult[] } = {
+          role: 'assistant',
+          content: parsed.textContent,
+        }
+        if (thinkContent || parsed.thinkContent) {
+          msg.thinkContent = thinkContent + (parsed.thinkContent || '')
+          msg.hasThink = true
+        }
+        if (toolCalls.length > 0) {
+          msg.toolCalls = toolCalls
+        }
+        messages.push(msg)
       }
     }
   } catch {

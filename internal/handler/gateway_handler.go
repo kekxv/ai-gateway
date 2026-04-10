@@ -77,11 +77,13 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		c.Stream(func(w io.Writer) bool {
 			buf := make([]byte, 1024)
 			n, err := streamResp.Read(buf)
-			if err != nil {
-				return false
+			if n > 0 {
+				w.Write(buf[:n])
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
 			}
-			w.Write(buf[:n])
-			return true
+			return err == nil
 		})
 		return
 	}
@@ -237,11 +239,13 @@ func (h *GatewayHandler) CreateResponse(c *gin.Context) {
 		c.Stream(func(w io.Writer) bool {
 			buf := make([]byte, 1024)
 			n, err := streamResp.Read(buf)
-			if err != nil {
-				return false
+			if n > 0 {
+				w.Write(buf[:n])
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
 			}
-			w.Write(buf[:n])
-			return true
+			return err == nil
 		})
 		return
 	}

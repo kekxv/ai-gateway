@@ -38,9 +38,19 @@ func (h *AnthropicHandler) CreateMessages(c *gin.Context) {
 		return
 	}
 
+	// Read raw request body first (for direct forwarding)
+	rawBody, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAnthropicError(
+			models.AnthropicErrorInvalidRequest,
+			"Failed to read request body: "+err.Error(),
+		))
+		return
+	}
+
 	// Parse Anthropic format request
 	var req models.AnthropicMessagesRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := json.Unmarshal(rawBody, &req); err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAnthropicError(
 			models.AnthropicErrorInvalidRequest,
 			"Invalid request body: "+err.Error(),
@@ -71,13 +81,15 @@ func (h *AnthropicHandler) CreateMessages(c *gin.Context) {
 		return
 	}
 
-	// Process through gateway service - keep Anthropic format, let gateway decide whether to convert
+	// Process through gateway service - pass raw body for direct forwarding
 	result, err := h.gatewayService.HandleAnthropicMessages(
 		c.Request.Context(),
 		apiKey,
-		&req, // Keep Anthropic format
+		&req,
+		rawBody, // Pass raw request body for direct forwarding
 		req.Stream,
 		c.Request.Header,
+		c.Request.URL.RawQuery,
 	)
 
 	if err != nil {
@@ -148,11 +160,13 @@ func (h *AnthropicHandler) handleStreamResponse(c *gin.Context, result interface
 		c.Stream(func(w io.Writer) bool {
 			buf := make([]byte, 1024)
 			n, err := streamResp.Read(buf)
-			if err != nil {
-				return false
+			if n > 0 {
+				w.Write(buf[:n])
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
 			}
-			w.Write(buf[:n])
-			return true
+			return err == nil
 		})
 		return
 	}
@@ -164,6 +178,9 @@ func (h *AnthropicHandler) handleStreamResponse(c *gin.Context, result interface
 
 	// Track state for stream conversion
 	state := &service.StreamConversionState{}
+	
+	// Buffer for partial SSE lines
+	var lineBuffer strings.Builder
 
 	// Create a custom reader that converts OpenAI SSE to Anthropic SSE
 	converter := service.NewProtocolConverter()
@@ -171,15 +188,48 @@ func (h *AnthropicHandler) handleStreamResponse(c *gin.Context, result interface
 	c.Stream(func(w io.Writer) bool {
 		buf := make([]byte, 1024)
 		n, err := streamResp.Read(buf)
+		if n > 0 {
+			// Write to line buffer
+			lineBuffer.Write(buf[:n])
+			
+			// Extract complete lines
+			rawData := lineBuffer.String()
+			lastNewline := strings.LastIndex(rawData, "\n")
+			
+			if lastNewline != -1 {
+				completeData := rawData[:lastNewline+1]
+				// Keep remaining partial line
+				lineBuffer.Reset()
+				lineBuffer.WriteString(rawData[lastNewline+1:])
+				
+				// Parse OpenAI SSE format and convert to Anthropic format
+				converted := h.convertStreamData([]byte(completeData), messageID, &contentIndex, converter, state, modelName)
+				if len(converted) > 0 {
+					w.Write(converted)
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+				}
+			}
+		}
+		
 		if err != nil {
+			// If we have remaining data in buffer, try to process it even if it doesn't end with newline
+			remaining := lineBuffer.String()
+			if remaining != "" {
+				// Add a newline to ensure it's processed
+				converted := h.convertStreamData([]byte(remaining+"\n"), messageID, &contentIndex, converter, state, modelName)
+				if len(converted) > 0 {
+					w.Write(converted)
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+				}
+				lineBuffer.Reset()
+			}
 			return false
 		}
-
-		// Parse OpenAI SSE format and convert to Anthropic format
-		converted := h.convertStreamData(buf[:n], messageID, &contentIndex, converter, state, modelName)
-		if len(converted) > 0 {
-			w.Write(converted)
-		}
+		
 		return true
 	})
 }
@@ -249,4 +299,41 @@ func (h *AnthropicHandler) handleErrorResponse(c *gin.Context, err error) {
 			errMsg,
 		))
 	}
+}
+
+// CountTokens handles POST /v1/messages/count_tokens
+func (h *AnthropicHandler) CountTokens(c *gin.Context) {
+	apiKey := middleware.GetAPIKey(c)
+	if apiKey == nil {
+		c.JSON(http.StatusUnauthorized, models.NewAnthropicError(
+			models.AnthropicErrorAuthentication,
+			"Missing API key",
+		))
+		return
+	}
+
+	// Read raw request body
+	rawBody, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAnthropicError(
+			models.AnthropicErrorInvalidRequest,
+			"Failed to read request body: "+err.Error(),
+		))
+		return
+	}
+
+	// Process through gateway service
+	result, err := h.gatewayService.HandleAnthropicCountTokens(
+		c.Request.Context(),
+		apiKey,
+		rawBody,
+		c.Request.Header,
+	)
+
+	if err != nil {
+		h.handleErrorResponse(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
 }
