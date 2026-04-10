@@ -41,7 +41,17 @@ func (r *ModelRepository) FindByName(ctx context.Context, name string) (*models.
 
 func (r *ModelRepository) FindByNameOrAlias(ctx context.Context, name string) (*models.Model, error) {
 	var model models.Model
+
+	// First try to find by name directly
 	err := r.db.WithContext(ctx).
+		Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).
+		Where("name = ?", name).First(&model).Error
+	if err == nil {
+		return &model, nil
+	}
+
+	// If not found by name, try to find by alias
+	err = r.db.WithContext(ctx).
 		Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).
 		Joins("JOIN ModelAlias ma ON ma.modelId = Model.id").
 		Where("ma.alias = ?", name).

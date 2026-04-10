@@ -137,7 +137,9 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 	}
 
 	// 5. Build upstream URL for Responses API
-	targetURL := fmt.Sprintf("%s/responses", strings.TrimSuffix(route.Provider.BaseURL, "/"))
+	// Use type-specific base URL if available, fallback to default
+	baseURL := route.Provider.GetBaseURLForType("openai")
+	targetURL := fmt.Sprintf("%s/responses", strings.TrimSuffix(baseURL, "/"))
 
 	// 6. Send upstream request with forwarded headers
 	resp, err := s.sendResponseUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req, req.Stream, forwardHeaders)
@@ -193,7 +195,7 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 
 	// Cache response ID -> provider mapping for later operations
 	if response.ID != "" {
-		s.cache.Set(response.ID, &route.Provider)
+		s.cache.Set(response.ID, &route.Provider, baseURL)
 	}
 
 	// Update log with completion data
@@ -342,8 +344,8 @@ func (s *ResponseService) CancelResponse(ctx context.Context, apiKey *models.Gat
 
 // getDefaultProvider returns a default provider for forwarding requests
 func (s *ResponseService) getDefaultProvider(ctx context.Context) (*models.Provider, error) {
-	// Get first available (non-disabled) provider
-	providers, err := s.providerRepo.List(ctx, nil)
+	// Get first available (non-disabled) provider with ProviderTypes preloaded
+	providers, err := s.providerRepo.ListWithTypes(ctx, nil)
 	if err != nil || len(providers) == 0 {
 		return nil, errors.New("no available provider")
 	}
@@ -419,7 +421,9 @@ func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *model
 	}
 
 	// 5. Build upstream URL
-	targetURL := fmt.Sprintf("%s/responses/compact", strings.TrimSuffix(route.Provider.BaseURL, "/"))
+	// Use type-specific base URL if available, fallback to default
+	baseURL := route.Provider.GetBaseURLForType("openai")
+	targetURL := fmt.Sprintf("%s/responses/compact", strings.TrimSuffix(baseURL, "/"))
 
 	// 6. Send upstream request with forwarded headers
 	resp, err := s.sendCompactUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req, forwardHeaders)
@@ -897,7 +901,7 @@ func (s *ResponseStreamingResponse) LogAfterComplete(ctx context.Context) {
 
 	// Cache response ID -> provider mapping
 	if responseID != "" && s.provider != nil && s.cache != nil {
-		s.cache.Set(responseID, s.provider)
+		s.cache.Set(responseID, s.provider, s.provider.GetBaseURLForType("openai"))
 	}
 
 	// Estimate completion tokens if not provided

@@ -56,6 +56,17 @@ func (r *ProviderRepository) List(ctx context.Context, userID *uint) ([]models.P
 	return providers, err
 }
 
+// ListWithTypes returns providers with ProviderTypes preloaded
+func (r *ProviderRepository) ListWithTypes(ctx context.Context, userID *uint) ([]models.Provider, error) {
+	var providers []models.Provider
+	query := r.db.WithContext(ctx).Preload("ProviderTypes")
+	if userID != nil {
+		query = query.Where("userId = ?", *userID)
+	}
+	err := query.Find(&providers).Error
+	return providers, err
+}
+
 // ListWithCount returns providers with pagination support
 func (r *ProviderRepository) ListWithCount(ctx context.Context, userID *uint, page, pageSize int) ([]models.Provider, int64, error) {
 	var providers []models.Provider
@@ -104,6 +115,7 @@ func (r *ProviderRepository) Count(ctx context.Context) (int64, error) {
 func (r *ProviderRepository) FindAutoLoadProviders(ctx context.Context) ([]models.Provider, error) {
 	var providers []models.Provider
 	err := r.db.WithContext(ctx).
+		Preload("ProviderTypes").
 		Where("autoLoadModels = ?", true).
 		Where("disabled = ?", false).
 		Find(&providers).Error

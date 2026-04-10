@@ -270,7 +270,7 @@ func (h *ProviderHandler) DeleteProvider(c *gin.Context) {
 func (h *ProviderHandler) LoadModels(c *gin.Context) {
 	id := parseUintParam(c.Param("id"))
 
-	provider, err := h.providerRepo.FindByID(c.Request.Context(), id)
+	provider, err := h.providerRepo.FindByIDWithTypes(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Provider not found"})
 		return
@@ -278,15 +278,18 @@ func (h *ProviderHandler) LoadModels(c *gin.Context) {
 
 	var models []map[string]interface{}
 
+	// Use type-specific base URL for model fetching (prefer openai type)
+	baseURL := provider.GetBaseURLForType("openai")
+
 	// Determine provider type and fetch models accordingly
 	switch strings.ToLower(provider.Type) {
 	case "openai":
-		models, err = h.fetchOpenAIModels(provider.BaseURL, provider.APIKey)
+		models, err = h.fetchOpenAIModels(baseURL, provider.APIKey)
 	case "gemini":
-		models, err = h.fetchGeminiModels(provider.BaseURL, provider.APIKey)
+		models, err = h.fetchGeminiModels(baseURL, provider.APIKey)
 	default:
 		// Try OpenAI-compatible API for custom providers
-		models, err = h.fetchOpenAIModels(provider.BaseURL, provider.APIKey)
+		models, err = h.fetchOpenAIModels(baseURL, provider.APIKey)
 	}
 
 	if err != nil {
@@ -428,7 +431,7 @@ func (h *ProviderHandler) SyncModels(c *gin.Context) {
 	}
 
 	// Fallback to original implementation (for backwards compatibility)
-	provider, err := h.providerRepo.FindByID(c.Request.Context(), id)
+	provider, err := h.providerRepo.FindByIDWithTypes(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Provider not found"})
 		return
@@ -440,15 +443,18 @@ func (h *ProviderHandler) SyncModels(c *gin.Context) {
 		return
 	}
 
+	// Use type-specific base URL for model fetching (prefer openai type)
+	baseURL := provider.GetBaseURLForType("openai")
+
 	// Fetch models from provider
 	var fetchedModels []map[string]interface{}
 	switch strings.ToLower(provider.Type) {
 	case "openai":
-		fetchedModels, err = h.fetchOpenAIModels(provider.BaseURL, provider.APIKey)
+		fetchedModels, err = h.fetchOpenAIModels(baseURL, provider.APIKey)
 	case "gemini":
-		fetchedModels, err = h.fetchGeminiModels(provider.BaseURL, provider.APIKey)
+		fetchedModels, err = h.fetchGeminiModels(baseURL, provider.APIKey)
 	default:
-		fetchedModels, err = h.fetchOpenAIModels(provider.BaseURL, provider.APIKey)
+		fetchedModels, err = h.fetchOpenAIModels(baseURL, provider.APIKey)
 	}
 
 	if err != nil {
@@ -561,7 +567,7 @@ func (h *ProviderHandler) SyncModels(c *gin.Context) {
 func (h *ProviderHandler) AddModels(c *gin.Context) {
 	id := parseUintParam(c.Param("id"))
 
-	provider, err := h.providerRepo.FindByID(c.Request.Context(), id)
+	provider, err := h.providerRepo.FindByIDWithTypes(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Provider not found"})
 		return

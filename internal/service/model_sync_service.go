@@ -67,7 +67,7 @@ func (s *ModelSyncService) SyncProviderModels(ctx context.Context, providerID ui
 		ProviderID: providerID,
 	}
 
-	provider, err := s.providerRepo.FindByID(ctx, providerID)
+	provider, err := s.providerRepo.FindByIDWithTypes(ctx, providerID)
 	if err != nil {
 		result.Error = fmt.Errorf("provider not found: %w", err)
 		return result
@@ -224,12 +224,14 @@ func (s *ModelSyncService) Run(ctx context.Context) {
 
 // fetchModels fetches models from a provider based on its type
 func (s *ModelSyncService) fetchModels(provider *models.Provider) ([]map[string]interface{}, error) {
+	// Use type-specific base URL for model fetching (prefer openai type)
+	baseURL := provider.GetBaseURLForType("openai")
 	switch strings.ToLower(provider.Type) {
 	case "gemini":
-		return s.fetchGeminiModels(provider.BaseURL, provider.APIKey)
+		return s.fetchGeminiModels(baseURL, provider.APIKey)
 	default:
 		// OpenAI-compatible API (including OpenAI, Anthropic, custom)
-		return s.fetchOpenAIModels(provider.BaseURL, provider.APIKey)
+		return s.fetchOpenAIModels(baseURL, provider.APIKey)
 	}
 }
 

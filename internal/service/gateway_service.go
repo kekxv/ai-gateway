@@ -758,6 +758,16 @@ func (s *StreamingResponse) GetCapturedData() (content string, usage *Usage, raw
 	}
 
 	content = contentBuilder.String()
+
+	// Fallback: estimate tokens if not provided
+	if usage.CompletionTokens == 0 && content != "" {
+		usage.CompletionTokens = len(content) / 4
+		if usage.CompletionTokens < 1 {
+			usage.CompletionTokens = 1
+		}
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+
 	return
 }
 
@@ -1189,10 +1199,13 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 
 	// 5. Build upstream request
 	// Determine provider type to use (primary type from ProviderTypes or default)
-	providerType := "openai" // default
-	if len(route.Provider.ProviderTypes) > 0 {
-		providerType = route.Provider.ProviderTypes[0].Type
-	} else if route.Provider.Type != "" {
+	providerType := "openai" // default for chat/completions (prefer openai type)
+	if route.Provider.HasType("openai") {
+		providerType = "openai"
+	} else if len(route.Provider.ProviderTypes) > 0 {
+			// Fallback: use first available type (may require protocol conversion)
+			providerType = route.Provider.ProviderTypes[0].Type
+		} else if route.Provider.Type != "" {
 		providerType = route.Provider.Type
 	}
 	// Get base URL for the specific type (with fallback to default)
@@ -1466,6 +1479,59 @@ func (s *GatewayService) updateLogAndCalculateCost(ctx context.Context, apiKey *
 		promptTokens = resp.Usage.PromptTokens
 		completionTokens = resp.Usage.CompletionTokens
 		totalTokens = resp.Usage.TotalTokens
+	}
+
+	// Fallback: estimate completion tokens if not provided
+	if completionTokens == 0 && resp != nil {
+		totalChars := 0
+		for _, choice := range resp.Choices {
+			if choice.Message != nil {
+				// Add string content
+				if choice.Message.Content.StringContent != "" {
+					totalChars += len(choice.Message.Content.StringContent)
+				}
+				// Add parts content
+				for _, part := range choice.Message.Content.Parts {
+					if part.Type == "text" {
+						totalChars += len(part.Text)
+					}
+				}
+				// Include tool_calls arguments
+				for _, tc := range choice.Message.ToolCalls {
+					totalChars += len(tc.Function.Arguments)
+				}
+			}
+		}
+		if totalChars > 0 {
+			completionTokens = totalChars / 4
+			if completionTokens < 1 {
+				completionTokens = 1
+			}
+			totalTokens = promptTokens + completionTokens
+		}
+	}
+
+	// Fallback: estimate prompt tokens if not provided
+	if promptTokens == 0 && req != nil {
+		totalChars := 0
+		for _, msg := range req.Messages {
+			totalChars += len(msg.Role)
+			if msg.Content.StringContent != "" {
+				totalChars += len(msg.Content.StringContent)
+			}
+			for _, part := range msg.Content.Parts {
+				if part.Type == "text" {
+					totalChars += len(part.Text)
+				}
+			}
+		}
+		if totalChars > 0 {
+			promptTokens = totalChars / 4
+			if promptTokens < 1 {
+				promptTokens = 1
+			}
+			totalTokens = promptTokens + completionTokens
+		}
 	}
 
 	cost := s.billingService.CalculateCost(promptTokens, completionTokens, model.InputTokenPrice, model.OutputTokenPrice)

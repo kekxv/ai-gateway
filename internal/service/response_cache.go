@@ -34,12 +34,16 @@ func NewResponseCache(ttl time.Duration) *ResponseCache {
 }
 
 // Set stores a response ID to provider mapping
-func (c *ResponseCache) Set(responseID string, provider *models.Provider) {
+// baseURL should be the type-specific base URL to use for subsequent requests
+func (c *ResponseCache) Set(responseID string, provider *models.Provider, baseURL string) {
+	if baseURL == "" {
+		baseURL = provider.BaseURL // fallback to default
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[responseID] = ResponseCacheEntry{
 		ProviderID:  provider.ID,
-		ProviderURL: provider.BaseURL,
+		ProviderURL: baseURL,
 		ProviderKey: provider.APIKey,
 		CreatedAt:   time.Now(),
 	}
