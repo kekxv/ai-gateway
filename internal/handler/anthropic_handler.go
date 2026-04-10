@@ -71,21 +71,11 @@ func (h *AnthropicHandler) CreateMessages(c *gin.Context) {
 		return
 	}
 
-	// Convert Anthropic request to OpenAI format for internal processing
-	openAIReq, err := h.converter.ConvertRequest(&req, service.ProtocolAnthropic, service.ProtocolOpenAI)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAnthropicError(
-			models.AnthropicErrorAPI,
-			"Failed to convert request: "+err.Error(),
-		))
-		return
-	}
-
-	// Process through gateway service
-	result, err := h.gatewayService.HandleChatCompletions(
+	// Process through gateway service - keep Anthropic format, let gateway decide whether to convert
+	result, err := h.gatewayService.HandleAnthropicMessages(
 		c.Request.Context(),
 		apiKey,
-		openAIReq.(*service.ChatRequest),
+		&req, // Keep Anthropic format
 		req.Stream,
 		c.Request.Header,
 	)
@@ -105,6 +95,13 @@ func (h *AnthropicHandler) CreateMessages(c *gin.Context) {
 
 // handleNonStreamResponse handles non-streaming response
 func (h *AnthropicHandler) handleNonStreamResponse(c *gin.Context, result interface{}, modelName string) {
+	// Check if response is already Anthropic format (direct forwarding)
+	if anthropicResp, ok := result.(*models.AnthropicMessagesResponse); ok {
+		c.JSON(http.StatusOK, anthropicResp)
+		return
+	}
+
+	// Response is OpenAI format, need to convert back to Anthropic
 	openAIResp, ok := result.(*service.ChatResponse)
 	if !ok {
 		c.JSON(http.StatusInternalServerError, models.NewAnthropicError(
@@ -145,6 +142,22 @@ func (h *AnthropicHandler) handleStreamResponse(c *gin.Context, result interface
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
+	// Check if upstream stream is already Anthropic format (direct forwarding)
+	if streamResp.IsAnthropicStream() {
+		// Direct forwarding - just pass through the stream data
+		c.Stream(func(w io.Writer) bool {
+			buf := make([]byte, 1024)
+			n, err := streamResp.Read(buf)
+			if err != nil {
+				return false
+			}
+			w.Write(buf[:n])
+			return true
+		})
+		return
+	}
+
+	// Upstream stream is OpenAI format, need to convert to Anthropic format
 	// Generate message ID for this stream
 	messageID := "msg_" + strings.ReplaceAll(uuid.New().String(), "-", "")[:24]
 	contentIndex := 0

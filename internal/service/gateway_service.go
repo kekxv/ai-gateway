@@ -635,6 +635,9 @@ type StreamingResponse struct {
 
 	// 实时日志更新器
 	realtimeLogger *RealtimeLogUpdater
+
+	// Protocol indicator for Anthropic streaming
+	isAnthropicStream bool // true if upstream returns Anthropic format, false if OpenAI format
 }
 
 // NewStreamingResponse creates a new streaming response wrapper
@@ -673,6 +676,11 @@ func (s *StreamingResponse) Read(p []byte) (n int, err error) {
 		}
 	}
 	return
+}
+
+// IsAnthropicStream returns whether the upstream stream is in Anthropic format
+func (s *StreamingResponse) IsAnthropicStream() bool {
+	return s.isAnthropicStream
 }
 
 // GetCapturedData returns the captured streaming data and parses it
@@ -1373,4 +1381,353 @@ func weightedRandomSelect(weights []int) int {
 	}
 
 	return len(weights) - 1
+}
+
+// HandleAnthropicMessages handles Anthropic Messages API requests
+// Supports direct forwarding if provider supports anthropic type, otherwise converts to OpenAI format
+func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *models.GatewayAPIKey, req *models.AnthropicMessagesRequest, stream bool, requestHeaders http.Header) (interface{}, error) {
+	startTime := time.Now()
+
+	// Extract and filter headers for forwarding and logging
+	forwardHeaders, headersJSON := extractForwardableHeaders(requestHeaders)
+
+	// 1. Find model (supports alias and :latest)
+	model, err := s.findModel(ctx, req.Model)
+	if err != nil {
+		log.Printf("[HandleAnthropicMessages] Model not found: %s, error: %v", req.Model, err)
+		return nil, ErrModelNotFound
+	}
+
+	// 2. Select route (weighted random)
+	route, err := s.selectRoute(ctx, model.ID)
+	if err != nil {
+		log.Printf("[HandleAnthropicMessages] No route available: model=%s, modelID=%d, error: %v", model.Name, model.ID, err)
+		return nil, ErrNoRouteAvailable
+	}
+
+	// 3. Check permission
+	if err := s.checkPermission(ctx, apiKey, model.ID); err != nil {
+		log.Printf("[HandleAnthropicMessages] Permission denied: apiKeyID=%d, modelID=%d, error: %v", apiKey.ID, model.ID, err)
+		return nil, err
+	}
+
+	// 4. Check balance
+	if err := s.checkBalance(ctx, apiKey.UserID, model); err != nil {
+		log.Printf("[HandleAnthropicMessages] Insufficient balance: userID=%v, model=%s", apiKey.UserID, model.Name)
+		return nil, err
+	}
+
+	// Create initial log entry (status=0 means pending)
+	logEntry := &models.Log{
+		APIKeyID:       getAPIKeyIDPtr(apiKey.ID),
+		ModelName:      model.Name,
+		ProviderName:   route.Provider.Name,
+		Status:         0, // pending
+		RequestHeaders: headersJSON,
+	}
+	if apiKey.ID != 0 || apiKey.IsChatKey {
+		if err := s.logRepo.Create(ctx, logEntry); err != nil {
+			logEntry.ID = 0
+		} else if apiKey.LogDetails {
+			reqBody, _ := json.Marshal(req)
+			reqGz, _ := utils.GzipCompress(reqBody)
+			detail := &models.LogDetail{
+				LogID:       logEntry.ID,
+				RequestBody: reqGz,
+			}
+			s.logDetailRepo.Create(ctx, detail)
+		}
+	} else {
+		logEntry.ID = 0
+	}
+
+	// Helper to update log on completion
+	updateLog := func(latency int, promptTokens, completionTokens, totalTokens int, cost int64, status int, errMsg string, respHeaders map[string]string) {
+		if logEntry.ID == 0 {
+			return
+		}
+		updates := map[string]interface{}{
+			"latency":           latency,
+			"promptTokens":     promptTokens,
+			"completionTokens": completionTokens,
+			"totalTokens":      totalTokens,
+			"cost":              cost,
+			"status":            status,
+		}
+		if errMsg != "" {
+			updates["errorMessage"] = errMsg
+		}
+		if len(respHeaders) > 0 {
+			respHeadersJSON, _ := json.Marshal(respHeaders)
+			updates["responseHeaders"] = string(respHeadersJSON)
+		}
+		s.logRepo.UpdateByID(ctx, logEntry.ID, updates)
+	}
+
+	// 5. Determine if provider supports anthropic protocol
+	providerSupportsAnthropic := route.Provider.HasType("anthropic")
+	converter := NewProtocolConverter()
+
+	// Determine the upstream model name
+	upstreamModelName := route.Model.Name
+
+	if providerSupportsAnthropic {
+		// Direct forwarding - provider supports anthropic
+		baseURL := route.Provider.GetBaseURLForType("anthropic")
+		targetURL := fmt.Sprintf("%s/v1/messages", strings.TrimSuffix(baseURL, "/"))
+
+		log.Printf("[HandleAnthropicMessages] Provider '%s' supports anthropic, direct forwarding to: %s", route.Provider.Name, targetURL)
+
+		// Update model name in request
+		upstreamReq := *req
+		upstreamReq.Model = upstreamModelName
+
+		// Send Anthropic format request
+		resp, err := s.sendAnthropicUpstreamRequest(ctx, targetURL, route.Provider.APIKey, &upstreamReq, stream, forwardHeaders)
+		if err != nil {
+			log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s", err, targetURL)
+			latency := int(time.Since(startTime).Milliseconds())
+			updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
+			return nil, ErrUpstreamFailed
+		}
+
+		if resp.StatusCode >= 400 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
+			latency := int(time.Since(startTime).Milliseconds())
+			s.handleUpstreamError(ctx, resp, route)
+			updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
+			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+
+		// Handle streaming response (direct Anthropic format)
+		if stream {
+			streamResp := NewStreamingResponse(resp, ctx)
+			streamResp.logID = logEntry.ID
+			streamResp.apiKey = apiKey
+			streamResp.model = model
+			streamResp.providerName = route.Provider.Name
+			streamResp.isAnthropicStream = true
+			streamResp.startTime = startTime
+			streamResp.logRepo = s.logRepo
+			streamResp.logDetailRepo = s.logDetailRepo
+			streamResp.billingService = s.billingService
+			streamResp.responseHeaders = extractResponseHeaders(resp.Header)
+
+			if logEntry.ID != 0 {
+				streamResp.realtimeLogger = NewRealtimeLogUpdater(
+					s.logRepo,
+					s.logDetailRepo,
+					logEntry.ID,
+					apiKey,
+					model,
+					200*time.Millisecond,
+				)
+			}
+
+			log.Printf("[HandleAnthropicMessages] Response type: anthropic (direct stream)")
+			return streamResp, nil
+		}
+
+		// Handle non-streaming response (direct Anthropic format)
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			log.Printf("[HandleAnthropicMessages] Read response body failed: %v", err)
+			latency := int(time.Since(startTime).Milliseconds())
+			updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil)
+			return nil, err
+		}
+
+		var anthropicResp models.AnthropicMessagesResponse
+		if err := json.Unmarshal(body, &anthropicResp); err != nil {
+			log.Printf("[HandleAnthropicMessages] Parse response failed: %v, body: %s", err, string(body))
+			latency := int(time.Since(startTime).Milliseconds())
+			updateLog(latency, 0, 0, 0, 0, 500, fmt.Sprintf("Parse error: %v", err), nil)
+			return nil, err
+		}
+
+		log.Printf("[HandleAnthropicMessages] Response type: anthropic (direct)")
+
+		// Update log and calculate cost
+		latency := int(time.Since(startTime).Milliseconds())
+		respHeaders := extractResponseHeaders(resp.Header)
+		s.updateAnthropicLogAndCalculateCost(ctx, apiKey, model, route.Provider.Name, req, &anthropicResp, latency, logEntry.ID, respHeaders)
+
+		return &anthropicResp, nil
+	}
+
+	// Convert to OpenAI format - provider doesn't support anthropic
+	log.Printf("[HandleAnthropicMessages] Provider '%s' doesn't support anthropic, converting to OpenAI format", route.Provider.Name)
+
+	openAIReq, err := converter.ConvertRequest(req, ProtocolAnthropic, ProtocolOpenAI)
+	if err != nil {
+		log.Printf("[HandleAnthropicMessages] Convert request failed: %v", err)
+		return nil, err
+	}
+
+	// Get OpenAI base URL
+	baseURL := route.Provider.GetBaseURLForType("openai")
+	targetURL := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(baseURL, "/"))
+
+	log.Printf("[HandleAnthropicMessages] Sending OpenAI format request to: %s, stream: %v, model: %s", targetURL, stream, upstreamModelName)
+
+	// Update model name in request
+	chatReq := openAIReq.(*ChatRequest)
+	chatReq.Model = upstreamModelName
+
+	// Send OpenAI format request
+	resp, err := s.sendUpstreamRequest(ctx, targetURL, route.Provider.APIKey, chatReq, stream, forwardHeaders)
+	if err != nil {
+		log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s", err, targetURL)
+		latency := int(time.Since(startTime).Milliseconds())
+		updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
+		return nil, ErrUpstreamFailed
+	}
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
+		latency := int(time.Since(startTime).Milliseconds())
+		s.handleUpstreamError(ctx, resp, route)
+		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
+		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+	}
+
+	// Handle streaming response (need to convert back to Anthropic format)
+	if stream {
+		streamResp := NewStreamingResponse(resp, ctx)
+		streamResp.logID = logEntry.ID
+		streamResp.apiKey = apiKey
+		streamResp.model = model
+		streamResp.providerName = route.Provider.Name
+		streamResp.isAnthropicStream = false // OpenAI stream that needs conversion
+		streamResp.startTime = startTime
+		streamResp.logRepo = s.logRepo
+		streamResp.logDetailRepo = s.logDetailRepo
+		streamResp.billingService = s.billingService
+		streamResp.responseHeaders = extractResponseHeaders(resp.Header)
+
+		if logEntry.ID != 0 {
+			streamResp.realtimeLogger = NewRealtimeLogUpdater(
+				s.logRepo,
+				s.logDetailRepo,
+				logEntry.ID,
+				apiKey,
+				model,
+				200*time.Millisecond,
+			)
+		}
+
+		log.Printf("[HandleAnthropicMessages] Response type: anthropic (converted from openai stream)")
+		return streamResp, nil
+	}
+
+	// Handle non-streaming response (convert back to Anthropic format)
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		log.Printf("[HandleAnthropicMessages] Read response body failed: %v", err)
+		latency := int(time.Since(startTime).Milliseconds())
+		updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil)
+		return nil, err
+	}
+
+	var chatResp ChatResponse
+	if err := json.Unmarshal(body, &chatResp); err != nil {
+		log.Printf("[HandleAnthropicMessages] Parse response failed: %v, body: %s", err, string(body))
+		latency := int(time.Since(startTime).Milliseconds())
+		updateLog(latency, 0, 0, 0, 0, 500, fmt.Sprintf("Parse error: %v", err), nil)
+		return nil, err
+	}
+
+	// Convert OpenAI response back to Anthropic format
+	anthropicResp, err := converter.ConvertResponse(&chatResp, ProtocolOpenAI, ProtocolAnthropic, req.Model)
+	if err != nil {
+		log.Printf("[HandleAnthropicMessages] Convert response failed: %v", err)
+		return nil, err
+	}
+
+	log.Printf("[HandleAnthropicMessages] Response type: anthropic (converted from openai)")
+
+	// Update log and calculate cost
+	latency := int(time.Since(startTime).Milliseconds())
+	respHeaders := extractResponseHeaders(resp.Header)
+	s.updateLogAndCalculateCost(ctx, apiKey, model, route.Provider.Name, chatReq, &chatResp, latency, logEntry.ID, respHeaders)
+
+	return anthropicResp, nil
+}
+
+// sendAnthropicUpstreamRequest sends an Anthropic format request to the upstream provider
+func (s *GatewayService) sendAnthropicUpstreamRequest(ctx context.Context, url, apiKey string, req *models.AnthropicMessagesRequest, stream bool, forwardHeaders map[string]string) (*http.Response, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		log.Printf("[sendAnthropicUpstreamRequest] Marshal request failed: %v", err)
+		return nil, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		log.Printf("[sendAnthropicUpstreamRequest] Create request failed: %v, URL: %s", err, url)
+		return nil, err
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", apiKey) // Anthropic uses x-api-key header
+	httpReq.Header.Set("anthropic-version", "2023-06-01") // Required by Anthropic API
+
+	// Forward additional headers
+	for key, value := range forwardHeaders {
+		httpReq.Header.Set(key, value)
+	}
+
+	log.Printf("[sendAnthropicUpstreamRequest] Sending request to: %s, stream: %v, model: %s", url, stream, req.Model)
+	return s.httpClient.Do(httpReq)
+}
+
+// updateAnthropicLogAndCalculateCost updates log and calculates cost for Anthropic format responses
+func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, req *models.AnthropicMessagesRequest, resp *models.AnthropicMessagesResponse, latency int, logID uint, respHeaders map[string]string) {
+	var promptTokens, completionTokens, totalTokens int
+	if resp.Usage != nil {
+		promptTokens = resp.Usage.InputTokens
+		completionTokens = resp.Usage.OutputTokens
+		totalTokens = promptTokens + completionTokens
+	}
+
+	cost := s.billingService.CalculateCost(promptTokens, completionTokens, model.InputTokenPrice, model.OutputTokenPrice)
+
+	// Determine owner channel (for shared channels)
+	ownerChannelID, ownerChannelUserID := s.determineChannelOwner(ctx, apiKey, model.ID)
+
+	// Deduct cost
+	if cost > 0 && apiKey.UserID != nil {
+		s.billingService.DeductAndDistribute(ctx, apiKey.UserID, ownerChannelUserID, cost)
+	}
+
+	// Update log entry
+	if logID > 0 {
+		updates := map[string]interface{}{
+			"latency":              latency,
+			"promptTokens":        promptTokens,
+			"completionTokens":    completionTokens,
+			"totalTokens":         totalTokens,
+			"cost":                 cost,
+			"ownerChannelId":     ownerChannelID,
+			"ownerChannelUserId": ownerChannelUserID,
+			"status":               200,
+		}
+		if len(respHeaders) > 0 {
+			respHeadersJSON, _ := json.Marshal(respHeaders)
+			updates["responseHeaders"] = string(respHeadersJSON)
+		}
+		s.logRepo.UpdateByID(ctx, logID, updates)
+
+		if apiKey.LogDetails {
+			respBody, _ := json.Marshal(resp)
+			respGz, _ := utils.GzipCompress(respBody)
+			s.logDetailRepo.UpdateResponseBody(ctx, logID, respGz)
+		}
+	}
 }
