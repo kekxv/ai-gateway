@@ -1474,7 +1474,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	if providerSupportsAnthropic {
 		// Direct forwarding - provider supports anthropic
 		baseURL := route.Provider.GetBaseURLForType("anthropic")
-		targetURL := fmt.Sprintf("%s/v1/messages", strings.TrimSuffix(baseURL, "/"))
+		targetURL := fmt.Sprintf("%s/messages", strings.TrimSuffix(baseURL, "/"))
 
 		log.Printf("[HandleAnthropicMessages] Provider '%s' supports anthropic, direct forwarding to: %s", route.Provider.Name, targetURL)
 
