@@ -76,6 +76,21 @@ func CreateTestModel(db *gorm.DB, overrides ...func(*models.Model)) *models.Mode
 	}
 
 	db.Create(model)
+
+	// Create default ModelAlias record for the model name
+	db.Create(&models.ModelAlias{
+		ModelID: model.ID,
+		Alias:   model.Name,
+	})
+
+	// If Alias field is set and different from Name, create an alias record
+	if model.Alias != "" && model.Alias != model.Name {
+		db.Create(&models.ModelAlias{
+			ModelID: model.ID,
+			Alias:   model.Alias,
+		})
+	}
+
 	return model
 }
 

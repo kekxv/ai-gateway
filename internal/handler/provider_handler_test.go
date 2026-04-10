@@ -19,9 +19,10 @@ func TestListProvidersHandler_Success(t *testing.T) {
 	defer test.CleanupTestDB(db)
 
 	providerRepo := repository.NewProviderRepository(db)
+	providerTypeRepo := repository.NewProviderTypeRepository(db)
 	modelRepo := repository.NewModelRepository(db)
 	modelRouteRepo := repository.NewModelRouteRepository(db)
-	providerHandler := NewProviderHandler(providerRepo, modelRepo, modelRouteRepo, nil)
+	providerHandler := NewProviderHandler(providerRepo, providerTypeRepo, modelRepo, modelRouteRepo, nil)
 
 	// Create test providers
 	test.CreateTestProvider(db, func(p *models.Provider) { p.Name = "provider1" })
@@ -54,9 +55,10 @@ func TestCreateProviderHandler_Success(t *testing.T) {
 	defer test.CleanupTestDB(db)
 
 	providerRepo := repository.NewProviderRepository(db)
+	providerTypeRepo := repository.NewProviderTypeRepository(db)
 	modelRepo := repository.NewModelRepository(db)
 	modelRouteRepo := repository.NewModelRouteRepository(db)
-	providerHandler := NewProviderHandler(providerRepo, modelRepo, modelRouteRepo, nil)
+	providerHandler := NewProviderHandler(providerRepo, providerTypeRepo, modelRepo, modelRouteRepo, nil)
 
 	adminUser := test.CreateTestAdmin(db, "admin@example.com")
 
@@ -87,9 +89,10 @@ func TestCreateProviderHandler_MissingName(t *testing.T) {
 	defer test.CleanupTestDB(db)
 
 	providerRepo := repository.NewProviderRepository(db)
+	providerTypeRepo := repository.NewProviderTypeRepository(db)
 	modelRepo := repository.NewModelRepository(db)
 	modelRouteRepo := repository.NewModelRouteRepository(db)
-	providerHandler := NewProviderHandler(providerRepo, modelRepo, modelRouteRepo, nil)
+	providerHandler := NewProviderHandler(providerRepo, providerTypeRepo, modelRepo, modelRouteRepo, nil)
 
 	adminUser := test.CreateTestAdmin(db, "admin@example.com")
 
@@ -117,9 +120,10 @@ func TestGetProviderHandler_Success(t *testing.T) {
 	defer test.CleanupTestDB(db)
 
 	providerRepo := repository.NewProviderRepository(db)
+	providerTypeRepo := repository.NewProviderTypeRepository(db)
 	modelRepo := repository.NewModelRepository(db)
 	modelRouteRepo := repository.NewModelRouteRepository(db)
-	providerHandler := NewProviderHandler(providerRepo, modelRepo, modelRouteRepo, nil)
+	providerHandler := NewProviderHandler(providerRepo, providerTypeRepo, modelRepo, modelRouteRepo, nil)
 
 	test.CreateTestProvider(db, func(p *models.Provider) {
 		p.Name = "test-provider"
@@ -152,9 +156,10 @@ func TestGetProviderHandler_NotFound(t *testing.T) {
 	defer test.CleanupTestDB(db)
 
 	providerRepo := repository.NewProviderRepository(db)
+	providerTypeRepo := repository.NewProviderTypeRepository(db)
 	modelRepo := repository.NewModelRepository(db)
 	modelRouteRepo := repository.NewModelRouteRepository(db)
-	providerHandler := NewProviderHandler(providerRepo, modelRepo, modelRouteRepo, nil)
+	providerHandler := NewProviderHandler(providerRepo, providerTypeRepo, modelRepo, modelRouteRepo, nil)
 
 	adminUser := test.CreateTestAdmin(db, "admin@example.com")
 
@@ -176,9 +181,10 @@ func TestUpdateProviderHandler_Success(t *testing.T) {
 	defer test.CleanupTestDB(db)
 
 	providerRepo := repository.NewProviderRepository(db)
+	providerTypeRepo := repository.NewProviderTypeRepository(db)
 	modelRepo := repository.NewModelRepository(db)
 	modelRouteRepo := repository.NewModelRouteRepository(db)
-	providerHandler := NewProviderHandler(providerRepo, modelRepo, modelRouteRepo, nil)
+	providerHandler := NewProviderHandler(providerRepo, providerTypeRepo, modelRepo, modelRouteRepo, nil)
 
 	test.CreateTestProvider(db, func(p *models.Provider) {
 		p.Name = "original-name"
@@ -210,9 +216,10 @@ func TestDeleteProviderHandler_Success(t *testing.T) {
 	defer test.CleanupTestDB(db)
 
 	providerRepo := repository.NewProviderRepository(db)
+	providerTypeRepo := repository.NewProviderTypeRepository(db)
 	modelRepo := repository.NewModelRepository(db)
 	modelRouteRepo := repository.NewModelRouteRepository(db)
-	providerHandler := NewProviderHandler(providerRepo, modelRepo, modelRouteRepo, nil)
+	providerHandler := NewProviderHandler(providerRepo, providerTypeRepo, modelRepo, modelRouteRepo, nil)
 
 	test.CreateTestProvider(db, func(p *models.Provider) {
 		p.Name = "to-delete"

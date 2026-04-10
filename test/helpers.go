@@ -33,6 +33,10 @@ func SetupTestDB(t *testing.T) *gorm.DB {
 		&models.GatewayAPIKeyChannel{},
 		&models.ChannelAllowedModel{},
 		&models.ProviderModel{},
+		&models.ModelAlias{},
+		&models.ProviderType{},
+		&models.Conversation{},
+		&models.Message{},
 	)
 	if err != nil {
 		t.Fatalf("Failed to migrate test database: %v", err)
