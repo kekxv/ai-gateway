@@ -21,52 +21,55 @@
         :key="provider.id"
         class="bg-white rounded-lg shadow-sm border border-gray-100 p-4 hover:shadow-md transition-shadow"
       >
-        <!-- Header -->
-        <div class="flex items-start justify-between mb-3 gap-2">
-          <div class="flex-1 min-w-0">
-            <h3 class="font-semibold text-gray-800 truncate">{{ provider.name }}</h3>
-            <div v-if="provider.providerTypes && provider.providerTypes.length > 0" class="mt-1 space-y-1">
-              <div v-for="pt in provider.providerTypes" :key="pt.type" class="text-sm text-gray-500 truncate">
-                <span class="font-medium text-gray-600">{{ pt.type }}:</span> {{ pt.baseURL }}
-              </div>
-            </div>
-            <p v-else class="text-sm text-gray-500 truncate mt-1">{{ provider.base_url || provider.baseURL }}</p>
-          </div>
-          <el-tag :type="provider.disabled ? 'danger' : 'success'" size="small" class="shrink-0">
+        <!-- Header: Name + Status -->
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-semibold text-gray-800 truncate">{{ provider.name }}</h3>
+          <el-tag :type="provider.disabled ? 'danger' : 'success'" size="small">
             {{ provider.disabled ? t('common.disabled') : t('common.enabled') }}
           </el-tag>
         </div>
 
-        <!-- Types -->
-        <div class="flex items-center gap-1 mb-3 flex-wrap">
-          <el-tag v-for="typeItem in (provider.typesList || [provider.type || 'custom'])" :key="typeItem" size="small" effect="plain">
-            {{ typeItem }}
-          </el-tag>
+        <!-- Types with BaseURLs -->
+        <div class="mb-3 space-y-2">
+          <template v-if="provider.providerTypes && provider.providerTypes.length > 0">
+            <div
+              v-for="pt in provider.providerTypes"
+              :key="getPtType(pt)"
+              class="flex items-center gap-2 text-sm"
+            >
+              <el-tag size="small" effect="plain">{{ getPtType(pt) }}</el-tag>
+              <span class="text-gray-500 truncate flex-1" :title="getPtBaseURL(pt)">{{ getPtBaseURL(pt) }}</span>
+            </div>
+          </template>
+          <template v-else>
+            <div class="flex items-center gap-2 text-sm">
+              <el-tag size="small" effect="plain">{{ provider.type || 'openai' }}</el-tag>
+              <span class="text-gray-500 truncate flex-1">{{ provider.base_url || provider.baseURL }}</span>
+            </div>
+          </template>
         </div>
 
         <!-- Auto Load Models -->
-        <div class="flex items-center gap-2 mb-4">
+        <div class="flex items-center gap-2 mb-3">
           <span class="text-xs text-gray-400">{{ t('provider.autoLoadModels') }}</span>
-          <el-tag :type="provider.auto_load_models || provider.autoLoadModels ? 'success' : 'info'" size="small">
+          <el-tag :type="(provider.auto_load_models || provider.autoLoadModels) ? 'success' : 'info'" size="small">
             {{ (provider.auto_load_models || provider.autoLoadModels) ? t('common.yes') : t('common.no') }}
           </el-tag>
         </div>
 
         <!-- Actions -->
         <div class="flex flex-wrap gap-2 pt-3 border-t border-gray-100">
-          <el-button size="small" @click="openEditDialog(provider)">
-            <el-icon class="mr-1"><Edit /></el-icon>
+          <el-button size="small" link type="primary" @click="openEditDialog(provider)">
             {{ t('common.edit') }}
           </el-button>
-          <el-button size="small" type="success" @click="openModelsDialog(provider)">
-            <el-icon class="mr-1"><Download /></el-icon>
+          <el-button size="small" link type="success" @click="openModelsDialog(provider)">
             {{ t('provider.loadModels') }}
           </el-button>
-          <el-button size="small" :type="provider.disabled ? 'warning' : 'info'" @click="toggleDisabled(provider)">
+          <el-button size="small" link :type="provider.disabled ? 'warning' : 'info'" @click="toggleDisabled(provider)">
             {{ provider.disabled ? t('common.enabled') : t('common.disabled') }}
           </el-button>
-          <el-button size="small" type="danger" @click="deleteProvider(provider)">
-            <el-icon><Delete /></el-icon>
+          <el-button size="small" link type="danger" @click="deleteProvider(provider)">
+            {{ t('common.delete') }}
           </el-button>
         </div>
       </div>
@@ -189,7 +192,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Search, Edit, Download, Delete } from '@element-plus/icons-vue'
+import { Loading, Search } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { providerApi } from '@/api/provider'
 import { modelApi } from '@/api/model'
@@ -305,6 +308,10 @@ const getDefaultBaseURL = (typeName: string): string => {
   return defaults[typeName] || ''
 }
 
+// Helper functions to handle both camelCase and PascalCase field names
+const getPtType = (pt: { type?: string; Type?: string }) => pt.type || pt.Type || ''
+const getPtBaseURL = (pt: { baseURL?: string; BaseURL?: string }) => pt.baseURL || pt.BaseURL || ''
+
 const handleTypesChange = (types: string[]) => {
   // Initialize providerTypeMap for new types
   for (const t of types) {
@@ -339,7 +346,7 @@ const openEditDialog = (provider: Provider) => {
   form.providerTypeMap = {}
   if (provider.providerTypes && provider.providerTypes.length > 0) {
     for (const pt of provider.providerTypes) {
-      form.providerTypeMap[pt.type] = pt.baseURL
+      form.providerTypeMap[getPtType(pt)] = getPtBaseURL(pt)
     }
   } else {
     // Fallback to default baseURL for all types

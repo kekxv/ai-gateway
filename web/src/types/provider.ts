@@ -1,8 +1,13 @@
 // Provider types
 export interface ProviderType {
-  type: string
-  baseURL: string
+  providerId?: number
+  ProviderID?: number
+  type?: string
+  Type?: string
+  baseURL?: string
+  BaseURL?: string
   createdAt?: string
+  CreatedAt?: string
 }
 
 export interface Provider {
