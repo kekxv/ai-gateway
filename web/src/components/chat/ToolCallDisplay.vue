@@ -341,10 +341,20 @@ const renderResult = (toolCall: ToolCallResult) => {
     case 'fetch_webpage':
       return renderWebpageResult(result)
     case 'web_canvas': {
-      const canvasData = result as { width?: number; height?: number; message?: string }
+      // Handle string result (JSON string from logs)
+      let canvasData: { width?: number; height?: number; message?: string; success?: boolean; canvasId?: string }
+      if (typeof result === 'string') {
+        try {
+          canvasData = JSON.parse(result)
+        } catch {
+          canvasData = { message: result }
+        }
+      } else {
+        canvasData = result as { width?: number; height?: number; message?: string; success?: boolean; canvasId?: string }
+      }
       return h('div', { class: 'tool-result-canvas' }, [
         h('el-icon', { class: 'canvas-icon' }, [h(Picture)]),
-        h('span', {}, canvasData.message || `Canvas 绘制完成 (${canvasData.width}x${canvasData.height})`)
+        h('span', {}, canvasData.message || `Canvas 绘制完成 (${canvasData.width ?? '?'}x${canvasData.height ?? '?'})`)
       ])
     }
     case 'draw_chart': {

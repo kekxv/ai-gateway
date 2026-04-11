@@ -386,9 +386,17 @@ interface CanvasOperation {
 
 /**
  * 从操作参数中提取填充颜色
- * 支持多种格式：fillColor, fillStyle, style.fill, style.fillStyle
+ * 支持多种格式：
+ * - fill 直接作为颜色值（如 fill: "#38761d"）
+ * - fillColor, fillStyle 作为颜色字段
+ * - style.fill, style.fillStyle 嵌套格式
  */
 function getFillColor(params: Record<string, unknown>, defaultColor = '#000000'): string {
+  // Check if fill is directly a color string (not boolean)
+  const fill = params.fill
+  if (typeof fill === 'string' && fill !== '') {
+    return fill
+  }
   if (params.fillColor) return params.fillColor as string
   if (params.fillStyle) return params.fillStyle as string
   if (params.style && typeof params.style === 'object') {
@@ -400,10 +408,33 @@ function getFillColor(params: Record<string, unknown>, defaultColor = '#000000')
 }
 
 /**
+ * 检查是否需要填充
+ * fill 为 true 或 fill 为颜色字符串时都返回 true
+ */
+function shouldFill(params: Record<string, unknown>): boolean {
+  const fill = params.fill
+  return fill === true || (typeof fill === 'string' && fill !== '')
+}
+
+/**
+ * 检查是否需要描边
+ * stroke 为 true 或 stroke 为颜色字符串时都返回 true
+ */
+function shouldStroke(params: Record<string, unknown>): boolean {
+  const stroke = params.stroke
+  return stroke === true || (typeof stroke === 'string' && stroke !== '')
+}
+
+/**
  * 从操作参数中提取描边颜色
- * 支持多种格式：strokeColor, strokeStyle, style.stroke, style.strokeStyle
+ * 支持多种格式：stroke（直接颜色），strokeColor, strokeStyle, style.stroke, style.strokeStyle
  */
 function getStrokeColor(params: Record<string, unknown>, defaultColor = '#000000'): string {
+  // Check if stroke is directly a color string (not boolean)
+  const stroke = params.stroke
+  if (typeof stroke === 'string' && stroke !== '') {
+    return stroke
+  }
   if (params.strokeColor) return params.strokeColor as string
   if (params.strokeStyle) return params.strokeStyle as string
   if (params.style && typeof params.style === 'object') {
@@ -546,14 +577,19 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
       const rw = (params.width as number) ?? 100
       const rh = (params.height as number) ?? 100
 
-      if (params.fill === true) {
+      if (shouldFill(params)) {
         ctx.fillStyle = getFillColor(params)
         ctx.fillRect(rx, ry, rw, rh)
       }
-      if (params.stroke === true) {
+      if (shouldStroke(params)) {
         ctx.strokeStyle = getStrokeColor(params)
         ctx.lineWidth = getLineWidth(params)
         ctx.strokeRect(rx, ry, rw, rh)
+      }
+      // If no fill/stroke specified, default to fill with default color
+      if (!shouldFill(params) && !shouldStroke(params)) {
+        ctx.fillStyle = getFillColor(params)
+        ctx.fillRect(rx, ry, rw, rh)
       }
       break
     }
@@ -568,15 +604,19 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
       ctx.beginPath()
       ctx.arc(cx, cy, radius, startAngle, endAngle)
 
-      if (params.fill === true) {
+      if (shouldFill(params)) {
         ctx.fillStyle = getFillColor(params)
         ctx.fill()
       }
-      // 默认描边（除非只有填充）
-      if (params.stroke === true || (params.stroke !== false && params.fill !== true)) {
+      if (shouldStroke(params)) {
         ctx.strokeStyle = getStrokeColor(params)
         ctx.lineWidth = getLineWidth(params)
         ctx.stroke()
+      }
+      // If no fill/stroke specified, default to fill with the fill color (or default)
+      if (!shouldFill(params) && !shouldStroke(params)) {
+        ctx.fillStyle = getFillColor(params)
+        ctx.fill()
       }
       break
     }
@@ -590,13 +630,20 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
         (params.startAngle as number) ?? 0,
         (params.endAngle as number) ?? Math.PI
       )
-      if (params.fill === true) {
+      if (shouldFill(params)) {
         ctx.fillStyle = getFillColor(params)
         ctx.fill()
       }
-      ctx.strokeStyle = getStrokeColor(params)
-      ctx.lineWidth = getLineWidth(params)
-      ctx.stroke()
+      if (shouldStroke(params)) {
+        ctx.strokeStyle = getStrokeColor(params)
+        ctx.lineWidth = getLineWidth(params)
+        ctx.stroke()
+      }
+      if (!shouldFill(params) && !shouldStroke(params)) {
+        ctx.strokeStyle = getStrokeColor(params)
+        ctx.lineWidth = getLineWidth(params)
+        ctx.stroke()
+      }
       break
     }
 
@@ -622,14 +669,21 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
 
       if (opType === 'polygon') {
         ctx.closePath()
-        if (params.fill === true) {
+        if (shouldFill(params)) {
           ctx.fillStyle = getFillColor(params)
           ctx.fill()
         }
       }
-      ctx.strokeStyle = getStrokeColor(params)
-      ctx.lineWidth = getLineWidth(params)
-      ctx.stroke()
+      if (shouldStroke(params)) {
+        ctx.strokeStyle = getStrokeColor(params)
+        ctx.lineWidth = getLineWidth(params)
+        ctx.stroke()
+      }
+      if (!shouldFill(params) && !shouldStroke(params)) {
+        ctx.strokeStyle = getStrokeColor(params)
+        ctx.lineWidth = getLineWidth(params)
+        ctx.stroke()
+      }
       break
     }
 
@@ -659,11 +713,16 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
         (params.startAngle as number) ?? 0,
         (params.endAngle as number) ?? Math.PI * 2
       )
-      if (params.fill === true) {
+      if (shouldFill(params)) {
         ctx.fillStyle = getFillColor(params)
         ctx.fill()
       }
-      if (params.stroke === true || (params.stroke !== false && params.fill !== true)) {
+      if (shouldStroke(params)) {
+        ctx.strokeStyle = getStrokeColor(params)
+        ctx.lineWidth = getLineWidth(params)
+        ctx.stroke()
+      }
+      if (!shouldFill(params) && !shouldStroke(params)) {
         ctx.strokeStyle = getStrokeColor(params)
         ctx.lineWidth = getLineWidth(params)
         ctx.stroke()
@@ -702,11 +761,11 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
       const pathData = params.d as string | undefined
       if (!pathData) break
       const path = new Path2D(pathData)
-      if (params.fill === true) {
+      if (shouldFill(params)) {
         ctx.fillStyle = getFillColor(params)
         ctx.fill(path)
       }
-      if (params.stroke === true || params.stroke === undefined) {
+      if (shouldStroke(params) || (!shouldFill(params) && !shouldStroke(params))) {
         ctx.strokeStyle = getStrokeColor(params)
         ctx.lineWidth = getLineWidth(params)
         ctx.stroke(path)

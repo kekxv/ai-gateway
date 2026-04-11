@@ -756,8 +756,17 @@ const chatMessages = computed(() => {
           if (Array.isArray(msg.content)) {
             msg.content.forEach((block: { type?: string; tool_use_id?: string; content?: unknown; is_error?: boolean; name?: string; id?: string; input?: unknown }) => {
               if (block.type === 'tool_result' && block.tool_use_id) {
+                // Parse content if it's a JSON string
+                let parsedContent = block.content
+                if (typeof block.content === 'string') {
+                  try {
+                    parsedContent = JSON.parse(block.content)
+                  } catch {
+                    // Keep as string if not valid JSON
+                  }
+                }
                 toolResultsMap.set(block.tool_use_id, {
-                  result: block.content,
+                  result: parsedContent,
                   isError: block.is_error
                 })
               }
@@ -772,11 +781,18 @@ const chatMessages = computed(() => {
           // Handle tool role with string content (OpenAI format)
           if (msg.role === 'tool' && typeof msg.content === 'string') {
             const content = msg.content
+            // Try to parse as JSON first
+            let parsedContent: unknown = content
+            try {
+              parsedContent = JSON.parse(content)
+            } catch {
+              // Keep as string if not valid JSON
+            }
             // Try to match with tool_call_id if available
             const toolCallId = (msg as { tool_call_id?: string }).tool_call_id
             if (toolCallId) {
               toolResultsMap.set(toolCallId, {
-                result: content
+                result: parsedContent
               })
             }
           }

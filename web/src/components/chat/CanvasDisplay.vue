@@ -149,22 +149,51 @@ const redrawCanvas = async () => {
   }
 }
 
-// Canvas 绘图操作函数（复制自 toolExecutor.ts）
+// Canvas 绘图操作函数（兼容多种参数格式）
 function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: Record<string, unknown>) {
-  const { type, ...params } = op
-  if (!type) return
+  // 兼容 type 和 operation 字段
+  const opType = (op.type as string) || (op.operation as string)
+  const { type, operation, ...params } = op
+  if (!opType) return
 
-  switch (type) {
+  // 辅助函数：检查是否需要填充/描边（支持 fill/stroke 直接是颜色字符串）
+  const shouldFill = (): boolean => {
+    const fill = params.fill
+    return fill === true || (typeof fill === 'string' && (fill as string) !== '')
+  }
+  const shouldStroke = (): boolean => {
+    const stroke = params.stroke
+    return stroke === true || (typeof stroke === 'string' && (stroke as string) !== '')
+  }
+  // 辅助函数：获取填充/描边颜色（支持 fill/stroke 直接是颜色值）
+  const getFillColor = (defaultColor = '#000000'): string => {
+    const fill = params.fill
+    if (typeof fill === 'string' && fill !== '') return fill
+    if (params.fillColor) return params.fillColor as string
+    if (params.fillStyle) return params.fillStyle as string
+    if (params.color) return params.color as string
+    return defaultColor
+  }
+  const getStrokeColor = (defaultColor = '#000000'): string => {
+    const stroke = params.stroke
+    if (typeof stroke === 'string' && stroke !== '') return stroke
+    if (params.strokeColor) return params.strokeColor as string
+    if (params.strokeStyle) return params.strokeStyle as string
+    if (params.color) return params.color as string
+    return defaultColor
+  }
+
+  switch (opType) {
     case 'clear':
       ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
       break
     case 'fill':
-      ctx.fillStyle = (params.color as string) || (params.fillStyle as string) || '#000000'
+      ctx.fillStyle = getFillColor()
       ctx.fillRect((params.x as number) ?? 0, (params.y as number) ?? 0,
         (params.width as number) ?? ctx.canvas.width, (params.height as number) ?? ctx.canvas.height)
       break
     case 'stroke':
-      ctx.strokeStyle = (params.color as string) || (params.strokeStyle as string) || '#000000'
+      ctx.strokeStyle = getStrokeColor()
       ctx.lineWidth = (params.lineWidth as number) ?? 1
       ctx.strokeRect((params.x as number) ?? 0, (params.y as number) ?? 0,
         (params.width as number) ?? 100, (params.height as number) ?? 100)
@@ -174,14 +203,19 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: Record<string
       const ry = (params.y as number) ?? 0
       const rw = (params.width as number) ?? 100
       const rh = (params.height as number) ?? 100
-      if (params.fill === true) {
-        ctx.fillStyle = (params.fillColor as string) || (params.fillStyle as string) || '#000000'
+      if (shouldFill()) {
+        ctx.fillStyle = getFillColor()
         ctx.fillRect(rx, ry, rw, rh)
       }
-      if (params.stroke === true) {
-        ctx.strokeStyle = (params.strokeColor as string) || (params.strokeStyle as string) || '#000000'
+      if (shouldStroke()) {
+        ctx.strokeStyle = getStrokeColor()
         ctx.lineWidth = (params.lineWidth as number) ?? 1
         ctx.strokeRect(rx, ry, rw, rh)
+      }
+      // 默认填充
+      if (!shouldFill() && !shouldStroke()) {
+        ctx.fillStyle = getFillColor()
+        ctx.fillRect(rx, ry, rw, rh)
       }
       break
     }
@@ -191,14 +225,18 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: Record<string
       const radius = Math.max(0, (params.radius as number) ?? 50)
       ctx.beginPath()
       ctx.arc(cx, cy, radius, 0, Math.PI * 2)
-      if (params.fill === true) {
-        ctx.fillStyle = (params.fillColor as string) || (params.fillStyle as string) || '#000000'
+      if (shouldFill()) {
+        ctx.fillStyle = getFillColor()
         ctx.fill()
       }
-      if (params.stroke === true || (params.stroke !== false && params.fill !== true)) {
-        ctx.strokeStyle = (params.strokeColor as string) || (params.strokeStyle as string) || '#000000'
+      if (shouldStroke()) {
+        ctx.strokeStyle = getStrokeColor()
         ctx.lineWidth = (params.lineWidth as number) ?? 1
         ctx.stroke()
+      }
+      if (!shouldFill() && !shouldStroke()) {
+        ctx.fillStyle = getFillColor()
+        ctx.fill()
       }
       break
     }
@@ -206,13 +244,13 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: Record<string
       ctx.beginPath()
       ctx.moveTo((params.x1 as number) ?? 0, (params.y1 as number) ?? 0)
       ctx.lineTo((params.x2 as number) ?? 100, (params.y2 as number) ?? 100)
-      ctx.strokeStyle = (params.color as string) || (params.strokeStyle as string) || '#000000'
+      ctx.strokeStyle = getStrokeColor()
       ctx.lineWidth = (params.lineWidth as number) ?? 1
       ctx.stroke()
       break
     case 'text':
       ctx.font = (params.font as string) || '16px Arial'
-      ctx.fillStyle = (params.color as string) || (params.fillStyle as string) || '#000000'
+      ctx.fillStyle = getFillColor('#000000')
       ctx.textAlign = (params.align as CanvasTextAlign) || 'left'
       ctx.textBaseline = (params.baseline as CanvasTextBaseline) || 'top'
       ctx.fillText(String(params.text ?? ''), (params.x as number) ?? 0, (params.y as number) ?? 0)
@@ -222,12 +260,17 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: Record<string
       ctx.ellipse((params.x as number) ?? 0, (params.y as number) ?? 0,
         Math.max(0, (params.radiusX as number) ?? 50), Math.max(0, (params.radiusY as number) ?? 30),
         (params.rotation as number) ?? 0, (params.startAngle as number) ?? 0, (params.endAngle as number) ?? Math.PI * 2)
-      if (params.fill === true) {
-        ctx.fillStyle = (params.fillColor as string) || (params.fillStyle as string) || '#000000'
+      if (shouldFill()) {
+        ctx.fillStyle = getFillColor()
         ctx.fill()
       }
-      if (params.stroke === true || (params.stroke !== false && params.fill !== true)) {
-        ctx.strokeStyle = (params.strokeColor as string) || (params.strokeStyle as string) || '#000000'
+      if (shouldStroke()) {
+        ctx.strokeStyle = getStrokeColor()
+        ctx.lineWidth = (params.lineWidth as number) ?? 1
+        ctx.stroke()
+      }
+      if (!shouldFill() && !shouldStroke()) {
+        ctx.strokeStyle = getStrokeColor()
         ctx.lineWidth = (params.lineWidth as number) ?? 1
         ctx.stroke()
       }
@@ -242,16 +285,23 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: Record<string
       for (let i = 1; i < points.length; i++) {
         ctx.lineTo(points[i].x, points[i].y)
       }
-      if (type === 'polygon') {
+      if (opType === 'polygon') {
         ctx.closePath()
-        if (params.fill === true) {
-          ctx.fillStyle = (params.fillColor as string) || (params.fillStyle as string) || '#000000'
+        if (shouldFill()) {
+          ctx.fillStyle = getFillColor()
           ctx.fill()
         }
       }
-      ctx.strokeStyle = (params.strokeColor as string) || (params.strokeStyle as string) || '#000000'
-      ctx.lineWidth = (params.lineWidth as number) ?? 1
-      ctx.stroke()
+      if (shouldStroke()) {
+        ctx.strokeStyle = getStrokeColor()
+        ctx.lineWidth = (params.lineWidth as number) ?? 1
+        ctx.stroke()
+      }
+      if (!shouldFill() && !shouldStroke()) {
+        ctx.strokeStyle = getStrokeColor()
+        ctx.lineWidth = (params.lineWidth as number) ?? 1
+        ctx.stroke()
+      }
       break
     }
     case 'arc': {
@@ -259,13 +309,20 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: Record<string
       ctx.arc((params.x as number) ?? 0, (params.y as number) ?? 0,
         Math.max(0, (params.radius as number) ?? 50),
         (params.startAngle as number) ?? 0, (params.endAngle as number) ?? Math.PI)
-      if (params.fill === true) {
-        ctx.fillStyle = (params.fillColor as string) || '#000000'
+      if (shouldFill()) {
+        ctx.fillStyle = getFillColor()
         ctx.fill()
       }
-      ctx.strokeStyle = (params.strokeColor as string) || (params.strokeStyle as string) || '#000000'
-      ctx.lineWidth = (params.lineWidth as number) ?? 1
-      ctx.stroke()
+      if (shouldStroke()) {
+        ctx.strokeStyle = getStrokeColor()
+        ctx.lineWidth = (params.lineWidth as number) ?? 1
+        ctx.stroke()
+      }
+      if (!shouldFill() && !shouldStroke()) {
+        ctx.strokeStyle = getStrokeColor()
+        ctx.lineWidth = (params.lineWidth as number) ?? 1
+        ctx.stroke()
+      }
       break
     }
     case 'bezier':
@@ -279,7 +336,7 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: Record<string
         ctx.quadraticCurveTo((params.cpx as number) ?? 50, (params.cpy as number) ?? 100,
           (params.x2 as number) ?? 100, (params.y2 as number) ?? 50)
       }
-      ctx.strokeStyle = (params.color as string) || (params.strokeStyle as string) || '#000000'
+      ctx.strokeStyle = getStrokeColor()
       ctx.lineWidth = (params.lineWidth as number) ?? 1
       ctx.stroke()
       break
@@ -287,12 +344,12 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: Record<string
       const pathData = params.d as string | undefined
       if (!pathData) break
       const path = new Path2D(pathData)
-      if (params.fill === true) {
-        ctx.fillStyle = (params.fillColor as string) || (params.fillStyle as string) || '#000000'
+      if (shouldFill()) {
+        ctx.fillStyle = getFillColor()
         ctx.fill(path)
       }
-      if (params.stroke === true || params.stroke === undefined) {
-        ctx.strokeStyle = (params.strokeColor as string) || (params.strokeStyle as string) || '#000000'
+      if (shouldStroke() || (!shouldFill() && !shouldStroke())) {
+        ctx.strokeStyle = getStrokeColor()
         ctx.lineWidth = (params.lineWidth as number) ?? 1
         ctx.stroke(path)
       }
@@ -323,7 +380,7 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: Record<string
       ctx.restore()
       break
     default:
-      console.warn(`未知的 Canvas 操作类型：${type}`)
+      console.warn(`未知的 Canvas 操作类型：${opType}`)
   }
 }
 
