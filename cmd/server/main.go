@@ -314,6 +314,7 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 	admin.DELETE("/conversations/:id", deps.ChatHandler.DeleteConversation)
 	admin.GET("/conversations/:id/messages", deps.ChatHandler.GetMessages)
 	admin.POST("/conversations/:id/messages", deps.ChatHandler.AddMessage)
+		admin.DELETE("/conversations/:id/messages/after/:message_id", deps.ChatHandler.DeleteMessagesAfter)
 	admin.POST("/conversations/:id/chat", deps.ChatHandler.SendMessage)
 	admin.POST("/chat/upload", deps.ChatHandler.UploadFile)
 

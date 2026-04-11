@@ -738,6 +738,18 @@ const regenerateFromUser = async (userIndex: number) => {
   // Remove messages from this user message onwards (local UI update)
   messages.value = messages.value.slice(0, userIndex)
 
+  // Delete messages from database
+  // Get the previous message ID (or 0 if it's the first message)
+  // deleteMessagesAfter deletes messages with id > prevMessageId
+  // So if prevMessageId = 0, it deletes all messages (id > 0)
+  const prevMessageId = userIndex > 0 ? messages.value[userIndex - 1]?.id : 0
+
+  try {
+    await conversationApi.deleteMessagesAfter(currentConversation.value.id, prevMessageId)
+  } catch (e) {
+    console.error('Failed to delete messages:', e)
+  }
+
   // Re-add user message
   const tempUserMsg: ExtendedMessage = {
     id: 0,
@@ -749,7 +761,7 @@ const regenerateFromUser = async (userIndex: number) => {
   messages.value.push(tempUserMsg)
   isUserAtBottom.value = true
 
-  // Delete messages after this user message in database
+  // Save user message to database
   try {
     await conversationApi.addMessage(currentConversation.value.id, {
       role: 'user',
@@ -841,8 +853,20 @@ const confirmEditBlock = async () => {
     newContentToStore = newTextContent
   }
 
+  // Get the message ID before this message (for deletion)
+  // deleteMessagesAfter deletes messages with id > prevMessageId
+  // So if prevMessageId = 0, it deletes all messages (id > 0)
+  const prevMessageId = originalIndex > 0 ? messages.value[originalIndex - 1]?.id : 0
+
   // 删除该消息之后的消息（本地）
   messages.value = messages.value.slice(0, originalIndex)
+
+  // Delete messages from database
+  try {
+    await conversationApi.deleteMessagesAfter(currentConversation.value.id, prevMessageId)
+  } catch (e) {
+    console.error('Failed to delete messages:', e)
+  }
 
   // 添加更新后的用户消息
   const tempUserMsg: ExtendedMessage = {

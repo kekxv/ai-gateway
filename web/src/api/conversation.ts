@@ -31,6 +31,10 @@ export const conversationApi = {
   addMessage: (id: number, data: { role: string; content: string; tool_calls?: string; tokens?: number }) =>
     api.post<{ data: Message }>(`/conversations/${id}/messages`, data),
 
+  // Delete all messages after a specific message ID
+  deleteMessagesAfter: (id: number, messageId: number) =>
+    api.delete(`/conversations/${id}/messages/after/${messageId}`),
+
   // Send a message with streaming (OpenAI-compatible format)
   // Frontend builds full request with model and messages
   sendMessageStream: async (

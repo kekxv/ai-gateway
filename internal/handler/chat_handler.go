@@ -469,6 +469,49 @@ func (h *ChatHandler) AddMessage(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": msg})
 }
 
+// DeleteMessagesAfter deletes all messages after a specific message ID in a conversation
+func (h *ChatHandler) DeleteMessagesAfter(c *gin.Context) {
+	user := middleware.GetCurrentUser(c)
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	id := c.Param("id")
+	var conversationID uint
+	if err := parseUint(id, &conversationID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+
+	messageIDStr := c.Param("message_id")
+	var messageID uint
+	if err := parseUint(messageIDStr, &messageID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid message ID"})
+		return
+	}
+
+	conversation, err := h.conversationRepo.GetByID(c.Request.Context(), conversationID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Conversation not found"})
+		return
+	}
+
+	// Check ownership
+	if conversation.UserID != user.ID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied"})
+		return
+	}
+
+	// Delete messages after the specified ID
+	if err := h.messageRepo.DeleteAfterID(c.Request.Context(), conversationID, messageID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Messages deleted"})
+}
+
 
 // Helper function to parse uint
 func parseUint(s string, v *uint) error {
