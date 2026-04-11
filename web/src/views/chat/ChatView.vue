@@ -141,41 +141,58 @@
         <!-- Messages -->
         <div v-else class="messages-container">
           <div
-            v-for="(message, index) in messages"
-            :key="message.id"
+            v-for="block in expandedMessages"
+            :key="block.id"
             class="message-block"
-            :class="message.role"
+            :class="block.role"
           >
-            <!-- User Message -->
-            <div v-if="message.role === 'user'" class="user-message">
-              <div class="user-bubble">
-                <div v-if="editingMessageIndex === index" class="edit-mode">
-                  <textarea
-                    ref="editTextareaRef"
-                    v-model="editingContent"
-                    class="edit-textarea"
-                    rows="2"
-                    @keydown="handleEditKeydown($event, index)"
-                  ></textarea>
-                  <div class="edit-actions">
-                    <button class="edit-btn cancel" @click="cancelEdit">取消</button>
-                    <button class="edit-btn confirm" @click="confirmEdit(index)">发送</button>
-                  </div>
+            <!-- User Message Block -->
+            <div v-if="block.role === 'user'" class="user-message">
+              <!-- 编辑模式 -->
+              <div v-if="editingBlockId === block.id && block.type === 'text'" class="user-bubble edit-mode">
+                <textarea
+                  ref="editTextareaRef"
+                  v-model="editingContent"
+                  class="edit-textarea"
+                  rows="2"
+                  @keydown="handleEditKeydown"
+                ></textarea>
+                <div class="edit-actions">
+                  <button class="edit-btn cancel" @click="cancelEdit">取消</button>
+                  <button class="edit-btn confirm" @click="confirmEditBlock">发送</button>
                 </div>
-                <div v-else class="user-text">{{ message.content }}</div>
               </div>
-              <div v-if="editingMessageIndex !== index && !sending" class="message-actions">
-                <button class="action-icon-btn" @click="startEdit(index)" title="编辑">
-                  <el-icon><Edit /></el-icon>
-                </button>
-                <button class="action-icon-btn" @click="regenerateFromUser(index)" title="重新生成">
-                  <el-icon><RefreshRight /></el-icon>
+              <!-- 正常显示 -->
+              <template v-else>
+                <div class="user-bubble">
+                  <!-- 图片块 -->
+                  <div v-if="block.type === 'image'" class="image-block">
+                    <AttachmentPreview :part="block.part!" />
+                  </div>
+                  <!-- 文本块 -->
+                  <div v-else class="user-text">{{ block.content }}</div>
+                </div>
+              </template>
+              <!-- 操作按钮 -->
+              <div v-if="editingBlockId !== block.id && !sending" class="message-actions">
+                <!-- 文本块：编辑 + 删除 -->
+                <template v-if="block.type === 'text'">
+                  <button class="action-icon-btn" @click="startEditBlock(block.id, block)" title="编辑">
+                    <el-icon><Edit /></el-icon>
+                  </button>
+                  <button class="action-icon-btn" @click="regenerateFromUser(block.originalIndex)" title="重新生成">
+                    <el-icon><RefreshRight /></el-icon>
+                  </button>
+                </template>
+                <!-- 所有块：删除 -->
+                <button class="action-icon-btn delete" @click="deleteMessage(block.originalIndex)" title="删除">
+                  <el-icon><Delete /></el-icon>
                 </button>
               </div>
             </div>
 
             <!-- Assistant Message (exclude tool role messages) -->
-            <div v-else-if="message.role !== 'tool'" class="assistant-message">
+            <div v-else-if="block.role !== 'tool'" class="assistant-message">
               <div class="assistant-avatar">
                 <el-icon><Monitor /></el-icon>
               </div>
@@ -183,27 +200,30 @@
                 <div class="assistant-header">
                   <div class="assistant-name">AI</div>
                   <div v-if="!sending" class="message-actions">
-                    <button class="action-icon-btn" @click="copyMessage(message.content)" title="复制">
+                    <button class="action-icon-btn" @click="copyMessage(block.message.content)" title="复制">
                       <el-icon><DocumentCopy /></el-icon>
+                    </button>
+                    <button class="action-icon-btn delete" @click="deleteMessage(block.originalIndex)" title="删除">
+                      <el-icon><Delete /></el-icon>
                     </button>
                   </div>
                 </div>
                 <!-- Think Block -->
                 <ThinkBlock
-                  v-if="message.hasThink"
-                  :content="message.thinkContent || ''"
-                  :tokens="estimateThinkTokens(message.thinkContent || '')"
+                  v-if="block.message.hasThink"
+                  :content="block.message.thinkContent || ''"
+                  :tokens="estimateThinkTokens(block.message.thinkContent || '')"
                   :default-collapsed="true"
-                  :force-expand="!message.content && (!message.toolCalls || message.toolCalls.length === 0)"
+                  :force-expand="!block.message.content && (!block.message.toolCalls || block.message.toolCalls.length === 0)"
                 />
                 <!-- Tool Calls Display -->
                 <ToolCallDisplay
-                  v-if="message.toolCalls && message.toolCalls.length > 0"
-                  :tool-calls="message.toolCalls"
+                  v-if="block.message.toolCalls && block.message.toolCalls.length > 0"
+                  :tool-calls="block.message.toolCalls"
                 />
                 <!-- Markdown Content -->
-                <div v-if="message.content" class="assistant-bubble">
-                  <MarkdownRenderer :content="message.content" />
+                <div v-if="block.message.content" class="assistant-bubble">
+                  <MarkdownRenderer :content="block.message.content" />
                 </div>
               </div>
             </div>
@@ -461,7 +481,9 @@ import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ThinkBlock from '@/components/chat/ThinkBlock.vue'
 import ToolCallDisplay from '@/components/chat/ToolCallDisplay.vue'
 import ToolsDialog from '@/components/chat/ToolsDialog.vue'
+import AttachmentPreview from '@/components/chat/AttachmentPreview.vue'
 import { parseMessageContent, parseStreamingThinkContent, estimateThinkTokens, removeThinkContent, parseXmlToolCalls } from '@/utils/messageParser'
+import { compressImage, isImageFile, formatFileSize } from '@/utils/imageUtils'
 import { useToolsStore } from '@/stores/tools'
 import type { ToolCallResult, ToolCall } from '@/types/tool'
 
@@ -593,17 +615,17 @@ const stopStreaming = async () => {
   }
 }
 
-// Edit state
-const editingMessageIndex = ref<number | null>(null)
-const editingContent = ref('')
-const editTextareaRef = ref<HTMLTextAreaElement | null>(null)
-
 // Extended message type with think and tool_calls
 interface ExtendedMessage extends Message {
   thinkContent?: string
   hasThink?: boolean
   toolCalls?: ToolCallResult[]
 }
+
+// Edit state
+const editingBlockId = ref<string | number | null>(null)
+const editingContent = ref('')
+const editTextareaRef = ref<HTMLTextAreaElement | null>(null)
 
 // Helper function to execute tool calls and send results back to AI
 const executeToolCallsAndContinue = async (
@@ -704,78 +726,6 @@ const handleKeydown = (e: KeyboardEvent) => {
   }
 }
 
-// Start editing a message
-const startEdit = (index: number) => {
-  const message = messages.value[index]
-  if (message.role !== 'user') return
-  editingMessageIndex.value = index
-  editingContent.value = message.content
-  nextTick(() => {
-    const textarea = editTextareaRef.value
-    if (textarea && typeof textarea.focus === 'function') {
-      textarea.focus()
-      textarea.style.height = 'auto'
-      textarea.style.height = textarea.scrollHeight + 'px'
-    }
-  })
-}
-
-// Cancel editing
-const cancelEdit = () => {
-  editingMessageIndex.value = null
-  editingContent.value = ''
-}
-
-// Handle keydown in edit mode
-const handleEditKeydown = (e: KeyboardEvent, index: number) => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-    e.preventDefault()
-    confirmEdit(index)
-  } else if (e.key === 'Escape') {
-    cancelEdit()
-  }
-}
-
-// Confirm edit and resend
-const confirmEdit = async (index: number) => {
-  if (!editingContent.value.trim() || !currentConversation.value) return
-
-  const newContent = editingContent.value.trim()
-  // Get the message ID before this index (for delete_after_id)
-  // When index=0 (first message), prevMessageId=0, which will delete all messages (id > 0)
-  const prevMessageId = index > 0 ? messages.value[index - 1].id : 0
-  cancelEdit()
-
-  // Remove all messages from this index onwards (local UI update)
-  const messagesBeforeEdit = messages.value.slice(0, index)
-  messages.value = messagesBeforeEdit
-
-  // Add the new user message locally
-  const tempUserMsg: ExtendedMessage = {
-    id: 0,
-    conversation_id: currentConversation.value.id,
-    role: 'user',
-    content: newContent,
-    created_at: new Date().toISOString()
-  }
-  messages.value.push(tempUserMsg)
-  isUserAtBottom.value = true
-
-  // Send the message
-  sending.value = true
-  await streamWithToolCalls(currentConversation.value.id, {
-    content: newContent,
-    stream: true,
-    settings: {
-      temperature: settingsForm.temperature,
-      max_tokens: settingsForm.max_tokens
-    },
-    tools: toolsStore.getToolsForModel(),
-    delete_after_id: prevMessageId,
-    enable_thinking: getEnableThinking()
-  })
-}
-
 // Regenerate from user message
 const regenerateFromUser = async (userIndex: number) => {
   if (!currentConversation.value || sending.value) return
@@ -804,7 +754,7 @@ const regenerateFromUser = async (userIndex: number) => {
   messages.value.push(tempUserMsg)
   isUserAtBottom.value = true
 
-  // Send the message
+  // Send the message (重新生成：发送完整历史)
   sending.value = true
   await streamWithToolCalls(currentConversation.value.id, {
     content: userContent,
@@ -816,9 +766,122 @@ const regenerateFromUser = async (userIndex: number) => {
     tools: toolsStore.getToolsForModel(),
     delete_after_id: prevMessageId,
     enable_thinking: getEnableThinking()
+  }, true)  // isRegenerate=true
+}
+
+// Start editing a text block
+const startEditBlock = (blockId: string | number, block: ExpandedMessageBlock) => {
+  if (block.type !== 'text') return
+  editingBlockId.value = blockId
+  editingContent.value = block.content
+  nextTick(() => {
+    const textarea = editTextareaRef.value
+    if (textarea && typeof textarea.focus === 'function') {
+      textarea.focus()
+      textarea.style.height = 'auto'
+      textarea.style.height = textarea.scrollHeight + 'px'
+    }
   })
 }
 
+// Cancel editing
+const cancelEdit = () => {
+  editingBlockId.value = null
+  editingContent.value = ''
+}
+
+// Handle keydown in edit mode
+const handleEditKeydown = (e: KeyboardEvent) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault()
+    confirmEditBlock()
+  } else if (e.key === 'Escape') {
+    cancelEdit()
+  }
+}
+
+// Confirm edit and resend
+const confirmEditBlock = async () => {
+  if (!editingContent.value.trim() || !currentConversation.value || editingBlockId.value === null) return
+
+  // 找到正在编辑的块
+  const block = expandedMessages.value.find(b => b.id === editingBlockId.value)
+  if (!block) return
+
+  const newTextContent = editingContent.value.trim()
+  const originalIndex = block.originalIndex
+  const originalMessage = messages.value[originalIndex]
+
+  cancelEdit()
+
+  // 检查原始消息是否包含图片
+  const originalParts = parseMessageContentFromDB(originalMessage.content)
+  const imageParts = originalParts.filter(p => p.type === 'image_url')
+
+  // 构建新的消息内容
+  let newContentToStore: string
+  let newParts: ChatContentPart[] = []
+
+  if (imageParts.length > 0) {
+    // 有图片：保留图片，更新文本
+    newParts = [...imageParts]
+    if (newTextContent) {
+      newParts.push({ type: 'text', text: newTextContent })
+    }
+    newContentToStore = JSON.stringify(newParts)
+  } else {
+    // 纯文本：直接更新
+    newContentToStore = newTextContent
+  }
+
+  // 删除该消息之后的消息（本地）
+  messages.value = messages.value.slice(0, originalIndex)
+
+  // 添加更新后的用户消息
+  const tempUserMsg: ExtendedMessage = {
+    id: 0,
+    conversation_id: currentConversation.value.id,
+    role: 'user',
+    content: newContentToStore,
+    created_at: new Date().toISOString()
+  }
+  messages.value.push(tempUserMsg)
+  isUserAtBottom.value = true
+
+  // 发送消息（编辑：发送完整历史）
+  sending.value = true
+  await streamWithToolCalls(currentConversation.value.id, {
+    content: newContentToStore,
+    parts: newParts.length > 0 ? newParts : undefined,
+    stream: true,
+    settings: {
+      temperature: settingsForm.temperature,
+      max_tokens: settingsForm.max_tokens
+    },
+    tools: toolsStore.getToolsForModel(),
+    delete_after_id: originalMessage.id,  // 删除当前消息及之后的消息
+    enable_thinking: getEnableThinking()
+  }, true)  // isRegenerate=true
+}
+
+// Delete a single message (and all messages after it)
+const deleteMessage = async (messageIndex: number) => {
+  if (!currentConversation.value) return
+
+  try {
+    await ElMessageBox.confirm('确定删除此消息及其后续消息？', '确认删除', { type: 'warning' })
+
+    // 本地删除消息
+    messages.value = messages.value.slice(0, messageIndex)
+
+    // TODO: 后端删除消息（需要实现专门的删除接口）
+    // 当前只在前端删除，等下次发送时通过 delete_after_id 处理
+
+    ElMessage.success('已删除')
+  } catch {
+    // 用户取消
+  }
+}
 
 // Copy message content
 const copyMessage = async (content: string) => {
@@ -1028,12 +1091,22 @@ const sendMessage = async () => {
 
   autoResize()
 
+  // Build content to store (支持多模态格式)
+  let contentToStore: string
+  if (parts.length > 1 || (parts.length === 1 && parts[0].type === 'image_url')) {
+    // 多模态内容：存储为 JSON 格式
+    contentToStore = JSON.stringify(parts)
+  } else {
+    // 纯文本
+    contentToStore = content
+  }
+
   // Add user message to display immediately
   const tempUserMsg: ExtendedMessage = {
     id: 0,
     conversation_id: currentConversation.value.id,
     role: 'user',
-    content,
+    content: contentToStore,  // 使用多模态格式存储
     created_at: new Date().toISOString()
   }
   messages.value.push(tempUserMsg)
@@ -1043,9 +1116,9 @@ const sendMessage = async () => {
 
   // Start the streaming loop with tool call support
   sending.value = true
+  // 正常发送：不发送 messages，只发送 content + parts（后端会保存用户消息）
   await streamWithToolCalls(currentConversation.value.id, {
-    content,
-    parts,
+    parts,  // 发送多模态内容给 AI
     stream: true,
     settings: {
       temperature: settingsForm.temperature,
@@ -1053,7 +1126,7 @@ const sendMessage = async () => {
     },
     tools: toolsStore.getToolsForModel(),
     enable_thinking: getEnableThinking()
-  })
+  }, false)
 }
 
 // Helper function to save assistant message to backend
@@ -1087,9 +1160,9 @@ const saveAssistantMessage = async (conversationId: number, content: string, too
   }
 }
 
-// Build chat history for API request
+// Build chat history for API request (OpenAI Chat format, supports multimodal)
 const buildChatHistory = () => {
-  const history: Array<{ role: string; content: string; tool_calls?: any[] }> = []
+  const history: Array<{ role: string; content: string | ChatContentPart[]; tool_calls?: any[] }> = []
 
   // Add system prompt if exists
   if (settingsForm.system_prompt) {
@@ -1100,13 +1173,6 @@ const buildChatHistory = () => {
   }
 
   messages.value.forEach(msg => {
-    let content = msg.content
-
-    // Clean assistant messages (remove think blocks)
-    if (msg.role === 'assistant') {
-      content = removeThinkContent(msg.content)
-    }
-
     // Format tool calls if they exist
     let formattedToolCalls: any[] | undefined = undefined
     if (msg.toolCalls && msg.toolCalls.length > 0) {
@@ -1120,9 +1186,30 @@ const buildChatHistory = () => {
       }))
     }
 
+    // 构建消息内容（支持多模态）
+    let messageContent: string | ChatContentPart[]
+
+    if (msg.role === 'assistant') {
+      // Assistant 消息：纯文本（移除 think blocks）
+      messageContent = removeThinkContent(msg.content)
+    } else if (msg.role === 'user') {
+      // User 消息：解析多模态内容
+      const parts = parseMessageContentFromDB(msg.content)
+      if (parts.length > 0) {
+        // 多模态内容：直接使用解析后的 parts
+        messageContent = parts
+      } else {
+        // 纯文本
+        messageContent = msg.content
+      }
+    } else {
+      // 其他角色（system, tool）：纯文本
+      messageContent = msg.content
+    }
+
     history.push({
       role: msg.role,
-      content: content,
+      content: messageContent,
       tool_calls: formattedToolCalls
     })
 
@@ -1146,7 +1233,7 @@ const buildChatHistory = () => {
 const streamWithToolCalls = async (
   conversationId: number,
   requestData: ChatRequest,
-  isToolResultRequest: boolean = false
+  isRegenerate: boolean = false
 ) => {
   // Reset streaming state
   streamingRawContent.value = ''
@@ -1160,8 +1247,10 @@ const streamWithToolCalls = async (
     throttleTimer = null
   }
 
-  // Ensure full history is sent
-  requestData.messages = buildChatHistory()
+  // 只有重新生成/编辑时才发送完整历史
+  if (isRegenerate) {
+    requestData.messages = buildChatHistory()
+  }
 
   // Reset user stop flag and create new AbortController
   userStoppedStream = false
@@ -1310,9 +1399,9 @@ const streamWithToolCalls = async (
       )
     })
 
-    // If this wasn't a tool result request, finalize the message
+    // If this wasn't a regenerate request, finalize the message
     // Skip if user manually stopped the stream (stopStreaming already saved)
-    if (!isToolResultRequest && receivedToolCalls.length === 0 && !userStoppedStream) {
+    if (!isRegenerate && receivedToolCalls.length === 0 && !userStoppedStream) {
       const finalRawContent = streamingRawContent.value
       const parsed = parseStreamingThinkContent(finalRawContent)
 
@@ -1347,8 +1436,8 @@ const streamWithToolCalls = async (
       if (messages.value.length <= 3) {
         loadConversations()
       }
-    } else if (isToolResultRequest && receivedToolCalls.length === 0 && !userStoppedStream) {
-      // Tool result request completed - save the final AI response
+    } else if (isRegenerate && receivedToolCalls.length === 0 && !userStoppedStream) {
+      // Regenerate request completed - save the final AI response
       const finalRawContent = streamingRawContent.value
       const parsed = parseStreamingThinkContent(finalRawContent)
 
@@ -1467,7 +1556,9 @@ const streamWithToolCalls = async (
   } catch (error) {
     console.error('Streaming error:', error)
   } finally {
-    if (!isToolResultRequest) {
+    // Don't reset sending state if tool calls are being processed
+    // (tool result continuation will handle this)
+    if (receivedToolCalls.length === 0) {
       sending.value = false
     }
   }
@@ -1540,8 +1631,26 @@ const addFile = async (file: File) => {
     return
   }
 
-  const isImage = file.type.startsWith('image/')
-  const dataUrl = await fileToBase64(file)
+  const isImage = isImageFile(file)
+  let dataUrl: string
+
+  if (isImage) {
+    // 对图片进行压缩处理
+    try {
+      const result = await compressImage(file)
+      dataUrl = result.dataUrl
+      // 显示压缩信息（可选）
+      if (result.compressedSize < result.originalSize) {
+        console.log(`图片压缩: ${formatFileSize(result.originalSize)} -> ${formatFileSize(result.compressedSize)}`)
+      }
+    } catch (error) {
+      // 压缩失败，直接使用原图
+      dataUrl = await fileToBase64(file)
+    }
+  } else {
+    // 非图片文件直接转换
+    dataUrl = await fileToBase64(file)
+  }
 
   attachedFiles.value.push({
     dataUrl,
@@ -1566,6 +1675,84 @@ const fileToBase64 = (file: File): Promise<string> => {
 const removeFile = (index: number) => {
   attachedFiles.value.splice(index, 1)
 }
+
+// 解析消息 Content，支持多模态格式
+const parseMessageContentFromDB = (content: string): ChatContentPart[] => {
+  // 尝试解析为多模态内容数组
+  try {
+    const parts = JSON.parse(content)
+    if (Array.isArray(parts) && parts.length > 0 && parts[0].type) {
+      return parts as ChatContentPart[]
+    }
+  } catch {
+    // 不是 JSON，作为纯文本
+  }
+  return []
+}
+
+// 展开消息列表，让图片和文字作为单独的块显示
+interface ExpandedMessageBlock {
+  id: number | string          // 原始消息 ID + 后缀
+  originalId: number           // 原始消息 ID
+  originalIndex: number        // 原始消息在 messages 数组中的索引
+  role: string
+  type: 'text' | 'image'       // 块类型
+  content: string              // 文本内容（type='text'）
+  part?: ChatContentPart       // 图片部分（type='image'）
+  message: ExtendedMessage     // 原始消息引用
+}
+
+const expandedMessages = computed<ExpandedMessageBlock[]>(() => {
+  const result: ExpandedMessageBlock[] = []
+
+  messages.value.forEach((msg, index) => {
+    const parts = parseMessageContentFromDB(msg.content)
+
+    if (parts.length > 0 && msg.role === 'user') {
+      // 多模态消息：展开为多个块
+      // 先显示图片块
+      const imageParts = parts.filter(p => p.type === 'image_url')
+      imageParts.forEach((part, partIdx) => {
+        result.push({
+          id: `${msg.id}-img-${partIdx}`,
+          originalId: msg.id,
+          originalIndex: index,
+          role: msg.role,
+          type: 'image',
+          content: '',
+          part: part,
+          message: msg
+        })
+      })
+      // 再显示文本块
+      const textPart = parts.find(p => p.type === 'text')
+      if (textPart?.text) {
+        result.push({
+          id: `${msg.id}-txt`,
+          originalId: msg.id,
+          originalIndex: index,
+          role: msg.role,
+          type: 'text',
+          content: textPart.text,
+          message: msg
+        })
+      }
+    } else {
+      // 纯文本消息或 assistant 消息：保持原样
+      result.push({
+        id: msg.id,
+        originalId: msg.id,
+        originalIndex: index,
+        role: msg.role,
+        type: 'text',
+        content: msg.content,
+        message: msg
+      })
+    }
+  })
+
+  return result
+})
 
 // Save settings
 const saveSettings = async () => {
@@ -2075,11 +2262,35 @@ onUnmounted(() => {
   border-radius: 18px 18px 4px 18px;
 }
 
+/* 图片块单独样式 */
+.image-block {
+  background: transparent;
+  padding: 0;
+}
+
+.image-block :deep(.attachment-preview) {
+  display: block;
+}
+
+.image-block :deep(.image-preview) {
+  width: 200px;
+  height: 200px;
+  border-radius: 12px;
+}
+
 .user-text {
   font-size: 14px;
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Message Attachments */
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 /* Message Actions */
@@ -2111,6 +2322,11 @@ onUnmounted(() => {
 .action-icon-btn:hover {
   background: #f3f4f6;
   color: #374151;
+}
+
+.action-icon-btn.delete:hover {
+  background: #fee2e2;
+  color: #dc2626;
 }
 
 /* Edit Mode */

@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Message represents a single message in a conversation
 type Message struct {
@@ -43,10 +46,18 @@ type ToolFunctionSpec struct {
 type ChatRequest struct {
 	Content           string               `json:"content"`
 	Parts             []ChatContentPart    `json:"parts,omitempty"`    // For multimodal content
+	Messages          []ChatRequestMessage `json:"messages,omitempty"` // For full chat history (regenerate)
 	Stream            bool                 `json:"stream"`
 	Settings          ConversationSettings `json:"settings,omitempty"` // optional override settings
 	Tools             []ToolDefinition     `json:"tools,omitempty"`    // optional tools for function calling
 	DeleteAfterID     *uint                `json:"delete_after_id,omitempty"` // for regenerate: delete messages after this ID (nil = no delete, 0 = delete all)
+}
+
+// ChatRequestMessage represents a message in the chat history
+type ChatRequestMessage struct {
+	Role      string          `json:"role"`
+	Content   json.RawMessage `json:"content"`    // Raw JSON to support string or array format
+	ToolCalls json.RawMessage `json:"tool_calls,omitempty"`
 }
 
 // ChatStreamEvent represents a streaming event

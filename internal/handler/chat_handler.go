@@ -327,46 +327,175 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 		})
 	}
 
-	// Add previous messages
-	for _, msg := range prevMessages {
-		chatMessages = append(chatMessages, service.ChatMessage{
-			Role: msg.Role,
-			Content: service.ChatMessageContent{StringContent: msg.Content},
-		})
+	// Helper function to parse message content (supports string or array format)
+	parseMessageContent := func(content json.RawMessage) service.ChatMessageContent {
+		// Try to parse as array first
+		var parts []models.ChatContentPart
+		if err := json.Unmarshal(content, &parts); err == nil && len(parts) > 0 && parts[0].Type != "" {
+			// Successfully parsed as array with valid Type field
+			serviceParts := make([]service.ChatContentPart, len(parts))
+			for i, p := range parts {
+				serviceParts[i] = service.ChatContentPart{
+					Type: p.Type,
+					Text: p.Text,
+				}
+				if p.ImageURL != nil {
+					serviceParts[i].ImageURL = &service.ChatMediaURL{
+						URL:    p.ImageURL.URL,
+						Detail: p.ImageURL.Detail,
+					}
+				}
+			}
+			return service.ChatMessageContent{Parts: serviceParts}
+		}
+
+		// Parse as string
+		var strContent string
+		if err := json.Unmarshal(content, &strContent); err == nil {
+			return service.ChatMessageContent{StringContent: strContent}
+		}
+
+		// Fallback: use raw string
+		return service.ChatMessageContent{StringContent: string(content)}
 	}
 
-	// Add new user message (support multimodal)
-	var userContent service.ChatMessageContent
-	if len(req.Parts) > 0 {
-		// Convert models.ChatContentPart to service.ChatContentPart
-		parts := make([]service.ChatContentPart, len(req.Parts))
-		for i, p := range req.Parts {
-			parts[i] = service.ChatContentPart{
-				Type: p.Type,
-				Text: p.Text,
+	// Helper function to extract text from content parts for title
+	extractTitleText := func(parts []models.ChatContentPart) string {
+		for _, p := range parts {
+			if p.Type == "text" && p.Text != "" {
+				return p.Text
 			}
-			if p.ImageURL != nil {
-				parts[i].ImageURL = &service.ChatMediaURL{
-					URL:    p.ImageURL.URL,
-					Detail: p.ImageURL.Detail,
+		}
+		return ""
+	}
+
+	// Variable to track title text for conversation title update
+	var titleText string
+
+	// Check if frontend provided messages (for regenerate scenario)
+	var lastUserMessageToSave *models.Message
+	if len(req.Messages) > 0 {
+		// Use frontend-provided history instead of database
+		for _, msg := range req.Messages {
+			content := parseMessageContent(msg.Content)
+			chatMessages = append(chatMessages, service.ChatMessage{
+				Role:    msg.Role,
+				Content: content,
+			})
+
+			// Track the last user message to save
+			if msg.Role == "user" {
+				// Determine the content string to save
+				var contentStr string
+				var parts []models.ChatContentPart
+				if err := json.Unmarshal(msg.Content, &parts); err == nil && len(parts) > 0 && parts[0].Type != "" {
+					// Array format - store as JSON
+					contentBytes, _ := json.Marshal(parts)
+					contentStr = string(contentBytes)
+					// Extract title text from parts
+					titleText = extractTitleText(parts)
+				} else {
+					// String format
+					var str string
+					if err := json.Unmarshal(msg.Content, &str); err == nil {
+						contentStr = str
+						titleText = str
+					} else {
+						contentStr = string(msg.Content)
+						titleText = string(msg.Content)
+					}
+				}
+				lastUserMessageToSave = &models.Message{
+					ConversationID: conversationID,
+					Role:           "user",
+					Content:        contentStr,
 				}
 			}
 		}
-		userContent = service.ChatMessageContent{Parts: parts}
 	} else {
-		userContent = service.ChatMessageContent{StringContent: req.Content}
+		// Add previous messages from database (support multimodal content)
+		for _, msg := range prevMessages {
+			// Try to parse as multimodal content
+			var parts []models.ChatContentPart
+			if err := json.Unmarshal([]byte(msg.Content), &parts); err == nil && len(parts) > 0 && parts[0].Type != "" {
+				// Successfully parsed as multimodal array
+				serviceParts := make([]service.ChatContentPart, len(parts))
+				for i, p := range parts {
+					serviceParts[i] = service.ChatContentPart{
+						Type: p.Type,
+						Text: p.Text,
+					}
+					if p.ImageURL != nil {
+						serviceParts[i].ImageURL = &service.ChatMediaURL{
+							URL:    p.ImageURL.URL,
+							Detail: p.ImageURL.Detail,
+						}
+					}
+				}
+				chatMessages = append(chatMessages, service.ChatMessage{
+					Role:    msg.Role,
+					Content: service.ChatMessageContent{Parts: serviceParts},
+				})
+			} else {
+				// Treat as plain text
+				chatMessages = append(chatMessages, service.ChatMessage{
+					Role:    msg.Role,
+					Content: service.ChatMessageContent{StringContent: msg.Content},
+				})
+			}
+		}
+
+		// Add new user message (support multimodal)
+		var userContent service.ChatMessageContent
+		if len(req.Parts) > 0 {
+			// Convert models.ChatContentPart to service.ChatContentPart
+			parts := make([]service.ChatContentPart, len(req.Parts))
+			for i, p := range req.Parts {
+				parts[i] = service.ChatContentPart{
+					Type: p.Type,
+					Text: p.Text,
+				}
+				if p.ImageURL != nil {
+					parts[i].ImageURL = &service.ChatMediaURL{
+						URL:    p.ImageURL.URL,
+						Detail: p.ImageURL.Detail,
+					}
+				}
+			}
+			userContent = service.ChatMessageContent{Parts: parts}
+			// Extract title text from parts
+			titleText = extractTitleText(req.Parts)
+		} else {
+			userContent = service.ChatMessageContent{StringContent: req.Content}
+			titleText = req.Content
+		}
+
+		chatMessages = append(chatMessages, service.ChatMessage{
+			Role:    "user",
+			Content: userContent,
+		})
 	}
 
-	chatMessages = append(chatMessages, service.ChatMessage{
-		Role:    "user",
-		Content: userContent,
-	})
-
-	// Save user message (store text content for simplicity)
-	userMsg := &models.Message{
-		ConversationID: conversationID,
-		Role:           "user",
-		Content:        req.Content,
+	// Save user message to database (support multimodal)
+	var userMsg *models.Message
+	if lastUserMessageToSave != nil {
+		// Frontend provided messages - use the tracked last user message
+		userMsg = lastUserMessageToSave
+	} else {
+		// Build user message from request
+		var contentToSave string
+		if len(req.Parts) > 0 {
+			// Serialize parts as JSON for storage
+			contentBytes, _ := json.Marshal(req.Parts)
+			contentToSave = string(contentBytes)
+		} else {
+			contentToSave = req.Content
+		}
+		userMsg = &models.Message{
+			ConversationID: conversationID,
+			Role:           "user",
+			Content:        contentToSave,
+		}
 	}
 	if err := h.messageRepo.Create(c.Request.Context(), userMsg); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -478,13 +607,13 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 					f.Flush()
 				}
 			}
-			
+
 			if err != nil {
 				// Stream ended.
 				// Logic for splicing and saving is now moved to frontend via AddMessage.
 				// We only handle title update if it's the first message.
-				if len(prevMessages) == 0 && conversation.Title == "New Chat" {
-					title := req.Content
+				if len(prevMessages) == 0 && len(req.Messages) == 0 && conversation.Title == "New Chat" && titleText != "" {
+					title := titleText
 					if len(title) > 50 {
 						title = title[:50] + "..."
 					}
@@ -510,8 +639,8 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 	// Note: we can't easily update, so we'll leave it
 
 	// Update conversation title if first message
-	if len(prevMessages) == 0 && conversation.Title == "New Chat" {
-		title := req.Content
+	if len(prevMessages) == 0 && len(req.Messages) == 0 && conversation.Title == "New Chat" && titleText != "" {
+		title := titleText
 		if len(title) > 50 {
 			title = title[:50] + "..."
 		}
@@ -610,7 +739,7 @@ func (h *ChatHandler) UploadFile(c *gin.Context) {
 
 	// Limit file size to 20MB
 	if file.Size > 20*1024*1024 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "File too large (max 20MB)"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File too large (max 20MB)"	})
 		return
 	}
 

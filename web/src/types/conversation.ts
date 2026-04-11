@@ -61,7 +61,7 @@ export interface ChatContentPart {
 export interface ChatRequest {
   messages?: Array<{
     role: string
-    content: string
+    content: string | ChatContentPart[]  // 支持多模态格式
     tool_calls?: string | any[]
   }>
   content?: string
