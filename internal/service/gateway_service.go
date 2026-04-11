@@ -113,11 +113,17 @@ type ChatRequest struct {
 	Model            string                 `json:"model"`
 	Messages         []ChatMessage          `json:"messages"`
 	Stream           bool                   `json:"stream,omitempty"`
+	StreamOptions    *StreamOptions         `json:"stream_options,omitempty"` // For OpenAI streaming usage
 	Temperature      float64                `json:"temperature,omitempty"`
 	MaxTokens        int                    `json:"max_tokens,omitempty"`
 	Tools            []ToolDefinition       `json:"tools,omitempty"`
 	ReasoningEffort  string                 `json:"reasoning_effort,omitempty"` // "none", "low", "medium", "high" - disable thinking
-	Extra            map[string]interface{} `json:"-"` // Additional fields
+	Extra            map[string]interface{} `json:"-"`                          // Additional fields
+}
+
+// StreamOptions for OpenAI streaming API to get usage data
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 // ToolDefinition represents a tool for function calling
@@ -1228,6 +1234,11 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	upstreamReq := *req
 	upstreamReq.Model = route.Model.Name
 
+	// For OpenAI streaming, set stream_options.include_usage to get token usage
+	if stream && providerType == "openai" && upstreamReq.StreamOptions == nil {
+		upstreamReq.StreamOptions = &StreamOptions{IncludeUsage: true}
+	}
+
 	// 6. Send upstream request with forwarded headers
 	resp, err := s.sendUpstreamRequest(ctx, targetURL, route.Provider.APIKey, &upstreamReq, stream, forwardHeaders)
 	if err != nil {
@@ -1891,6 +1902,11 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	// Update model name in request
 	chatReq := openAIReq.(*ChatRequest)
 	chatReq.Model = upstreamModelName
+
+	// For OpenAI streaming, set stream_options.include_usage to get token usage
+	if stream && chatReq.StreamOptions == nil {
+		chatReq.StreamOptions = &StreamOptions{IncludeUsage: true}
+	}
 
 	// Send OpenAI format request
 	resp, err := s.sendUpstreamRequest(ctx, targetURL, route.Provider.APIKey, chatReq, stream, forwardHeaders)

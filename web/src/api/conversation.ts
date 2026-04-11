@@ -80,6 +80,7 @@ export const conversationApi = {
       let buffer = ''
       let inReasoning = false
       let toolCalls: ToolCall[] = []
+      let toolCallsByIndex: Map<number, ToolCall> = new Map()  // Track tool calls by index for accumulation
 
       while (true) {
         const { done, value } = await reader.read()
@@ -150,17 +151,32 @@ export const conversationApi = {
                     onContent(delta.content)
                   }
                 }
-                // Handle tool calls
+                // Handle tool calls - accumulate arguments by index
                 if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
                   for (const tc of delta.tool_calls) {
-                    toolCalls.push({
-                      id: tc.id || `tool_${Date.now()}`,
-                      type: 'function',
-                      function: {
-                        name: tc.function?.name || '',
-                        arguments: tc.function?.arguments || '{}'
+                    const idx = tc.index ?? 0
+                    const tcId = tc.id || ''
+                    const tcName = tc.function?.name || ''
+                    const tcArgs = tc.function?.arguments || ''
+
+                    // Check if we already have a tool call at this index
+                    const existing = toolCallsByIndex.get(idx)
+                    if (existing) {
+                      // Accumulate arguments (they come in fragments)
+                      existing.function.arguments += tcArgs
+                    } else if (tcId || tcName) {
+                      // Create new tool call (first chunk has id and name)
+                      const newToolCall: ToolCall = {
+                        id: tcId || `tool_${Date.now()}_${idx}`,
+                        type: 'function',
+                        function: {
+                          name: tcName,
+                          arguments: tcArgs
+                        }
                       }
-                    })
+                      toolCallsByIndex.set(idx, newToolCall)
+                      toolCalls.push(newToolCall)
+                    }
                   }
                 }
               }

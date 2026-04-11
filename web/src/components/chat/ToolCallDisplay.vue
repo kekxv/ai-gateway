@@ -41,6 +41,15 @@
             :background-color="toolCall.arguments?.backgroundColor as string | undefined"
           />
         </div>
+        <!-- YOLO 绘图结果特殊显示 -->
+        <div v-else-if="toolCall.toolName === 'yolo_draw' && toolCall.result && getCanvasId(toolCall.result)" class="detail-section canvas-section">
+          <CanvasDisplay
+            :canvas-id="getCanvasId(toolCall.result) || ''"
+            :data-url="getCanvasDataUrl(toolCall.result)"
+            :width="getCanvasWidth(toolCall.result)"
+            :height="getCanvasHeight(toolCall.result)"
+          />
+        </div>
         <div v-else-if="toolCall.result !== undefined" class="detail-section">
           <div class="detail-label">结果</div>
           <div class="detail-content">
@@ -72,10 +81,10 @@ const canvasStore = useCanvasStore()
 
 const expandedIds = ref(new Set<string>())
 
-// Auto-expand specific tools (like web_canvas) when they are successful or running
+// Auto-expand specific tools (like web_canvas, yolo_draw) when they are successful or running
 watch(() => props.toolCalls, (newCalls) => {
   newCalls.forEach(tc => {
-    if ((tc.toolName === 'web_canvas' || tc.status === 'running') && !expandedIds.value.has(tc.id)) {
+    if ((tc.toolName === 'web_canvas' || tc.toolName === 'yolo_draw' || tc.status === 'running') && !expandedIds.value.has(tc.id)) {
       expandedIds.value.add(tc.id)
     }
   })
@@ -110,6 +119,7 @@ const getToolDisplayName = (toolName: string) => {
     'web_search': '网络搜索',
     'fetch_webpage': '获取网页',
     'web_canvas': 'Canvas 绘图',
+    'yolo_draw': 'YOLO 绘图',
     'draw_chart': '绘制图表',
     'save_note': '保存笔记',
     'Edit': '编辑文件',
@@ -200,6 +210,8 @@ const renderArguments = (toolCall: ToolCallResult) => {
       ])
     case 'web_canvas':
       return renderCanvasArgs(args)
+    case 'yolo_draw':
+      return renderYoloArgs(args)
     case 'draw_chart':
       return h('div', { class: 'tool-args-chart' }, [
         h('div', { class: 'chart-arg' }, `类型：${args.type || '未知'}`),
@@ -297,6 +309,58 @@ const renderCanvasArgs = (args: Record<string, unknown>) => {
   }
 
   return h('div', { class: 'tool-args-canvas' }, children)
+}
+
+// 渲染 YOLO 绘图参数
+const renderYoloArgs = (args: Record<string, unknown>) => {
+  let boxes: Array<Record<string, unknown>> = []
+
+  // 确保 boxes 是数组
+  if (Array.isArray(args.boxes)) {
+    boxes = args.boxes as Array<Record<string, unknown>>
+  } else if (typeof args.boxes === 'string') {
+    try {
+      const parsed = JSON.parse(args.boxes)
+      if (Array.isArray(parsed)) {
+        boxes = parsed
+      }
+    } catch {
+      // 解析失败，保持空数组
+    }
+  }
+
+  const defaultColor = args.color || '#ff0000'
+  const lineWidth = args.lineWidth || 2
+
+  return h('div', { class: 'tool-args-yolo' }, [
+    h('div', { class: 'yolo-header' }, [
+      h('span', { class: 'arg-label' }, '边界框数量：'),
+      h('span', { class: 'arg-value' }, String(boxes.length))
+    ]),
+    h('div', { class: 'yolo-options' }, [
+      h('span', { class: 'arg-label' }, '默认颜色：'),
+      h('span', { class: 'arg-value', style: { color: String(defaultColor) } }, String(defaultColor)),
+      h('span', { class: 'arg-label ml-2' }, '线宽：'),
+      h('span', { class: 'arg-value' }, String(lineWidth))
+    ]),
+    boxes.length > 0 ? h('div', { class: 'yolo-boxes-preview' }, [
+      h('div', { class: 'yolo-boxes-header' }, '检测框列表：'),
+      h('div', { class: 'yolo-boxes-list' }, [
+        ...boxes.slice(0, 5).map((box, idx) =>
+          h('div', { key: idx, class: 'yolo-box-item' }, [
+            h('span', { class: 'box-label' }, String(box.label || `目标 ${idx + 1}`)),
+            h('span', { class: 'box-coords' },
+              `左上(${((box.x as number) || 0).toFixed(2)}, ${((box.y as number) || 0).toFixed(2)}) ${((box.width as number) || 0).toFixed(2)}x${((box.height as number) || 0).toFixed(2)}`
+            ),
+            box.confidence !== undefined ? h('span', { class: 'box-conf' },
+              `${((box.confidence as number) * 100).toFixed(0)}%`
+            ) : null
+          ])
+        ),
+        boxes.length > 5 ? h('div', { class: 'yolo-more' }, `还有 ${boxes.length - 5} 个...`) : null
+      ])
+    ]) : null
+  ])
 }
 
 // 渲染 Edit 参数
@@ -402,6 +466,23 @@ const renderResult = (toolCall: ToolCallResult) => {
       return h('div', { class: 'tool-result-canvas' }, [
         h('el-icon', { class: 'canvas-icon' }, [h(Picture)]),
         h('span', {}, canvasData.message || `Canvas 绘制完成 (${canvasData.width ?? '?'}x${canvasData.height ?? '?'})`)
+      ])
+    }
+    case 'yolo_draw': {
+      // Handle string result (JSON string from logs)
+      let yoloData: { width?: number; height?: number; message?: string; success?: boolean; boxCount?: number; canvasId?: string }
+      if (typeof result === 'string') {
+        try {
+          yoloData = JSON.parse(result)
+        } catch {
+          yoloData = { message: result }
+        }
+      } else {
+        yoloData = result as { width?: number; height?: number; message?: string; success?: boolean; boxCount?: number; canvasId?: string }
+      }
+      return h('div', { class: 'tool-result-yolo' }, [
+        h('el-icon', { class: 'canvas-icon' }, [h(Picture)]),
+        h('span', {}, yoloData.message || `YOLO 绘制完成，共 ${yoloData.boxCount ?? '?'} 个目标 (${yoloData.width ?? '?'}x${yoloData.height ?? '?'})`)
       ])
     }
     case 'draw_chart': {
@@ -940,6 +1021,85 @@ const formatJson = (obj: unknown) => {
 .canvas-section {
   padding: 0;
   background: transparent;
+}
+
+/* YOLO 参数样式 */
+.tool-args-yolo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.yolo-header, .yolo-options {
+  color: #374151;
+}
+
+.yolo-boxes-preview {
+  margin-top: 8px;
+  padding: 8px;
+  background: #fef3c7;
+  border-radius: 6px;
+  border: 1px solid #fcd34d;
+}
+
+.yolo-boxes-header {
+  font-size: 12px;
+  color: #92400e;
+  margin-bottom: 6px;
+}
+
+.yolo-boxes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.yolo-box-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.yolo-box-item .box-label {
+  padding: 2px 6px;
+  background: #dc2626;
+  color: #fff;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.yolo-box-item .box-coords {
+  color: #78350f;
+  font-family: 'SF Mono', 'Monaco', monospace;
+}
+
+.yolo-box-item .box-conf {
+  padding: 2px 6px;
+  background: #10b981;
+  color: #fff;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.yolo-more {
+  font-size: 11px;
+  color: #92400e;
+  padding: 4px 0;
+}
+
+/* YOLO 结果样式 */
+.tool-result-yolo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border-radius: 8px;
+}
+
+.tool-result-yolo .canvas-icon {
+  color: #d97706;
 }
 
 /* 网页获取参数样式 */

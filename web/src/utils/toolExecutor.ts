@@ -4,9 +4,63 @@
  */
 
 import type { ToolCallResult, ToolDefinition } from '@/types/tool'
+import type { ChatContentPart } from '@/types/conversation'
 import { useToolsStore } from '@/stores/tools'
 import { useAuthStore } from '@/stores/auth'
 import { useCanvasStore } from '@/stores/canvas'
+import { useImageStore } from '@/stores/image'
+
+// 消息类型，用于查找图片
+interface MessageLike {
+  role: string
+  content: string | ChatContentPart[]
+}
+
+// 当前消息列表（由 ChatView 设置）
+let currentMessages: MessageLike[] = []
+
+// 设置当前消息列表（供 ChatView 调用）
+export function setMessagesForToolExecution(messages: MessageLike[]) {
+  currentMessages = messages
+}
+
+// 从工具调用之前的消息中获取最新图片
+// 工具调用在助手消息中，所以要找助手消息之前的用户图片
+function getLatestImageFromMessages(): { dataUrl: string; id: string } | null {
+  // 从末尾往前查找，跳过助手消息（工具调用在助手消息中）
+  // 找到最近的包含图片的用户消息
+  for (let i = currentMessages.length - 1; i >= 0; i--) {
+    const msg = currentMessages[i]
+    // 跳过助手消息和 tool 消息，只找用户消息
+    if (msg.role === 'user') {
+      let content = msg.content
+
+      // content 可能是 JSON 字符串（多模态格式），需要解析
+      if (typeof content === 'string') {
+        try {
+          const parsed = JSON.parse(content)
+          if (Array.isArray(parsed)) {
+            content = parsed
+          }
+        } catch {
+          // 解析失败，说明是纯文本，继续
+        }
+      }
+
+      if (Array.isArray(content)) {
+        // 查找图片部分（从后往前，找这张消息中最后一张图片）
+        for (let j = content.length - 1; j >= 0; j--) {
+          const part = content[j]
+          if (part.type === 'image_url' && part.image_url?.url) {
+            const imageId = `msg_image_${i}_${j}`
+            return { dataUrl: part.image_url.url, id: imageId }
+          }
+        }
+      }
+    }
+  }
+  return null
+}
 
 /**
  * 执行工具调用
@@ -113,6 +167,15 @@ async function executeBuiltinTool(
       return executeJavaScript(
         args.code as string,
         args.timeout as number | undefined
+      )
+
+    case 'yolo_draw':
+      return executeYoloDraw(
+        args.boxes as Array<Record<string, unknown>>,
+        args.color as string | undefined,
+        args.lineWidth as number | undefined,
+        args.fontSize as number | undefined,
+        args.showConfidence as boolean | undefined
       )
 
     default:
@@ -816,4 +879,162 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
     default:
       console.warn(`未知的 Canvas 操作类型: ${opType}`)
   }
+}
+
+/**
+ * 边界框格式
+ */
+interface YoloBox {
+  x: number       // 左上角 x 坐标比例 (0-1)
+  y: number       // 左上角 y 坐标比例 (0-1)
+  width: number   // 宽度比例 (0-1)
+  height: number  // 高度比例 (0-1)
+  label?: string
+  color?: string
+  confidence?: number
+}
+
+/**
+ * 执行 YOLO 绘图
+ * 在用户上传的最后一张图片上绘制边界框
+ */
+function executeYoloDraw(
+  boxes: Array<Record<string, unknown>>,
+  defaultColor?: string,
+  lineWidth?: number,
+  fontSize?: number,
+  showConfidence?: boolean
+): object {
+  const imageStore = useImageStore()
+  const canvasStore = useCanvasStore()
+
+  // 先从消息列表查找最新图片，再从 imageStore 查找
+  let latestImage = getLatestImageFromMessages()
+  if (!latestImage) {
+    const storeImage = imageStore.getLatestImage()
+    if (storeImage) {
+      latestImage = { dataUrl: storeImage.dataUrl, id: storeImage.id }
+    }
+  }
+
+  if (!latestImage) {
+    throw new Error('没有找到用户上传的图片。请先上传一张图片后再使用 yolo_draw。')
+  }
+
+  const boxesArray = Array.isArray(boxes) ? boxes : []
+  if (boxesArray.length === 0) {
+    throw new Error('boxes 参数为空，请提供至少一个边界框')
+  }
+
+  // 转换为 YoloBox 格式并验证
+  const validBoxes: YoloBox[] = boxesArray.map(box => ({
+    x: typeof box.x === 'number' ? box.x : 0,
+    y: typeof box.y === 'number' ? box.y : 0,
+    width: typeof box.width === 'number' ? box.width : 0.1,
+    height: typeof box.height === 'number' ? box.height : 0.1,
+    label: typeof box.label === 'string' ? box.label : undefined,
+    color: typeof box.color === 'string' ? box.color : undefined,
+    confidence: typeof box.confidence === 'number' ? box.confidence : undefined
+  }))
+
+  // 创建 Canvas 并加载图片
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    throw new Error('无法创建 Canvas 上下文')
+  }
+
+  // 加载图片并绘制
+  const img = new Image()
+  img.crossOrigin = 'anonymous'
+
+  // 设置默认样式
+  const boxColor = defaultColor || '#ff0000'
+  const boxLineWidth = lineWidth || 2
+  const labelFontSize = fontSize || 14
+  const showConf = showConfidence !== false // 默认显示
+
+  return new Promise((resolve, reject) => {
+    img.onload = () => {
+      // 设置 Canvas 尺寸与图片相同
+      canvas.width = img.width
+      canvas.height = img.height
+
+      // 先绘制原图
+      ctx.drawImage(img, 0, 0)
+
+      // 设置绘图样式
+      ctx.lineWidth = boxLineWidth
+      ctx.font = `${labelFontSize}px Arial`
+      ctx.textBaseline = 'top'
+
+      // 绘制每个边界框
+      for (const box of validBoxes) {
+        // 将比例坐标转换为像素坐标
+        // 格式: x,y 为左上角坐标比例，width,height 为宽高比例
+        const left = box.x * canvas.width
+        const top = box.y * canvas.height
+        const boxWidth = box.width * canvas.width
+        const boxHeight = box.height * canvas.height
+
+        // 获取框的颜色
+        const color = box.color || boxColor
+
+        // 绘制边界框
+        ctx.strokeStyle = color
+        ctx.strokeRect(left, top, boxWidth, boxHeight)
+
+        // 绘制标签背景和文字
+        if (box.label || (showConf && box.confidence !== undefined)) {
+          const labelText = box.label || ''
+          const confText = showConf && box.confidence !== undefined
+            ? ` ${(box.confidence * 100).toFixed(0)}%`
+            : ''
+          const fullText = labelText + confText
+
+          // 计算文字宽度
+          const textWidth = ctx.measureText(fullText).width
+
+          // 绘制标签背景
+          ctx.fillStyle = color
+          ctx.fillRect(left, top - labelFontSize - 4, textWidth + 8, labelFontSize + 4)
+
+          // 绘制标签文字（白色）
+          ctx.fillStyle = '#ffffff'
+          ctx.fillText(fullText, left + 4, top - labelFontSize - 2)
+        }
+      }
+
+      // 获取绘制后的图片数据
+      const dataUrl = canvas.toDataURL('image/png')
+      const canvasId = `yolo_${Date.now()}`
+
+      // 保存到 canvas store（用于页面显示）
+      canvasStore.addCanvas({
+        id: canvasId,
+        width: canvas.width,
+        height: canvas.height,
+        dataUrl,
+        createdAt: Date.now()
+      })
+
+      // 返回成功结果（不回传给 AI）
+      resolve({
+        success: true,
+        canvasId,
+        width: canvas.width,
+        height: canvas.height,
+        boxCount: boxesArray.length,
+        message: `YOLO 绘图完成，共绘制 ${boxesArray.length} 个边界框，结果已显示在页面上`,
+        sourceImage: latestImage.id
+      })
+    }
+
+    img.onerror = () => {
+      reject(new Error('无法加载图片，请检查图片格式'))
+    }
+
+    // 设置图片源
+    img.src = latestImage.dataUrl
+  })
 }

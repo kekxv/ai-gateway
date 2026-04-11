@@ -230,7 +230,7 @@
           </div>
 
           <!-- Streaming Message -->
-          <div v-if="throttledStreamingContent || throttledStreamingThink || streamingToolCallResults.length > 0" class="message-block assistant">
+          <div v-if="throttledStreamingContent.trim() || throttledStreamingThink || streamingToolCallResults.length > 0" class="message-block assistant">
             <div class="assistant-message">
               <div class="assistant-avatar" :class="{ thinking: isAnyToolRunning }">
                 <el-icon v-if="isAnyToolRunning" class="is-loading"><Loading /></el-icon>
@@ -243,7 +243,7 @@
                   v-if="throttledStreamingThink"
                   :content="throttledStreamingThink"
                   :default-collapsed="true"
-                  :force-expand="!throttledStreamingContent && streamingToolCallResults.length === 0"
+                  :force-expand="!throttledStreamingContent.trim() && streamingToolCallResults.length === 0"
                 />
                 <!-- Streaming Tool Calls Display -->
                 <ToolCallDisplay
@@ -258,7 +258,7 @@
                 </div>
 
                 <!-- Streaming Markdown Content -->
-                <div v-if="throttledStreamingContent" class="assistant-bubble">
+                <div v-if="throttledStreamingContent.trim()" class="assistant-bubble">
                   <MarkdownRenderer :content="throttledStreamingContent" />
                   <span class="cursor" v-if="sending">▌</span>
                 </div>
@@ -267,7 +267,7 @@
           </div>
 
           <!-- Thinking State - only show when no streaming content yet AND no tools running -->
-          <div v-if="sending && !streamingContent && !streamingThinkContent && streamingToolCallResults.length === 0" class="message-block assistant">
+          <div v-if="sending && !streamingContent.trim() && !streamingThinkContent && streamingToolCallResults.length === 0" class="message-block assistant">
             <div class="assistant-message">
               <div class="assistant-avatar thinking">
                 <el-icon class="is-loading"><Loading /></el-icon>
@@ -493,10 +493,82 @@ import AttachmentPreview from '@/components/chat/AttachmentPreview.vue'
 import { parseMessageContent, parseStreamingThinkContent, estimateThinkTokens, removeThinkContent, parseXmlToolCalls } from '@/utils/messageParser'
 import { compressImage, isImageFile, formatFileSize } from '@/utils/imageUtils'
 import { useToolsStore } from '@/stores/tools'
+import { useImageStore } from '@/stores/image'
 import type { ToolCallResult, ToolCall } from '@/types/tool'
 
 // Tools store
 const toolsStore = useToolsStore()
+
+// Image store (for yolo-draw)
+const imageStore = useImageStore()
+
+// Clean tokenizer artifacts from model output (e.g., Gemma's <|...|> tokens)
+function cleanTokenizerArtifacts(str: string): string {
+  // Gemma-style special tokens: <|...|> patterns
+  // These can appear in various forms:
+  // - Complete: <|token|>
+  // - Incomplete/split: <| ... |>, <|, |>
+  // - In JSON context: "<|\" or "\"|" (escaped quotes with tokenizer boundaries)
+
+  let cleaned = str
+
+  // 1. Remove complete <|...|> patterns (including escaped versions)
+  // Match <| followed by any characters until |>
+  cleaned = cleaned.replace(/<\\?\|[^>|]*\\?\|>/g, '')
+
+  // 2. Remove incomplete <| patterns (tokenizer start that wasn't closed)
+  // <| or <\| followed by optional characters
+  cleaned = cleaned.replace(/<\\?\|[^\s,\}\]]*/g, '')
+
+  // 3. Remove standalone | or \| that appear after quote marks (tokenizer boundary)
+  // Pattern: "\"|" or "\|" at end of a JSON string value
+  cleaned = cleaned.replace(/\"\\?\|/g, '"')
+  cleaned = cleaned.replace(/\\?\|\"/g, '"')
+
+  // 4. Remove any remaining <| or |>
+  cleaned = cleaned.replace(/<\\?\|/g, '')
+  cleaned = cleaned.replace(/\\?\|>/g, '')
+
+  // 5. Clean up double quotes that might have been affected
+  // Remove empty string artifacts like "" that might result from cleanup
+  // But preserve legitimate empty strings in JSON
+
+  return cleaned
+}
+
+// Safely parse JSON with artifact cleanup
+function safeParseJson(str: string): Record<string, unknown> {
+  if (!str || str.trim() === '') {
+    return {}
+  }
+
+  try {
+    const cleaned = cleanTokenizerArtifacts(str)
+    return JSON.parse(cleaned)
+  } catch (e) {
+    // If still fails, try more aggressive cleanup
+    try {
+      // Remove any remaining special characters that might break JSON
+      let aggressiveClean = str
+        // Remove all <| and |> variants
+        .replace(/<\\?\|[^>|]*\\?\|>/g, '')
+        .replace(/<\\?\|/g, '')
+        .replace(/\\?\|>/g, '')
+        // Remove | that appears in suspicious contexts (after/before quotes)
+        .replace(/\"\\?\|/g, '"')
+        .replace(/\\?\|\"/g, '"')
+        // Remove any remaining | that's not part of valid JSON syntax
+        .replace(/\\?\|(?![\s,\}\]])/g, '')
+        // Remove unescaped control characters
+        .replace(/[\x00-\x1F]/g, '')
+
+      return JSON.parse(aggressiveClean)
+    } catch {
+      // Return empty object if all parsing attempts fail
+      return {}
+    }
+  }
+}
 
 // Throttle helper
 function throttle<T extends (...args: unknown[]) => void>(fn: T, delay: number): T {
@@ -644,7 +716,7 @@ const executeToolCallsAndContinue = async (
   const results: ToolCallResult[] = toolCalls.map(tc => ({
     id: tc.id,
     toolName: tc.function.name,
-    arguments: JSON.parse(tc.function.arguments || '{}'),
+    arguments: safeParseJson(tc.function.arguments || '{}'),
     status: 'running'
   }))
 
@@ -655,7 +727,12 @@ const executeToolCallsAndContinue = async (
   for (let i = 0; i < results.length; i++) {
     const toolCall = results[i]
     try {
-      const { executeToolCall } = await import('@/utils/toolExecutor')
+      const { executeToolCall, setMessagesForToolExecution } = await import('@/utils/toolExecutor')
+      // 设置当前消息列表，供 yolo_draw 等工具使用
+      setMessagesForToolExecution(messages.value.map(m => ({
+        role: m.role,
+        content: m.content
+      })))
       const result = await executeToolCall(toolCall.toolName, toolCall.arguments as Record<string, unknown>)
       results[i] = result
     } catch (e) {
@@ -1082,7 +1159,7 @@ const selectConversation = async (conv: Conversation) => {
                 return {
                   id: tc.id || `tool_${idx}`,
                   toolName,
-                  arguments: typeof tc.function?.arguments === 'string' ? JSON.parse(tc.function.arguments) : tc.function?.arguments || {},
+                  arguments: typeof tc.function?.arguments === 'string' ? safeParseJson(tc.function.arguments) : tc.function?.arguments || {},
                   status,
                   result,
                   error
@@ -1380,7 +1457,7 @@ const streamWithToolCalls = async (
             streamingToolCallResults.value = xmlToolCalls.map(tc => ({
               id: tc.id,
               toolName: tc.function.name,
-              arguments: JSON.parse(tc.function.arguments || '{}'),
+              arguments: safeParseJson(tc.function.arguments || '{}'),
               status: 'running'
             }))
           } else {
@@ -1407,7 +1484,7 @@ const streamWithToolCalls = async (
           streamingToolCallResults.value = toolCalls.map(tc => ({
             id: tc.id,
             toolName: tc.function.name,
-            arguments: JSON.parse(tc.function.arguments || '{}'),
+            arguments: safeParseJson(tc.function.arguments || '{}'),
             status: 'running'
           }))
 
@@ -1740,6 +1817,16 @@ const addFile = async (file: File) => {
       image_url: isImage ? { url: dataUrl } : undefined
     }
   })
+
+  // 如果是图片，保存到 imageStore（用于 yolo-draw）
+  if (isImage) {
+    const imageId = `image_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    imageStore.addImage({
+      id: imageId,
+      dataUrl,
+      createdAt: Date.now()
+    })
+  }
 }
 
 const fileToBase64 = (file: File): Promise<string> => {

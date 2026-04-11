@@ -20,8 +20,9 @@ export interface SchemaProperty {
   type: 'string' | 'number' | 'boolean' | 'array' | 'object'
   description?: string
   enum?: string[]
-  items?: SchemaProperty
+  items?: SchemaProperty & { required?: string[] }  // Support nested required
   properties?: Record<string, SchemaProperty>
+  required?: string[]  // Support required at this level for nested objects
 }
 
 // 工具调用（从 API 接收的格式）
@@ -201,6 +202,52 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
         }
       },
       required: ['code']
+    }
+  },
+  {
+    id: 'yolo_draw',
+    name: 'yolo_draw',
+    description: '在用户上传的图片上绘制目标检测边界框。AI负责分类，此工具只负责绘制边界框。结果直接显示在页面上，不回传给 AI。',
+    type: 'builtin',
+    enabled: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        boxes: {
+          type: 'array',
+          description: '目标检测框数组。坐标格式：x,y 为左上角坐标比例(0-1)，width,height 为宽高比例(0-1)。',
+          items: {
+            type: 'object',
+            properties: {
+              x: { type: 'number', description: '左上角 x 坐标比例 (0-1)，0表示最左边' },
+              y: { type: 'number', description: '左上角 y 坐标比例 (0-1)，0表示最上边' },
+              width: { type: 'number', description: '宽度比例 (0-1)' },
+              height: { type: 'number', description: '高度比例 (0-1)' },
+              label: { type: 'string', description: '目标标签名称' },
+              color: { type: 'string', description: '边界框颜色，如 #ff0000(红色)、#00ff00(绿色)，默认红色' },
+              confidence: { type: 'number', description: '置信度 (0-1)，可选' }
+            },
+            required: ['x', 'y', 'width', 'height']
+          }
+        },
+        color: {
+          type: 'string',
+          description: '默认边界框颜色，如 #ff0000(红色)，默认红色'
+        },
+        lineWidth: {
+          type: 'number',
+          description: '边界框线宽，默认 2'
+        },
+        fontSize: {
+          type: 'number',
+          description: '标签字体大小，默认 14'
+        },
+        showConfidence: {
+          type: 'boolean',
+          description: '是否显示置信度，默认 true'
+        }
+      },
+      required: ['boxes']
     }
   },
 ]
