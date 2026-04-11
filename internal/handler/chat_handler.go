@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"time"
@@ -608,4 +609,180 @@ func readFileAsBase64(file *multipart.FileHeader) (string, string, error) {
 	dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data)
 
 	return dataURL, mimeType, nil
+}
+
+// GenerateTitle generates a title for the conversation based on the first user message
+func (h *ChatHandler) GenerateTitle(c *gin.Context) {
+	user := middleware.GetCurrentUser(c)
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	id := c.Param("id")
+	var conversationID uint
+	if err := parseUint(id, &conversationID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+
+	conversation, err := h.conversationRepo.GetByID(c.Request.Context(), conversationID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Conversation not found"})
+		return
+	}
+
+	// Check ownership
+	if conversation.UserID != user.ID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied"})
+		return
+	}
+
+	// Get the first user message
+	messages, err := h.messageRepo.GetByConversationID(c.Request.Context(), conversationID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Find first user message
+	var firstUserContent string
+	for _, msg := range messages {
+		if msg.Role == "user" {
+			// Try to parse as multimodal content
+			var parts []models.ChatContentPart
+			if err := json.Unmarshal([]byte(msg.Content), &parts); err == nil && len(parts) > 0 {
+				// Extract text from parts
+				for _, p := range parts {
+					if p.Type == "text" && p.Text != "" {
+						firstUserContent = p.Text
+						break
+					}
+				}
+			} else {
+				firstUserContent = msg.Content
+			}
+			break
+		}
+	}
+
+	if firstUserContent == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No user message found"})
+		return
+	}
+
+	// Build a request to generate title
+	// Use the conversation's model to generate title
+	// Note: Disable reasoning/thinking to get direct output
+	chatReq := &service.ChatRequest{
+		Model: conversation.Model,
+		Messages: []service.ChatMessage{
+			{
+				Role:    "system",
+				Content: service.ChatMessageContent{StringContent: "请根据用户的第一条消息，生成一个简短的对话标题（不超过20个汉字，不要使用引号）。直接返回标题，不要其他内容。"},
+			},
+			{
+				Role:    "user",
+				Content: service.ChatMessageContent{StringContent: firstUserContent},
+			},
+		},
+		Stream:           false,
+		MaxTokens:        50, // Title should be short
+		Temperature:      0.7,
+		ReasoningEffort:  "none", // Disable thinking/reasoning for direct output
+	}
+
+	// Create virtual API key for user
+	userID := user.ID
+	virtualAPIKey := &models.GatewayAPIKey{
+		UserID:           &userID,
+		BindToAllChannels: true,
+		IsChatKey:        true,
+		LogDetails:       false, // Don't log title generation
+	}
+
+	// Call gateway service to generate title
+	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, false, c.Request.Header)
+	if err != nil {
+		log.Printf("[GenerateTitle] HandleChatCompletions error: %v, model: %s", err, conversation.Model)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate title: " + err.Error()})
+		return
+	}
+
+	chatResp, ok := result.(*service.ChatResponse)
+	if !ok {
+		log.Printf("[GenerateTitle] Invalid response type: %T", result)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid response type"})
+		return
+	}
+
+	// Debug: print parsed response structure
+	log.Printf("[GenerateTitle] Parsed response: ID=%s, Model=%s, choices=%d", chatResp.ID, chatResp.Model, len(chatResp.Choices))
+
+	// Extract title from response
+	title := ""
+	if len(chatResp.Choices) > 0 {
+		choice := chatResp.Choices[0]
+		log.Printf("[GenerateTitle] Choice[0]: Index=%d, FinishReason=%s, Message=%v, Delta=%v", choice.Index, choice.FinishReason, choice.Message, choice.Delta)
+		if choice.Message != nil {
+			// Use GetTextWithReasoning to support models that put content in reasoning field
+			title = choice.Message.GetTextWithReasoning()
+			log.Printf("[GenerateTitle] Message content: StringContent='%s', Reasoning='%s', Parts=%v", choice.Message.Content.StringContent, choice.Message.Reasoning, choice.Message.Content.Parts)
+		}
+		if choice.Delta != nil && title == "" {
+			title = choice.Delta.GetTextWithReasoning()
+			log.Printf("[GenerateTitle] Delta content: StringContent='%s'", choice.Delta.Content.StringContent)
+		}
+	}
+
+	// Debug: if title is empty, return more info
+	if title == "" {
+		// Return original title with debug info
+		debugPrompt := firstUserContent
+		if len(debugPrompt) > 100 {
+			debugPrompt = debugPrompt[:100]
+		}
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{
+			"title":      conversation.Title,
+			"debug":      "AI returned empty content",
+			"model":      conversation.Model,
+			"prompt":     debugPrompt,
+			"choices":    len(chatResp.Choices),
+			"hasMessage": len(chatResp.Choices) > 0 && chatResp.Choices[0].Message != nil,
+			"hasDelta":   len(chatResp.Choices) > 0 && chatResp.Choices[0].Delta != nil,
+		}})
+		return
+	}
+
+	// Clean up title - remove quotes and trim
+	title = trimQuotes(title)
+	if len(title) > 50 {
+		title = title[:50]
+	}
+
+	// Update conversation title
+	if err := h.conversationRepo.UpdateTitle(c.Request.Context(), conversationID, title); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"title": title}})
+}
+
+// trimQuotes removes surrounding quotes from a string
+func trimQuotes(s string) string {
+	s = trimChar(s, '"')
+	s = trimChar(s, '\'')
+	s = trimChar(s, '`')
+	return s
+}
+
+func trimChar(s string, c byte) string {
+	for len(s) > 0 && s[0] == c {
+		s = s[1:]
+	}
+	for len(s) > 0 && s[len(s)-1] == c {
+		s = s[:len(s)-1]
+	}
+	return s
 }

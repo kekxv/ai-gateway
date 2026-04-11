@@ -110,13 +110,14 @@ func extractResponseHeaders(header http.Header) map[string]string {
 }
 
 type ChatRequest struct {
-	Model       string                 `json:"model"`
-	Messages    []ChatMessage          `json:"messages"`
-	Stream      bool                   `json:"stream,omitempty"`
-	Temperature float64                `json:"temperature,omitempty"`
-	MaxTokens   int                    `json:"max_tokens,omitempty"`
-	Tools       []ToolDefinition       `json:"tools,omitempty"`
-	Extra       map[string]interface{} `json:"-"` // Additional fields
+	Model            string                 `json:"model"`
+	Messages         []ChatMessage          `json:"messages"`
+	Stream           bool                   `json:"stream,omitempty"`
+	Temperature      float64                `json:"temperature,omitempty"`
+	MaxTokens        int                    `json:"max_tokens,omitempty"`
+	Tools            []ToolDefinition       `json:"tools,omitempty"`
+	ReasoningEffort  string                 `json:"reasoning_effort,omitempty"` // "none", "low", "medium", "high" - disable thinking
+	Extra            map[string]interface{} `json:"-"` // Additional fields
 }
 
 // ToolDefinition represents a tool for function calling
@@ -196,6 +197,15 @@ func (c ChatMessageContent) GetText() string {
 	return ""
 }
 
+// GetTextWithReasoning returns content text, falling back to reasoning if content is empty
+func (m *ChatMessage) GetTextWithReasoning() string {
+	text := m.Content.GetText()
+	if text == "" && m.Reasoning != "" {
+		return m.Reasoning
+	}
+	return text
+}
+
 // HasImage checks if content contains image
 func (c ChatMessageContent) HasImage() bool {
 	for _, part := range c.Parts {
@@ -209,6 +219,7 @@ func (c ChatMessageContent) HasImage() bool {
 type ChatMessage struct {
 	Role       string             `json:"role"`
 	Content    ChatMessageContent `json:"content"`
+	Reasoning  string             `json:"reasoning,omitempty"` // Some models (Ollama/Gemma) put thinking in this field
 	ToolCalls  []ToolCall         `json:"tool_calls,omitempty"`
 	ToolCallID string             `json:"tool_call_id,omitempty"` // For tool messages - must match tool_calls.id
 }
@@ -1275,6 +1286,11 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		latency := int(time.Since(startTime).Milliseconds())
 		updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil)
 		return nil, err
+	}
+
+	// Debug: print raw response for title generation requests
+	if req.MaxTokens <= 100 {
+		log.Printf("[HandleChatCompletions] Raw response body for title: %s", string(body))
 	}
 
 	var chatResp ChatResponse

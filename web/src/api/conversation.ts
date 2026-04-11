@@ -35,6 +35,10 @@ export const conversationApi = {
   deleteMessagesAfter: (id: number, messageId: number) =>
     api.delete(`/conversations/${id}/messages/after/${messageId}`),
 
+  // Generate title for conversation based on first user message
+  generateTitle: (id: number) =>
+    api.post<{ data: { title: string } }>(`/conversations/${id}/generate-title`),
+
   // Send a message with streaming (OpenAI-compatible format)
   // Frontend builds full request with model and messages
   sendMessageStream: async (

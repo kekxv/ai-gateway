@@ -935,6 +935,26 @@ const copyMessage = async (content: string) => {
   }
 }
 
+// Generate title in background (non-blocking)
+const generateTitleInBackground = async (conversationId: number) => {
+  try {
+    const response = await conversationApi.generateTitle(conversationId)
+    const newTitle = response.data.data?.title
+    if (newTitle && currentConversation.value?.id === conversationId) {
+      // Update current conversation title
+      currentConversation.value.title = newTitle
+      // Update in conversations list
+      const convInList = conversations.value.find(c => c.id === conversationId)
+      if (convInList) {
+        convInList.title = newTitle
+      }
+    }
+  } catch (e) {
+    // Silently fail - title generation is optional
+    console.error('Failed to generate title:', e)
+  }
+}
+
 // Load conversations
 const loadConversations = async () => {
   try {
@@ -1507,6 +1527,13 @@ const streamWithToolCalls = async (
       // Update conversation list if needed
       if (messages.value.length <= 3) {
         loadConversations()
+      }
+
+      // Auto-generate title if this is the first user message
+      // Check: only 1 user message and title is still "New Chat"
+      const userMessageCount = messages.value.filter(m => m.role === 'user').length
+      if (userMessageCount === 1 && currentConversation.value?.title === 'New Chat') {
+        generateTitleInBackground(conversationId)
       }
     }
 

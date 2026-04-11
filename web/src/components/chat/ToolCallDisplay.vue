@@ -218,6 +218,7 @@ const renderArguments = (toolCall: ToolCallResult) => {
 const renderCanvasArgs = (args: Record<string, unknown>) => {
   const width = args.width || 400
   const height = args.height || 300
+  const backgroundColor = args.backgroundColor
   let operations: Array<Record<string, unknown>> = []
 
   // 确保 operations 是数组
@@ -234,18 +235,62 @@ const renderCanvasArgs = (args: Record<string, unknown>) => {
     }
   }
 
-  return h('div', { class: 'tool-args-canvas' }, [
+  // 获取操作类型 - 支持 type 和 operation 字段
+  const getOpType = (op: Record<string, unknown>): string => {
+    return String(op.type || op.operation || 'unknown')
+  }
+
+  // 格式化单个操作的描述
+  const formatOpDesc = (op: Record<string, unknown>): string => {
+    const type = getOpType(op)
+    switch (type) {
+      case 'rect':
+        return `矩形 (${op.x || 0}, ${op.y || 0}) ${op.width || 0}x${op.height || 0}`
+      case 'circle':
+        return `圆形 (${op.x || 0}, ${op.y || 0}) r=${op.radius || op.r || 0}`
+      case 'ellipse':
+        return `椭圆 (${op.x || 0}, ${op.y || 0})`
+      case 'line':
+        return `线条 (${op.x1 || 0},${op.y1 || 0}) → (${op.x2 || 0},${op.y2 || 0})`
+      case 'text':
+        return `文本: "${String(op.text || '').slice(0, 20)}"`
+      case 'arc':
+        return `弧形`
+      case 'clear':
+        return '清空画布'
+      case 'setStyle':
+        return '设置样式'
+      default:
+        return type
+    }
+  }
+
+  const children: Array<ReturnType<typeof h>> = [
     h('div', { class: 'canvas-size' }, `画布尺寸：${width} x ${height}`),
     h('div', { class: 'canvas-ops' }, [
       h('span', { class: 'arg-label' }, '操作：'),
       h('span', { class: 'arg-value' }, `${operations.length} 个绘制操作`)
-    ]),
-    operations.length > 0 ? h('div', { class: 'canvas-op-list' },
-      operations.slice(0, 5).map((op, idx) =>
-        h('span', { class: 'canvas-op-tag', key: idx }, String(op.type || 'unknown'))
-      ).concat(operations.length > 5 ? [h('span', { class: 'canvas-op-more', key: 'more' }, `+${operations.length - 5}`)] : [])
-    ) : null
-  ])
+    ])
+  ]
+
+  // Add background color if specified
+  if (backgroundColor) {
+    children.push(h('div', { class: 'canvas-bg' }, `背景：${backgroundColor}`))
+  }
+
+  // 显示详细操作列表
+  if (operations.length > 0) {
+    children.push(h('div', { class: 'canvas-op-details' },
+      operations.map((op, idx) =>
+        h('div', { class: 'canvas-op-item', key: idx }, [
+          h('span', { class: 'canvas-op-type' }, getOpType(op)),
+          h('span', { class: 'canvas-op-desc' }, formatOpDesc(op))
+        ])
+      )
+    ))
+  }
+
+  return h('div', { class: 'tool-args-canvas' }, children)
 }
 
 // 渲染结果
@@ -724,7 +769,7 @@ const formatJson = (obj: unknown) => {
   gap: 8px;
 }
 
-.canvas-size {
+.canvas-size, .canvas-bg {
   color: #374151;
 }
 
@@ -732,6 +777,37 @@ const formatJson = (obj: unknown) => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.canvas-op-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 8px;
+  background: #f8fafc;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+}
+
+.canvas-op-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.canvas-op-type {
+  padding: 2px 6px;
+  background: #e0e7ff;
+  color: #3730a3;
+  border-radius: 4px;
+  font-family: 'SF Mono', 'Monaco', monospace;
+  font-size: 11px;
+}
+
+.canvas-op-desc {
+  color: #4b5563;
 }
 
 .canvas-op-list {
