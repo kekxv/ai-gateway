@@ -73,7 +73,8 @@ export interface ChatRequest {
       parameters: Record<string, unknown>
     }
   }>
-  enable_thinking?: boolean
+  enable_thinking?: boolean                  // Deprecated: use reasoning_effort instead
+  reasoning_effort?: 'high' | 'medium' | 'low' | 'none'  // Thinking/reasoning effort level
 }
 
 // ChatMessage for OpenAI-compatible format

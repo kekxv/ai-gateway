@@ -392,15 +392,23 @@
                   <el-dropdown-menu>
                     <el-dropdown-item command="auto" :class="{ 'is-active': thinkingMode === 'auto' }">
                       <span class="option-label">自动</span>
-                      <span class="option-desc">不设置</span>
+                      <span class="option-desc">不设置参数</span>
                     </el-dropdown-item>
-                    <el-dropdown-item command="on" :class="{ 'is-active': thinkingMode === 'on' }">
-                      <span class="option-label">开启</span>
-                      <span class="option-desc">强制启用</span>
+                    <el-dropdown-item command="high" :class="{ 'is-active': thinkingMode === 'high' }">
+                      <span class="option-label">高</span>
+                      <span class="option-desc">深度思考</span>
                     </el-dropdown-item>
-                    <el-dropdown-item command="off" :class="{ 'is-active': thinkingMode === 'off' }">
-                      <span class="option-label">关闭</span>
-                      <span class="option-desc">强制禁用</span>
+                    <el-dropdown-item command="medium" :class="{ 'is-active': thinkingMode === 'medium' }">
+                      <span class="option-label">中</span>
+                      <span class="option-desc">适中思考</span>
+                    </el-dropdown-item>
+                    <el-dropdown-item command="low" :class="{ 'is-active': thinkingMode === 'low' }">
+                      <span class="option-label">低</span>
+                      <span class="option-desc">轻度思考</span>
+                    </el-dropdown-item>
+                    <el-dropdown-item command="none" :class="{ 'is-active': thinkingMode === 'none' }">
+                      <span class="option-label">不开</span>
+                      <span class="option-desc">禁用思考</span>
                     </el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
@@ -672,15 +680,17 @@ const settingsForm = reactive<ConversationSettings & { system_prompt: string }>(
   system_prompt: ''
 })
 
-// Thinking chain mode: 'auto' = not set, 'on' = force enable, 'off' = force disable
-type ThinkingMode = 'auto' | 'on' | 'off'
+// Thinking/reasoning effort mode
+type ThinkingMode = 'auto' | 'high' | 'medium' | 'low' | 'none'
 const thinkingMode = ref<ThinkingMode>('auto')
 
 const thinkingModeLabel = computed(() => {
   const labels: Record<ThinkingMode, string> = {
     auto: '自动',
-    on: '开启',
-    off: '关闭'
+    high: '高',
+    medium: '中',
+    low: '低',
+    none: '不开'
   }
   return labels[thinkingMode.value]
 })
@@ -689,10 +699,10 @@ const setThinkingMode = (mode: ThinkingMode) => {
   thinkingMode.value = mode
 }
 
-// Get enable_thinking value for API request
-const getEnableThinking = (): boolean | undefined => {
+// Get reasoning_effort value for API request
+const getReasoningEffort = (): 'high' | 'medium' | 'low' | 'none' | undefined => {
   if (thinkingMode.value === 'auto') return undefined
-  return thinkingMode.value === 'on'
+  return thinkingMode.value as 'high' | 'medium' | 'low' | 'none'
 }
 
 // Check mobile
@@ -784,7 +794,7 @@ const regenerateFromUser = async (userIndex: number) => {
     temperature: settingsForm.temperature,
     max_tokens: settingsForm.max_tokens,
     tools: toolsStore.getToolsForModel(),
-    enable_thinking: getEnableThinking()
+    reasoning_effort: getReasoningEffort()
   })
 }
 
@@ -902,7 +912,7 @@ const confirmEditBlock = async () => {
     temperature: settingsForm.temperature,
     max_tokens: settingsForm.max_tokens,
     tools: toolsStore.getToolsForModel(),
-    enable_thinking: getEnableThinking()
+    reasoning_effort: getReasoningEffort()
   })
 }
 
@@ -1199,7 +1209,7 @@ const sendMessage = async () => {
     temperature: settingsForm.temperature,
     max_tokens: settingsForm.max_tokens,
     tools: toolsStore.getToolsForModel(),
-    enable_thinking: getEnableThinking()
+    reasoning_effort: getReasoningEffort()
   })
 }
 
@@ -1482,7 +1492,7 @@ const streamWithToolCalls = async (
               temperature: settingsForm.temperature,
               max_tokens: settingsForm.max_tokens,
               tools: toolsStore.getToolsForModel(),
-              enable_thinking: getEnableThinking()
+              reasoning_effort: getReasoningEffort()
             },
             iteration + 1
           ).catch(console.error)
@@ -1617,7 +1627,7 @@ const streamWithToolCalls = async (
           temperature: settingsForm.temperature,
           max_tokens: settingsForm.max_tokens,
           tools: toolsStore.getToolsForModel(),
-          enable_thinking: getEnableThinking()
+          reasoning_effort: getReasoningEffort()
         },
         iteration + 1
       ).catch(console.error)
