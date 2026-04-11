@@ -215,109 +215,135 @@
         <template v-if="viewMode === 'chat'">
 
         <!-- Chat Messages (show when available) -->
-        <div v-if="chatMessages.length > 0" class="chat-container">
-          <div class="chat-header">
-            <span class="font-medium">对话内容</span>
-            <span class="chat-count">{{ chatMessages.length }} 条消息</span>
-          </div>
-          <div class="chat-body">
-            <div
-              v-for="(msg, idx) in chatMessages"
-              :key="idx"
-              class="message-block"
-              :class="msg.role"
-            >
-              <!-- User Message -->
-              <div v-if="msg.role === 'user'" class="msg-card msg-card-user">
-                <div class="msg-header" @click="toggleMessage(idx)">
-                  <div class="msg-icon msg-icon-user">
-                    <el-icon><User /></el-icon>
-                  </div>
-                  <span class="msg-label">用户</span>
-                  <span v-if="collapsedMessages.has(idx)" class="msg-preview">{{ getPreviewText(msg.content) }}</span>
-                  <div class="msg-header-actions">
-                    <el-tooltip content="复制原文" placement="top">
-                      <el-button size="small" text @click.stop="copyMessage('text', msg)">
-                        <el-icon><Document /></el-icon>
-                      </el-button>
-                    </el-tooltip>
-                    <el-tooltip content="复制MD" placement="top">
-                      <el-button size="small" text @click.stop="copyMessage('markdown', msg)">
-                        <el-icon><DocumentCopy /></el-icon>
-                      </el-button>
-                    </el-tooltip>
-                  </div>
-                  <el-icon class="expand-icon">
-                    <ArrowDown v-if="collapsedMessages.has(idx)" />
-                    <ArrowUp v-else />
-                  </el-icon>
-                </div>
-                <div v-show="!collapsedMessages.has(idx)" class="msg-content">
-                  <div class="msg-text">{{ msg.content }}</div>
-                </div>
+        <div v-if="chatMessages.length > 0" class="chat-messages-area">
+          <div
+            v-for="(msg, idx) in chatMessages"
+            :key="idx"
+            class="log-message-block"
+            :class="msg.role"
+          >
+            <!-- User Message -->
+            <div v-if="msg.role === 'user'" class="log-user-message">
+              <div class="log-user-avatar">
+                <el-icon><User /></el-icon>
               </div>
-
-              <!-- System Message -->
-              <div v-else-if="msg.role === 'system'" class="msg-card msg-card-system">
-                <div class="msg-header" @click="toggleMessage(idx)">
-                  <div class="msg-icon msg-icon-system">
-                    <el-icon><Setting /></el-icon>
-                  </div>
-                  <span class="msg-label">System</span>
-                  <span v-if="collapsedMessages.has(idx)" class="msg-preview">{{ getPreviewText(msg.content) }}</span>
-                  <div class="msg-header-actions">
+              <div class="log-user-content">
+                <div class="log-user-header">
+                  <span class="log-user-name">用户</span>
+                  <div class="log-message-actions">
                     <el-tooltip content="复制原文" placement="top">
-                      <el-button size="small" text @click.stop="copyMessage('text', msg)">
+                      <button class="log-action-btn" @click.stop="copyMessage('text', msg)">
                         <el-icon><Document /></el-icon>
-                      </el-button>
+                      </button>
                     </el-tooltip>
                     <el-tooltip content="复制MD" placement="top">
-                      <el-button size="small" text @click.stop="copyMessage('markdown', msg)">
+                      <button class="log-action-btn" @click.stop="copyMessage('markdown', msg)">
                         <el-icon><DocumentCopy /></el-icon>
-                      </el-button>
+                      </button>
                     </el-tooltip>
                   </div>
-                  <el-icon class="expand-icon">
-                    <ArrowDown v-if="collapsedMessages.has(idx)" />
-                    <ArrowUp v-else />
-                  </el-icon>
                 </div>
-                <div v-show="!collapsedMessages.has(idx)" class="msg-content">
-                  <div class="msg-text">{{ msg.content }}</div>
+                <!-- 图片部分 -->
+                <div v-if="msg.imageParts && msg.imageParts.length > 0" class="log-image-blocks">
+                  <AttachmentPreview v-for="part in msg.imageParts" :key="part.image_url?.url" :part="part" />
                 </div>
-              </div>
-
-              <!-- Assistant Message -->
-              <div v-else-if="msg.role === 'assistant'" class="msg-card msg-card-assistant">
-                <div class="msg-header" @click="toggleMessage(idx)">
-                  <div class="msg-icon msg-icon-assistant">
-                    <el-icon><Monitor /></el-icon>
+                <!-- Tool Results (用户发送的工具调用结果) -->
+                <div v-if="msg.toolResults && msg.toolResults.length > 0" class="log-tool-results">
+                  <div v-for="result in msg.toolResults" :key="result.toolUseId" class="log-tool-result-card">
+                    <div class="log-tool-result-header" @click="toggleToolResult(result.toolUseId)">
+                      <div class="log-tool-result-icon">
+                        <el-icon><Check /></el-icon>
+                      </div>
+                      <span class="log-tool-result-name">{{ result.toolName || '工具结果' }}</span>
+                      <el-icon class="log-tool-expand-icon">
+                        <ArrowDown v-if="!expandedToolResults.has(result.toolUseId)" />
+                        <ArrowUp v-else />
+                      </el-icon>
+                    </div>
+                    <div v-show="expandedToolResults.has(result.toolUseId)" class="log-tool-result-content">
+                      <pre class="log-tool-result-pre">{{ result.content }}</pre>
+                    </div>
                   </div>
-                  <span class="msg-label">AI</span>
-                  <span v-if="collapsedMessages.has(idx)" class="msg-preview">{{ getPreviewText(msg.content) }}</span>
-                  <div class="msg-header-actions">
-                    <el-tooltip content="复制原文" placement="top">
-                      <el-button size="small" text @click.stop="copyMessage('text', msg)">
-                        <el-icon><Document /></el-icon>
-                      </el-button>
-                    </el-tooltip>
-                    <el-tooltip content="复制MD" placement="top">
-                      <el-button size="small" text @click.stop="copyMessage('markdown', msg)">
-                        <el-icon><DocumentCopy /></el-icon>
-                      </el-button>
-                    </el-tooltip>
-                  </div>
-                  <el-icon class="expand-icon">
-                    <ArrowDown v-if="collapsedMessages.has(idx)" />
-                    <ArrowUp v-else />
-                  </el-icon>
                 </div>
-                <div v-show="!collapsedMessages.has(idx)" class="msg-content">
+                <!-- System Reminder -->
+                  <SystemReminderBlock
+                    v-if="extractSystemReminders(msg.content)"
+                    :content="extractSystemReminders(msg.content)"
+                    :default-collapsed="false"
+                  />
                   <!-- Think Block -->
                   <ThinkBlock
-                    v-if="msg.hasThink && msg.thinkContent"
-                    :content="msg.thinkContent"
-                    :tokens="estimateThinkTokens(msg.thinkContent)"
+                    v-if="parseMessageWithThink(removeSystemReminders(msg.content)).hasThink"
+                    :content="parseMessageWithThink(removeSystemReminders(msg.content)).thinkContent"
+                    :tokens="estimateThinkTokens(parseMessageWithThink(removeSystemReminders(msg.content)).thinkContent)"
+                    :default-collapsed="true"
+                  />
+                  <!-- 文本内容 -->
+                  <div v-if="parseMessageWithThink(removeSystemReminders(msg.content)).textContent" class="log-user-collapsible-bubble">
+                    <div class="bubble-header" @click="toggleBubble(`user-${idx}`)">
+                      <div class="bubble-icon">
+                        <el-icon><User /></el-icon>
+                      </div>
+                      <div class="bubble-meta">
+                        <span class="bubble-label">用户消息</span>
+                        <span v-if="!expandedBubbles.has(`user-${idx}`)" class="bubble-preview-text">{{ getBubblePreview(parseMessageWithThink(removeSystemReminders(msg.content)).textContent) }}</span>
+                      </div>
+                      <el-icon class="bubble-expand-icon">
+                        <ArrowDown v-if="!expandedBubbles.has(`user-${idx}`)" />
+                        <ArrowUp v-else />
+                      </el-icon>
+                    </div>
+                    <div v-show="expandedBubbles.has(`user-${idx}`)" class="bubble-content">
+                      {{ parseMessageWithThink(removeSystemReminders(msg.content)).textContent }}
+                    </div>
+                  </div>
+              </div>
+            </div>
+
+            <!-- System Message -->
+            <div v-else-if="msg.role === 'system'" class="log-system-block-wrapper">
+              <SystemBlock :content="msg.content" :default-collapsed="true" />
+              <div class="log-system-actions">
+                <el-tooltip content="复制原文" placement="top">
+                  <button class="log-action-btn" @click.stop="copyMessage('text', msg)">
+                    <el-icon><Document /></el-icon>
+                  </button>
+                </el-tooltip>
+              </div>
+            </div>
+
+            <!-- Assistant Message -->
+            <div v-else-if="msg.role === 'assistant'" class="log-assistant-message">
+              <div class="log-assistant-avatar">
+                <el-icon><Monitor /></el-icon>
+              </div>
+              <div class="log-assistant-content">
+                <div class="log-assistant-header">
+                  <span class="log-assistant-name">AI</span>
+                  <div class="log-message-actions">
+                    <el-tooltip content="复制原文" placement="top">
+                      <button class="log-action-btn" @click.stop="copyMessage('text', msg)">
+                        <el-icon><Document /></el-icon>
+                      </button>
+                    </el-tooltip>
+                    <el-tooltip content="复制MD" placement="top">
+                      <button class="log-action-btn" @click.stop="copyMessage('markdown', msg)">
+                        <el-icon><DocumentCopy /></el-icon>
+                      </button>
+                    </el-tooltip>
+                  </div>
+                </div>
+                <!-- System Reminder -->
+                <SystemReminderBlock
+                  v-if="extractSystemReminders(msg.content)"
+                    :content="extractSystemReminders(msg.content)"
+                    :default-collapsed="false"
+                  />
+                  <!-- Think Block -->
+                  <ThinkBlock
+                    v-if="parseMessageWithThink(removeSystemReminders(msg.content)).hasThink || msg.hasThink"
+                    :content="msg.thinkContent || parseMessageWithThink(removeSystemReminders(msg.content)).thinkContent"
+                    :tokens="estimateThinkTokens(msg.thinkContent || parseMessageWithThink(removeSystemReminders(msg.content)).thinkContent)"
                     :default-collapsed="true"
                   />
                   <!-- Tool Calls Display -->
@@ -326,36 +352,28 @@
                     :tool-calls="msg.toolCalls"
                   />
                   <!-- Content -->
-                  <div v-if="msg.content" class="msg-text msg-markdown">
-                    <MarkdownRenderer :content="msg.content" />
+                  <div v-if="parseMessageWithThink(removeSystemReminders(msg.content)).textContent" class="log-assistant-collapsible-bubble">
+                    <div class="bubble-header" @click="toggleBubble(`assistant-${idx}`)">
+                      <div class="bubble-icon">
+                        <el-icon><Monitor /></el-icon>
+                      </div>
+                      <div class="bubble-meta">
+                        <span class="bubble-label">AI 回复</span>
+                        <span v-if="!expandedBubbles.has(`assistant-${idx}`)" class="bubble-preview-text">{{ getBubblePreview(parseMessageWithThink(removeSystemReminders(msg.content)).textContent) }}</span>
+                      </div>
+                      <el-icon class="bubble-expand-icon">
+                        <ArrowDown v-if="!expandedBubbles.has(`assistant-${idx}`)" />
+                        <ArrowUp v-else />
+                      </el-icon>
+                    </div>
+                    <div v-show="expandedBubbles.has(`assistant-${idx}`)" class="bubble-content">
+                      <MarkdownRenderer :content="parseMessageWithThink(removeSystemReminders(msg.content)).textContent" />
+                    </div>
                   </div>
-                </div>
               </div>
             </div>
           </div>
         </div>
-
-        <!-- Raw Request/Response (show only when has content) -->
-        <template v-else>
-          <div v-if="logDetail.detail?.requestBody" class="raw-card">
-            <div class="raw-header">
-              <span>{{ t('log.request') }}</span>
-              <el-button size="small" text @click="copyToClipboard(logDetail.detail.requestBody)">
-                <el-icon><CopyDocument /></el-icon>
-              </el-button>
-            </div>
-            <pre class="raw-body">{{ formatJson(logDetail.detail.requestBody) }}</pre>
-          </div>
-          <div v-if="logDetail.detail?.responseBody" class="raw-card">
-            <div class="raw-header">
-              <span>{{ t('log.response') }}</span>
-              <el-button size="small" text @click="copyToClipboard(logDetail.detail.responseBody)">
-                <el-icon><CopyDocument /></el-icon>
-              </el-button>
-            </div>
-            <pre class="raw-body">{{ formatJson(logDetail.detail.responseBody) }}</pre>
-          </div>
-        </template>
         </template>
 
         <!-- Meta Mode - request/response body with syntax highlighting -->
@@ -391,17 +409,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, CopyDocument, Warning, Loading, Monitor, Document, ChatDotRound, DataLine, ArrowDown, ArrowUp, User, Setting, DocumentCopy } from '@element-plus/icons-vue'
+import { Delete, CopyDocument, Warning, Loading, Monitor, Document, ChatDotRound, DataLine, User, DocumentCopy, ArrowDown, ArrowUp, Check } from '@element-plus/icons-vue'
 import { logApi } from '@/api/log'
 import type { Log, LogDetail } from '@/types/log'
 import type { ToolCallResult } from '@/types/tool'
+import type { ChatContentPart } from '@/types/conversation'
 import { parseMessageContent, estimateThinkTokens } from '@/utils/messageParser'
 import ThinkBlock from '@/components/chat/ThinkBlock.vue'
 import ToolCallDisplay from '@/components/chat/ToolCallDisplay.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import AttachmentPreview from '@/components/chat/AttachmentPreview.vue'
+import SystemBlock from '@/components/chat/SystemBlock.vue'
+import SystemReminderBlock from '@/components/chat/SystemReminderBlock.vue'
 import dayjs from 'dayjs'
 import 'highlight.js/styles/github.css'
 import hljs from 'highlight.js'
@@ -419,17 +441,36 @@ const viewMode = ref<'chat' | 'meta'>('chat')
 // 折叠状态
 const requestHeadersCollapsed = ref(true)
 const responseHeadersCollapsed = ref(true)
-const collapsedMessages = ref<Set<number>>(new Set())
+const expandedToolResults = ref<Set<string>>(new Set())
+const expandedBubbles = ref<Set<string>>(new Set())
 
-// Auto collapse long messages when detail loads
-const initMessageCollapse = () => {
-  collapsedMessages.value = new Set()
-  chatMessages.value.forEach((msg, idx) => {
-    // Auto collapse if content is long (> 200 chars)
-    if (msg.content && msg.content.length > 200) {
-      collapsedMessages.value.add(idx)
-    }
-  })
+// Toggle tool result collapse
+const toggleToolResult = (toolUseId: string) => {
+  if (expandedToolResults.value.has(toolUseId)) {
+    expandedToolResults.value.delete(toolUseId)
+  } else {
+    expandedToolResults.value.add(toolUseId)
+  }
+}
+
+// Toggle bubble collapse
+const toggleBubble = (bubbleId: string) => {
+  if (expandedBubbles.value.has(bubbleId)) {
+    expandedBubbles.value.delete(bubbleId)
+  } else {
+    expandedBubbles.value.add(bubbleId)
+  }
+}
+
+// Get preview text for collapsed bubble
+const getBubblePreview = (content: string): string => {
+  const maxLen = 100
+  return content.length > maxLen ? content.slice(0, maxLen) + '...' : content
+}
+
+// Initialize bubble collapse state
+const initBubbleCollapse = () => {
+  expandedBubbles.value = new Set()
 }
 
 // Parse headers JSON
@@ -514,16 +555,6 @@ const getStatusType = (status: number | string) => {
   return 'danger'
 }
 
-const formatJson = (json: string | object | null | undefined) => {
-  if (!json) return 'N/A'
-  try {
-    const obj = typeof json === 'string' ? JSON.parse(json) : json
-    return JSON.stringify(obj, null, 2)
-  } catch {
-    return String(json)
-  }
-}
-
 const copyToClipboard = async (text: string | object | null | undefined) => {
   if (!text) return
   try {
@@ -532,23 +563,6 @@ const copyToClipboard = async (text: string | object | null | undefined) => {
   } catch {
     ElMessage.error('复制失败')
   }
-}
-
-// Toggle message collapse
-const toggleMessage = (idx: number) => {
-  if (collapsedMessages.value.has(idx)) {
-    collapsedMessages.value.delete(idx)
-  } else {
-    collapsedMessages.value.add(idx)
-  }
-}
-
-// Get preview text for collapsed message
-const getPreviewText = (content: string): string => {
-  if (!content) return ''
-  const maxLen = 60
-  const text = content.replace(/\n/g, ' ').trim()
-  return text.length > maxLen ? text.slice(0, maxLen) + '...' : text
 }
 
 // Copy message content
@@ -585,11 +599,10 @@ const extractContentText = (content: string | object | undefined): string => {
   if (Array.isArray(content)) {
     // Handle [{type: "text", text: "..."}] format (Anthropic/OpenAI multimodal)
     return content
-      .map((item: { type?: string; text?: string; thinking?: string; source?: { url?: string; media_type?: string } }) => {
+      .map((item: { type?: string; text?: string; thinking?: string }) => {
         if (item.type === 'text' && item.text) return item.text
         if (item.type === 'thinking' && item.thinking) return `[思考] ${item.thinking}`
-        if (item.type === 'image' && item.source) return `[图片: ${item.source.url || item.source.media_type || ''}]`
-        if (item.type === 'video' && item.source) return `[视频: ${item.source.url || item.source.media_type || ''}]`
+        // image_url type is handled separately via extractImageParts
         // tool_use and tool_result are handled separately via toolCalls array
         return ''
       })
@@ -607,8 +620,52 @@ const extractContentText = (content: string | object | undefined): string => {
   return ''
 }
 
+// Helper function to extract image parts from content
+const extractImageParts = (content: string | object | undefined): ChatContentPart[] => {
+  if (!content) return []
+  if (typeof content === 'string') return []
+  if (Array.isArray(content)) {
+    return content
+      .filter((item: { type?: string; image_url?: { url?: string } }) =>
+        item.type === 'image_url' && item.image_url?.url
+      )
+      .map((item: { type?: string; image_url?: { url?: string; detail?: string } }) => ({
+        type: 'image_url' as const,
+        image_url: {
+          url: item.image_url!.url!,
+          detail: item.image_url?.detail || undefined
+        }
+      }))
+  }
+  return []
+}
+
+// Helper function to extract system-reminder content from message
+const extractSystemReminders = (content: string | undefined): string => {
+  if (!content) return ''
+  const matches = content.match(/<system-reminder>\s*[\s\S]*?\s*<\/system-reminder>/gi)
+  return matches ? matches.join('\n') : ''
+}
+
+// Helper function to remove system-reminder tags from content
+const removeSystemReminders = (content: string | undefined): string => {
+  if (!content) return ''
+  return content.replace(/<system-reminder>\s*[\s\S]*?\s*<\/system-reminder>/gi, '').trim()
+}
+
+// Helper function to parse message content with think tags
+const parseMessageWithThink = (content: string | undefined): { textContent: string; thinkContent: string; hasThink: boolean } => {
+  if (!content) return { textContent: '', thinkContent: '', hasThink: false }
+  const parsed = parseMessageContent(content)
+  return {
+    textContent: parsed.textContent,
+    thinkContent: parsed.thinkContent || '',
+    hasThink: parsed.hasThink
+  }
+}
+
 // Helper function to parse tool_calls from message object
-const parseToolCalls = (toolCalls: unknown, toolResultsMap?: Map<string, { toolName: string; result: unknown }>): ToolCallResult[] => {
+const parseToolCalls = (toolCalls: unknown, toolResultsMap?: Map<string, { toolName?: string; result: unknown; isError?: boolean }>): ToolCallResult[] => {
   if (!toolCalls) return []
 
   let parsedToolCalls: Array<{ id: string; type: string; function: { name: string; arguments: string } }> = []
@@ -627,10 +684,17 @@ const parseToolCalls = (toolCalls: unknown, toolResultsMap?: Map<string, { toolN
     const id = tc.id || `tool_${idx}_${Date.now()}`
     const toolName = tc.function?.name || 'unknown'
     let result: unknown = undefined
+    let status: 'success' | 'error' = 'success'
 
-    // Try to get result from toolResultsMap by tool name
-    if (toolResultsMap && toolResultsMap.has(toolName)) {
-      result = toolResultsMap.get(toolName)!.result
+    // Try to get result from toolResultsMap by id or tool name
+    if (toolResultsMap) {
+      if (toolResultsMap.has(id)) {
+        const toolResult = toolResultsMap.get(id)!
+        result = toolResult.result
+        if (toolResult.isError) status = 'error'
+      } else if (toolResultsMap.has(toolName)) {
+        result = toolResultsMap.get(toolName)!.result
+      }
     }
 
     // Parse arguments
@@ -650,67 +714,33 @@ const parseToolCalls = (toolCalls: unknown, toolResultsMap?: Map<string, { toolN
       toolName,
       arguments: args,
       result,
-      status: 'success' as const
+      status
     }
   })
 }
 
-// Helper function to extract tool calls from Anthropic content array
-const extractToolCallsFromContent = (content: unknown, toolResultsMap?: Map<string, { toolName: string; result: unknown }>): ToolCallResult[] => {
-  if (!content || !Array.isArray(content)) return []
-
-  const toolCalls: ToolCallResult[] = []
-
-  content.forEach((block: { type?: string; name?: string; id?: string; input?: unknown }, idx: number) => {
-    if (block.type === 'tool_use' && block.name) {
-      toolCalls.push({
-        id: block.id || `tool_${block.name}_${idx}_${Date.now()}`,
-        toolName: block.name,
-        arguments: (block.input as Record<string, unknown>) || {},
-        result: toolResultsMap?.get(block.name)?.result,
-        status: 'success' as const
-      })
-    }
-  })
-
-  return toolCalls
-}
-
-// Helper function to extract tool results from Anthropic content array
-const extractToolResultsFromContent = (content: unknown): Map<string, { toolName: string; result: unknown }> => {
-  const results = new Map<string, { toolName: string; result: unknown }>()
-
-  if (!content || !Array.isArray(content)) return results
-
-  content.forEach((block: { type?: string; tool_use_id?: string; name?: string; content?: unknown }) => {
-    if (block.type === 'tool_result') {
-      const key = block.tool_use_id || block.name || ''
-      if (key) {
-        results.set(key, {
-          toolName: key,
-          result: block.content
-        })
-      }
-    }
-  })
-
-  return results
+// Type for parsed chat message
+type ParsedChatMessage = {
+  role: string
+  content: string
+  thinkContent?: string
+  hasThink?: boolean
+  toolCalls?: ToolCallResult[]
+  toolResults?: Array<{ toolUseId: string; toolName?: string; content: string; isError?: boolean }>
+  imageParts?: ChatContentPart[]
+  rawContent?: string | object
+  isToolResultOnly?: boolean
 }
 
 // Extract chat messages from request/response
 const chatMessages = computed(() => {
   if (!logDetail.value?.detail) return []
-  const messages: {
-    role: string
-    content: string
-    thinkContent?: string
-    hasThink?: boolean
-    toolCalls?: ToolCallResult[]
-  }[] = []
+  const messages: ParsedChatMessage[] = []
 
-  // First pass: collect all tool results from messages
-  // Format: "Tool: xxx\nResult: xxx" (can be in role: 'tool' or role: 'user')
-  const toolResultsMap: Map<string, { toolName: string; result: unknown }> = new Map()
+  // First pass: collect all tool results from messages by tool_use_id
+  const toolResultsMap: Map<string, { toolName?: string; result: unknown; isError?: boolean }> = new Map()
+  // Also collect tool_use info by id for matching
+  const toolUseMap: Map<string, { toolName: string; input: unknown }> = new Map()
 
   // Collect tool results from request body
   try {
@@ -722,54 +752,32 @@ const chatMessages = computed(() => {
       const msgs = reqObj.messages || reqObj.input
       if (Array.isArray(msgs)) {
         msgs.forEach((msg: { role?: string; content?: string | object }) => {
-          // Handle tool role with string content
-          if (msg.role === 'tool' || (msg.role === 'user' && typeof msg.content === 'string' && msg.content.startsWith('Tool: '))) {
-            const content = typeof msg.content === 'string' ? msg.content : ''
-            // Parse "Tool: name\nResult: content" format
-            const lines = content.split('\n')
-            if (lines.length >= 2 && lines[0].startsWith('Tool: ')) {
-              const toolName = lines[0].slice(6).trim()
-              let resultPart = lines.slice(1).join('\n').trim()
-              if (resultPart.startsWith('Result: ')) {
-                resultPart = resultPart.slice(8).trim()
-              }
-              // Try to parse as JSON
-              let result: unknown
-              try {
-                result = JSON.parse(resultPart)
-              } catch {
-                result = resultPart
-              }
-              toolResultsMap.set(toolName, { toolName, result })
-            }
-          }
           // Handle Anthropic tool_result in content array
           if (Array.isArray(msg.content)) {
-            const contentResults = extractToolResultsFromContent(msg.content)
-            contentResults.forEach((value, key) => {
-              toolResultsMap.set(key, value)
+            msg.content.forEach((block: { type?: string; tool_use_id?: string; content?: unknown; is_error?: boolean; name?: string; id?: string; input?: unknown }) => {
+              if (block.type === 'tool_result' && block.tool_use_id) {
+                toolResultsMap.set(block.tool_use_id, {
+                  result: block.content,
+                  isError: block.is_error
+                })
+              }
+              if (block.type === 'tool_use' && block.id) {
+                toolUseMap.set(block.id, {
+                  toolName: block.name || 'unknown',
+                  input: block.input
+                })
+              }
             })
           }
-        })
-      }
-    }
-  } catch {
-    // Ignore parse errors
-  }
-
-  // Collect tool results from response body (function_call_output)
-  try {
-    const response = logDetail.value.detail.responseBody
-    if (response) {
-      const respObj = typeof response === 'string' ? JSON.parse(response) : response
-      if (respObj.output && Array.isArray(respObj.output)) {
-        respObj.output.forEach((item: { type?: string; call_id?: string; output?: string; name?: string }) => {
-          if (item.type === 'function_call_output' && (item.call_id || item.name)) {
-            const key = item.name || item.call_id || ''
-            try {
-              toolResultsMap.set(key, { toolName: key, result: JSON.parse(item.output || '{}') })
-            } catch {
-              toolResultsMap.set(key, { toolName: key, result: item.output })
+          // Handle tool role with string content (OpenAI format)
+          if (msg.role === 'tool' && typeof msg.content === 'string') {
+            const content = msg.content
+            // Try to match with tool_call_id if available
+            const toolCallId = (msg as { tool_call_id?: string }).tool_call_id
+            if (toolCallId) {
+              toolResultsMap.set(toolCallId, {
+                result: content
+              })
             }
           }
         })
@@ -779,7 +787,7 @@ const chatMessages = computed(() => {
     // Ignore parse errors
   }
 
-  // Second pass: build chat messages
+  // Second pass: build messages, matching tool_use with tool_result
   try {
     const request = logDetail.value.detail.requestBody
     if (request) {
@@ -794,13 +802,12 @@ const chatMessages = computed(() => {
           messages.push({ role: 'user', content: reqObj.input })
         } else if (Array.isArray(reqObj.input)) {
           reqObj.input.forEach((item: { type?: string; role?: string; content?: string | object; tool_calls?: unknown }) => {
-            if (item.role === 'tool' || (item.role === 'user' && typeof item.content === 'string' && item.content?.startsWith('Tool: '))) return
-            if (item.role === 'system') return
+            if (item.role === 'tool' || item.role === 'system') return
 
             if (item.type === 'message' || item.role) {
               const contentText = extractContentText(item.content)
               const parsed = parseMessageContent(contentText)
-              const msg: { role: string; content: string; thinkContent?: string; hasThink?: boolean; toolCalls?: ToolCallResult[] } = {
+              const msg: ParsedChatMessage = {
                 role: item.role || 'user',
                 content: parsed.textContent,
                 thinkContent: parsed.thinkContent || undefined,
@@ -827,16 +834,99 @@ const chatMessages = computed(() => {
           }
         }
         reqObj.messages.forEach((msg: { role: string; content: string | object; tool_calls?: unknown }) => {
-          // Skip tool result messages (but not if content is array with tool_result)
-          if (msg.role === 'tool' && typeof msg.content === 'string' && msg.content?.startsWith('Tool: ')) return
+          // Skip tool role messages - they will be matched with tool_calls
+          if (msg.role === 'tool') return
 
+          // Handle array content (Anthropic-style with thinking, text, tool_use, tool_result)
+          if (Array.isArray(msg.content)) {
+            let textContent = ''
+            let thinkContent = ''
+            const toolCalls: ToolCallResult[] = []
+            const toolResults: Array<{ toolUseId: string; toolName?: string; content: string; isError?: boolean }> = []
+            const imageParts: ChatContentPart[] = []
+            let hasToolResultOnly = true  // Check if message is only tool_result
+
+            msg.content.forEach((block: { type?: string; text?: string; thinking?: string; name?: string; input?: unknown; id?: string; image_url?: { url?: string }; tool_use_id?: string; content?: unknown; is_error?: boolean }) => {
+              if (block.type === 'text' && block.text) {
+                textContent += block.text
+                hasToolResultOnly = false
+              } else if (block.type === 'thinking' && block.thinking) {
+                thinkContent += block.thinking
+                hasToolResultOnly = false
+              } else if (block.type === 'tool_use' && block.name && block.id) {
+                // Match tool_use with tool_result using tool_use_id
+                const toolResult = toolResultsMap.get(block.id)
+                toolCalls.push({
+                  id: block.id,
+                  toolName: block.name,
+                  arguments: (block.input as Record<string, unknown>) || {},
+                  result: toolResult?.result,
+                  status: toolResult?.isError ? 'error' : 'success'
+                })
+                hasToolResultOnly = false
+              } else if (block.type === 'tool_result' && block.tool_use_id) {
+                // This is a tool_result in user message
+                const toolUseInfo = toolUseMap.get(block.tool_use_id)
+                const resultContent = typeof block.content === 'string' ? block.content : JSON.stringify(block.content)
+                toolResults.push({
+                  toolUseId: block.tool_use_id,
+                  toolName: toolUseInfo?.toolName,
+                  content: resultContent,
+                  isError: block.is_error
+                })
+              } else if (block.type === 'image_url' && block.image_url?.url) {
+                imageParts.push({
+                  type: 'image_url',
+                  image_url: { url: block.image_url.url }
+                })
+                hasToolResultOnly = false
+              }
+            })
+
+            const parsed = parseMessageContent(textContent)
+            const parsedMsg: ParsedChatMessage = {
+              role: msg.role,
+              content: parsed.textContent,
+              thinkContent: thinkContent || parsed.thinkContent || undefined,
+              hasThink: !!thinkContent || parsed.hasThink,
+              rawContent: msg.content,
+              isToolResultOnly: hasToolResultOnly && toolResults.length > 0
+            }
+            if (imageParts.length > 0) {
+              parsedMsg.imageParts = imageParts
+            }
+            if (toolCalls.length > 0) {
+              parsedMsg.toolCalls = toolCalls
+            }
+            if (toolResults.length > 0) {
+              parsedMsg.toolResults = toolResults
+            }
+            if (msg.tool_calls) {
+              const extraToolCalls = parseToolCalls(msg.tool_calls, toolResultsMap)
+              if (extraToolCalls.length > 0 && !parsedMsg.toolCalls) {
+                parsedMsg.toolCalls = extraToolCalls
+              }
+            }
+            // Only push if has content or tool info
+            if (textContent || thinkContent || toolCalls.length > 0 || toolResults.length > 0 || imageParts.length > 0) {
+              messages.push(parsedMsg)
+            }
+            return
+          }
+
+          // Standard string content
           const contentText = extractContentText(msg.content)
+          const imageParts = extractImageParts(msg.content)
           const parsed = parseMessageContent(contentText)
-          const parsedMsg: { role: string; content: string; thinkContent?: string; hasThink?: boolean; toolCalls?: ToolCallResult[] } = {
+          const parsedMsg: ParsedChatMessage = {
             role: msg.role,
             content: parsed.textContent,
             thinkContent: parsed.thinkContent || undefined,
-            hasThink: parsed.hasThink
+            hasThink: parsed.hasThink,
+            rawContent: msg.content
+          }
+          if (imageParts.length > 0) {
+            parsedMsg.imageParts = imageParts
           }
 
           // Extract tool_calls from OpenAI format
@@ -845,25 +935,6 @@ const chatMessages = computed(() => {
             if (toolCalls.length > 0) parsedMsg.toolCalls = toolCalls
           }
 
-          // Extract tool_use from Anthropic content array
-          if (Array.isArray(msg.content)) {
-            const toolCallsFromContent = extractToolCallsFromContent(msg.content, toolResultsMap)
-            if (toolCallsFromContent.length > 0) {
-              parsedMsg.toolCalls = toolCallsFromContent
-            }
-          }
-
-          // If this is an assistant message with think content but no tool_calls,
-          // and we have tool results collected, attach them here
-          if (msg.role === 'assistant' && !parsedMsg.toolCalls && toolResultsMap.size > 0) {
-            parsedMsg.toolCalls = Array.from(toolResultsMap.values()).map(tr => ({
-              id: `tool_${tr.toolName}_${Date.now()}`,
-              toolName: tr.toolName,
-              arguments: {},
-              result: tr.result,
-              status: 'success' as const
-            }))
-          }
           messages.push(parsedMsg)
         })
       }
@@ -922,28 +993,72 @@ const chatMessages = computed(() => {
       else if (respObj.choices && Array.isArray(respObj.choices)) {
         respObj.choices.forEach((choice: { message?: { role: string; content: string | object; reasoning?: string; tool_calls?: unknown } }) => {
           if (choice.message) {
-            const contentText = extractContentText(choice.message.content)
-            const parsed = parseMessageContent(contentText)
-            const msg: { role: string; content: string; thinkContent?: string; hasThink?: boolean; toolCalls?: ToolCallResult[] } = {
-              role: choice.message.role,
-              content: parsed.textContent,
-              thinkContent: parsed.thinkContent || undefined,
-              hasThink: parsed.hasThink
-            }
-            // 处理 reasoning 字段（OpenAI/Ollama 格式的思考内容）
-            if (choice.message.reasoning) {
-              if (msg.thinkContent) {
-                msg.thinkContent = choice.message.reasoning + '\n' + msg.thinkContent
-              } else {
-                msg.thinkContent = choice.message.reasoning
+            // Handle array content (Anthropic-style in OpenAI format)
+            if (Array.isArray(choice.message.content)) {
+              let textContent = ''
+              let thinkContent = ''
+              const toolCalls: ToolCallResult[] = []
+
+              choice.message.content.forEach((block: { type?: string; text?: string; thinking?: string; name?: string; input?: unknown; id?: string }) => {
+                if (block.type === 'text' && block.text) {
+                  textContent += block.text
+                } else if (block.type === 'thinking' && block.thinking) {
+                  thinkContent += block.thinking
+                } else if (block.type === 'tool_use' && block.name && block.id) {
+                  // Match tool_use with tool_result using tool_use_id
+                  const toolResult = toolResultsMap.get(block.id)
+                  toolCalls.push({
+                    id: block.id,
+                    toolName: block.name,
+                    arguments: (block.input as Record<string, unknown>) || {},
+                    result: toolResult?.result,
+                    status: toolResult?.isError ? 'error' as const : 'success' as const
+                  })
+                }
+              })
+
+              const parsed = parseMessageContent(textContent)
+              const msg: { role: string; content: string; thinkContent?: string; hasThink?: boolean; toolCalls?: ToolCallResult[] } = {
+                role: choice.message.role,
+                content: parsed.textContent,
+                thinkContent: thinkContent || parsed.thinkContent || undefined,
+                hasThink: !!thinkContent || parsed.hasThink
               }
-              msg.hasThink = true
+              if (toolCalls.length > 0) {
+                msg.toolCalls = toolCalls
+              }
+              if (choice.message.tool_calls) {
+                const extraToolCalls = parseToolCalls(choice.message.tool_calls, toolResultsMap)
+                if (extraToolCalls.length > 0 && !msg.toolCalls) {
+                  msg.toolCalls = extraToolCalls
+                }
+              }
+              messages.push(msg)
+            } else {
+              // Standard string content
+              const contentText = extractContentText(choice.message.content)
+              const parsed = parseMessageContent(contentText)
+              const msg: { role: string; content: string; thinkContent?: string; hasThink?: boolean; toolCalls?: ToolCallResult[] } = {
+                role: choice.message.role,
+                content: parsed.textContent,
+                thinkContent: parsed.thinkContent || undefined,
+                hasThink: parsed.hasThink
+              }
+              // 处理 reasoning 字段（OpenAI/Ollama 格式的思考内容）
+              if (choice.message.reasoning) {
+                if (msg.thinkContent) {
+                  msg.thinkContent = choice.message.reasoning + '\n' + msg.thinkContent
+                } else {
+                  msg.thinkContent = choice.message.reasoning
+                }
+                msg.hasThink = true
+              }
+              if (choice.message.tool_calls) {
+                const toolCalls = parseToolCalls(choice.message.tool_calls, toolResultsMap)
+                if (toolCalls.length > 0) msg.toolCalls = toolCalls
+              }
+              messages.push(msg)
             }
-            if (choice.message.tool_calls) {
-              const toolCalls = parseToolCalls(choice.message.tool_calls, toolResultsMap)
-              if (toolCalls.length > 0) msg.toolCalls = toolCalls
-            }
-            messages.push(msg)
           }
         })
       }
@@ -958,13 +1073,53 @@ const chatMessages = computed(() => {
             textContent += block.text
           } else if (block.type === 'thinking' && block.thinking) {
             thinkContent += block.thinking
-          } else if (block.type === 'tool_use' && block.name) {
+          } else if (block.type === 'tool_use' && block.name && block.id) {
+            // Match tool_use with tool_result using tool_use_id
+            const toolResult = toolResultsMap.get(block.id)
             toolCalls.push({
-              id: block.id || `tool_${block.name}_${Date.now()}`,
+              id: block.id,
               toolName: block.name,
               arguments: block.input as Record<string, unknown> || {},
-              result: toolResultsMap.get(block.name)?.result,
-              status: 'success' as const
+              result: toolResult?.result,
+              status: toolResult?.isError ? 'error' as const : 'success' as const
+            })
+          }
+        })
+
+        const parsed = parseMessageContent(textContent)
+        const msg: { role: string; content: string; thinkContent?: string; hasThink?: boolean; toolCalls?: ToolCallResult[] } = {
+          role: 'assistant',
+          content: parsed.textContent,
+        }
+        if (thinkContent || parsed.thinkContent) {
+          msg.thinkContent = thinkContent + (parsed.thinkContent || '')
+          msg.hasThink = true
+        }
+        if (toolCalls.length > 0) {
+          msg.toolCalls = toolCalls
+        }
+        messages.push(msg)
+      }
+      // Handle generic content array (without type: "message" wrapper)
+      else if (respObj.content && Array.isArray(respObj.content) && !respObj.type) {
+        let textContent = ''
+        let thinkContent = ''
+        const toolCalls: ToolCallResult[] = []
+
+        respObj.content.forEach((block: { type?: string; text?: string; thinking?: string; name?: string; input?: unknown; id?: string }) => {
+          if (block.type === 'text' && block.text) {
+            textContent += block.text
+          } else if (block.type === 'thinking' && block.thinking) {
+            thinkContent += block.thinking
+          } else if (block.type === 'tool_use' && block.name && block.id) {
+            // Match tool_use with tool_result using tool_use_id
+            const toolResult = toolResultsMap.get(block.id)
+            toolCalls.push({
+              id: block.id,
+              toolName: block.name,
+              arguments: (block.input as Record<string, unknown>) || {},
+              result: toolResult?.result,
+              status: toolResult?.isError ? 'error' as const : 'success' as const
             })
           }
         })
@@ -1036,9 +1191,7 @@ const viewDetail = async (log: Log) => {
       detail: data.detail || undefined
     }
     detailDialogVisible.value = true
-    // Initialize collapse state for long messages
-    await nextTick()
-    initMessageCollapse()
+    initBubbleCollapse()
   } catch (error) {
     ElMessage.error(t('common.error'))
   }
@@ -1156,62 +1309,125 @@ const cleanupLogs = async () => {
   padding: 16px;
 }
 
-/* Chat container */
-.chat-container {
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  overflow: hidden;
-}
-.chat-header {
-  background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
-  padding: 12px 16px;
-  border-bottom: 1px solid #e5e7eb;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.chat-count {
-  font-size: 12px;
-  color: #9ca3af;
-}
-.chat-body {
+/* Chat messages area - similar to ChatView */
+.chat-messages-area {
   max-height: 500px;
   overflow-y: auto;
   padding: 16px;
-  background: #fafafa;
+  background: linear-gradient(180deg, #fafafa 0%, #f5f5f5 100%);
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+}
+
+/* Log message blocks */
+.log-message-block {
+  margin-bottom: 20px;
+}
+
+/* User Message - right aligned with avatar */
+.log-user-message {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.log-user-avatar {
+  width: 36px;
+  height: 36px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  flex-shrink: 0;
+  order: 2;
+}
+
+.log-user-content {
+  flex: 1;
+  min-width: 200px;
+  max-width: 70%;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  align-items: flex-end;
 }
 
-/* Message blocks */
-.message-block {
-  margin-bottom: 12px;
+.log-user-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.2s;
 }
 
-/* Message card styles */
-.msg-card {
+.log-user-header:hover {
+  opacity: 0.8;
+}
+
+.log-user-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+.log-user-preview {
+  font-size: 12px;
+  color: #9ca3af;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-user-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.log-expand-icon {
+  color: #9ca3af;
+  font-size: 14px;
+}
+
+.log-image-blocks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.log-image-blocks :deep(.attachment-preview) {
+  display: block;
+}
+
+.log-image-blocks :deep(.image-preview) {
+  width: 150px;
+  height: 150px;
+  border-radius: 12px;
+}
+
+/* Tool Results - 用户发送的工具调用结果 */
+.log-tool-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.log-tool-result-card {
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+  border: 1px solid #bbf7d0;
   border-radius: 8px;
   overflow: hidden;
-  border: 1px solid;
 }
 
-.msg-card-user {
-  border-color: #c7d2fe;
-  background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
-}
-
-.msg-card-system {
-  border-color: #fde68a;
-  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
-}
-
-.msg-card-assistant {
-  border-color: #bbf7d0;
-  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
-}
-
-.msg-header {
+.log-tool-result-header {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1221,99 +1437,319 @@ const cleanupLogs = async () => {
   transition: background 0.2s;
 }
 
-.msg-header:hover {
-  background: rgba(0, 0, 0, 0.05);
+.log-tool-result-header:hover {
+  background: rgba(34, 197, 94, 0.1);
 }
 
-.msg-icon {
-  width: 28px;
-  height: 28px;
+.log-tool-result-icon {
+  width: 20px;
+  height: 20px;
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
   border-radius: 50%;
   color: white;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
 }
 
-.msg-icon-user {
-  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-}
-
-.msg-icon-system {
-  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-}
-
-.msg-icon-assistant {
-  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
-}
-
-.msg-label {
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.msg-card-user .msg-label { color: #4f46e5; }
-.msg-card-system .msg-label { color: #b45309; }
-.msg-card-assistant .msg-label { color: #16a34a; }
-
-.msg-preview {
+.log-tool-result-name {
   flex: 1;
   font-size: 12px;
-  color: #6b7280;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 500;
+  color: #166534;
 }
 
-.msg-header-actions {
-  display: flex;
-  gap: 2px;
-  margin-left: 8px;
-}
-
-.expand-icon {
-  margin-left: auto;
+.log-tool-expand-icon {
+  color: #22c55e;
   font-size: 14px;
-  transition: transform 0.2s;
 }
 
-.msg-card-user .expand-icon { color: #6366f1; }
-.msg-card-system .expand-icon { color: #f59e0b; }
-.msg-card-assistant .expand-icon { color: #22c55e; }
-
-.msg-content {
-  padding: 12px 16px;
-  border-top: 1px solid;
+.log-tool-result-content {
+  padding: 8px 12px;
+  border-top: 1px solid #bbf7d0;
   background: rgba(255, 255, 255, 0.5);
 }
 
-.msg-card-user .msg-content { border-color: #c7d2fe; }
-.msg-card-system .msg-content { border-color: #fde68a; }
-.msg-card-assistant .msg-content { border-color: #bbf7d0; }
-
-.msg-text {
-  font-size: 14px;
-  line-height: 1.6;
-  word-break: break-word;
+.log-tool-result-pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: #fff;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #15803d;
   white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
 }
 
-.msg-card-user .msg-text { color: #3730a3; }
-.msg-card-system .msg-text { color: #78350f; }
-.msg-card-assistant .msg-text { color: #166534; }
+.log-tool-result-content {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #15803d;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(255, 255, 255, 0.5);
+  padding: 8px 10px;
+  border-radius: 4px;
+}
 
-.msg-markdown {
-  background: white;
+/* User Collapsible Bubble - 类似 ThinkBlock 样式，紫色系 */
+.log-user-collapsible-bubble {
+  margin: 8px 0;
+  border: 1px solid #ddd6fe;
   border-radius: 8px;
-  padding: 12px;
-  border: 1px solid #e5e7eb;
+  background: linear-gradient(135deg, #f3e8ff 0%, #e9d5ff 100%);
+  overflow: hidden;
 }
 
-/* Markdown content inside assistant bubble */
-.assistant-bubble .markdown-content {
+.log-user-collapsible-bubble .bubble-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s;
+}
+
+.log-user-collapsible-bubble .bubble-header:hover {
+  background: rgba(168, 85, 247, 0.1);
+}
+
+.log-user-collapsible-bubble .bubble-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #a855f7 0%, #9333ea 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.log-user-collapsible-bubble .bubble-meta {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.log-user-collapsible-bubble .bubble-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #9333ea;
+}
+
+.log-user-collapsible-bubble .bubble-preview-text {
+  font-size: 11px;
+  color: #7c3aed;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.log-user-collapsible-bubble .bubble-expand-icon {
+  color: #a855f7;
   font-size: 14px;
+}
+
+.log-user-collapsible-bubble .bubble-content {
+  padding: 12px 16px;
+  border-top: 1px solid #c4b5fd;
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  line-height: 1.6;
+  color: #6b21a8;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Assistant Collapsible Bubble - 类似 ThinkBlock 样式，绿色系 */
+.log-assistant-collapsible-bubble {
+  margin: 8px 0;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+  overflow: hidden;
+}
+
+.log-assistant-collapsible-bubble .bubble-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s;
+}
+
+.log-assistant-collapsible-bubble .bubble-header:hover {
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.log-assistant-collapsible-bubble .bubble-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.log-assistant-collapsible-bubble .bubble-meta {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.log-assistant-collapsible-bubble .bubble-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #166534;
+}
+
+.log-assistant-collapsible-bubble .bubble-preview-text {
+  font-size: 11px;
+  color: #15803d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
+}
+
+.log-assistant-collapsible-bubble .bubble-expand-icon {
+  color: #22c55e;
+  font-size: 14px;
+}
+
+.log-assistant-collapsible-bubble .bubble-content {
+  padding: 12px 16px;
+  border-top: 1px solid #86efac;
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  line-height: 1.7;
+  color: #1f2937;
+}
+
+/* System Message - collapsible block */
+.log-system-block-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.log-system-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+}
+
+.log-system-block-wrapper:hover .log-system-actions {
+  opacity: 1;
+}
+
+/* Assistant Message - left aligned with avatar */
+.log-assistant-message {
+  display: flex;
+  gap: 12px;
+}
+
+.log-assistant-avatar {
+  width: 36px;
+  height: 36px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  flex-shrink: 0;
+}
+
+.log-assistant-content {
+  flex: 1;
+  min-width: 200px;
+  max-width: 85%;
+}
+
+.log-assistant-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.2s;
+}
+
+.log-assistant-header:hover {
+  opacity: 0.8;
+}
+
+.log-assistant-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+.log-assistant-preview {
+  flex: 1;
+  font-size: 12px;
+  color: #9ca3af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+.log-assistant-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.log-message-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+}
+
+.log-message-block:hover .log-message-actions {
+  opacity: 1;
+}
+
+.log-action-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.log-action-btn:hover {
+  background: #f3f4f6;
   color: #374151;
+}
+
+.log-assistant-collapsible-bubble :deep(.markdown-content) {
+  font-size: 13px;
+  color: #1f2937;
 }
 
 /* Tool message */

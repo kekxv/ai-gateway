@@ -316,6 +316,10 @@ const renderResult = (toolCall: ToolCallResult) => {
       ])
     }
     default:
+      // For string results, preserve line breaks
+      if (typeof result === 'string') {
+        return h('pre', { class: 'detail-code' }, result)
+      }
       return h('pre', { class: 'detail-code' }, formatJson(result))
   }
 }
