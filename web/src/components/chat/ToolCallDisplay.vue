@@ -62,6 +62,7 @@ import { Tools, Check, Close, Loading, ArrowDown, ArrowUp, Clock, Document, Pict
 import type { ToolCallResult } from '@/types/tool'
 import CanvasDisplay from './CanvasDisplay.vue'
 import { useCanvasStore } from '@/stores/canvas'
+import * as Diff from 'diff'
 
 const props = defineProps<{
   toolCalls: ToolCallResult[]
@@ -110,7 +111,9 @@ const getToolDisplayName = (toolName: string) => {
     'fetch_webpage': '获取网页',
     'web_canvas': 'Canvas 绘图',
     'draw_chart': '绘制图表',
-    'save_note': '保存笔记'
+    'save_note': '保存笔记',
+    'Edit': '编辑文件',
+    'edit_file': '编辑文件'
   }
   return nameMap[toolName] || toolName
 }
@@ -176,6 +179,9 @@ const renderArguments = (toolCall: ToolCallResult) => {
       ])
     case 'execute_javascript':
       return h('pre', { class: 'tool-args-code' }, String(args.code || ''))
+    case 'Edit':
+    case 'edit_file':
+      return renderEditArgs(args)
     case 'web_search':
       return h('div', { class: 'tool-args-simple' }, [
         h('span', { class: 'arg-label' }, '搜索：'),
@@ -293,6 +299,44 @@ const renderCanvasArgs = (args: Record<string, unknown>) => {
   return h('div', { class: 'tool-args-canvas' }, children)
 }
 
+// 渲染 Edit 参数
+const renderEditArgs = (args: Record<string, unknown>) => {
+  const filePath = String(args.file_path || args.path || '未知文件')
+  const oldString = String(args.old_string || '')
+  const newString = String(args.new_string || '')
+  const replaceAll = args.replace_all === true
+
+  // 计算差异
+  const diff = Diff.diffLines(oldString, newString)
+
+  return h('div', { class: 'tool-args-edit' }, [
+    h('div', { class: 'edit-file-path' }, [
+      h('span', { class: 'arg-label' }, '文件：'),
+      h('span', { class: 'arg-value' }, filePath)
+    ]),
+    replaceAll ? h('div', { class: 'edit-replace-all' }, '替换全部匹配') : null,
+    h('div', { class: 'edit-diff-preview' }, [
+      h('div', { class: 'edit-diff-header' }, '内容差异预览：'),
+      h('div', { class: 'edit-diff-content' },
+        diff.map((part, idx) => {
+          const lines = part.value.split('\n')
+          if (lines[lines.length - 1] === '') lines.pop()
+
+          return lines.map((line, lineIdx) =>
+            h('div', {
+              key: `${idx}-${lineIdx}`,
+              class: ['edit-diff-line', part.added ? 'diff-added' : part.removed ? 'diff-removed' : 'diff-neutral']
+            }, [
+              h('span', { class: 'edit-line-sign' }, part.added ? '+' : part.removed ? '-' : ' '),
+              h('span', { class: 'edit-line-text' }, line)
+            ])
+          )
+        }).flat()
+      )
+    ])
+  ])
+}
+
 // 渲染结果
 const renderResult = (toolCall: ToolCallResult) => {
   const toolName = toolCall.toolName || 'unknown'
@@ -336,6 +380,9 @@ const renderResult = (toolCall: ToolCallResult) => {
         h('div', { class: 'result-label' }, '执行结果：'),
         h('pre', {}, typeof result === 'object' ? formatJson(result) : String(result))
       ])
+    case 'Edit':
+    case 'edit_file':
+      return renderEditResult(result)
     case 'web_search':
       return renderWebSearchResult(result)
     case 'fetch_webpage':
@@ -428,6 +475,37 @@ const renderWebSearchResult = (result: unknown) => {
       item.snippet ? h('div', { class: 'result-snippet' }, item.snippet) : null,
       item.url ? h('a', { href: item.url, target: '_blank', class: 'result-url' }, item.url) : null
     ]))
+  ])
+}
+
+// 渲染 Edit 结果
+const renderEditResult = (result: unknown) => {
+  if (!result) {
+    return h('div', { class: 'tool-result-empty' }, '无结果')
+  }
+
+  // Handle string result
+  let resultData: { success?: boolean; message?: string; file_path?: string; error?: string }
+  if (typeof result === 'string') {
+    try {
+      resultData = JSON.parse(result)
+    } catch {
+      resultData = { message: result, success: true }
+    }
+  } else {
+    resultData = result as { success?: boolean; message?: string; file_path?: string; error?: string }
+  }
+
+  if (resultData.error) {
+    return h('div', { class: 'tool-result-error' }, [
+      h('el-icon', { class: 'error-icon' }, [h(Close)]),
+      h('span', {}, resultData.error)
+    ])
+  }
+
+  return h('div', { class: 'tool-result-edit' }, [
+    h('el-icon', { class: 'edit-success-icon' }, [h(Check)]),
+    h('span', {}, resultData.message || '文件已成功更新')
   ])
 }
 
@@ -945,5 +1023,134 @@ const formatJson = (obj: unknown) => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* Edit 工具参数样式 */
+.tool-args-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.edit-file-path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.edit-replace-all {
+  padding: 4px 8px;
+  background: #fef3c7;
+  color: #92400e;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.edit-diff-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.edit-diff-header {
+  font-size: 12px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.edit-diff-content {
+  padding: 12px;
+  background: #f8fafc;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.edit-diff-line {
+  display: flex;
+  align-items: flex-start;
+  white-space: pre;
+  padding: 1px 0;
+}
+
+.edit-line-sign {
+  width: 16px;
+  text-align: center;
+  color: #6b7280;
+  user-select: none;
+}
+
+.edit-line-text {
+  flex: 1;
+  padding-left: 8px;
+  word-break: break-all;
+}
+
+.edit-diff-line.diff-added {
+  background: #dcfce7;
+}
+
+.edit-diff-line.diff-added .edit-line-sign {
+  color: #16a34a;
+}
+
+.edit-diff-line.diff-added .edit-line-text {
+  color: #166534;
+}
+
+.edit-diff-line.diff-removed {
+  background: #fee2e2;
+}
+
+.edit-diff-line.diff-removed .edit-line-sign {
+  color: #dc2626;
+}
+
+.edit-diff-line.diff-removed .edit-line-text {
+  color: #991b1b;
+}
+
+.edit-diff-line.diff-neutral {
+  background: transparent;
+}
+
+.edit-diff-line.diff-neutral .edit-line-text {
+  color: #374151;
+}
+
+/* Edit 工具结果样式 */
+.tool-result-edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+  border-radius: 8px;
+}
+
+.edit-success-icon {
+  font-size: 18px;
+  color: #16a34a;
+}
+
+.tool-result-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: #fef2f2;
+  border-radius: 8px;
+  color: #991b1b;
+}
+
+.error-icon {
+  font-size: 18px;
+  color: #dc2626;
 }
 </style>
