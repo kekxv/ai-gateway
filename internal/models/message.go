@@ -42,22 +42,23 @@ type ToolFunctionSpec struct {
 	Parameters  map[string]interface{} `json:"parameters"` // JSON Schema
 }
 
-// ChatRequest is the request body for sending a message
+// ChatRequest is the request body for sending a message (OpenAI-compatible format)
 type ChatRequest struct {
-	Content           string               `json:"content"`
-	Parts             []ChatContentPart    `json:"parts,omitempty"`    // For multimodal content
-	Messages          []ChatRequestMessage `json:"messages,omitempty"` // For full chat history (regenerate)
-	Stream            bool                 `json:"stream"`
-	Settings          ConversationSettings `json:"settings,omitempty"` // optional override settings
-	Tools             []ToolDefinition     `json:"tools,omitempty"`    // optional tools for function calling
-	DeleteAfterID     *uint                `json:"delete_after_id,omitempty"` // for regenerate: delete messages after this ID (nil = no delete, 0 = delete all)
+	Model          string                 `json:"model"`                        // Required: model name
+	Messages       []ChatRequestMessage   `json:"messages"`                     // Required: full chat history
+	Stream         bool                   `json:"stream,omitempty"`
+	Temperature    float64                `json:"temperature,omitempty"`
+	MaxTokens      int                    `json:"max_tokens,omitempty"`
+	Tools          []ToolDefinition       `json:"tools,omitempty"`              // Optional tools for function calling
+	EnableThinking bool                   `json:"enable_thinking,omitempty"`    // Enable thinking/reasoning
 }
 
 // ChatRequestMessage represents a message in the chat history
 type ChatRequestMessage struct {
-	Role      string          `json:"role"`
-	Content   json.RawMessage `json:"content"`    // Raw JSON to support string or array format
-	ToolCalls json.RawMessage `json:"tool_calls,omitempty"`
+	Role         string          `json:"role"`
+	Content      json.RawMessage `json:"content"`              // Raw JSON to support string or array format
+	ToolCalls    json.RawMessage `json:"tool_calls,omitempty"` // For assistant messages with tool calls
+	ToolCallID   string          `json:"tool_call_id,omitempty"` // For tool messages - must match tool_calls.id
 }
 
 // ChatStreamEvent represents a streaming event

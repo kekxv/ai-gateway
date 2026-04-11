@@ -475,7 +475,7 @@ import {
   Edit, RefreshRight, DocumentCopy, Cpu
 } from '@element-plus/icons-vue'
 import { conversationApi, modelApi } from '@/api/conversation'
-import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart, ChatRequest } from '@/types/conversation'
+import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart, ChatRequest, ChatMessage } from '@/types/conversation'
 import { PRESET_PROMPTS } from '@/types/conversation'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ThinkBlock from '@/components/chat/ThinkBlock.vue'
@@ -735,11 +735,6 @@ const regenerateFromUser = async (userIndex: number) => {
 
   const userContent = userMessage.content
 
-  // Get the message ID before this user message (for delete_after_id)
-  // We need to delete messages AFTER the previous message, which includes the current user message
-  // When userIndex=0 (first message), prevMessageId=0, which will delete all messages (id > 0)
-  const prevMessageId = userIndex > 0 ? messages.value[userIndex - 1].id : 0
-
   // Remove messages from this user message onwards (local UI update)
   messages.value = messages.value.slice(0, userIndex)
 
@@ -754,19 +749,31 @@ const regenerateFromUser = async (userIndex: number) => {
   messages.value.push(tempUserMsg)
   isUserAtBottom.value = true
 
-  // Send the message (重新生成：发送完整历史)
+  // Delete messages after this user message in database
+  try {
+    await conversationApi.addMessage(currentConversation.value.id, {
+      role: 'user',
+      content: userContent
+    })
+  } catch (e) {
+    console.error('Failed to save user message:', e)
+  }
+
+  // Build full messages array
+  // buildChatHistory() already includes the user message we just added
+  const messagesForApi = buildChatHistory()
+
+  // Send the message
   sending.value = true
   await streamWithToolCalls(currentConversation.value.id, {
-    content: userContent,
+    model: selectedModel.value,
+    messages: messagesForApi,
     stream: true,
-    settings: {
-      temperature: settingsForm.temperature,
-      max_tokens: settingsForm.max_tokens
-    },
+    temperature: settingsForm.temperature,
+    max_tokens: settingsForm.max_tokens,
     tools: toolsStore.getToolsForModel(),
-    delete_after_id: prevMessageId,
     enable_thinking: getEnableThinking()
-  }, true)  // isRegenerate=true
+  })
 }
 
 // Start editing a text block
@@ -848,20 +855,31 @@ const confirmEditBlock = async () => {
   messages.value.push(tempUserMsg)
   isUserAtBottom.value = true
 
-  // 发送消息（编辑：发送完整历史）
+  // Save user message to database
+  try {
+    await conversationApi.addMessage(currentConversation.value.id, {
+      role: 'user',
+      content: newContentToStore
+    })
+  } catch (e) {
+    console.error('Failed to save user message:', e)
+  }
+
+  // Build full messages array
+  // buildChatHistory() already includes the user message we just added
+  const messagesForApi = buildChatHistory()
+
+  // 发送消息
   sending.value = true
   await streamWithToolCalls(currentConversation.value.id, {
-    content: newContentToStore,
-    parts: newParts.length > 0 ? newParts : undefined,
+    model: selectedModel.value,
+    messages: messagesForApi,
     stream: true,
-    settings: {
-      temperature: settingsForm.temperature,
-      max_tokens: settingsForm.max_tokens
-    },
+    temperature: settingsForm.temperature,
+    max_tokens: settingsForm.max_tokens,
     tools: toolsStore.getToolsForModel(),
-    delete_after_id: originalMessage.id,  // 删除当前消息及之后的消息
     enable_thinking: getEnableThinking()
-  }, true)  // isRegenerate=true
+  })
 }
 
 // Delete a single message (and all messages after it)
@@ -1076,7 +1094,7 @@ const sendMessage = async () => {
   const content = inputContent.value.trim()
   inputContent.value = ''
 
-  // Build parts array for multimodal content
+  // Build parts array for multimodal content (user message)
   const parts: ChatContentPart[] = []
   if (content) {
     parts.push({ type: 'text', text: content })
@@ -1114,19 +1132,31 @@ const sendMessage = async () => {
   isUserAtBottom.value = true
   scrollToBottom()
 
+  // Save user message to database first
+  try {
+    await conversationApi.addMessage(currentConversation.value.id, {
+      role: 'user',
+      content: contentToStore
+    })
+  } catch (e) {
+    console.error('Failed to save user message:', e)
+  }
+
+  // Build full messages array for API request
+  // buildChatHistory() already includes the user message we just added to messages.value
+  const messagesForApi = buildChatHistory()
+
   // Start the streaming loop with tool call support
   sending.value = true
-  // 正常发送：不发送 messages，只发送 content + parts（后端会保存用户消息）
   await streamWithToolCalls(currentConversation.value.id, {
-    parts,  // 发送多模态内容给 AI
+    model: selectedModel.value,
+    messages: messagesForApi,
     stream: true,
-    settings: {
-      temperature: settingsForm.temperature,
-      max_tokens: settingsForm.max_tokens
-    },
+    temperature: settingsForm.temperature,
+    max_tokens: settingsForm.max_tokens,
     tools: toolsStore.getToolsForModel(),
     enable_thinking: getEnableThinking()
-  }, false)
+  })
 }
 
 // Helper function to save assistant message to backend
@@ -1161,8 +1191,8 @@ const saveAssistantMessage = async (conversationId: number, content: string, too
 }
 
 // Build chat history for API request (OpenAI Chat format, supports multimodal)
-const buildChatHistory = () => {
-  const history: Array<{ role: string; content: string | ChatContentPart[]; tool_calls?: any[] }> = []
+const buildChatHistory = (): ChatMessage[] => {
+  const history: ChatMessage[] = []
 
   // Add system prompt if exists
   if (settingsForm.system_prompt) {
@@ -1219,7 +1249,8 @@ const buildChatHistory = () => {
         if (tc.status === 'success' || tc.status === 'error') {
           history.push({
             role: 'tool',
-            content: `Tool: ${tc.toolName}\nResult: ${JSON.stringify(tc.result ?? tc.error)}`
+            tool_call_id: tc.id,
+            content: JSON.stringify(tc.result ?? tc.error)
           })
         }
       })
@@ -1229,12 +1260,22 @@ const buildChatHistory = () => {
   return history
 }
 
+// Max iterations for tool calls to prevent infinite loops
+const MAX_TOOL_ITERATIONS = 5
+
 // Streaming loop that handles tool calls recursively
 const streamWithToolCalls = async (
   conversationId: number,
   requestData: ChatRequest,
-  isRegenerate: boolean = false
+  iteration: number = 0
 ) => {
+  // Check iteration limit
+  if (iteration >= MAX_TOOL_ITERATIONS) {
+    console.warn('Max tool iterations reached, stopping')
+    sending.value = false
+    return
+  }
+
   // Reset streaming state
   streamingRawContent.value = ''
   streamingContent.value = ''
@@ -1245,11 +1286,6 @@ const streamWithToolCalls = async (
   if (throttleTimer) {
     clearTimeout(throttleTimer)
     throttleTimer = null
-  }
-
-  // 只有重新生成/编辑时才发送完整历史
-  if (isRegenerate) {
-    requestData.messages = buildChatHistory()
   }
 
   // Reset user stop flag and create new AbortController
@@ -1342,7 +1378,7 @@ const streamWithToolCalls = async (
           const savedThinkContent = streamingThinkContent.value
           const savedHasThink = streamingThinkContent.value.length > 0
 
-          // Clear streaming state BEFORE adding message to avoid duplicate display
+          // Clear streaming state
           streamingRawContent.value = ''
           streamingContent.value = ''
           streamingThinkContent.value = ''
@@ -1354,7 +1390,12 @@ const streamWithToolCalls = async (
             throttleTimer = null
           }
 
-          // Add assistant message with tool calls to display
+          // Build tool results content for saving to database
+          const toolResultsContent = results.map(r =>
+            `Tool: ${r.toolName}\nResult: ${JSON.stringify(r.result ?? r.error)}`
+          ).join('\n\n')
+
+          // Add assistant message to UI display FIRST
           const assistantMsg: ExtendedMessage = {
             id: -Date.now(),
             conversation_id: conversationId,
@@ -1362,36 +1403,44 @@ const streamWithToolCalls = async (
             content: savedContent,
             thinkContent: savedThinkContent,
             hasThink: savedHasThink,
-            toolCalls: results,
+            toolCalls: results, // results already have status: 'success'
             created_at: new Date().toISOString()
           }
           messages.value.push(assistantMsg)
 
-          // Save this intermediate state to history (use saved content)
-          await saveAssistantMessage(conversationId, savedRawContent, results)
-
           scrollToBottom()
 
-          // Build tool results content to send back to AI
-          const toolResultsContent = results.map(r =>
-            `Tool: ${r.toolName}\nResult: ${JSON.stringify(r.result ?? r.error)}`
-          ).join('\n\n')
+          // NOW build messages for next request using buildChatHistory
+          // buildChatHistory will automatically include the assistant message we just added
+          // and will add tool results for each toolCall with status: 'success'
+          const messagesForApi = buildChatHistory()
+
+          // Save assistant message to database
+          await saveAssistantMessage(conversationId, savedRawContent, results)
+
+          // Save tool results as a tool message
+          try {
+            await conversationApi.addMessage(conversationId, {
+              role: 'tool',
+              content: toolResultsContent
+            })
+          } catch (e) {
+            console.error('Failed to save tool results message:', e)
+          }
 
           // Send tool results back to AI and continue streaming
-          // API will save this as a user message
           await streamWithToolCalls(
             conversationId,
             {
-              content: toolResultsContent,
+              model: selectedModel.value,
+              messages: messagesForApi,
               stream: true,
-              settings: {
-                temperature: settingsForm.temperature,
-                max_tokens: settingsForm.max_tokens
-              },
+              temperature: settingsForm.temperature,
+              max_tokens: settingsForm.max_tokens,
               tools: toolsStore.getToolsForModel(),
               enable_thinking: getEnableThinking()
             },
-            true
+            iteration + 1
           ).catch(console.error)
           resolve()
         },
@@ -1399,9 +1448,8 @@ const streamWithToolCalls = async (
       )
     })
 
-    // If this wasn't a regenerate request, finalize the message
-    // Skip if user manually stopped the stream (stopStreaming already saved)
-    if (!isRegenerate && receivedToolCalls.length === 0 && !userStoppedStream) {
+    // Finalize the message if no tool calls and user didn't stop
+    if (receivedToolCalls.length === 0 && !userStoppedStream) {
       const finalRawContent = streamingRawContent.value
       const parsed = parseStreamingThinkContent(finalRawContent)
 
@@ -1436,51 +1484,11 @@ const streamWithToolCalls = async (
       if (messages.value.length <= 3) {
         loadConversations()
       }
-    } else if (isRegenerate && receivedToolCalls.length === 0 && !userStoppedStream) {
-      // Regenerate request completed - save the final AI response
-      const finalRawContent = streamingRawContent.value
-      const parsed = parseStreamingThinkContent(finalRawContent)
-
-      const finalContent = streamingContent.value || parsed.text
-      const finalThink = streamingThinkContent.value || parsed.think
-
-      // Save final response to history
-      await saveAssistantMessage(conversationId, finalRawContent)
-
-      // Add new assistant message for AI's response
-      messages.value.push({
-        id: -Date.now(),
-        conversation_id: conversationId,
-        role: 'assistant',
-        content: finalContent,
-        thinkContent: finalThink,
-        hasThink: finalThink.length > 0,
-        created_at: new Date().toISOString()
-      })
-
-      // Clear streaming state
-      streamingRawContent.value = ''
-      streamingContent.value = ''
-      streamingThinkContent.value = ''
-      throttledStreamingContent.value = ''
-      throttledStreamingThink.value = ''
-      if (throttleTimer) {
-        clearTimeout(throttleTimer)
-        throttleTimer = null
-      }
-
-      if (messages.value.length <= 3) {
-        loadConversations()
-      }
-
-      scrollToBottom()
     }
 
     // Handle XML format tool calls detected after stream completion
-    if (receivedToolCalls.length > 0 && !receivedToolCalls[0].id.startsWith('xml_tool_')) {
-      // Standard API tool calls are handled in the onToolCall callback
-    } else if (receivedToolCalls.length > 0 && !userStoppedStream) {
-      // XML format tool calls - execute them now (skip if user stopped)
+    if (receivedToolCalls.length > 0 && receivedToolCalls[0].id.startsWith('xml_tool_') && !userStoppedStream) {
+      // XML format tool calls - execute them now
       const xmlToolCalls = receivedToolCalls
 
       // Execute tools
@@ -1492,28 +1500,39 @@ const streamWithToolCalls = async (
         }
       )
 
-      // Build tool results message to send back to AI
+      // Save current content BEFORE clearing
+      const savedRawContent = streamingRawContent.value
+      const savedContent = streamingContent.value
+      const savedThinkContent = streamingThinkContent.value
+      const savedHasThink = streamingThinkContent.value.length > 0
+
+      // Build tool results content for saving to database
       const toolResultsContent = results.map(r =>
         `Tool: ${r.toolName}\nResult: ${JSON.stringify(r.result ?? r.error)}`
       ).join('\n\n')
 
-      // Add assistant message with tool calls to display
+      // Add assistant message to UI display FIRST
       const assistantMsg: ExtendedMessage = {
         id: -Date.now(),
         conversation_id: conversationId,
         role: 'assistant',
-        content: streamingContent.value,
-        thinkContent: streamingThinkContent.value,
-        hasThink: streamingThinkContent.value.length > 0,
-        toolCalls: results,
+        content: savedContent,
+        thinkContent: savedThinkContent,
+        hasThink: savedHasThink,
+        toolCalls: results, // results already have status: 'success'
         created_at: new Date().toISOString()
       }
       messages.value.push(assistantMsg)
 
-      // Save this intermediate state to history
-      await saveAssistantMessage(conversationId, streamingRawContent.value, results)
+      scrollToBottom()
 
-      // Also save the "tool result" message
+      // NOW build messages for next request using buildChatHistory
+      const messagesForApi = buildChatHistory()
+
+      // Save assistant message to history
+      await saveAssistantMessage(conversationId, savedRawContent, results)
+
+      // Save tool result message
       try {
         await conversationApi.addMessage(conversationId, {
           role: 'tool',
@@ -1541,16 +1560,15 @@ const streamWithToolCalls = async (
       await streamWithToolCalls(
         conversationId,
         {
-          content: toolResultsContent,
+          model: selectedModel.value,
+          messages: messagesForApi,
           stream: true,
-          settings: {
-            temperature: settingsForm.temperature,
-            max_tokens: settingsForm.max_tokens
-          },
+          temperature: settingsForm.temperature,
+          max_tokens: settingsForm.max_tokens,
           tools: toolsStore.getToolsForModel(),
           enable_thinking: getEnableThinking()
         },
-        true
+        iteration + 1
       ).catch(console.error)
     }
   } catch (error) {

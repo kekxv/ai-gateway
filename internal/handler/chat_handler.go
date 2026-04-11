@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -268,6 +267,7 @@ func (h *ChatHandler) GetMessages(c *gin.Context) {
 }
 
 // SendMessage sends a message and gets AI response (with streaming support)
+// Simplified: frontend provides full OpenAI-compatible request, backend only forwards
 func (h *ChatHandler) SendMessage(c *gin.Context) {
 	user := middleware.GetCurrentUser(c)
 	if user == nil {
@@ -300,238 +300,42 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	// Delete messages after specified ID (for regenerate/edit) - must do BEFORE getting prevMessages
-	if req.DeleteAfterID != nil {
-		deleteID := *req.DeleteAfterID
-		if err := h.messageRepo.DeleteAfterID(c.Request.Context(), conversationID, deleteID); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-	}
-
-	// Get previous messages
-	prevMessages, err := h.messageRepo.GetByConversationID(c.Request.Context(), conversationID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Build chat messages
-	chatMessages := []service.ChatMessage{}
-
-	// Add system prompt if set
-	if conversation.SystemPrompt != "" {
-		chatMessages = append(chatMessages, service.ChatMessage{
-			Role: "system",
-			Content: service.ChatMessageContent{StringContent: conversation.SystemPrompt},
-		})
-	}
-
-	// Helper function to parse message content (supports string or array format)
-	parseMessageContent := func(content json.RawMessage) service.ChatMessageContent {
-		// Try to parse as array first
-		var parts []models.ChatContentPart
-		if err := json.Unmarshal(content, &parts); err == nil && len(parts) > 0 && parts[0].Type != "" {
-			// Successfully parsed as array with valid Type field
-			serviceParts := make([]service.ChatContentPart, len(parts))
-			for i, p := range parts {
-				serviceParts[i] = service.ChatContentPart{
-					Type: p.Type,
-					Text: p.Text,
-				}
-				if p.ImageURL != nil {
-					serviceParts[i].ImageURL = &service.ChatMediaURL{
-						URL:    p.ImageURL.URL,
-						Detail: p.ImageURL.Detail,
-					}
-				}
-			}
-			return service.ChatMessageContent{Parts: serviceParts}
+	// Convert frontend request to service format
+	chatMessages := make([]service.ChatMessage, len(req.Messages))
+	for i, msg := range req.Messages {
+		// Parse content (supports string or array format)
+		var content service.ChatMessageContent
+		if err := json.Unmarshal(msg.Content, &content); err != nil {
+			// Fallback to string
+			content = service.ChatMessageContent{StringContent: string(msg.Content)}
 		}
 
-		// Parse as string
-		var strContent string
-		if err := json.Unmarshal(content, &strContent); err == nil {
-			return service.ChatMessageContent{StringContent: strContent}
-		}
-
-		// Fallback: use raw string
-		return service.ChatMessageContent{StringContent: string(content)}
-	}
-
-	// Helper function to extract text from content parts for title
-	extractTitleText := func(parts []models.ChatContentPart) string {
-		for _, p := range parts {
-			if p.Type == "text" && p.Text != "" {
-				return p.Text
-			}
-		}
-		return ""
-	}
-
-	// Variable to track title text for conversation title update
-	var titleText string
-
-	// Check if frontend provided messages (for regenerate scenario)
-	var lastUserMessageToSave *models.Message
-	if len(req.Messages) > 0 {
-		// Use frontend-provided history instead of database
-		for _, msg := range req.Messages {
-			content := parseMessageContent(msg.Content)
-			chatMessages = append(chatMessages, service.ChatMessage{
-				Role:    msg.Role,
-				Content: content,
-			})
-
-			// Track the last user message to save
-			if msg.Role == "user" {
-				// Determine the content string to save
-				var contentStr string
-				var parts []models.ChatContentPart
-				if err := json.Unmarshal(msg.Content, &parts); err == nil && len(parts) > 0 && parts[0].Type != "" {
-					// Array format - store as JSON
-					contentBytes, _ := json.Marshal(parts)
-					contentStr = string(contentBytes)
-					// Extract title text from parts
-					titleText = extractTitleText(parts)
-				} else {
-					// String format
-					var str string
-					if err := json.Unmarshal(msg.Content, &str); err == nil {
-						contentStr = str
-						titleText = str
-					} else {
-						contentStr = string(msg.Content)
-						titleText = string(msg.Content)
-					}
-				}
-				lastUserMessageToSave = &models.Message{
-					ConversationID: conversationID,
-					Role:           "user",
-					Content:        contentStr,
-				}
-			}
-		}
-	} else {
-		// Add previous messages from database (support multimodal content)
-		for _, msg := range prevMessages {
-			// Try to parse as multimodal content
-			var parts []models.ChatContentPart
-			if err := json.Unmarshal([]byte(msg.Content), &parts); err == nil && len(parts) > 0 && parts[0].Type != "" {
-				// Successfully parsed as multimodal array
-				serviceParts := make([]service.ChatContentPart, len(parts))
-				for i, p := range parts {
-					serviceParts[i] = service.ChatContentPart{
-						Type: p.Type,
-						Text: p.Text,
-					}
-					if p.ImageURL != nil {
-						serviceParts[i].ImageURL = &service.ChatMediaURL{
-							URL:    p.ImageURL.URL,
-							Detail: p.ImageURL.Detail,
-						}
-					}
-				}
-				chatMessages = append(chatMessages, service.ChatMessage{
-					Role:    msg.Role,
-					Content: service.ChatMessageContent{Parts: serviceParts},
-				})
-			} else {
-				// Treat as plain text
-				chatMessages = append(chatMessages, service.ChatMessage{
-					Role:    msg.Role,
-					Content: service.ChatMessageContent{StringContent: msg.Content},
-				})
+		// Parse tool_calls if present
+		var toolCalls []service.ToolCall
+		if len(msg.ToolCalls) > 0 {
+			if err := json.Unmarshal(msg.ToolCalls, &toolCalls); err != nil {
+				toolCalls = nil
 			}
 		}
 
-		// Add new user message (support multimodal)
-		var userContent service.ChatMessageContent
-		if len(req.Parts) > 0 {
-			// Convert models.ChatContentPart to service.ChatContentPart
-			parts := make([]service.ChatContentPart, len(req.Parts))
-			for i, p := range req.Parts {
-				parts[i] = service.ChatContentPart{
-					Type: p.Type,
-					Text: p.Text,
-				}
-				if p.ImageURL != nil {
-					parts[i].ImageURL = &service.ChatMediaURL{
-						URL:    p.ImageURL.URL,
-						Detail: p.ImageURL.Detail,
-					}
-				}
-			}
-			userContent = service.ChatMessageContent{Parts: parts}
-			// Extract title text from parts
-			titleText = extractTitleText(req.Parts)
-		} else {
-			userContent = service.ChatMessageContent{StringContent: req.Content}
-			titleText = req.Content
-		}
-
-		chatMessages = append(chatMessages, service.ChatMessage{
-			Role:    "user",
-			Content: userContent,
-		})
-	}
-
-	// Save user message to database (support multimodal)
-	var userMsg *models.Message
-	if lastUserMessageToSave != nil {
-		// Frontend provided messages - use the tracked last user message
-		userMsg = lastUserMessageToSave
-	} else {
-		// Build user message from request
-		var contentToSave string
-		if len(req.Parts) > 0 {
-			// Serialize parts as JSON for storage
-			contentBytes, _ := json.Marshal(req.Parts)
-			contentToSave = string(contentBytes)
-		} else {
-			contentToSave = req.Content
-		}
-		userMsg = &models.Message{
-			ConversationID: conversationID,
-			Role:           "user",
-			Content:        contentToSave,
+		chatMessages[i] = service.ChatMessage{
+			Role:       msg.Role,
+			Content:    content,
+			ToolCalls:  toolCalls,
+			ToolCallID: msg.ToolCallID,
 		}
 	}
-	if err := h.messageRepo.Create(c.Request.Context(), userMsg); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
 
-	// Parse conversation settings
-	var settings models.ConversationSettings
-	if conversation.Settings != "" {
-		json.Unmarshal([]byte(conversation.Settings), &settings)
-	}
-
-	// Use request settings if provided (override)
-	if req.Settings.Temperature != 0 {
-		settings.Temperature = req.Settings.Temperature
-	}
-	if req.Settings.MaxTokens != 0 {
-		settings.MaxTokens = req.Settings.MaxTokens
-	}
-	if req.Settings.TopP != 0 {
-		settings.TopP = req.Settings.TopP
-	}
-
-	// Build chat request
+	// Build service request
 	chatReq := &service.ChatRequest{
-		Model:       conversation.Model,
+		Model:       req.Model,
 		Messages:    chatMessages,
 		Stream:      req.Stream,
-		Temperature: settings.Temperature,
-		MaxTokens:   settings.MaxTokens,
-	}
-	if settings.TopP != 0 {
-		chatReq.Extra = map[string]interface{}{"top_p": settings.TopP}
+		Temperature: req.Temperature,
+		MaxTokens:   req.MaxTokens,
 	}
 
-	// Convert tools from frontend request to service format
+	// Convert tools
 	if len(req.Tools) > 0 {
 		chatReq.Tools = make([]service.ToolDefinition, len(req.Tools))
 		for i, tool := range req.Tools {
@@ -546,6 +350,11 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 		}
 	}
 
+	// Handle enable_thinking
+	if req.EnableThinking {
+		chatReq.Extra = map[string]interface{}{"enable_thinking": true}
+	}
+
 	// Create virtual API key for user (bind to all channels)
 	userID := user.ID
 	virtualAPIKey := &models.GatewayAPIKey{
@@ -556,18 +365,8 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 		LogDetails:       true,  // Enable detailed logging for chat
 	}
 
-	stream := req.Stream
-
-	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, stream, c.Request.Header)
+	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, req.Stream, c.Request.Header)
 	if err != nil {
-		// Save error as assistant message
-		errorMsg := &models.Message{
-			ConversationID: conversationID,
-			Role:           "assistant",
-			Content:        fmt.Sprintf("Error: %s", err.Error()),
-		}
-		h.messageRepo.Create(c.Request.Context(), errorMsg)
-
 		switch err {
 		case service.ErrModelNotFound:
 			c.JSON(http.StatusNotFound, gin.H{"error": "Model not found"})
@@ -584,7 +383,7 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 	}
 
 	// Handle streaming response
-	if stream {
+	if req.Stream {
 		streamResp, ok := result.(*service.StreamingResponse)
 		if !ok {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid streaming response"})
@@ -600,29 +399,12 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 			buf := make([]byte, 1024)
 			n, err := streamResp.Read(buf)
 			if n > 0 {
-				// Write SSE format
-				data := buf[:n]
-				w.Write(data)
+				w.Write(buf[:n])
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
 				}
 			}
-
-			if err != nil {
-				// Stream ended.
-				// Logic for splicing and saving is now moved to frontend via AddMessage.
-				// We only handle title update if it's the first message.
-				if len(prevMessages) == 0 && len(req.Messages) == 0 && conversation.Title == "New Chat" && titleText != "" {
-					title := titleText
-					if len(title) > 50 {
-						title = title[:50] + "..."
-					}
-					h.conversationRepo.UpdateTitle(context.Background(), conversationID, title)
-				}
-				return false
-			}
-
-			return true
+			return err == nil
 		})
 		return
 	}
@@ -634,27 +416,11 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	// Update user message tokens
-	userMsg.Tokens = chatResp.Usage.PromptTokens
-	// Note: we can't easily update, so we'll leave it
-
-	// Update conversation title if first message
-	if len(prevMessages) == 0 && len(req.Messages) == 0 && conversation.Title == "New Chat" && titleText != "" {
-		title := titleText
-		if len(title) > 50 {
-			title = title[:50] + "..."
-		}
-		h.conversationRepo.UpdateTitle(c.Request.Context(), conversationID, title)
-	}
-
 	// Update conversation timestamp
 	conversation.UpdatedAt = time.Now()
 	h.conversationRepo.Update(c.Request.Context(), conversation)
 
-	c.JSON(http.StatusOK, gin.H{
-		"data":  chatResp.Choices[0].Message,
-		"usage": chatResp.Usage,
-	})
+	c.JSON(http.StatusOK, chatResp)
 }
 
 // AddMessage adds a new message to a conversation (typically from frontend)

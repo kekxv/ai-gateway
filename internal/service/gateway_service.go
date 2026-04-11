@@ -207,9 +207,10 @@ func (c ChatMessageContent) HasImage() bool {
 }
 
 type ChatMessage struct {
-	Role      string             `json:"role"`
-	Content   ChatMessageContent `json:"content"`
-	ToolCalls []ToolCall         `json:"tool_calls,omitempty"`
+	Role       string             `json:"role"`
+	Content    ChatMessageContent `json:"content"`
+	ToolCalls  []ToolCall         `json:"tool_calls,omitempty"`
+	ToolCallID string             `json:"tool_call_id,omitempty"` // For tool messages - must match tool_calls.id
 }
 
 // ToolCall represents a tool/function call

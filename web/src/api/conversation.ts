@@ -1,5 +1,5 @@
 import { api } from './index'
-import type { Conversation, Message, CreateConversationRequest, UpdateConversationRequest, ChatRequest } from '@/types/conversation'
+import type { Conversation, Message, CreateConversationRequest, UpdateConversationRequest, ChatRequest, ChatContentPart } from '@/types/conversation'
 import type { ToolCall } from '@/types/tool'
 
 export const conversationApi = {
@@ -31,11 +31,8 @@ export const conversationApi = {
   addMessage: (id: number, data: { role: string; content: string; tool_calls?: string; tokens?: number }) =>
     api.post<{ data: Message }>(`/conversations/${id}/messages`, data),
 
-  // Send a message (non-streaming)
-  sendMessage: (id: number, data: ChatRequest) =>
-    api.post<{ data: Message; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } }>(`/conversations/${id}/chat`, { ...data, stream: false }),
-
-  // Send a message with streaming
+  // Send a message with streaming (OpenAI-compatible format)
+  // Frontend builds full request with model and messages
   sendMessageStream: async (
     id: number,
     data: ChatRequest,
@@ -180,4 +177,27 @@ export const modelApi = {
   // Get available models for chat
   listForChat: () =>
     api.get<{ id: number; name: string; alias?: string }[]>('/models')
+}
+
+// Helper function to build user content from text and attached files
+export function buildUserContent(text: string, parts?: ChatContentPart[]): ChatContentPart[] | string {
+  if (!parts || parts.length === 0) {
+    return text
+  }
+  // Add text content if provided
+  const contentParts: ChatContentPart[] = []
+  if (text) {
+    contentParts.push({ type: 'text', text: text })
+  }
+  // Add attached files
+  for (const part of parts) {
+    if (part.type === 'image_url' && part.image_url) {
+      contentParts.push({ type: 'image_url', image_url: part.image_url })
+    }
+  }
+  // Return string if only text, otherwise return parts array
+  if (contentParts.length === 1 && contentParts[0].type === 'text') {
+    return contentParts[0].text || ''
+  }
+  return contentParts
 }

@@ -58,16 +58,13 @@ export interface ChatContentPart {
   image_url?: { url: string; detail?: string }
 }
 
+// ChatRequest - OpenAI-compatible format (frontend builds full request)
 export interface ChatRequest {
-  messages?: Array<{
-    role: string
-    content: string | ChatContentPart[]  // 支持多模态格式
-    tool_calls?: string | any[]
-  }>
-  content?: string
-  parts?: ChatContentPart[]
+  model: string                              // Required: model name
+  messages: ChatMessage[]                    // Required: full chat history
   stream?: boolean
-  settings?: ConversationSettings
+  temperature?: number
+  max_tokens?: number
   tools?: Array<{
     type: string
     function: {
@@ -76,8 +73,15 @@ export interface ChatRequest {
       parameters: Record<string, unknown>
     }
   }>
-  delete_after_id?: number // for regenerate: delete messages after this ID
   enable_thinking?: boolean
+}
+
+// ChatMessage for OpenAI-compatible format
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content: string | ChatContentPart[]        // Supports multimodal
+  tool_calls?: any[]                         // For assistant messages with tool calls
+  tool_call_id?: string                      // For tool messages - must match the tool_call id
 }
 
 export interface ChatStreamEvent {
