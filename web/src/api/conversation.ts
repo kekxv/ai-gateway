@@ -198,9 +198,9 @@ export const conversationApi = {
 }
 
 export const modelApi = {
-  // Get available models for chat
+  // Get available models for chat (only enabled models with routes)
   listForChat: () =>
-    api.get<{ id: number; name: string; alias?: string }[]>('/models')
+    api.get<{ id: number; name: string; alias?: string }[]>('/models/chat')
 }
 
 // Helper function to build user content from text and attached files

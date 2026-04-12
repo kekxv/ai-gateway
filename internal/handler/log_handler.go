@@ -22,6 +22,7 @@ func NewLogHandler(logRepo *repository.LogRepository, logDetailRepo *repository.
 func (h *LogHandler) ListLogs(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	model := c.Query("model")
 
 	if page < 1 {
 		page = 1
@@ -30,7 +31,7 @@ func (h *LogHandler) ListLogs(c *gin.Context) {
 		pageSize = 20
 	}
 
-	logs, total, err := h.logRepo.List(c.Request.Context(), nil, page, pageSize)
+	logs, total, err := h.logRepo.List(c.Request.Context(), nil, model, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

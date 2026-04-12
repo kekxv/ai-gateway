@@ -532,6 +532,20 @@ function executeCanvas(
   const canvasWidth = Math.max(1, Math.min(width || 400, 2000))
   const canvasHeight = Math.max(1, Math.min(height || 300, 2000))
 
+  // 扁平化嵌套的 operations（AI 可能返回 {"operations:[{"operations":[...]}]}）
+  let flatOperations: CanvasOperation[] = []
+  if (Array.isArray(operations)) {
+    for (const op of operations) {
+      if (op && typeof op === 'object' && Array.isArray(op.operations)) {
+        // 嵌套结构：{"operations": [...]}
+        flatOperations = flatOperations.concat(op.operations as CanvasOperation[])
+      } else if (op && (op.type || op.operation)) {
+        // 直接操作：{"type": "rect", ...}
+        flatOperations.push(op as CanvasOperation)
+      }
+    }
+  }
+
   // 创建 Canvas 元素
   const canvas = document.createElement('canvas')
   canvas.width = canvasWidth
@@ -560,7 +574,7 @@ function executeCanvas(
 
   // 执行绘图操作
   const executedOps: string[] = []
-  for (const op of operations) {
+  for (const op of flatOperations) {
     try {
       executeCanvasOperation(ctx, op)
       const opType = op.type || op.operation

@@ -280,6 +280,7 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 
 	// Model management
 	admin.GET("/models", deps.ModelHandler.ListModels)
+		admin.GET("/models/chat", deps.ModelHandler.ListModelsForChat)
 	admin.POST("/models", deps.ModelHandler.CreateModel)
 	admin.GET("/models/:id", deps.ModelHandler.GetModel)
 	admin.PUT("/models/:id", deps.ModelHandler.UpdateModel)

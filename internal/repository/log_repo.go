@@ -26,7 +26,7 @@ func (r *LogRepository) UpdateByID(ctx context.Context, id uint, updates map[str
 	return r.db.WithContext(ctx).Model(&models.Log{}).Where("id = ?", id).Updates(updates).Error
 }
 
-func (r *LogRepository) List(ctx context.Context, apiKeyID *uint, page, limit int) ([]models.Log, int64, error) {
+func (r *LogRepository) List(ctx context.Context, apiKeyID *uint, model string, page, limit int) ([]models.Log, int64, error) {
 	var logs []models.Log
 	var total int64
 
@@ -34,11 +34,14 @@ func (r *LogRepository) List(ctx context.Context, apiKeyID *uint, page, limit in
 	if apiKeyID != nil {
 		query = query.Where("apiKeyId = ?", *apiKeyID)
 	}
+	if model != "" {
+		query = query.Where("modelName = ?", model)
+	}
 
 	query.Count(&total)
 
 	offset := (page - 1) * limit
-	err := r.db.WithContext(ctx).
+	err := query.
 		Preload("APIKey.User").
 		Preload("OwnerChannel").
 		Order("createdAt DESC").

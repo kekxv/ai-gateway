@@ -891,6 +891,47 @@ func (h *ModelHandler) ListModels(c *gin.Context) {
 	c.JSON(http.StatusOK, modelsList)
 }
 
+// ListModelsForChat returns models available for chat (enabled and have at least one non-disabled route with enabled provider)
+func (h *ModelHandler) ListModelsForChat(c *gin.Context) {
+	modelsList, err := h.modelRepo.ListWithRoutes(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Filter models that have at least one enabled route with enabled provider
+	availableModels := []map[string]interface{}{}
+	for _, m := range modelsList {
+		// Check if model has at least one non-disabled route with non-disabled provider
+		hasEnabledRoute := false
+		for _, route := range m.ModelRoutes {
+			// Check route is not disabled
+			if route.Disabled {
+				continue
+			}
+			// Check disabledUntil is not set or has expired
+			if route.DisabledUntil != nil && route.DisabledUntil.After(time.Now()) {
+				continue
+			}
+			// Check provider is not disabled (Provider.ID > 0 means it was loaded)
+			if route.Provider.ID > 0 && route.Provider.Disabled {
+				continue
+			}
+			hasEnabledRoute = true
+			break
+		}
+		if hasEnabledRoute {
+			availableModels = append(availableModels, map[string]interface{}{
+				"id":    m.ID,
+				"name":  m.Name,
+				"alias": m.Alias,
+			})
+		}
+	}
+
+	c.JSON(http.StatusOK, availableModels)
+}
+
 func (h *ModelHandler) CreateModel(c *gin.Context) {
 	var req struct {
 		Name                  string   `json:"name" binding:"required"`
