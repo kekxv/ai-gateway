@@ -171,6 +171,8 @@ const menuItems = computed(() => {
     { path: '/channels', title: t('menu.channels'), icon: 'Channel' },
     { path: '/models', title: t('menu.models'), icon: 'Model' },
     { path: '/keys', title: t('menu.keys'), icon: 'Key' },
+    { path: '/skills', title: t('menu.skills'), icon: 'Skill' },
+    { path: '/tools', title: t('menu.tools'), icon: 'Tool' },
     { path: '/logs', title: t('menu.logs'), icon: 'Log' },
     { path: '/profile', title: t('menu.profile'), icon: 'Profile' }
   ]

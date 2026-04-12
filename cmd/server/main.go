@@ -60,6 +60,7 @@ func main() {
 	settingsRepo := repository.NewSettingsRepository(db)
 	conversationRepo := repository.NewConversationRepository(db)
 	messageRepo := repository.NewMessageRepository(db)
+	skillRepo := repository.NewSkillRepository(db)
 
 	// Get JWT secret from settings or environment
 	jwtSecret := ""
@@ -107,6 +108,9 @@ func main() {
 	// Initialize tools service
 	toolsService := service.NewToolsService()
 
+	// Initialize skill service
+	skillService := service.NewSkillService(skillRepo, userRepo)
+
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userRepo, logRepo, authService)
@@ -120,6 +124,7 @@ func main() {
 	anthropicHandler := handler.NewAnthropicHandler(gatewayService)
 	chatHandler := handler.NewChatHandler(conversationRepo, messageRepo, userRepo, gatewayService, billingService)
 	toolsHandler := handler.NewToolsHandler(toolsService)
+	skillHandler := handler.NewSkillHandler(skillService)
 
 	// Setup Gin
 	port := 3000
@@ -150,6 +155,7 @@ func main() {
 		AnthropicHandler: anthropicHandler,
 		ChatHandler:      chatHandler,
 		ToolsHandler:     toolsHandler,
+			SkillHandler:     skillHandler,
 		APIKeyRepo:       apiKeyRepo,
 	})
 
@@ -231,6 +237,7 @@ type Dependencies struct {
 	AnthropicHandler *handler.AnthropicHandler
 	ChatHandler      *handler.ChatHandler
 	ToolsHandler     *handler.ToolsHandler
+	SkillHandler     *handler.SkillHandler
 	APIKeyRepo       *repository.APIKeyRepository
 }
 
@@ -324,6 +331,17 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 	// Tools API (JWT required)
 	admin.POST("/tools/web-search", deps.ToolsHandler.WebSearch)
 	admin.POST("/tools/fetch-webpage", deps.ToolsHandler.FetchWebpage)
+
+	// Skills API (JWT required)
+	admin.GET("/skills", deps.SkillHandler.ListSkills)
+	admin.GET("/skills/:id", deps.SkillHandler.GetSkill)
+	admin.POST("/skills", deps.SkillHandler.CreateSkill)
+	admin.PUT("/skills/:id", deps.SkillHandler.UpdateSkill)
+	admin.DELETE("/skills/:id", deps.SkillHandler.DeleteSkill)
+	admin.POST("/skills/:id/toggle", deps.SkillHandler.ToggleSkill)
+	admin.GET("/skills/catalog", deps.SkillHandler.GetCatalog)
+	admin.GET("/skills/scan", deps.SkillHandler.ScanLocalSkills)
+	admin.POST("/skills/import", deps.SkillHandler.ImportSkill)
 
 	// ========== Gateway API (API Key required) ==========
 	v1 := r.Group("/api/v1")

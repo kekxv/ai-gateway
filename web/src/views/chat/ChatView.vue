@@ -62,9 +62,6 @@
 
     <!-- Main Content -->
     <main class="main-content">
-      <!-- Tools Dialog -->
-      <ToolsDialog v-model="showToolsDialog" />
-
       <!-- Header -->
       <header class="chat-header">
         <div class="header-left">
@@ -94,9 +91,37 @@
         </div>
 
         <div class="header-right">
-          <button class="icon-btn" @click="showToolsDialog = true" title="工具">
-            <el-icon><Operation /></el-icon>
-          </button>
+          <!-- Skills & Tools row -->
+          <div class="header-tools-row">
+            <!-- Skills Dropdown -->
+            <el-dropdown trigger="click" @command="activateSkill" placement="bottom-end" :disabled="!currentConversation || skillsStore.enabledSkills.length === 0">
+              <button class="icon-btn" :class="{ active: activeSkillName }" title="技能">
+                <el-icon><Collection /></el-icon>
+              </button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item v-if="activeSkillName" command="">
+                    <div class="skill-option">
+                      <span class="skill-name text-warning">取消当前技能</span>
+                    </div>
+                  </el-dropdown-item>
+                  <el-dropdown-item divided v-for="skill in skillsStore.enabledSkills" :key="skill.id" :command="skill.name">
+                    <div class="skill-option">
+                      <span class="skill-name">{{ skill.display_name || skill.name }}</span>
+                      <span class="skill-desc">{{ skill.description }}</span>
+                    </div>
+                  </el-dropdown-item>
+                  <el-dropdown-item v-if="skillsStore.enabledSkills.length === 0" disabled>
+                    <span class="text-gray-400">暂无可用技能</span>
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <!-- Tools Button -->
+            <button class="icon-btn" @click="showToolSelector = true" title="工具">
+              <el-icon><Operation /></el-icon>
+            </button>
+          </div>
           <button class="icon-btn" @click="showSettingsDialog = true" :disabled="!currentConversation" title="设置">
             <el-icon><Setting /></el-icon>
           </button>
@@ -169,8 +194,10 @@
                   <div v-if="block.type === 'image'" class="image-block">
                     <AttachmentPreview :part="block.part!" />
                   </div>
-                  <!-- 文本块 -->
-                  <div v-else class="user-text">{{ block.content }}</div>
+                  <!-- 文本块 - 使用 Markdown 渲染 -->
+                  <div v-else class="user-text">
+                    <MarkdownRenderer :content="block.content" />
+                  </div>
                 </div>
               </template>
               <!-- 操作按钮 -->
@@ -291,22 +318,77 @@
       <!-- Input Area -->
       <div class="input-area">
         <div class="input-container">
-          <!-- Enabled Tools Display -->
-          <div v-if="toolsStore.enabledTools.length > 0" class="enabled-tools-bar">
-            <span class="tools-label">工具:</span>
-            <el-tag
-              v-for="tool in visibleTools"
-              :key="tool.id"
-              size="small"
-              closable
-              @close="toolsStore.toggleTool(tool.id)"
-            >
-              {{ tool.name }}
-            </el-tag>
-            <el-tag v-if="hiddenToolsCount > 0" size="small" type="info" class="more-tools-tag">
-              +{{ hiddenToolsCount }}
-            </el-tag>
+          <!-- Enabled Skills & Tools Display -->
+          <div v-if="activeSkillName || toolsStore.enabledTools.length > 0" class="enabled-bar-container">
+            <!-- Active Skill Display -->
+            <div v-if="activeSkillName" class="enabled-skills-bar">
+              <span class="skills-label">技能:</span>
+              <el-tag
+                size="small"
+                type="warning"
+                closable
+                @close="deactivateSkill"
+              >
+                {{ skillsStore.getSkillByName(activeSkillName)?.display_name || activeSkillName }}
+              </el-tag>
+            </div>
+
+            <!-- Enabled Tools Display -->
+            <div v-if="toolsStore.enabledTools.length > 0" class="enabled-tools-bar">
+              <span class="tools-label">工具:</span>
+              <el-tag
+                v-for="tool in visibleTools"
+                :key="tool.id"
+                size="small"
+                class="tool-tag"
+              >
+                {{ tool.name }}
+              </el-tag>
+              <el-tag v-if="hiddenToolsCount > 0" size="small" type="info" class="more-tools-tag">
+                +{{ hiddenToolsCount }}
+              </el-tag>
+            </div>
+            <!-- Empty state -->
+            <div v-else class="add-tools-bar">
+              <span class="add-tools-label">工具: 无</span>
+            </div>
           </div>
+
+          <!-- Tool Selector Dialog -->
+          <el-dialog
+            v-model="showToolSelector"
+            title="选择工具"
+            width="400px"
+            class="tool-selector-dialog"
+          >
+            <div class="tool-selector-content">
+              <div class="tool-selector-header">
+                <span>点击切换工具启用状态</span>
+                <el-button size="small" link type="primary" class="manage-tools-btn" @click="router.push('/tools')">
+                  <el-icon><Setting /></el-icon>
+                  管理自定义工具
+                </el-button>
+              </div>
+              <div class="tool-list">
+                <div
+                  v-for="tool in toolsStore.allTools"
+                  :key="tool.id"
+                  class="tool-item"
+                  :class="{ enabled: toolsStore.isToolEnabled(tool.id) }"
+                  @click="toolsStore.toggleTool(tool.id)"
+                >
+                  <div class="tool-info">
+                    <span class="tool-name">{{ tool.name }}</span>
+                    <span class="tool-desc">{{ tool.description.slice(0, 50) }}{{ tool.description.length > 50 ? '...' : '' }}</span>
+                  </div>
+                  <el-icon v-if="toolsStore.isToolEnabled(tool.id)" class="tool-check"><Check /></el-icon>
+                </div>
+              </div>
+            </div>
+            <template #footer>
+              <el-button @click="showToolSelector = false">完成</el-button>
+            </template>
+          </el-dialog>
 
           <!-- Input Box -->
           <div class="input-box" :class="{ disabled: !currentConversation || sending }">
@@ -478,11 +560,12 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Setting, ChatLineRound, Monitor,
   Loading, Promotion, MoreFilled, Delete, MagicStick, Close, Menu, Paperclip, Operation,
-  Edit, RefreshRight, DocumentCopy, Cpu
+  Edit, RefreshRight, DocumentCopy, Collection, Check
 } from '@element-plus/icons-vue'
 import { conversationApi, modelApi } from '@/api/conversation'
 import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart, ChatRequest, ChatMessage } from '@/types/conversation'
@@ -490,12 +573,12 @@ import { PRESET_PROMPTS } from '@/types/conversation'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ThinkBlock from '@/components/chat/ThinkBlock.vue'
 import ToolCallDisplay from '@/components/chat/ToolCallDisplay.vue'
-import ToolsDialog from '@/components/chat/ToolsDialog.vue'
 import AttachmentPreview from '@/components/chat/AttachmentPreview.vue'
 import { parseMessageContent, parseStreamingThinkContent, estimateThinkTokens, removeThinkContent, parseXmlToolCalls } from '@/utils/messageParser'
 import { compressImage, isImageFile, formatFileSize } from '@/utils/imageUtils'
 import { useToolsStore } from '@/stores/tools'
 import { useImageStore } from '@/stores/image'
+import { useSkillsStore } from '@/stores/skills'
 import type { ToolCallResult, ToolCall } from '@/types/tool'
 
 // Tools store
@@ -503,6 +586,13 @@ const toolsStore = useToolsStore()
 
 // Image store (for yolo-draw)
 const imageStore = useImageStore()
+
+// Skills store (for agent skills)
+const skillsStore = useSkillsStore()
+
+// Router
+const route = useRoute()
+const router = useRouter()
 
 // Clean tokenizer artifacts from model output (e.g., Gemma's <|...|> tokens)
 function cleanTokenizerArtifacts(str: string): string {
@@ -629,10 +719,14 @@ const streamingContent = ref('')
 const showSettingsDialog = ref(false)
 const presets = ref<PresetPrompt[]>(PRESET_PROMPTS)
 
+// Active skill state - skill instructions appended to system prompt
+const activeSkillName = ref<string | null>(null)
+const activeSkillInstructions = ref<string | null>(null)
+
 // Streaming state for Think and ToolCalls
 const streamingThinkContent = ref('')
 const streamingToolCallResults = ref<ToolCallResult[]>([])
-const showToolsDialog = ref(false)
+const showToolSelector = ref(false)
 
 // Track full raw content for parsing (includes think tags)
 const streamingRawContent = ref('')
@@ -1197,6 +1291,32 @@ const selectConversation = async (conv: Conversation) => {
   if (isMobile.value) sidebarOpen.value = false
 }
 
+// Activate a skill by name (appended to system prompt)
+const activateSkill = (skillName: string) => {
+  // If empty skillName, deactivate current skill
+  if (!skillName) {
+    activeSkillName.value = null
+    activeSkillInstructions.value = null
+    ElMessage.success('已取消技能')
+    return
+  }
+
+  const skill = skillsStore.getSkillByName(skillName)
+  if (skill) {
+    activeSkillName.value = skill.name
+    activeSkillInstructions.value = skill.instructions || null
+    ElMessage.success(`已激活技能: ${skill.display_name || skill.name}`)
+  } else {
+    ElMessage.warning('未找到该技能')
+  }
+}
+
+// Deactivate current skill
+const deactivateSkill = () => {
+  activeSkillName.value = null
+  activeSkillInstructions.value = null
+}
+
 // Update model
 const updateModel = async () => {
   if (currentConversation.value && selectedModel.value !== currentConversation.value.model) {
@@ -1227,6 +1347,11 @@ const sendMessage = async () => {
   const content = inputContent.value.trim()
   inputContent.value = ''
 
+  // Reset textarea height after clearing content
+  if (textareaRef.value) {
+    textareaRef.value.style.height = 'auto'
+  }
+
   // Build parts array for multimodal content (user message)
   const parts: ChatContentPart[] = []
   if (content) {
@@ -1239,8 +1364,6 @@ const sendMessage = async () => {
   }
   // Clear attached files after building parts
   attachedFiles.value = []
-
-  autoResize()
 
   // Build content to store (支持多模态格式)
   let contentToStore: string
@@ -1329,9 +1452,34 @@ const buildChatHistory = (): ChatMessage[] => {
 
   // Add system prompt if exists
   if (settingsForm.system_prompt) {
+    let systemContent = settingsForm.system_prompt
+
+    // Add skills catalog if available
+    const skillsXML = skillsStore.getSkillsForModel()
+    if (skillsXML) {
+      systemContent += '\n\n' + skillsXML
+    }
+
     history.push({
       role: 'system',
-      content: settingsForm.system_prompt
+      content: systemContent
+    })
+  } else {
+    // If no system prompt but skills exist, add skills as system message
+    const skillsXML = skillsStore.getSkillsForModel()
+    if (skillsXML) {
+      history.push({
+        role: 'system',
+        content: `You have access to the following skills:\n\n${skillsXML}\n\nWhen a task matches a skill's description, consider using its instructions to guide your response.`
+      })
+    }
+  }
+
+  // Add active skill instructions after system prompt
+  if (activeSkillInstructions.value) {
+    history.push({
+      role: 'system',
+      content: `[Active Skill: ${activeSkillName.value}]\n\n${activeSkillInstructions.value}`
     })
   }
 
@@ -1991,6 +2139,15 @@ onMounted(() => {
   loadConversations()
   loadModels()
   window.addEventListener('resize', checkMobile)
+
+  // Handle skill activation from query parameter
+  if (route.query.activateSkill) {
+    const skillName = route.query.activateSkill as string
+    // Wait for skills to be loaded
+    setTimeout(() => {
+      activateSkill(skillName)
+    }, 500)
+  }
 })
 
 onUnmounted(() => {
@@ -2458,9 +2615,65 @@ onUnmounted(() => {
 
 .user-text {
   font-size: 14px;
-  line-height: 1.6;
-  white-space: pre-wrap;
+  line-height: 1.5;
   word-break: break-word;
+}
+
+/* User message markdown - compact style */
+.user-bubble :deep(.markdown-content) {
+  line-height: 1.5;
+}
+
+.user-bubble :deep(.markdown-content p) {
+  margin: 0 0 6px 0;
+}
+
+.user-bubble :deep(.markdown-content p:last-child) {
+  margin-bottom: 0;
+}
+
+/* Remove extra margin when p is followed by code block */
+.user-bubble :deep(.markdown-content p + .code-block) {
+  margin-top: 4px;
+}
+
+.user-bubble :deep(.markdown-content .code-block) {
+  margin: 6px 0;
+}
+
+.user-bubble :deep(.markdown-content .code-block:first-child) {
+  margin-top: 0;
+}
+
+.user-bubble :deep(.markdown-content .code-block:last-child) {
+  margin-bottom: 0;
+}
+
+.user-bubble :deep(.markdown-content .code-header) {
+  padding: 4px 10px;
+}
+
+.user-bubble :deep(.markdown-content pre) {
+  padding: 8px 10px;
+}
+
+.user-bubble :deep(.markdown-content code) {
+  font-size: 13px;
+}
+
+.user-bubble :deep(.markdown-content :not(pre) > code) {
+  padding: 1px 4px;
+  font-size: 13px;
+}
+
+.user-bubble :deep(.markdown-content ul),
+.user-bubble :deep(.markdown-content ol) {
+  margin: 4px 0;
+  padding-left: 16px;
+}
+
+.user-bubble :deep(.markdown-content li) {
+  margin: 2px 0;
 }
 
 /* Message Attachments */
@@ -2717,12 +2930,40 @@ onUnmounted(() => {
   margin: 0 auto;
 }
 
+/* Enabled Bar Container */
+.enabled-bar-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* Enabled Skills Bar */
+.enabled-skills-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.skills-label {
+  font-size: 12px;
+  color: #e6a23c;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.enabled-skills-bar :deep(.el-tag) {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
 /* Enabled Tools Bar */
 .enabled-tools-bar {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 10px;
   flex-wrap: nowrap;
   overflow: hidden;
 }
@@ -2743,7 +2984,93 @@ onUnmounted(() => {
   background: #f3f4f6;
   border-color: #e5e7eb;
   color: #6b7280;
-  cursor: default;
+  cursor: pointer;
+}
+
+/* Tool tags bar */
+.enabled-tools-bar {
+  border-radius: 8px;
+}
+
+/* Add tools bar */
+.add-tools-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 8px;
+}
+
+.add-tools-label {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+/* Tool Selector Dialog */
+.tool-selector-content {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.tool-selector-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.manage-tools-btn {
+  padding: 4px 8px;
+}
+
+.tool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+  border: 1px solid #e5e7eb;
+}
+
+.tool-item:hover {
+  background: #f9fafb;
+}
+
+.tool-item.enabled {
+  background: #f0fdf4;
+  border-color: #22c55e;
+}
+
+.tool-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.tool-name {
+  font-weight: 500;
+  color: #374151;
+}
+
+.tool-desc {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.tool-check {
+  color: #22c55e;
+  font-size: 18px;
 }
 
 /* Input Box */
@@ -3027,5 +3354,38 @@ onUnmounted(() => {
 .icon-btn.active {
   background: #eef2ff;
   color: #667eea;
+}
+
+/* Skill dropdown option */
+.skill-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+}
+
+.skill-name {
+  font-weight: 500;
+  color: #374151;
+}
+
+.skill-name.text-warning {
+  color: #e6a23c;
+}
+
+.skill-desc {
+  font-size: 12px;
+  color: #6b7280;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Header tools row */
+.header-tools-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 </style>

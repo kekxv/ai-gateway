@@ -40,6 +40,8 @@ func InitDatabase(dbPath string) (*gorm.DB, error) {
 		&models.ProviderModel{},
 		&models.Conversation{},
 		&models.Message{},
+		&models.Skill{},
+		&models.SkillResource{},
 	}
 
 	// Create tables that don't exist

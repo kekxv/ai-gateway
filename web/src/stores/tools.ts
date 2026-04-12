@@ -3,6 +3,15 @@ import { ref, computed } from 'vue'
 import type { ToolDefinition, ToolCallResult } from '@/types/tool'
 import { BUILTIN_TOOLS } from '@/types/tool'
 
+// Default enabled tools
+const DEFAULT_ENABLED_TOOLS = [
+  'get_current_time',
+  'execute_javascript',
+  'web_search',
+  'fetch_webpage',
+  'web_canvas'
+]
+
 export const useToolsStore = defineStore('tools', () => {
   // 自定义工具列表
   const customTools = ref<ToolDefinition[]>([])
@@ -13,11 +22,36 @@ export const useToolsStore = defineStore('tools', () => {
   // 所有工具
   const allTools = computed(() => [...builtinTools.value, ...customTools.value])
 
+  // 启用的工具 ID 列表
+  const enabledToolIds = ref<Set<string>>(new Set())
+
   // 启用的工具
-  const enabledTools = computed(() => allTools.value.filter(t => t.enabled))
+  const enabledTools = computed(() => allTools.value.filter(t => enabledToolIds.value.has(t.id)))
 
   // 工具执行结果
   const toolResults = ref<Map<string, ToolCallResult>>(new Map())
+
+  // 从 localStorage 加载启用状态
+  function loadEnabledState() {
+    try {
+      const saved = localStorage.getItem('enabled_tools')
+      if (saved) {
+        const ids = JSON.parse(saved) as string[]
+        enabledToolIds.value = new Set(ids)
+      } else {
+        // First time: enable default tools
+        enabledToolIds.value = new Set(DEFAULT_ENABLED_TOOLS)
+        saveEnabledState()
+      }
+    } catch {
+      enabledToolIds.value = new Set(DEFAULT_ENABLED_TOOLS)
+    }
+  }
+
+  // 保存启用状态到 localStorage
+  function saveEnabledState() {
+    localStorage.setItem('enabled_tools', JSON.stringify(Array.from(enabledToolIds.value)))
+  }
 
   // 从 localStorage 加载自定义工具
   function loadCustomTools() {
@@ -59,18 +93,35 @@ export const useToolsStore = defineStore('tools', () => {
   // 删除自定义工具
   function deleteTool(id: string) {
     customTools.value = customTools.value.filter(t => t.id !== id)
+    enabledToolIds.value.delete(id)
     saveCustomTools()
+    saveEnabledState()
   }
 
   // 切换工具启用状态
   function toggleTool(id: string) {
-    const tool = allTools.value.find(t => t.id === id)
-    if (tool) {
-      tool.enabled = !tool.enabled
-      if (tool.type === 'custom') {
-        saveCustomTools()
-      }
+    if (enabledToolIds.value.has(id)) {
+      enabledToolIds.value.delete(id)
+    } else {
+      enabledToolIds.value.add(id)
     }
+    saveEnabledState()
+  }
+
+  // 设置工具启用状态
+  function setToolEnabled(id: string, enabled: boolean) {
+    if (enabled) {
+      enabledToolIds.value.add(id)
+    } else {
+      enabledToolIds.value.delete(id)
+    }
+    saveEnabledState()
+  }
+
+  // 批量设置启用状态
+  function setEnabledTools(ids: string[]) {
+    enabledToolIds.value = new Set(ids)
+    saveEnabledState()
   }
 
   // 获取工具定义（用于发送给模型）
@@ -110,7 +161,13 @@ export const useToolsStore = defineStore('tools', () => {
     return allTools.value.some(t => t.name === name)
   }
 
+  // 检查工具是否启用
+  function isToolEnabled(id: string): boolean {
+    return enabledToolIds.value.has(id)
+  }
+
   // 初始化时加载
+  loadEnabledState()
   loadCustomTools()
 
   return {
@@ -118,16 +175,20 @@ export const useToolsStore = defineStore('tools', () => {
     builtinTools,
     allTools,
     enabledTools,
+    enabledToolIds,
     toolResults,
     addTool,
     updateTool,
     deleteTool,
     toggleTool,
+    setToolEnabled,
+    setEnabledTools,
     getToolsForModel,
     setToolResult,
     getToolResult,
     clearToolResults,
     getTool,
-    isToolNameExists
+    isToolNameExists,
+    isToolEnabled
   }
 })

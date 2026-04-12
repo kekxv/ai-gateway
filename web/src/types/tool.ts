@@ -5,7 +5,7 @@ export interface ToolDefinition {
   description: string       // 工具描述
   parameters: JSONSchema    // 参数 schema
   type: 'custom' | 'builtin'  // 用户自定义 / 内置
-  enabled: boolean
+  enabled?: boolean         // Deprecated: now tracked in store's enabledToolIds
   executionCode?: string    // 执行代码（JavaScript），仅自定义工具
 }
 
@@ -52,7 +52,6 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     name: 'get_current_time',
     description: '获取当前时间和日期',
     type: 'builtin',
-    enabled: true,
     parameters: {
       type: 'object',
       properties: {
@@ -68,7 +67,6 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     name: 'get_location',
     description: '获取用户当前地理位置（需要用户授权）',
     type: 'builtin',
-    enabled: true,
     parameters: {
       type: 'object',
       properties: {
@@ -84,7 +82,6 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     name: 'execute_javascript',
     description: '执行 JavaScript 代码并返回结果。可用于计算、数据处理等。注意：代码中需要使用 return 语句返回结果。',
     type: 'builtin',
-    enabled: true,
     parameters: {
       type: 'object',
       properties: {
@@ -101,7 +98,6 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     name: 'web_search',
     description: '在网络上搜索信息，返回搜索结果',
     type: 'builtin',
-    enabled: true,
     parameters: {
       type: 'object',
       properties: {
@@ -130,7 +126,6 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     name: 'fetch_webpage',
     description: '获取网页内容，用于读取指定URL的页面数据',
     type: 'builtin',
-    enabled: true,
     parameters: {
       type: 'object',
       properties: {
@@ -155,7 +150,6 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     name: 'web_canvas',
     description: 'HTML5 Canvas 绘图工具，支持完整的 2D 绘图功能。绘制结果直接在页面上显示。',
     type: 'builtin',
-    enabled: true,
     parameters: {
       type: 'object',
       properties: {
@@ -245,7 +239,6 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     name: 'yolo_draw',
     description: '在用户上传的图片上绘制目标检测边界框。AI负责分类，此工具只负责绘制边界框。结果直接显示在页面上，不回传给 AI。',
     type: 'builtin',
-    enabled: true,
     parameters: {
       type: 'object',
       properties: {
