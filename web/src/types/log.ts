@@ -70,3 +70,8 @@ export interface LogListResponse {
   page: number
   limit: number
 }
+
+export interface LogFilterOptionsResponse {
+  models: string[]
+  providers: string[]
+}

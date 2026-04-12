@@ -432,18 +432,12 @@ async function fetchWebpage(url: string, selector?: string, format?: string): Pr
 /**
  * Canvas 绘图操作类型
  * 支持两种字段名：type 和 operation（AI 可能使用不同的字段名）
+ * 使用单个 [key: string] 索引签名来支持所有可能的参数
  */
 interface CanvasOperation {
   type?: string
   operation?: string
-  style?: {
-    fill?: string
-    fillStyle?: string
-    stroke?: string
-    strokeStyle?: string
-    lineWidth?: number
-    font?: string
-  }
+  // 使用索引签名支持所有参数，避免重复定义
   [key: string]: unknown
 }
 
@@ -463,7 +457,7 @@ function getFillColor(params: Record<string, unknown>, defaultColor = '#000000')
   if (params.fillColor) return params.fillColor as string
   if (params.fillStyle) return params.fillStyle as string
   if (params.style && typeof params.style === 'object') {
-    const style = params.style as CanvasOperation['style']
+    const style = params.style as { fill?: string; fillStyle?: string }
     if (style?.fill) return style.fill
     if (style?.fillStyle) return style.fillStyle
   }
@@ -501,7 +495,7 @@ function getStrokeColor(params: Record<string, unknown>, defaultColor = '#000000
   if (params.strokeColor) return params.strokeColor as string
   if (params.strokeStyle) return params.strokeStyle as string
   if (params.style && typeof params.style === 'object') {
-    const style = params.style as CanvasOperation['style']
+    const style = params.style as { stroke?: string; strokeStyle?: string }
     if (style?.stroke) return style.stroke
     if (style?.strokeStyle) return style.strokeStyle
   }
@@ -514,7 +508,7 @@ function getStrokeColor(params: Record<string, unknown>, defaultColor = '#000000
 function getLineWidth(params: Record<string, unknown>, defaultWidth = 1): number {
   if (params.lineWidth) return params.lineWidth as number
   if (params.style && typeof params.style === 'object') {
-    const style = params.style as CanvasOperation['style']
+    const style = params.style as { lineWidth?: number }
     if (style?.lineWidth) return style.lineWidth
   }
   return defaultWidth
@@ -622,10 +616,26 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
   if (!opType) return
 
   switch (opType) {
+    // ========== 基础操作 ==========
     case 'clear':
-      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+      ctx.clearRect(
+        (params.x as number) ?? 0,
+        (params.y as number) ?? 0,
+        (params.width as number) ?? ctx.canvas.width,
+        (params.height as number) ?? ctx.canvas.height
+      )
       break
 
+    case 'clearRect':
+      ctx.clearRect(
+        (params.x as number) ?? 0,
+        (params.y as number) ?? 0,
+        (params.width as number) ?? ctx.canvas.width,
+        (params.height as number) ?? ctx.canvas.height
+      )
+      break
+
+    // ========== 形状绘制 ==========
     case 'fill':
       // 填充整个画布或指定区域
       ctx.fillStyle = getFillColor(params)
@@ -637,7 +647,28 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
       )
       break
 
+    case 'fillRect':
+      ctx.fillStyle = getFillColor(params)
+      ctx.fillRect(
+        (params.x as number) ?? 0,
+        (params.y as number) ?? 0,
+        (params.width as number) ?? 100,
+        (params.height as number) ?? 100
+      )
+      break
+
     case 'stroke':
+      ctx.strokeStyle = getStrokeColor(params)
+      ctx.lineWidth = getLineWidth(params)
+      ctx.strokeRect(
+        (params.x as number) ?? 0,
+        (params.y as number) ?? 0,
+        (params.width as number) ?? 100,
+        (params.height as number) ?? 100
+      )
+      break
+
+    case 'strokeRect':
       ctx.strokeStyle = getStrokeColor(params)
       ctx.lineWidth = getLineWidth(params)
       ctx.strokeRect(
@@ -667,6 +698,53 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
       if (!shouldFill(params) && !shouldStroke(params)) {
         ctx.fillStyle = getFillColor(params)
         ctx.fillRect(rx, ry, rw, rh)
+      }
+      break
+    }
+
+    case 'roundRect': {
+      const rx = (params.x as number) ?? 0
+      const ry = (params.y as number) ?? 0
+      const rw = (params.width as number) ?? 100
+      const rh = (params.height as number) ?? 100
+      const radii = params.radii as number | number[] | undefined
+      const radius = (params.radius as number) ?? 10
+
+      ctx.beginPath()
+      // roundRect 是较新的 API，需要检查兼容性
+      if (typeof ctx.roundRect === 'function') {
+        if (radii !== undefined) {
+          ctx.roundRect(rx, ry, rw, rh, Array.isArray(radii) ? radii : radii)
+        } else {
+          ctx.roundRect(rx, ry, rw, rh, radius)
+        }
+      } else {
+        // 手动绘制圆角矩形
+        const r = Array.isArray(radii) ? radii[0] : (radii ?? radius)
+        ctx.moveTo(rx + r, ry)
+        ctx.lineTo(rx + rw - r, ry)
+        ctx.arcTo(rx + rw, ry, rx + rw, ry + r, r)
+        ctx.lineTo(rx + rw, ry + rh - r)
+        ctx.arcTo(rx + rw, ry + rh, rx + rw - r, ry + rh, r)
+        ctx.lineTo(rx + r, ry + rh)
+        ctx.arcTo(rx, ry + rh, rx, ry + rh - r, r)
+        ctx.lineTo(rx, ry + r)
+        ctx.arcTo(rx, ry, rx + r, ry, r)
+        ctx.closePath()
+      }
+
+      if (shouldFill(params)) {
+        ctx.fillStyle = getFillColor(params)
+        ctx.fill()
+      }
+      if (shouldStroke(params)) {
+        ctx.strokeStyle = getStrokeColor(params)
+        ctx.lineWidth = getLineWidth(params)
+        ctx.stroke()
+      }
+      if (!shouldFill(params) && !shouldStroke(params)) {
+        ctx.fillStyle = getFillColor(params)
+        ctx.fill()
       }
       break
     }
@@ -724,6 +802,57 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
       break
     }
 
+    case 'arcTo': {
+      ctx.beginPath()
+      ctx.moveTo((params.x1 as number) ?? 0, (params.y1 as number) ?? 0)
+      ctx.arcTo(
+        (params.x2 as number) ?? 50,
+        (params.y2 as number) ?? 50,
+        (params.x3 as number) ?? 100,
+        (params.y3 as number) ?? 100,
+        (params.radius as number) ?? 20
+      )
+      if (shouldStroke(params) || !shouldFill(params)) {
+        ctx.strokeStyle = getStrokeColor(params)
+        ctx.lineWidth = getLineWidth(params)
+        ctx.stroke()
+      }
+      if (shouldFill(params)) {
+        ctx.fillStyle = getFillColor(params)
+        ctx.fill()
+      }
+      break
+    }
+
+    case 'ellipse': {
+      ctx.beginPath()
+      ctx.ellipse(
+        (params.x as number) ?? 0,
+        (params.y as number) ?? 0,
+        Math.max(0, (params.radiusX as number) ?? 50),
+        Math.max(0, (params.radiusY as number) ?? 30),
+        (params.rotation as number) ?? 0,
+        (params.startAngle as number) ?? 0,
+        (params.endAngle as number) ?? Math.PI * 2
+      )
+      if (shouldFill(params)) {
+        ctx.fillStyle = getFillColor(params)
+        ctx.fill()
+      }
+      if (shouldStroke(params)) {
+        ctx.strokeStyle = getStrokeColor(params)
+        ctx.lineWidth = getLineWidth(params)
+        ctx.stroke()
+      }
+      if (!shouldFill(params) && !shouldStroke(params)) {
+        ctx.strokeStyle = getStrokeColor(params)
+        ctx.lineWidth = getLineWidth(params)
+        ctx.stroke()
+      }
+      break
+    }
+
+    // ========== 线条绘制 ==========
     case 'line':
       ctx.beginPath()
       ctx.moveTo((params.x1 as number) ?? 0, (params.y1 as number) ?? 0)
@@ -731,6 +860,14 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
       ctx.strokeStyle = getStrokeColor(params)
       ctx.lineWidth = getLineWidth(params)
       ctx.stroke()
+      break
+
+    case 'moveTo':
+      ctx.moveTo((params.x as number) ?? 0, (params.y as number) ?? 0)
+      break
+
+    case 'lineTo':
+      ctx.lineTo((params.x as number) ?? 0, (params.y as number) ?? 0)
       break
 
     case 'polyline':
@@ -764,50 +901,8 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
       break
     }
 
-    case 'text':
-      ctx.font = (params.font as string) || '16px Arial'
-      ctx.fillStyle = getFillColor(params, '#000000')
-      ctx.textAlign = (params.align as CanvasTextAlign) || 'left'
-      ctx.textBaseline = (params.baseline as CanvasTextBaseline) || 'top'
-      const text = String(params.text ?? '')
-      const textX = (params.x as number) ?? 0
-      const textY = (params.y as number) ?? 0
-      if (params.maxWidth !== undefined) {
-        ctx.fillText(text, textX, textY, params.maxWidth as number)
-      } else {
-        ctx.fillText(text, textX, textY)
-      }
-      break
-
-    case 'ellipse': {
-      ctx.beginPath()
-      ctx.ellipse(
-        (params.x as number) ?? 0,
-        (params.y as number) ?? 0,
-        Math.max(0, (params.radiusX as number) ?? 50),
-        Math.max(0, (params.radiusY as number) ?? 30),
-        (params.rotation as number) ?? 0,
-        (params.startAngle as number) ?? 0,
-        (params.endAngle as number) ?? Math.PI * 2
-      )
-      if (shouldFill(params)) {
-        ctx.fillStyle = getFillColor(params)
-        ctx.fill()
-      }
-      if (shouldStroke(params)) {
-        ctx.strokeStyle = getStrokeColor(params)
-        ctx.lineWidth = getLineWidth(params)
-        ctx.stroke()
-      }
-      if (!shouldFill(params) && !shouldStroke(params)) {
-        ctx.strokeStyle = getStrokeColor(params)
-        ctx.lineWidth = getLineWidth(params)
-        ctx.stroke()
-      }
-      break
-    }
-
     case 'bezier':
+    case 'bezierCurveTo': {
       ctx.beginPath()
       ctx.moveTo((params.x1 as number) ?? 0, (params.y1 as number) ?? 0)
       if (params.cp2x !== undefined && params.cp2y !== undefined) {
@@ -833,6 +928,41 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
       ctx.lineWidth = getLineWidth(params)
       ctx.stroke()
       break
+    }
+
+    case 'quadraticCurveTo': {
+      ctx.quadraticCurveTo(
+        (params.cpx as number) ?? 50,
+        (params.cpy as number) ?? 50,
+        (params.x as number) ?? 100,
+        (params.y as number) ?? 100
+      )
+      break
+    }
+
+    // ========== 路径操作 ==========
+    case 'beginPath':
+      ctx.beginPath()
+      break
+
+    case 'closePath':
+      ctx.closePath()
+      break
+
+    case 'fillPath':
+      ctx.fillStyle = getFillColor(params)
+      ctx.fill()
+      break
+
+    case 'strokePath':
+      ctx.strokeStyle = getStrokeColor(params)
+      ctx.lineWidth = getLineWidth(params)
+      ctx.stroke()
+      break
+
+    case 'clip':
+      ctx.clip()
+      break
 
     case 'path': {
       const pathData = params.d as string | undefined
@@ -850,6 +980,137 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
       break
     }
 
+    // ========== 文字绘制 ==========
+    case 'text':
+    case 'fillText': {
+      ctx.font = (params.font as string) || '16px Arial'
+      ctx.fillStyle = getFillColor(params, '#000000')
+      ctx.textAlign = (params.align as CanvasTextAlign) || 'left'
+      ctx.textBaseline = (params.baseline as CanvasTextBaseline) || 'top'
+      const text = String(params.text ?? '')
+      const textX = (params.x as number) ?? 0
+      const textY = (params.y as number) ?? 0
+      if (params.maxWidth !== undefined) {
+        ctx.fillText(text, textX, textY, params.maxWidth as number)
+      } else {
+        ctx.fillText(text, textX, textY)
+      }
+      break
+    }
+
+    case 'strokeText': {
+      ctx.font = (params.font as string) || '16px Arial'
+      ctx.strokeStyle = getStrokeColor(params, '#000000')
+      ctx.lineWidth = getLineWidth(params)
+      ctx.textAlign = (params.align as CanvasTextAlign) || 'left'
+      ctx.textBaseline = (params.baseline as CanvasTextBaseline) || 'top'
+      const text = String(params.text ?? '')
+      const textX = (params.x as number) ?? 0
+      const textY = (params.y as number) ?? 0
+      if (params.maxWidth !== undefined) {
+        ctx.strokeText(text, textX, textY, params.maxWidth as number)
+      } else {
+        ctx.strokeText(text, textX, textY)
+      }
+      break
+    }
+
+    // ========== 图像操作 ==========
+    case 'drawImage': {
+      const src = params.src as string | undefined
+      const imageId = params.imageId as string | undefined
+      if (!src && !imageId) break
+
+      // 获取图片数据
+      let imageSrc = src
+      if (imageId) {
+        const canvasStore = useCanvasStore()
+        const canvasData = canvasStore.canvases.get(imageId)
+        if (canvasData) {
+          imageSrc = canvasData.dataUrl
+        }
+      }
+
+      if (!imageSrc) break
+
+      // 创建图片并绘制
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      img.onload = () => {
+        const dx = (params.dx as number) ?? (params.x as number) ?? 0
+        const dy = (params.dy as number) ?? (params.y as number) ?? 0
+        const dWidth = (params.dWidth as number) ?? (params.width as number) ?? img.width
+        const dHeight = (params.dHeight as number) ?? (params.height as number) ?? img.height
+
+        // 支持裁剪参数
+        if (params.sx !== undefined) {
+          ctx.drawImage(
+            img,
+            (params.sx as number) ?? 0,
+            (params.sy as number) ?? 0,
+            (params.sWidth as number) ?? img.width,
+            (params.sHeight as number) ?? img.height,
+            dx, dy, dWidth, dHeight
+          )
+        } else {
+          ctx.drawImage(img, dx, dy, dWidth, dHeight)
+        }
+      }
+      img.src = imageSrc
+      break
+    }
+
+    // ========== 渐变与图案 ==========
+    case 'linearGradient': {
+      const x0 = (params.x0 as number) ?? 0
+      const y0 = (params.y0 as number) ?? 0
+      const x1 = (params.x1 as number) ?? 100
+      const y1 = (params.y1 as number) ?? 100
+      const stops = params.stops as Array<{ offset: number; color: string }> | undefined
+
+      const gradient = ctx.createLinearGradient(x0, y0, x1, y1)
+      if (stops && Array.isArray(stops)) {
+        for (const stop of stops) {
+          gradient.addColorStop(stop.offset, stop.color)
+        }
+      }
+
+      // 应用渐变到后续操作
+      if (params.applyTo === 'fill' || !params.applyTo) {
+        ctx.fillStyle = gradient
+      }
+      if (params.applyTo === 'stroke') {
+        ctx.strokeStyle = gradient
+      }
+      break
+    }
+
+    case 'radialGradient': {
+      const x0 = (params.x0 as number) ?? 50
+      const y0 = (params.y0 as number) ?? 50
+      const r0 = (params.r0 as number) ?? 0
+      const x1 = (params.x1 as number) ?? 50
+      const y1 = (params.y1 as number) ?? 50
+      const r1 = (params.r1 as number) ?? 50
+      const stops = params.stops as Array<{ offset: number; color: string }> | undefined
+
+      const gradient = ctx.createRadialGradient(x0, y0, r0, x1, y1, r1)
+      if (stops && Array.isArray(stops)) {
+        for (const stop of stops) {
+          gradient.addColorStop(stop.offset, stop.color)
+        }
+      }
+
+      if (params.applyTo === 'fill' || !params.applyTo) {
+        ctx.fillStyle = gradient
+      }
+      if (params.applyTo === 'stroke') {
+        ctx.strokeStyle = gradient
+      }
+      break
+    }
+
+    // ========== 样式设置 ==========
     case 'setStyle':
       if (params.fillStyle !== undefined) ctx.fillStyle = params.fillStyle as string
       if (params.strokeStyle !== undefined) ctx.strokeStyle = params.strokeStyle as string
@@ -858,9 +1119,21 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
       if (params.lineJoin !== undefined) ctx.lineJoin = params.lineJoin as CanvasLineJoin
       if (params.font !== undefined) ctx.font = params.font as string
       if (params.globalAlpha !== undefined) ctx.globalAlpha = params.globalAlpha as number
+      if (params.globalCompositeOperation !== undefined) ctx.globalCompositeOperation = params.globalCompositeOperation as GlobalCompositeOperation
+      if (params.textAlign !== undefined) ctx.textAlign = params.textAlign as CanvasTextAlign
+      if (params.textBaseline !== undefined) ctx.textBaseline = params.textBaseline as CanvasTextBaseline
+      if (params.direction !== undefined) ctx.direction = params.direction as CanvasDirection
+      // 阴影设置
+      if (params.shadowBlur !== undefined) ctx.shadowBlur = params.shadowBlur as number
+      if (params.shadowColor !== undefined) ctx.shadowColor = params.shadowColor as string
+      if (params.shadowOffsetX !== undefined) ctx.shadowOffsetX = params.shadowOffsetX as number
+      if (params.shadowOffsetY !== undefined) ctx.shadowOffsetY = params.shadowOffsetY as number
+      // 线条虚线
+      if (params.lineDash !== undefined) ctx.setLineDash(params.lineDash as number[])
+      if (params.lineDashOffset !== undefined) ctx.lineDashOffset = params.lineDashOffset as number
       // 也支持 style 对象中的值
       if (params.style && typeof params.style === 'object') {
-        const style = params.style as CanvasOperation['style']
+        const style = params.style as { fill?: string; fillStyle?: string; stroke?: string; strokeStyle?: string; lineWidth?: number; font?: string }
         if (style?.fill) ctx.fillStyle = style.fill
         if (style?.fillStyle) ctx.fillStyle = style.fillStyle
         if (style?.stroke) ctx.strokeStyle = style.stroke
@@ -870,6 +1143,7 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
       }
       break
 
+    // ========== 变形操作 ==========
     case 'translate':
       ctx.translate((params.x as number) ?? 0, (params.y as number) ?? 0)
       break
@@ -882,6 +1156,38 @@ function executeCanvasOperation(ctx: CanvasRenderingContext2D, op: CanvasOperati
       ctx.scale((params.x as number) ?? 1, (params.y as number) ?? 1)
       break
 
+    case 'transform':
+      ctx.transform(
+        (params.a as number) ?? 1,
+        (params.b as number) ?? 0,
+        (params.c as number) ?? 0,
+        (params.d as number) ?? 1,
+        (params.e as number) ?? 0,
+        (params.f as number) ?? 0
+      )
+      break
+
+    case 'setTransform':
+      if (params.matrix !== undefined) {
+        const m = params.matrix as number[]
+        ctx.setTransform(m[0] ?? 1, m[1] ?? 0, m[2] ?? 0, m[3] ?? 1, m[4] ?? 0, m[5] ?? 0)
+      } else {
+        ctx.setTransform(
+          (params.a as number) ?? 1,
+          (params.b as number) ?? 0,
+          (params.c as number) ?? 0,
+          (params.d as number) ?? 1,
+          (params.e as number) ?? 0,
+          (params.f as number) ?? 0
+        )
+      }
+      break
+
+    case 'resetTransform':
+      ctx.resetTransform()
+      break
+
+    // ========== 状态保存/恢复 ==========
     case 'save':
       ctx.save()
       break

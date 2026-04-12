@@ -102,6 +102,30 @@ func (r *LogDetailRepository) UpdateResponseBody(ctx context.Context, logID uint
 		Update("responseBody", responseBody).Error
 }
 
+// GetDistinctModels returns all distinct model names from logs
+func (r *LogRepository) GetDistinctModels(ctx context.Context) ([]string, error) {
+	var modelNames []string
+	err := r.db.WithContext(ctx).
+		Model(&models.Log{}).
+		Where("modelName IS NOT NULL AND modelName != ''").
+		Distinct("modelName").
+		Order("modelName ASC").
+		Pluck("modelName", &modelNames).Error
+	return modelNames, err
+}
+
+// GetDistinctProviders returns all distinct provider names from logs
+func (r *LogRepository) GetDistinctProviders(ctx context.Context) ([]string, error) {
+	var providerNames []string
+	err := r.db.WithContext(ctx).
+		Model(&models.Log{}).
+		Where("providerName IS NOT NULL AND providerName != ''").
+		Distinct("providerName").
+		Order("providerName ASC").
+		Pluck("providerName", &providerNames).Error
+	return providerNames, err
+}
+
 type SettingsRepository struct {
 	db *gorm.DB
 }

@@ -11,8 +11,12 @@
 
     <!-- Filters -->
     <div class="flex flex-wrap gap-2 items-center text-sm">
-      <el-input v-model="filters.model" placeholder="模型" clearable class="!w-32 sm:!w-40" size="small" />
-      <el-input v-model="filters.provider" placeholder="提供商" clearable class="!w-24 sm:!w-32" size="small" />
+      <el-select v-model="filters.model" placeholder="模型" clearable filterable class="!w-32 sm:!w-40" size="small">
+        <el-option v-for="model in filterOptions.models" :key="model" :label="model" :value="model" />
+      </el-select>
+      <el-select v-model="filters.provider" placeholder="提供商" clearable filterable class="!w-24 sm:!w-32" size="small">
+        <el-option v-for="provider in filterOptions.providers" :key="provider" :label="provider" :value="provider" />
+      </el-select>
       <el-select v-model="filters.status" placeholder="状态" clearable class="!w-20 sm:!w-24" size="small">
         <el-option label="成功" value="success" />
         <el-option label="错误" value="error" />
@@ -89,7 +93,7 @@
     </div>
 
     <!-- Pagination -->
-    <div v-if="logs.length > 0" class="flex justify-center mt-6">
+    <div v-if="pagination.total > 0 || hasFilters" class="flex justify-center mt-6">
       <el-pagination
         v-model:current-page="pagination.page"
         v-model:page-size="pagination.pageSize"
@@ -532,6 +536,7 @@ onMounted(() => {
   checkMobile()
   window.addEventListener('resize', checkMobile)
   fetchLogs()
+  fetchFilterOptions()
 })
 
 onUnmounted(() => {
@@ -550,6 +555,28 @@ const filters = reactive({
   status: '',
   dateRange: null as [Date, Date] | null
 })
+
+// 筛选器选项（从后端获取）
+const filterOptions = reactive({
+  models: [] as string[],
+  providers: [] as string[]
+})
+
+// 计算是否有筛选条件
+const hasFilters = computed(() => {
+  return filters.model || filters.provider || filters.status || filters.dateRange
+})
+
+// 获取筛选器选项
+const fetchFilterOptions = async () => {
+  try {
+    const response = await logApi.getFilters()
+    filterOptions.models = response.data.models || []
+    filterOptions.providers = response.data.providers || []
+  } catch (error) {
+    console.error('Failed to fetch filter options:', error)
+  }
+}
 
 const formatDate = (date: string) => dayjs(date).format('YYYY-MM-DD HH:mm:ss')
 const formatNumber = (num: number | undefined) => (num || 0).toLocaleString()

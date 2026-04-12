@@ -153,7 +153,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     id: 'web_canvas',
     name: 'web_canvas',
-    description: '在Canvas画布上进行绘图，支持矩形、圆形、线条、多边形、文本等。绘制结果直接在页面上显示。',
+    description: 'HTML5 Canvas 绘图工具，支持完整的 2D 绘图功能。绘制结果直接在页面上显示。',
     type: 'builtin',
     enabled: true,
     parameters: {
@@ -169,39 +169,75 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
         },
         backgroundColor: {
           type: 'string',
-          description: '背景颜色，如 #ffffff(白色)、#000000(黑色)、transparent(透明)，默认白色'
+          description: '背景颜色，如 #ffffff(白色)、transparent(透明)，默认白色'
         },
         operations: {
           type: 'array',
-          description: `绘制操作数组。每个操作需显式设置 fill:true 填充或 stroke:true 描边。
-支持类型：rect(矩形), circle(圆), ellipse(椭圆), line(线), polygon(多边形), text(文本), arc(弧), bezier(贝塞尔曲线), setStyle(设置样式), translate/rotate/scale/save/restore(变换), clear(清空)`,
+          description: `绘图操作数组。每个操作是一个对象，包含 type 字段指定操作类型。
+
+【基础形状】
+- rect: 矩形 {x,y,width,height,fill,stroke,lineWidth}
+- roundRect: 圆角矩形 {x,y,width,height,radius/radii,fill,stroke,lineWidth}
+- circle: 圆形 {x,y,radius,startAngle,endAngle,fill,stroke,lineWidth}
+- ellipse: 椭圆 {x,y,radiusX,radiusY,rotation,startAngle,endAngle,fill,stroke,lineWidth}
+- arc: 弧 {x,y,radius,startAngle,endAngle,fill,stroke,lineWidth}
+- arcTo: 弧线 {x1,y1,x2,y2,x3,y3,radius,stroke,lineWidth}
+
+【线条路径】
+- line: 线段 {x1,y1,x2,y2,stroke,lineWidth}
+- moveTo: 移动路径点 {x,y} - 用于 beginPath 后
+- lineTo: 添加线段点 {x,y} - 用于 moveTo 后
+- polyline: 折线 {points:[{x,y}],stroke,lineWidth}
+- polygon: 多边形 {points:[{x,y}],fill,stroke,lineWidth}
+- bezier/quadraticCurveTo: 贝塞尔曲线 {cpx,cpy,x,y,stroke} 或 {cp1x,cp1y,cp2x,cp2y,x,y}
+- path: SVG路径 {d:"M 0 0 L 100 100",fill,stroke}
+
+【路径操作】
+- beginPath: 开始新路径
+- closePath: 关闭当前路径
+- fillPath: 填充当前路径 {fill}
+- strokePath: 描边当前路径 {stroke,lineWidth}
+- clip: 裁剪路径
+
+【文字】
+- fillText: 填充文字 {text,x,y,font,fill,align,baseline,maxWidth}
+- strokeText: 描边文字 {text,x,y,font,stroke,lineWidth,align,baseline,maxWidth}
+
+【图像】
+- drawImage: 绘制图片 {src/imageId,x,y,width,height,sx,sy,sWidth,sHeight}
+
+【渐变】
+- linearGradient: 线性渐变 {x0,y0,x1,y1,stops:[{offset,color}],applyTo:"fill|stroke"}
+- radialGradient: 径向渐变 {x0,y0,r0,x1,y1,r1,stops:[{offset,color}],applyTo}
+
+【样式设置】
+- setStyle: 设置样式 {fillStyle,strokeStyle,lineWidth,lineCap,lineJoin,font,globalAlpha,globalCompositeOperation,shadowBlur,shadowColor,shadowOffsetX,shadowOffsetY,lineDash,lineDashOffset,textAlign,textBaseline}
+
+【变形】
+- translate: 平移 {x,y}
+- rotate: 旋转 {angle} - angle 为弧度
+- scale: 缩放 {x,y}
+- transform/setTransform: 矩阵变换 {a,b,c,d,e,f} 或 {matrix:[a,b,c,d,e,f]}
+- resetTransform: 重置变换
+
+【状态】
+- save: 保存当前状态
+- restore: 恢复上次保存的状态
+
+【清空】
+- clear/clearRect: 清空区域 {x,y,width,height}
+
+通用参数说明：
+- fill: 填充颜色或 true(使用默认色)
+- stroke: 描边颜色或 true(使用默认色)
+- lineWidth: 线条宽度，默认1
+- globalCompositeOperation: 合成模式，如 "source-over","multiply","screen","overlay"`,
           items: {
             type: 'object'
           }
         }
       },
       required: ['operations']
-    }
-  },
-  {
-    id: 'execute_javascript',
-    name: 'execute_javascript',
-    description: '执行 JavaScript 代码并返回结果。代码中的 console.log/console.warn/console.error 输出会被捕获并返回。支持 async/await。',
-    type: 'builtin',
-    enabled: true,
-    parameters: {
-      type: 'object',
-      properties: {
-        code: {
-          type: 'string',
-          description: '要执行的 JavaScript 代码，使用 return 返回结果'
-        },
-        timeout: {
-          type: 'number',
-          description: '执行超时时间(毫秒)，默认5000，最大30000'
-        }
-      },
-      required: ['code']
     }
   },
   {

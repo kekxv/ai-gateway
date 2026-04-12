@@ -302,6 +302,7 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 
 	// Logs and stats
 	admin.GET("/logs", deps.LogHandler.ListLogs)
+	admin.GET("/logs/filters", deps.LogHandler.GetLogFilters)
 	admin.GET("/logs/:id", deps.LogHandler.GetLogDetail)
 	admin.GET("/stats", deps.StatsHandler.GetStats)
 	admin.DELETE("/cleanup/log-details", middleware.RequireRole("ADMIN"), deps.LogHandler.CleanupLogDetails)

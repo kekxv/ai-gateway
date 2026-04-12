@@ -101,6 +101,28 @@ func (h *LogHandler) CleanupLogDetails(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Log details cleaned up"})
 }
 
+// GetLogFilters returns distinct model names and provider names from logs for filter dropdowns
+func (h *LogHandler) GetLogFilters(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	models, err := h.logRepo.GetDistinctModels(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	providers, err := h.logRepo.GetDistinctProviders(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"models":    models,
+		"providers": providers,
+	})
+}
+
 // StatsHandler
 type StatsHandler struct {
 	logRepo      *repository.LogRepository

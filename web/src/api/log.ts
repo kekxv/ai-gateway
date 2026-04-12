@@ -1,5 +1,5 @@
 import { api } from './index'
-import type { LogDetailResponse, LogListResponse } from '@/types/log'
+import type { LogDetailResponse, LogListResponse, LogFilterOptionsResponse } from '@/types/log'
 
 export const logApi = {
   // List logs with pagination
@@ -17,6 +17,10 @@ export const logApi = {
   // Get log detail (returns { log, detail })
   getDetail: (id: number) =>
     api.get<LogDetailResponse>(`/logs/${id}`),
+
+  // Get filter options (distinct models and providers from logs)
+  getFilters: () =>
+    api.get<LogFilterOptionsResponse>('/logs/filters'),
 
   // Cleanup log details (admin only)
   cleanup: (days?: number) =>
