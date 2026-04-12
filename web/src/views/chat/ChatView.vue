@@ -490,6 +490,10 @@
                       <span class="option-label">低</span>
                       <span class="option-desc">轻度思考</span>
                     </el-dropdown-item>
+                    <el-dropdown-item command="minimal" :class="{ 'is-active': thinkingMode === 'minimal' }">
+                      <span class="option-label">最小</span>
+                      <span class="option-desc">Gemini MINIMAL</span>
+                    </el-dropdown-item>
                     <el-dropdown-item command="none" :class="{ 'is-active': thinkingMode === 'none' }">
                       <span class="option-label">不开</span>
                       <span class="option-desc">禁用思考</span>
@@ -568,7 +572,7 @@ import {
   Edit, RefreshRight, DocumentCopy, Collection, Check, Cpu
 } from '@element-plus/icons-vue'
 import { conversationApi, modelApi } from '@/api/conversation'
-import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart, ChatRequest, ChatMessage } from '@/types/conversation'
+import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart, ChatRequest, ChatMessage, OpenAIReasoningEffort, GeminiThinkingLevel } from '@/types/conversation'
 import { PRESET_PROMPTS } from '@/types/conversation'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ThinkBlock from '@/components/chat/ThinkBlock.vue'
@@ -854,7 +858,7 @@ const settingsForm = reactive<ConversationSettings & { system_prompt: string }>(
 })
 
 // Thinking/reasoning effort mode
-type ThinkingMode = 'auto' | 'high' | 'medium' | 'low' | 'none'
+type ThinkingMode = 'auto' | 'high' | 'medium' | 'low' | 'minimal' | 'none'
 const thinkingMode = ref<ThinkingMode>('auto')
 
 const thinkingModeLabel = computed(() => {
@@ -863,6 +867,7 @@ const thinkingModeLabel = computed(() => {
     high: '高',
     medium: '中',
     low: '低',
+    minimal: '最小',
     none: '不开'
   }
   return labels[thinkingMode.value]
@@ -872,10 +877,49 @@ const setThinkingMode = (mode: ThinkingMode) => {
   thinkingMode.value = mode
 }
 
-// Get reasoning_effort value for API request
-const getReasoningEffort = (): 'high' | 'medium' | 'low' | 'none' | undefined => {
+// Get thinking config for API request - supports both OpenAI and Gemini formats
+const getThinkingConfig = (): { reasoning_effort?: OpenAIReasoningEffort; generationConfig?: { thinkingConfig?: { thinkingLevel?: GeminiThinkingLevel } } } | undefined => {
   if (thinkingMode.value === 'auto') return undefined
-  return thinkingMode.value as 'high' | 'medium' | 'low' | 'none'
+
+  // OpenAI format: reasoning_effort
+  const reasoningEffortMap: Record<ThinkingMode, OpenAIReasoningEffort | undefined> = {
+    auto: undefined,
+    high: 'high',
+    medium: 'medium',
+    low: 'low',
+    minimal: undefined,  // minimal only for Gemini
+    none: 'none'
+  }
+
+  // Gemini format: thinkingLevel
+  const thinkingLevelMap: Record<ThinkingMode, GeminiThinkingLevel | undefined> = {
+    auto: undefined,
+    high: 'HIGH',
+    medium: 'MEDIUM',
+    low: 'LOW',
+    minimal: 'MINIMAL',
+    none: 'NONE'
+  }
+
+  const effort = reasoningEffortMap[thinkingMode.value]
+  const level = thinkingLevelMap[thinkingMode.value]
+
+  return {
+    reasoning_effort: effort,
+    generationConfig: level ? { thinkingConfig: { thinkingLevel: level } } : undefined
+  }
+}
+
+// Build request with thinking config
+const buildRequestWithThinking = (baseRequest: ChatRequest): ChatRequest => {
+  const thinkingConfig = getThinkingConfig()
+  if (!thinkingConfig) return baseRequest
+
+  return {
+    ...baseRequest,
+    reasoning_effort: thinkingConfig.reasoning_effort,
+    generationConfig: thinkingConfig.generationConfig
+  }
 }
 
 // Check mobile
@@ -960,15 +1004,14 @@ const regenerateFromUser = async (userIndex: number) => {
 
   // Send the message
   sending.value = true
-  await streamWithToolCalls(currentConversation.value.id, {
+  await streamWithToolCalls(currentConversation.value.id, buildRequestWithThinking({
     model: selectedModel.value,
     messages: messagesForApi,
     stream: true,
     temperature: settingsForm.temperature,
     max_tokens: settingsForm.max_tokens,
-    tools: toolsStore.getToolsForModel(),
-    reasoning_effort: getReasoningEffort()
-  })
+    tools: toolsStore.getToolsForModel()
+  }))
 }
 
 // Start editing a text block
@@ -1078,15 +1121,14 @@ const confirmEditBlock = async () => {
 
   // 发送消息
   sending.value = true
-  await streamWithToolCalls(currentConversation.value.id, {
+  await streamWithToolCalls(currentConversation.value.id, buildRequestWithThinking({
     model: selectedModel.value,
     messages: messagesForApi,
     stream: true,
     temperature: settingsForm.temperature,
     max_tokens: settingsForm.max_tokens,
-    tools: toolsStore.getToolsForModel(),
-    reasoning_effort: getReasoningEffort()
-  })
+    tools: toolsStore.getToolsForModel()
+  }))
 }
 
 // Delete a single message (and all messages after it)
@@ -1404,15 +1446,14 @@ const sendMessage = async () => {
 
   // Start the streaming loop with tool call support
   sending.value = true
-  await streamWithToolCalls(currentConversation.value.id, {
+  await streamWithToolCalls(currentConversation.value.id, buildRequestWithThinking({
     model: selectedModel.value,
     messages: messagesForApi,
     stream: true,
     temperature: settingsForm.temperature,
     max_tokens: settingsForm.max_tokens,
-    tools: toolsStore.getToolsForModel(),
-    reasoning_effort: getReasoningEffort()
-  })
+    tools: toolsStore.getToolsForModel()
+  }))
 }
 
 // Helper function to save assistant message to backend
@@ -1712,15 +1753,14 @@ const streamWithToolCalls = async (
           // Send tool results back to AI and continue streaming
           await streamWithToolCalls(
             conversationId,
-            {
+            buildRequestWithThinking({
               model: selectedModel.value,
               messages: messagesForApi,
               stream: true,
               temperature: settingsForm.temperature,
               max_tokens: settingsForm.max_tokens,
-              tools: toolsStore.getToolsForModel(),
-              reasoning_effort: getReasoningEffort()
-            },
+              tools: toolsStore.getToolsForModel()
+            }),
             iteration + 1
           ).catch(console.error)
           resolve()
@@ -1847,15 +1887,14 @@ const streamWithToolCalls = async (
       // Send tool results back to AI and continue streaming
       await streamWithToolCalls(
         conversationId,
-        {
+        buildRequestWithThinking({
           model: selectedModel.value,
           messages: messagesForApi,
           stream: true,
           temperature: settingsForm.temperature,
           max_tokens: settingsForm.max_tokens,
-          tools: toolsStore.getToolsForModel(),
-          reasoning_effort: getReasoningEffort()
-        },
+          tools: toolsStore.getToolsForModel()
+        }),
         iteration + 1
       ).catch(console.error)
     }

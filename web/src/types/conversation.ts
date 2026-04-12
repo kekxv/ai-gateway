@@ -58,6 +58,10 @@ export interface ChatContentPart {
   image_url?: { url: string; detail?: string }
 }
 
+// Thinking level types
+export type OpenAIReasoningEffort = 'high' | 'medium' | 'low' | 'none'
+export type GeminiThinkingLevel = 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH' | 'NONE'
+
 // ChatRequest - OpenAI-compatible format (frontend builds full request)
 export interface ChatRequest {
   model: string                              // Required: model name
@@ -74,7 +78,12 @@ export interface ChatRequest {
     }
   }>
   enable_thinking?: boolean                  // Deprecated: use reasoning_effort instead
-  reasoning_effort?: 'high' | 'medium' | 'low' | 'none'  // Thinking/reasoning effort level
+  reasoning_effort?: OpenAIReasoningEffort   // OpenAI thinking/reasoning effort level
+  generationConfig?: {                       // Gemini generation config
+    thinkingConfig?: {
+      thinkingLevel?: GeminiThinkingLevel
+    }
+  }
 }
 
 // ChatMessage for OpenAI-compatible format

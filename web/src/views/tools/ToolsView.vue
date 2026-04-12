@@ -237,7 +237,10 @@ return { city, temperature: data.temp, weather: data.weather };"
                 <el-tag size="small">{{ prop.type }}</el-tag>
                 <el-tag v-if="isRequired(name)" size="small" type="warning">{{ t('tool.required') }}</el-tag>
               </div>
-              <p class="param-detail-desc">{{ prop.description || '-' }}</p>
+              <div v-if="prop.description" class="param-detail-desc">
+                <MarkdownRenderer :content="prop.description" />
+              </div>
+              <p v-else class="param-detail-desc-empty">-</p>
               <div v-if="prop.enum" class="param-detail-extra">
                 <span class="extra-label">{{ t('tool.enumValues') }}</span>
                 <span class="extra-value">{{ prop.enum.join(', ') }}</span>
@@ -270,6 +273,7 @@ import { Plus, Delete, VideoPlay } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { useToolsStore } from '@/stores/tools'
 import type { ToolDefinition, SchemaProperty } from '@/types/tool'
+import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 
 const { t } = useI18n()
 const toolsStore = useToolsStore()
@@ -947,7 +951,55 @@ const deleteTool = async (tool: ToolDefinition) => {
 .param-detail-desc {
   font-size: 13px;
   color: #6b7280;
-  margin: 0;
+  margin-top: 6px;
+}
+
+.param-detail-desc :deep(.markdown-content) {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.param-detail-desc :deep(.markdown-content p) {
+  margin: 0 0 8px 0;
+}
+
+.param-detail-desc :deep(.markdown-content p:last-child) {
+  margin-bottom: 0;
+}
+
+.param-detail-desc :deep(.markdown-content ul),
+.param-detail-desc :deep(.markdown-content ol) {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.param-detail-desc :deep(.markdown-content li) {
+  margin: 2px 0;
+}
+
+.param-detail-desc :deep(.markdown-content code) {
+  font-size: 12px;
+  padding: 1px 4px;
+  background: #f1f5f9;
+  border-radius: 3px;
+}
+
+.param-detail-desc :deep(.markdown-content .code-block) {
+  margin: 8px 0;
+}
+
+.param-detail-desc :deep(.markdown-content .code-header) {
+  padding: 4px 10px;
+}
+
+.param-detail-desc :deep(.markdown-content pre) {
+  padding: 8px 10px;
+}
+
+.param-detail-desc-empty {
+  font-size: 13px;
+  color: #9ca3af;
+  margin: 6px 0 0 0;
 }
 
 .param-detail-extra {
