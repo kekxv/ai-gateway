@@ -1,54 +1,268 @@
 <template>
-  <div class="markdown-content" v-html="renderedContent"></div>
+  <div class="markdown-content">
+    <template v-for="(segment, index) in renderedSegments" :key="index">
+      <!-- Code block segment - render as Vue component -->
+      <CodeBlock
+        v-if="segment.type === 'code'"
+        :code="segment.code"
+        :language="segment.language"
+        :default-collapsed="segment.defaultCollapsed"
+      />
+      <!-- HTML segment - render via v-html -->
+      <div v-else-if="segment.type === 'html'" v-html="segment.html"></div>
+      <!-- Incomplete segment - show as plain text during streaming -->
+      <div v-else-if="segment.type === 'incomplete'" class="incomplete-text">{{ segment.text }}</div>
+    </template>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { marked } from 'marked'
-import hljs from 'highlight.js'
+import CodeBlock from './CodeBlock.vue'
+
+interface CodeSegment {
+  type: 'code'
+  code: string
+  language: string
+  defaultCollapsed: boolean
+}
+
+interface HtmlSegment {
+  type: 'html'
+  html: string
+}
+
+interface IncompleteSegment {
+  type: 'incomplete'
+  text: string
+}
+
+type Segment = CodeSegment | HtmlSegment | IncompleteSegment
 
 const props = defineProps<{
   content: string
+  streaming?: boolean  // 是否在流式输出中
 }>()
 
-// 配置 marked
+// Configure marked
 marked.setOptions({
   breaks: true,
   gfm: true
 })
 
-// 自定义渲染器
+// Custom renderer for links - open in new tab
 const renderer = new marked.Renderer()
 
-// 代码块渲染
-renderer.code = function({ text, lang }) {
-  const language = lang || ''
-  const highlighted = language && hljs.getLanguage(language)
-    ? hljs.highlight(text, { language }).value
-    : hljs.highlightAuto(text).value
-
-  return `<div class="code-block">
-    <div class="code-header">
-      <span class="code-lang">${language || 'code'}</span>
-      <button class="copy-btn" onclick="navigator.clipboard.writeText(this.closest('.code-block').querySelector('code').textContent)">复制</button>
-    </div>
-    <pre><code class="hljs ${language ? 'language-' + language : ''}">${highlighted}</code></pre>
-  </div>`
-}
-
-// 链接渲染 - 在新标签页打开
 renderer.link = function({ href, text }) {
   return `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`
 }
 
+// Inline code renderer
+renderer.codespan = function({ text }) {
+  return `<code>${text}</code>`
+}
+
 marked.use({ renderer })
 
-const renderedContent = computed(() => {
-  if (!props.content) return ''
+// 缓存已渲染的内容（key是原始文本）
+const renderedCache = ref(new Map<string, { type: 'code' | 'html', data: any }>())
+
+// 检测完整代码块的结束位置
+const findCompleteCodeBlocks = (content: string): { start: number, end: number, lang: string, code: string }[] => {
+  // 只匹配完整的代码块（有开始和结束的 ```）
+  const regex = /```(\w*)\n([\s\S]*?)```/g
+  const blocks: { start: number, end: number, lang: string, code: string }[] = []
+  let match
+
+  while ((match = regex.exec(content)) !== null) {
+    blocks.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      lang: match[1] || '',
+      code: match[2].trimEnd()
+    })
+  }
+
+  return blocks
+}
+
+// 检测是否有未闭合的代码块，返回其起始位置
+const findUnclosedCodeBlock = (content: string): { start: number, lang: string } | null => {
+  // 找最后一个 ``` 开始但未闭合的位置
+  const lastCodeBlockStart = content.lastIndexOf('```')
+  if (lastCodeBlockStart === -1) return null
+
+  // 检查这个 ``` 后面是否有闭合的 ```
+  // 需要检查从 lastCodeBlockStart 开始，后面是否有完整的闭合
+  const afterStart = content.slice(lastCodeBlockStart)
+
+  // 更精确的判断：从 lastCodeBlockStart 开始，找下一个 ```
+  const nextTripleBackticks = afterStart.indexOf('```', 3) // 从 ``` 后面开始找
+  if (nextTripleBackticks === -1) {
+    // 没有找到闭合的 ```
+    const langMatch = afterStart.match(/^```(\w*)\n?/)
+    return {
+      start: lastCodeBlockStart,
+      lang: langMatch ? langMatch[1] || '' : ''
+    }
+  }
+
+  return null
+}
+
+// 增量解析：将内容分为已完成和未完成部分
+const parseIncremental = (content: string): Segment[] => {
+  if (!content) return []
+
+  const segments: Segment[] = []
+
+  // 1. 先找出所有完整的代码块
+  const completeBlocks = findCompleteCodeBlocks(content)
+
+  // 2. 检测是否有未闭合的代码块
+  const unclosedBlock = findUnclosedCodeBlock(content)
+
+  // 3. 构建内容区间
+  // 已完成区间：从 0 到最后一个完整代码块的结束位置（或未闭合代码块的开始位置）
+  let completeEndIndex = content.length
+
+  if (unclosedBlock) {
+    // 有未闭合代码块，已完成部分截止到未闭合代码块开始前
+    completeEndIndex = unclosedBlock.start
+  } else if (completeBlocks.length > 0) {
+    // 有完整代码块，检查最后一个完整代码块后面是否还有内容
+    // 最后一个完整代码块后的内容也算已完成（因为没有未闭合的代码块）
+    completeEndIndex = content.length
+  }
+
+  // 4. 解析已完成部分
+  let lastIndex = 0
+
+  for (const block of completeBlocks) {
+    // 添加代码块之前的HTML内容
+    if (block.start > lastIndex && block.start < completeEndIndex) {
+      const htmlContent = content.slice(lastIndex, block.start)
+      if (htmlContent.trim()) {
+        // 检查缓存
+        const cached = renderedCache.value.get(htmlContent)
+        if (cached && cached.type === 'html') {
+          segments.push({ type: 'html', html: cached.data })
+        } else {
+          const renderedHtml = marked.parse(htmlContent) as string
+          if (renderedHtml.trim()) {
+            renderedCache.value.set(htmlContent, { type: 'html', data: renderedHtml })
+            segments.push({ type: 'html', html: renderedHtml })
+          }
+        }
+      }
+    }
+
+    // 添加代码块
+    segments.push({
+      type: 'code',
+      code: block.code,
+      language: block.lang,
+      defaultCollapsed: false
+    })
+
+    lastIndex = block.end
+  }
+
+  // 5. 添加最后一个完整代码块之后到 completeEndIndex 之间的HTML内容
+  if (lastIndex < completeEndIndex) {
+    const htmlContent = content.slice(lastIndex, completeEndIndex)
+    if (htmlContent.trim()) {
+      const cached = renderedCache.value.get(htmlContent)
+      if (cached && cached.type === 'html') {
+        segments.push({ type: 'html', html: cached.data })
+      } else {
+        const renderedHtml = marked.parse(htmlContent) as string
+        if (renderedHtml.trim()) {
+          renderedCache.value.set(htmlContent, { type: 'html', data: renderedHtml })
+          segments.push({ type: 'html', html: renderedHtml })
+        }
+      }
+    }
+  }
+
+  // 6. 添加未完成部分（纯文本显示）
+  const incompleteContent = content.slice(completeEndIndex)
+  if (incompleteContent.trim()) {
+    segments.push({ type: 'incomplete', text: incompleteContent })
+  }
+
+  return segments
+}
+
+// 完整解析：非流式时正常渲染所有内容
+const parseComplete = (content: string): Segment[] => {
+  const segments: Segment[] = []
+
+  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g
+
+  let lastIndex = 0
+  let match
+
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    // Add HTML content before this code block
+    if (match.index > lastIndex) {
+      const htmlContent = content.slice(lastIndex, match.index)
+      const renderedHtml = marked.parse(htmlContent) as string
+      if (renderedHtml.trim()) {
+        segments.push({
+          type: 'html',
+          html: renderedHtml
+        })
+      }
+    }
+
+    // Add code block segment
+    const language = match[1] || ''
+    const code = match[2].trimEnd()
+    segments.push({
+      type: 'code',
+      code,
+      language,
+      defaultCollapsed: false
+    })
+
+    lastIndex = match.index + match[0].length
+  }
+
+  // Add remaining HTML content after last code block
+  if (lastIndex < content.length) {
+    const htmlContent = content.slice(lastIndex)
+    const renderedHtml = marked.parse(htmlContent) as string
+    if (renderedHtml.trim()) {
+      segments.push({
+        type: 'html',
+        html: renderedHtml
+      })
+    }
+  }
+
+  return segments
+}
+
+const renderedSegments = computed(() => {
+  if (!props.content) return []
   try {
-    return marked.parse(props.content) as string
+    // 流式输出时使用增量解析，非流式时使用完整解析
+    if (props.streaming) {
+      return parseIncremental(props.content)
+    } else {
+      return parseComplete(props.content)
+    }
   } catch {
-    return props.content
+    return [{ type: 'html' as const, html: props.content }]
+  }
+})
+
+// 当 streaming 变为 false 时，清空缓存（准备下次流式输出）
+watch(() => props.streaming, (newVal) => {
+  if (newVal === false) {
+    renderedCache.value.clear()
   }
 })
 </script>
@@ -57,6 +271,10 @@ const renderedContent = computed(() => {
 .markdown-content {
   line-height: 1.7;
   word-break: break-word;
+}
+
+.markdown-content > div:not(.code-block-wrapper) {
+  /* Only apply to non-code-block divs */
 }
 
 .markdown-content p {
@@ -128,73 +346,19 @@ const renderedContent = computed(() => {
   text-decoration: underline;
 }
 
-/* 代码块样式 */
-.markdown-content .code-block {
-  margin: 12px 0;
-  border-radius: 8px;
-  overflow: hidden;
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
-}
-
-.markdown-content .code-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 12px;
-  background: #f3f4f6;
-  color: #6b7280;
-  font-size: 12px;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.markdown-content .copy-btn {
-  padding: 2px 8px;
-  background: #e5e7eb;
-  color: #374151;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.markdown-content .copy-btn:hover {
-  background: #d1d5db;
-}
-
-.markdown-content pre {
-  margin: 0;
-  padding: 16px;
-  overflow-x: auto;
-}
-
-.markdown-content code {
-  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
-  font-size: 14px;
-  line-height: 1.5;
-}
-
+/* Inline code style */
 .markdown-content :not(pre) > code {
   padding: 2px 6px;
   background: #f1f5f9;
   border-radius: 4px;
   color: #e11d48;
   font-size: 0.9em;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
 }
 
-/* Highlight.js 主题调整 - 亮色主题 */
-.markdown-content .hljs {
-  background: transparent;
-  color: #374151;
+/* Incomplete text style during streaming */
+.incomplete-text {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
-
-.markdown-content .hljs-keyword { color: #d73a49; }
-.markdown-content .hljs-string { color: #032f62; }
-.markdown-content .hljs-number { color: #005cc5; }
-.markdown-content .hljs-function { color: #6f42c1; }
-.markdown-content .hljs-comment { color: #6a737d; }
-.markdown-content .hljs-variable { color: #e36209; }
-.markdown-content .hljs-title { color: #6f42c1; }
-.markdown-content .hljs-params { color: #24292e; }
-.markdown-content .hljs-built_in { color: #005cc5; }
 </style>

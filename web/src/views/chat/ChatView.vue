@@ -288,7 +288,7 @@
 
                 <!-- Streaming Markdown Content -->
                 <div v-if="throttledStreamingContent.trim()" class="assistant-bubble">
-                  <MarkdownRenderer :content="throttledStreamingContent" />
+                  <MarkdownRenderer :content="throttledStreamingContent" :streaming="sending" />
                   <span class="cursor" v-if="sending">▌</span>
                 </div>
               </div>
@@ -697,8 +697,9 @@ const messagesAreaRef = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
-// Scroll state - track if user is at bottom
+// Scroll state - track if user is at bottom and if user scrolled during output
 const isUserAtBottom = ref(true)
+const userHasScrolledDuringOutput = ref(false)
 
 // Attached files state
 interface AttachedFile {
@@ -987,6 +988,7 @@ const regenerateFromUser = async (userIndex: number) => {
   }
   messages.value.push(tempUserMsg)
   isUserAtBottom.value = true
+  userHasScrolledDuringOutput.value = false
 
   // Save user message to database
   try {
@@ -1104,6 +1106,7 @@ const confirmEditBlock = async () => {
   }
   messages.value.push(tempUserMsg)
   isUserAtBottom.value = true
+  userHasScrolledDuringOutput.value = false
 
   // Save user message to database
   try {
@@ -1428,6 +1431,7 @@ const sendMessage = async () => {
   messages.value.push(tempUserMsg)
   // User is sending a message, force scroll to bottom
   isUserAtBottom.value = true
+  userHasScrolledDuringOutput.value = false
   scrollToBottom()
 
   // Save user message to database first
@@ -1910,30 +1914,32 @@ const streamWithToolCalls = async (
 }
 
 
-// Scroll to bottom (only if user is at bottom)
+// Scroll to bottom (only if user hasn't scrolled during this output)
 const scrollToBottom = () => {
-  if (messagesAreaRef.value && isUserAtBottom.value) {
+  if (messagesAreaRef.value && !userHasScrolledDuringOutput.value) {
     messagesAreaRef.value.scrollTop = messagesAreaRef.value.scrollHeight
   }
 }
 
-// Check if user is at bottom
-const checkIsAtBottom = () => {
-  if (messagesAreaRef.value) {
-    const { scrollTop, scrollHeight, clientHeight } = messagesAreaRef.value
-    // Consider "at bottom" if within 150px of the bottom (more tolerant)
-    isUserAtBottom.value = scrollHeight - scrollTop - clientHeight < 150
-  }
-}
-
-// Handle scroll event with debounce
+// Handle scroll event
 let scrollTimeout: ReturnType<typeof setTimeout> | null = null
 const handleScroll = () => {
+  if (messagesAreaRef.value) {
+    const { scrollTop, scrollHeight, clientHeight } = messagesAreaRef.value
+    const atBottom = scrollHeight - scrollTop - clientHeight < 150
+    isUserAtBottom.value = atBottom
+
+    // Immediately detect if user scrolled up during output - stop auto-scroll
+    if (!atBottom && sending.value) {
+      userHasScrolledDuringOutput.value = true
+    }
+  }
+
+  // Debounce for other scroll-related checks
   if (scrollTimeout) {
     clearTimeout(scrollTimeout)
   }
   scrollTimeout = setTimeout(() => {
-    checkIsAtBottom()
     scrollTimeout = null
   }, 100)
 }
