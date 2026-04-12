@@ -46,6 +46,8 @@ var excludedHeaders = []string{
 	"proxy-authorization",
 	"proxy-authenticate",
 	"proxy-connection",
+	"x-api-key",        // Anthropic API key - should use Provider's key
+	"anthropic-version", // Anthropic version header - we set our own
 }
 
 // extractForwardableHeaders extracts headers that should be forwarded to upstream
