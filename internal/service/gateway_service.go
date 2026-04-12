@@ -725,12 +725,14 @@ func (s *StreamingResponse) GetCapturedData() (content string, usage *Usage, raw
 			continue
 		}
 
-		// Look for "data: " prefix
-		if !strings.HasPrefix(line, "data: ") {
+		// Look for "data:" prefix - support both "data: " and "data:" formats
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
 
-		data := strings.TrimPrefix(line, "data: ")
+		// Remove "data:" prefix and any optional space
+		data := strings.TrimPrefix(line, "data:")
+		data = strings.TrimSpace(data)
 
 		// Skip [DONE] marker
 		if data == "[DONE]" {
@@ -800,9 +802,20 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 	var blockTexts = make(map[int]*strings.Builder) // track text per content block
 	var inputTokens int = 0
 	var outputTokens int = 0
+	var tokenSource = "unknown" // Track where tokens came from
+
+	// Debug: capture first few lines for troubleshooting
+	lineCount := 0
+	var firstLines []string
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		lineCount++
+
+		// Capture first 10 lines for debugging
+		if lineCount <= 10 {
+			firstLines = append(firstLines, line)
+		}
 
 		// Skip empty lines
 		if line == "" {
@@ -810,21 +823,30 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 		}
 
 		// Parse SSE format: event: xxx\ndata: xxx
+		// Note: Some providers don't put a space after the colon (e.g., "event:message_start" instead of "event: message_start")
 		var eventType string
 		var eventData string
 
-		if strings.HasPrefix(line, "event: ") {
-			eventType = strings.TrimPrefix(line, "event: ")
+		// Check for event line - support both "event: " and "event:" formats
+		if strings.HasPrefix(line, "event:") {
+			// Remove "event:" prefix and any optional space
+			eventType = strings.TrimPrefix(line, "event:")
+			eventType = strings.TrimSpace(eventType)
 			// Read next line for data
 			if scanner.Scan() {
 				dataLine := scanner.Text()
-				if strings.HasPrefix(dataLine, "data: ") {
-					eventData = strings.TrimPrefix(dataLine, "data: ")
+				lineCount++
+				// Support both "data: " and "data:" formats
+				if strings.HasPrefix(dataLine, "data:") {
+					eventData = strings.TrimPrefix(dataLine, "data:")
+					eventData = strings.TrimSpace(eventData)
 				}
 			}
-		} else if strings.HasPrefix(line, "data: ") {
+		} else if strings.HasPrefix(line, "data:") {
 			// Some providers might send data without event prefix
-			eventData = strings.TrimPrefix(line, "data: ")
+			// Support both "data: " and "data:" formats
+			eventData = strings.TrimPrefix(line, "data:")
+			eventData = strings.TrimSpace(eventData)
 		}
 
 		if eventData == "" {
@@ -841,6 +863,8 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 
 		switch eventType {
 		case "message_start":
+			tokenSource = "message_start"
+			// Standard Anthropic format
 			var event struct {
 				Message struct {
 					Usage struct {
@@ -852,6 +876,49 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 			if err := json.Unmarshal([]byte(eventData), &event); err == nil {
 				inputTokens = event.Message.Usage.InputTokens
 				outputTokens = event.Message.Usage.OutputTokens
+			}
+
+			// Fallback: Try alternative field names for message_start
+			if inputTokens == 0 && outputTokens == 0 {
+				var altEvent struct {
+					Message struct {
+						Usage struct {
+							InputTokens       int `json:"input_tokens"`
+							OutputTokens      int `json:"output_tokens"`
+							InputTokensCount  int `json:"inputTokensCount"`
+							OutputTokensCount int `json:"outputTokensCount"`
+						} `json:"usage"`
+						// Some providers put usage directly in message
+						InputTokens  int `json:"input_tokens"`
+						OutputTokens int `json:"output_tokens"`
+					} `json:"message"`
+					// Some providers have usage at top level
+					Usage struct {
+						InputTokens  int `json:"input_tokens"`
+						OutputTokens int `json:"output_tokens"`
+					} `json:"usage"`
+				}
+				if json.Unmarshal([]byte(eventData), &altEvent) == nil {
+					if altEvent.Message.Usage.InputTokensCount > 0 {
+						inputTokens = altEvent.Message.Usage.InputTokensCount
+					} else if altEvent.Message.Usage.InputTokens > 0 {
+						inputTokens = altEvent.Message.Usage.InputTokens
+					} else if altEvent.Message.InputTokens > 0 {
+						inputTokens = altEvent.Message.InputTokens
+					} else if altEvent.Usage.InputTokens > 0 {
+						inputTokens = altEvent.Usage.InputTokens
+					}
+
+					if altEvent.Message.Usage.OutputTokensCount > 0 {
+						outputTokens = altEvent.Message.Usage.OutputTokensCount
+					} else if altEvent.Message.Usage.OutputTokens > 0 {
+						outputTokens = altEvent.Message.Usage.OutputTokens
+					} else if altEvent.Message.OutputTokens > 0 {
+						outputTokens = altEvent.Message.OutputTokens
+					} else if altEvent.Usage.OutputTokens > 0 {
+						outputTokens = altEvent.Usage.OutputTokens
+					}
+				}
 			}
 
 		case "content_block_start":
@@ -900,17 +967,84 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 			}
 
 		case "message_delta":
+			if tokenSource == "unknown" || tokenSource == "message_start" {
+				tokenSource = "message_delta"
+			}
+			// Standard format
 			var event struct {
 				Usage struct {
 					OutputTokens int `json:"output_tokens"`
 				} `json:"usage"`
 			}
 			if err := json.Unmarshal([]byte(eventData), &event); err == nil {
-				outputTokens = event.Usage.OutputTokens
+				if event.Usage.OutputTokens > 0 {
+					outputTokens = event.Usage.OutputTokens
+				}
+			}
+
+			// Fallback: Alternative formats for message_delta
+			if outputTokens == 0 {
+				var altEvent struct {
+					Usage struct {
+						OutputTokens      int `json:"output_tokens"`
+						OutputTokensCount int `json:"outputTokensCount"`
+					} `json:"usage"`
+					OutputTokens int `json:"output_tokens"` // Some providers have it at top level
+				}
+				if json.Unmarshal([]byte(eventData), &altEvent) == nil {
+					if altEvent.Usage.OutputTokensCount > 0 {
+						outputTokens = altEvent.Usage.OutputTokensCount
+					} else if altEvent.Usage.OutputTokens > 0 {
+						outputTokens = altEvent.Usage.OutputTokens
+					} else if altEvent.OutputTokens > 0 {
+						outputTokens = altEvent.OutputTokens
+					}
+				}
 			}
 
 		case "message_stop":
 			// Message finished, nothing specific to extract
+
+		// Handle additional event types that might contain usage (Azure/third-party providers)
+		case "usage", "token_usage", "final_usage":
+			tokenSource = eventType
+			// Some providers send usage in a separate event
+			var event struct {
+				InputTokens       int `json:"input_tokens"`
+				OutputTokens      int `json:"output_tokens"`
+				TotalTokens       int `json:"total_tokens"`
+				PromptTokens      int `json:"prompt_tokens"`      // OpenAI style naming
+				CompletionTokens  int `json:"completion_tokens"`
+				InputTokensCount  int `json:"inputTokensCount"`
+				OutputTokensCount int `json:"outputTokensCount"`
+			}
+			if json.Unmarshal([]byte(eventData), &event) == nil {
+				if event.InputTokens > 0 {
+					inputTokens = event.InputTokens
+				} else if event.PromptTokens > 0 {
+					inputTokens = event.PromptTokens
+				} else if event.InputTokensCount > 0 {
+					inputTokens = event.InputTokensCount
+				}
+				if event.OutputTokens > 0 {
+					outputTokens = event.OutputTokens
+				} else if event.CompletionTokens > 0 {
+					outputTokens = event.CompletionTokens
+				} else if event.OutputTokensCount > 0 {
+					outputTokens = event.OutputTokensCount
+				}
+			}
+
+		case "error":
+			var event struct {
+				Error struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if json.Unmarshal([]byte(eventData), &event) == nil {
+				log.Printf("[getAnthropicCapturedData] Error event received: type=%s, message=%s", event.Error.Type, event.Error.Message)
+			}
 		}
 	}
 
@@ -926,11 +1060,22 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 	usage.CompletionTokens = outputTokens
 	usage.TotalTokens = inputTokens + outputTokens
 
+	// Debug logging when no tokens found
+	if inputTokens == 0 && outputTokens == 0 && len(firstLines) > 0 {
+		log.Printf("[getAnthropicCapturedData] WARNING: No token usage found in stream for provider '%s'. First 10 lines:\n%s", s.providerName, strings.Join(firstLines, "\n"))
+	}
+
 	// Fallback: estimate tokens if not provided
 	if usage.CompletionTokens == 0 && content != "" {
 		usage.CompletionTokens = len(content) / 4
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		tokenSource = "estimated"
+		log.Printf("[getAnthropicCapturedData] Provider '%s' estimated completion tokens: %d (content length: %d)", s.providerName, usage.CompletionTokens, len(content))
 	}
+
+	// Log final token counts and source
+	log.Printf("[getAnthropicCapturedData] Provider '%s' token summary: prompt=%d, completion=%d, total=%d, source=%s",
+		s.providerName, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, tokenSource)
 
 	return
 }
@@ -956,12 +1101,16 @@ func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 	content, usage, _ := s.GetCapturedData()
 	latency := time.Since(s.startTime).Milliseconds()
 
+	// Determine token source for better tracking
+	var tokenSource string = "unknown"
+
 	// Estimate prompt tokens if not provided
 	promptTokens := usage.PromptTokens
 	if promptTokens == 0 {
 		// Try estimatedPromptTokens first (for Anthropic direct forwarding)
 		if s.estimatedPromptTokens > 0 {
 			promptTokens = s.estimatedPromptTokens
+			tokenSource = "estimated_request"
 		} else if s.request != nil {
 			// Estimate from request content (~4 chars per token)
 			totalChars := 0
@@ -981,7 +1130,10 @@ func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 			if promptTokens < 1 && totalChars > 0 {
 				promptTokens = 1
 			}
+			tokenSource = "estimated_request"
 		}
+	} else {
+		tokenSource = "stream_usage"
 	}
 
 	// Estimate completion tokens if not provided
@@ -992,6 +1144,24 @@ func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 		if completionTokens < 1 {
 			completionTokens = 1
 		}
+		if tokenSource == "stream_usage" {
+			tokenSource = "stream_usage+estimated_completion"
+		} else {
+			tokenSource = "estimated_all"
+		}
+	}
+
+	// Log token accounting summary
+	modelName := ""
+	if s.model != nil {
+		modelName = s.model.Name
+	}
+	log.Printf("[LogAfterComplete] Provider '%s' model '%s' tokens: prompt=%d, completion=%d, total=%d, source=%s, latency=%dms",
+		s.providerName, modelName, promptTokens, completionTokens, promptTokens+completionTokens, tokenSource, latency)
+
+	// Warn if all tokens are estimated (potential issue with provider)
+	if tokenSource == "estimated_all" || tokenSource == "estimated_request" {
+		log.Printf("[LogAfterComplete] WARNING: Provider '%s' did not return token usage in stream, using estimation", s.providerName)
 	}
 
 	// Calculate cost
@@ -2055,13 +2225,55 @@ func (s *GatewayService) sendRawUpstreamRequest(ctx context.Context, url, apiKey
 // updateAnthropicLogAndCalculateCost updates log and calculates cost for Anthropic format responses
 func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, req *models.AnthropicMessagesRequest, resp *models.AnthropicMessagesResponse, latency int, logID uint, respHeaders map[string]string) {
 	var promptTokens, completionTokens, totalTokens int
+	var tokenSource = "usage" // Track where tokens came from
+
+	// Try standard Anthropic usage format first
 	if resp.Usage != nil {
 		promptTokens = resp.Usage.InputTokens
 		completionTokens = resp.Usage.OutputTokens
 	}
 
-	// Fallback: estimate tokens if not provided
+	// Fallback 1: Try alternative field names (some providers use different naming)
+	if promptTokens == 0 && completionTokens == 0 && resp.Usage != nil {
+		// Try to parse as alternative format
+		// Some providers might use InputTokensCount/OutputTokensCount or camelCase
+		usageBytes, _ := json.Marshal(resp.Usage)
+		var altUsage struct {
+			InputTokens       int `json:"input_tokens"`
+			OutputTokens      int `json:"output_tokens"`
+			InputTokensCount  int `json:"inputTokensCount"`
+			OutputTokensCount int `json:"outputTokensCount"`
+			PromptTokens      int `json:"prompt_tokens"`      // OpenAI style naming
+			CompletionTokens  int `json:"completion_tokens"`
+		}
+		if json.Unmarshal(usageBytes, &altUsage) == nil {
+			if altUsage.InputTokensCount > 0 {
+				promptTokens = altUsage.InputTokensCount
+			} else if altUsage.InputTokens > 0 {
+				promptTokens = altUsage.InputTokens
+			} else if altUsage.PromptTokens > 0 {
+				promptTokens = altUsage.PromptTokens
+			}
+			if altUsage.OutputTokensCount > 0 {
+				completionTokens = altUsage.OutputTokensCount
+			} else if altUsage.OutputTokens > 0 {
+				completionTokens = altUsage.OutputTokens
+			} else if altUsage.CompletionTokens > 0 {
+				completionTokens = altUsage.CompletionTokens
+			}
+		}
+	}
+
+	// Log warning if Usage is completely nil (not just zero values)
+	if resp.Usage == nil {
+		log.Printf("[updateAnthropicLogAndCalculateCost] WARNING: Provider '%s' returned Anthropic response without Usage field (model: %s)", providerName, model.Name)
+	} else if promptTokens == 0 && completionTokens == 0 {
+		log.Printf("[updateAnthropicLogAndCalculateCost] WARNING: Provider '%s' returned zero token counts (model: %s)", providerName, model.Name)
+	}
+
+	// Fallback 2: estimate tokens if not provided
 	if promptTokens == 0 && req != nil {
+		tokenSource = "estimated"
 		// Estimate input tokens from request content (~4 chars per token)
 		totalChars := 0
 		if !req.System.IsEmpty() {
@@ -2074,12 +2286,13 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 			}
 		}
 		promptTokens = totalChars / 4
-		if promptTokens < 1 {
+		if promptTokens < 1 && totalChars > 0 {
 			promptTokens = 1
 		}
 	}
 
 	if completionTokens == 0 && resp != nil {
+		tokenSource = "estimated"
 		// Estimate output tokens from response content (~4 chars per token)
 		totalChars := 0
 		for _, block := range resp.Content {
@@ -2094,6 +2307,13 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 	}
 
 	totalTokens = promptTokens + completionTokens
+
+	// Log token source for debugging
+	if tokenSource == "estimated" {
+		log.Printf("[updateAnthropicLogAndCalculateCost] Provider '%s' token estimation: prompt=%d, completion=%d, total=%d (estimated)", providerName, promptTokens, completionTokens, totalTokens)
+	} else if promptTokens > 0 || completionTokens > 0 {
+		log.Printf("[updateAnthropicLogAndCalculateCost] Provider '%s' token usage: prompt=%d, completion=%d, total=%d (from response)", providerName, promptTokens, completionTokens, totalTokens)
+	}
 
 	cost := s.billingService.CalculateCost(promptTokens, completionTokens, model.InputTokenPrice, model.OutputTokenPrice)
 
