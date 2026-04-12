@@ -31,9 +31,9 @@
           </div>
         </div>
         <!-- Canvas 结果特殊显示 -->
-        <div v-if="toolCall.toolName === 'web_canvas' && toolCall.result && getCanvasId(toolCall.result)" class="detail-section canvas-section">
+        <div v-if="toolCall.toolName === 'web_canvas' && toolCall.result && getCanvasIdFromResult(toolCall.result, 'web_canvas')" class="detail-section canvas-section">
           <CanvasDisplay
-            :canvas-id="getCanvasId(toolCall.result) || ''"
+            :canvas-id="getCanvasIdFromResult(toolCall.result, 'web_canvas') || ''"
             :data-url="getCanvasDataUrl(toolCall.result)"
             :width="getCanvasWidth(toolCall.result)"
             :height="getCanvasHeight(toolCall.result)"
@@ -42,12 +42,23 @@
           />
         </div>
         <!-- YOLO 绘图结果特殊显示 -->
-        <div v-else-if="toolCall.toolName === 'yolo_draw' && toolCall.result && getCanvasId(toolCall.result)" class="detail-section canvas-section">
+        <!-- 如果 canvasStore 有数据，直接显示 -->
+        <div v-else-if="toolCall.toolName === 'yolo_draw' && toolCall.result && hasCanvasInStore(toolCall.id)" class="detail-section canvas-section">
           <CanvasDisplay
-            :canvas-id="getCanvasId(toolCall.result) || ''"
+            :canvas-id="getCanvasIdFromResult(toolCall.result, 'yolo_draw') || ''"
             :data-url="getCanvasDataUrl(toolCall.result)"
             :width="getCanvasWidth(toolCall.result)"
             :height="getCanvasHeight(toolCall.result)"
+          />
+        </div>
+        <!-- 如果 canvasStore 没有数据（历史日志），从请求消息中重新绘制 -->
+        <div v-else-if="toolCall.toolName === 'yolo_draw' && toolCall.arguments?.boxes && props.requestMessages" class="detail-section canvas-section">
+          <YoloRedrawDisplay
+            :request-messages="props.requestMessages"
+            :boxes="getYoloBoxes(toolCall)"
+            :default-color="toolCall.arguments?.color as string"
+            :line-width="toolCall.arguments?.lineWidth as number"
+            :font-size="toolCall.arguments?.fontSize as number"
           />
         </div>
         <div v-else-if="toolCall.result !== undefined" class="detail-section">
@@ -66,18 +77,41 @@
 </template>
 
 <script setup lang="ts">
-import { ref, h, watch } from 'vue'
+import { ref, h, watch, computed } from 'vue'
 import { Tools, Check, Close, Loading, ArrowDown, ArrowUp, Clock, Document, Picture } from '@element-plus/icons-vue'
 import type { ToolCallResult } from '@/types/tool'
 import CanvasDisplay from './CanvasDisplay.vue'
+import YoloRedrawDisplay from './YoloRedrawDisplay.vue'
 import { useCanvasStore } from '@/stores/canvas'
 import * as Diff from 'diff'
 
 const props = defineProps<{
   toolCalls: ToolCallResult[]
+  requestMessages?: Array<{ role: string; content: string | unknown }>  // 用于历史日志中重新绘制，内容可能是字符串或解析后的数组对象
 }>()
 
 const canvasStore = useCanvasStore()
+
+// 计算属性：获取所有 yolo_draw 工具调用的 canvasId 并检查是否在 store 中
+// 使用 computed 确保 Vue 正确追踪 Map 的变化
+const yoloCanvasStatus = computed(() => {
+  const status: Record<string, boolean> = {}
+  for (const tc of props.toolCalls) {
+    if (tc.toolName === 'yolo_draw' && tc.result) {
+      const canvasId = getCanvasIdFromResult(tc.result, 'yolo_draw')
+      if (canvasId) {
+        // 使用 canvasStore.canvasList 来检查（这是 computed 属性）
+        status[tc.id] = canvasStore.canvasList.some(c => c.id === canvasId)
+      }
+    }
+  }
+  return status
+})
+
+// 检查 canvas 是否存在于 store 中（使用 computed 的结果）
+const hasCanvasInStore = (toolCallId: string): boolean => {
+  return yoloCanvasStatus.value[toolCallId] === true
+}
 
 const expandedIds = ref(new Set<string>())
 
@@ -128,21 +162,40 @@ const getToolDisplayName = (toolName: string) => {
   return nameMap[toolName] || toolName
 }
 
-// 获取 Canvas ID（用于从 store 获取图片）
-const getCanvasId = (result: unknown): string | null => {
+// 获取 Canvas ID 从 result 对象
+// 对于 web_canvas：尝试从 result 或 store 获取
+// 对于 yolo_draw：返回 result 中的 canvasId（如果存在）
+const getCanvasIdFromResult = (result: unknown, toolName?: string): string | null => {
   if (!result || typeof result !== 'object') return null
   const data = result as Record<string, unknown>
-  // 如果结果里有 canvasId，使用它
-  if (data.canvasId) return data.canvasId as string
-  // 否则从 store 获取最新的 canvas
-  return canvasStore.latestCanvasId
+  // 如果结果里有 canvasId，返回它
+  if (data.canvasId) {
+    return data.canvasId as string
+  }
+  // web_canvas：尝试从 store 获取最新的 canvas
+  if (toolName === 'web_canvas') {
+    return canvasStore.latestCanvasId
+  }
+  return null
 }
 
 // 获取 Canvas dataUrl（可选，可能从 store 获取）
 const getCanvasDataUrl = (result: unknown): string | undefined => {
   if (!result || typeof result !== 'object') return undefined
   const data = result as Record<string, unknown>
-  return data.dataUrl as string | undefined
+  // 先从 result 获取
+  if (data.dataUrl) {
+    return data.dataUrl as string
+  }
+  // result 中没有，尝试从 store 获取
+  const canvasId = data.canvasId as string | undefined
+  if (canvasId) {
+    const canvasData = canvasStore.getCanvas(canvasId)
+    if (canvasData) {
+      return canvasData.dataUrl
+    }
+  }
+  return undefined
 }
 
 // 获取 Canvas 宽度
@@ -157,6 +210,44 @@ const getCanvasHeight = (result: unknown): number => {
   if (!result || typeof result !== 'object') return 300
   const data = result as Record<string, unknown>
   return (data.height as number) || 300
+}
+
+// 获取 YOLO boxes 数组（用于历史日志重新绘制）
+interface YoloBox {
+  x: number
+  y: number
+  width: number
+  height: number
+  label?: string
+  color?: string
+  confidence?: number
+}
+
+const getYoloBoxes = (toolCall: ToolCallResult): YoloBox[] => {
+  const args = toolCall.arguments
+  if (!args || !args.boxes) return []
+
+  let boxes = args.boxes
+  // boxes 可能是 JSON 字符串
+  if (typeof boxes === 'string') {
+    try {
+      boxes = JSON.parse(boxes)
+    } catch {
+      return []
+    }
+  }
+
+  if (!Array.isArray(boxes)) return []
+
+  return boxes.map((box: Record<string, unknown>) => ({
+    x: typeof box.x === 'number' ? box.x : 0,
+    y: typeof box.y === 'number' ? box.y : 0,
+    width: typeof box.width === 'number' ? box.width : 0,
+    height: typeof box.height === 'number' ? box.height : 0,
+    label: typeof box.label === 'string' ? box.label : undefined,
+    color: typeof box.color === 'string' ? box.color : undefined,
+    confidence: typeof box.confidence === 'number' ? box.confidence : undefined
+  }))
 }
 
 // 获取 operations 数组

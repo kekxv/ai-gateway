@@ -350,6 +350,7 @@
                   <ToolCallDisplay
                     v-if="msg.toolCalls && msg.toolCalls.length > 0"
                     :tool-calls="msg.toolCalls"
+                    :request-messages="requestMessages"
                   />
                   <!-- Content -->
                   <div v-if="parseMessageWithThink(removeSystemReminders(msg.content)).textContent" class="log-assistant-collapsible-bubble">
@@ -437,6 +438,25 @@ const isMobile = ref(false)
 
 // 显示模式：'chat' 对话模式, 'meta' 元数据模式
 const viewMode = ref<'chat' | 'meta'>('chat')
+
+// 从 requestBody 中提取原始请求消息（用于 YOLO 等工具重新绘制）
+const requestMessages = computed(() => {
+  if (!logDetail.value?.detail?.requestBody) return []
+  try {
+    const request = logDetail.value.detail.requestBody
+    const reqObj = typeof request === 'string' ? JSON.parse(request) : request
+    const msgs = reqObj.messages || reqObj.input
+    if (Array.isArray(msgs)) {
+      return msgs.map((msg: { role?: string; content?: string | object }) => ({
+        role: msg.role || 'user',
+        content: msg.content || ''
+      }))
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return []
+})
 
 // 折叠状态
 const requestHeadersCollapsed = ref(true)

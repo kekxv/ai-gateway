@@ -220,6 +220,7 @@
                 <ToolCallDisplay
                   v-if="block.message.toolCalls && block.message.toolCalls.length > 0"
                   :tool-calls="block.message.toolCalls"
+                  :request-messages="getRequestMessagesForBlock(block)"
                 />
                 <!-- Markdown Content -->
                 <div v-if="block.message.content" class="assistant-bubble">
@@ -249,6 +250,7 @@
                 <ToolCallDisplay
                   v-if="streamingToolCallResults.length > 0"
                   :tool-calls="streamingToolCallResults"
+                  :request-messages="messages.map(m => ({ role: m.role, content: m.content }))"
                 />
 
                 <!-- Tool Executing Indicator - show when tools are running and no result yet -->
@@ -1866,6 +1868,16 @@ interface ExpandedMessageBlock {
   content: string              // 文本内容（type='text'）
   part?: ChatContentPart       // 图片部分（type='image'）
   message: ExtendedMessage     // 原始消息引用
+}
+
+// 获取某个消息块之前的所有消息（用于 YoloRedrawDisplay 查找图片）
+const getRequestMessagesForBlock = (block: ExpandedMessageBlock) => {
+  // 返回从第一条消息到该块所在消息的所有消息
+  // 格式化为 ToolCallDisplay 所需的格式
+  return messages.value.slice(0, block.originalIndex + 1).map(m => ({
+    role: m.role,
+    content: m.content
+  }))
 }
 
 const expandedMessages = computed<ExpandedMessageBlock[]>(() => {
