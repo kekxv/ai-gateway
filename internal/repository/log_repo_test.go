@@ -90,7 +90,7 @@ func TestLogRepository_List(t *testing.T) {
 		db.Create(log)
 	}
 
-	logs, total, err := repo.List(context.Background(), nil, 1, 10)
+	logs, total, err := repo.List(context.Background(), nil, "", 1, 10)
 	if err != nil {
 		t.Fatalf("Failed to list logs: %v", err)
 	}

@@ -3,10 +3,6 @@
     <!-- Header -->
     <div class="flex justify-between items-center">
       <h2 class="text-xl font-semibold">{{ t('log.title') }}</h2>
-      <el-button type="danger" plain size="small" @click="cleanupLogs">
-        <el-icon class="mr-1"><Delete /></el-icon>
-        清理旧日志
-      </el-button>
     </div>
 
     <!-- Filters -->
@@ -417,7 +413,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, CopyDocument, Warning, Loading, Monitor, Document, ChatDotRound, DataLine, User, DocumentCopy, ArrowDown, ArrowUp, Check } from '@element-plus/icons-vue'
+import { CopyDocument, Warning, Loading, Monitor, Document, ChatDotRound, DataLine, User, DocumentCopy, ArrowDown, ArrowUp, Check } from '@element-plus/icons-vue'
 import { logApi } from '@/api/log'
 import type { Log, LogDetail } from '@/types/log'
 import type { ToolCallResult } from '@/types/tool'
@@ -1257,17 +1253,6 @@ const viewDetail = async (log: Log) => {
     initBubbleCollapse()
   } catch (error) {
     ElMessage.error(t('common.error'))
-  }
-}
-
-const cleanupLogs = async () => {
-  try {
-    await ElMessageBox.confirm('确定要清理 30 天前的日志吗？', '清理日志', { type: 'warning' })
-    await logApi.cleanup(30)
-    ElMessage.success('清理完成')
-    fetchLogs()
-  } catch {
-    // User cancelled
   }
 }
 </script>

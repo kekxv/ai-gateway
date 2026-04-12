@@ -1,6 +1,9 @@
 import axios, { type AxiosInstance, type AxiosError } from 'axios'
 import { ElMessage } from 'element-plus'
 
+// 不需要处理401跳转的接口列表（认证相关接口）
+const AUTH_ENDPOINTS = ['/auth/login', '/auth/register', '/auth/refresh']
+
 const createApiInstance = (): AxiosInstance => {
   const instance = axios.create({
     baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
@@ -26,21 +29,25 @@ const createApiInstance = (): AxiosInstance => {
   instance.interceptors.response.use(
     (response) => response,
     (error: AxiosError<{ error?: string }>) => {
-      const isLoginRequest = error.config?.url?.includes('/auth/login')
+      const requestUrl = error.config?.url || ''
+      const isAuthEndpoint = AUTH_ENDPOINTS.some(endpoint => requestUrl.includes(endpoint))
 
       if (error.response?.status === 401) {
-        // 只在非登录页面清除 token 并跳转
-        // 登录页面的 401 错误（密码错误等）应该由登录逻辑处理
-        const currentPath = window.location.hash.replace('#', '')
-        if (currentPath !== '/login') {
+        // 认证相关接口的401不跳转（登录失败、注册失败等）
+        if (!isAuthEndpoint) {
+          // 清除认证信息
           localStorage.removeItem('token')
           localStorage.removeItem('user')
-          window.location.hash = '#/login'
+
+          // 跳转到登录页（使用 hash 导航，不刷新页面）
+          if (window.location.hash !== '#/login') {
+            window.location.hash = '#/login'
+          }
         }
       } else if (error.response?.status === 403) {
         ElMessage.error('权限不足')
-      } else if (!isLoginRequest) {
-        // 非登录请求才显示全局错误提示
+      } else if (!isAuthEndpoint) {
+        // 非认证接口才显示全局错误提示
         const message = error.response?.data?.error || error.message || '请求失败'
         ElMessage.error(message)
       }
