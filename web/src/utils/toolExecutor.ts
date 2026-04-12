@@ -353,6 +353,10 @@ async function webSearch(
     })
 
     if (response.status === 401) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      window.location.href = '/#/login'
+      window.location.reload()
       throw new Error('登录已过期，请重新登录')
     }
 
@@ -404,6 +408,10 @@ async function fetchWebpage(url: string, selector?: string, format?: string): Pr
     })
 
     if (response.status === 401) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      window.location.href = '/#/login'
+      window.location.reload()
       throw new Error('登录已过期，请重新登录')
     }
 

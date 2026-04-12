@@ -1,4 +1,5 @@
 import { api } from './index'
+import { ElMessage } from 'element-plus'
 import type { Conversation, Message, CreateConversationRequest, UpdateConversationRequest, ChatRequest, ChatContentPart } from '@/types/conversation'
 import type { ToolCall } from '@/types/tool'
 
@@ -65,6 +66,15 @@ export const conversationApi = {
       })
 
       if (!response.ok) {
+        // Handle 401 - redirect to login with page reload
+        if (response.status === 401) {
+          localStorage.removeItem('token')
+          localStorage.removeItem('user')
+          ElMessage.error('登录已过期，请重新登录')
+          window.location.href = '/#/login'
+          window.location.reload()
+          return
+        }
         const errorData = await response.json().catch(() => ({ error: '请求失败' }))
         onError(errorData.error || 'Request failed')
         return

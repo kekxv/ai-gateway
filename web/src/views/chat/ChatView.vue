@@ -565,7 +565,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Setting, ChatLineRound, Monitor,
   Loading, Promotion, MoreFilled, Delete, MagicStick, Close, Menu, Paperclip, Operation,
-  Edit, RefreshRight, DocumentCopy, Collection, Check
+  Edit, RefreshRight, DocumentCopy, Collection, Check, Cpu
 } from '@element-plus/icons-vue'
 import { conversationApi, modelApi } from '@/api/conversation'
 import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart, ChatRequest, ChatMessage } from '@/types/conversation'

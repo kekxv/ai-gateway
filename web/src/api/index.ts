@@ -1,8 +1,12 @@
 import axios, { type AxiosInstance, type AxiosError } from 'axios'
 import { ElMessage } from 'element-plus'
+import { useAuthStore } from '@/stores/auth'
 
 // 不需要处理401跳转的接口列表（认证相关接口）
 const AUTH_ENDPOINTS = ['/auth/login', '/auth/register', '/auth/refresh']
+
+// Flag to prevent multiple redirects
+let isRedirecting = false
 
 const createApiInstance = (): AxiosInstance => {
   const instance = axios.create({
@@ -34,15 +38,18 @@ const createApiInstance = (): AxiosInstance => {
 
       if (error.response?.status === 401) {
         // 认证相关接口的401不跳转（登录失败、注册失败等）
-        if (!isAuthEndpoint) {
-          // 清除认证信息
-          localStorage.removeItem('token')
-          localStorage.removeItem('user')
+        if (!isAuthEndpoint && !isRedirecting) {
+          isRedirecting = true
 
-          // 跳转到登录页（使用 hash 导航，不刷新页面）
-          if (window.location.hash !== '#/login') {
-            window.location.hash = '#/login'
-          }
+          // Clear auth store state (this also clears localStorage)
+          const authStore = useAuthStore()
+          authStore.clearAuth()
+
+          ElMessage.error('登录已过期，请重新登录')
+
+          // 跳转到登录页 - 使用 window.location 强制刷新
+          window.location.href = '/#/login'
+          window.location.reload()
         }
       } else if (error.response?.status === 403) {
         ElMessage.error('权限不足')

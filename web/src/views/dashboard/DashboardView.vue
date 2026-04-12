@@ -535,23 +535,27 @@ onMounted(() => {
 
 <style scoped>
 .dashboard-page {
-  padding: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 /* 页面标题 */
 .page-header {
-  margin-bottom: 24px;
+  margin-bottom: 16px;
+  flex-shrink: 0;
 }
 
 .page-header h1 {
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 700;
   color: #1e293b;
-  margin: 0 0 4px 0;
+  margin: 0 0 2px 0;
 }
 
 .page-header p {
-  font-size: 14px;
+  font-size: 13px;
   color: #64748b;
   margin: 0;
 }
@@ -559,42 +563,36 @@ onMounted(() => {
 /* 统计卡片 */
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 12px;
-  margin-bottom: 24px;
-  min-width: 0; /* 防止内容溢出 */
+  margin-bottom: 16px;
+  flex-shrink: 0;
 }
 
 .stats-grid.user-stats {
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(4, 1fr);
 }
 
 .stat-card {
   background: white;
-  border-radius: 16px;
-  padding: 16px;
+  border-radius: 12px;
+  padding: 12px 16px;
   display: flex;
   align-items: center;
   gap: 12px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  transition: all 0.3s ease;
-  min-width: 0; /* 防止内容溢出 */
-}
-
-.stat-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+  min-width: 0;
 }
 
 .stat-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  font-size: 20px;
+  font-size: 18px;
 }
 
 .stat-card--blue .stat-icon { background: #dbeafe; }
@@ -610,42 +608,43 @@ onMounted(() => {
 }
 
 .stat-value {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 700;
   color: #1e293b;
   line-height: 1.2;
 }
 
 .stat-label {
-  font-size: 13px;
+  font-size: 12px;
   color: #64748b;
   margin-top: 2px;
 }
 
 .stat-detail {
-  font-size: 11px;
+  font-size: 10px;
   color: #8b5cf6;
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .stat-days {
   font-size: 10px;
   color: #94a3b8;
-  margin-top: 2px;
+  margin-top: 1px;
 }
 
 /* 图表区域 */
 .charts-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 24px;
-  margin-bottom: 24px;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-shrink: 0;
 }
 
 .chart-section {
   background: white;
-  border-radius: 16px;
-  padding: 24px;
+  border-radius: 12px;
+  padding: 16px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
@@ -657,11 +656,11 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
 }
 
 .section-header h2 {
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 600;
   color: #1e293b;
   margin: 0;
@@ -673,26 +672,37 @@ onMounted(() => {
 
 .chart {
   width: 100%;
-  height: 300px;
+  height: 180px;
 }
 
 /* 数据表格 */
 .tables-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 24px;
-  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
 }
 
 .table-section {
   background: white;
-  border-radius: 16px;
-  padding: 24px;
+  border-radius: 12px;
+  padding: 16px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.table-section .section-header {
+  margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
 .table-container {
-  overflow-x: auto;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .data-table {
@@ -702,13 +712,13 @@ onMounted(() => {
 
 .data-table th,
 .data-table td {
-  padding: 12px 16px;
+  padding: 8px 12px;
   text-align: left;
   border-bottom: 1px solid #f1f5f9;
 }
 
 .data-table th {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: #64748b;
   text-transform: uppercase;
@@ -716,7 +726,7 @@ onMounted(() => {
 }
 
 .data-table td {
-  font-size: 14px;
+  font-size: 13px;
   color: #334155;
 }
 
@@ -726,13 +736,13 @@ onMounted(() => {
 
 .badge {
   display: inline-block;
-  padding: 4px 10px;
+  padding: 2px 8px;
   background: #f1f5f9;
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: 4px;
+  font-size: 12px;
   font-weight: 500;
   color: #475569;
-  max-width: 150px;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -742,7 +752,7 @@ onMounted(() => {
 .empty-cell {
   text-align: center;
   color: #94a3b8;
-  padding: 24px !important;
+  padding: 16px !important;
 }
 
 .font-semibold {
@@ -750,42 +760,18 @@ onMounted(() => {
 }
 
 /* 响应式 */
-/* 平板及以上：4列布局 */
-@media (min-width: 768px) {
+@media (max-width: 1024px) {
   .stats-grid {
-    grid-template-columns: repeat(4, 1fr);
-    gap: 20px;
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .stats-grid.user-stats {
-    grid-template-columns: repeat(4, 1fr);
-  }
-
-  .stat-card {
-    padding: 24px;
-    gap: 20px;
-  }
-
-  .stat-icon {
-    width: 56px;
-    height: 56px;
-    border-radius: 14px;
-    font-size: 24px;
-  }
-
-  .stat-value {
-    font-size: 28px;
-  }
-
-  .stat-label {
-    font-size: 14px;
-    margin-top: 4px;
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 768px) {
-  .charts-grid,
-  .tables-grid {
+  .charts-grid {
     grid-template-columns: 1fr;
   }
 
@@ -793,10 +779,8 @@ onMounted(() => {
     grid-column: span 1;
   }
 
-  .section-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
+  .chart {
+    height: 150px;
   }
 }
 </style>
