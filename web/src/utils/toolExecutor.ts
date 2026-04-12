@@ -922,8 +922,18 @@ function executeYoloDraw(
   }
 
   const boxesArray = Array.isArray(boxes) ? boxes : []
+
+  // 允许空 boxes - 表示没有检测到任何对象
   if (boxesArray.length === 0) {
-    throw new Error('boxes 参数为空，请提供至少一个边界框')
+    return {
+      success: true,
+      canvasId: null,
+      width: 0,
+      height: 0,
+      boxCount: 0,
+      message: '没有检测到任何目标对象',
+      sourceImage: latestImage.id
+    }
   }
 
   // 转换为 YoloBox 格式并验证
