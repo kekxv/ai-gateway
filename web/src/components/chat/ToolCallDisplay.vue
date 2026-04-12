@@ -157,7 +157,9 @@ const getToolDisplayName = (toolName: string) => {
     'draw_chart': '绘制图表',
     'save_note': '保存笔记',
     'Edit': '编辑文件',
-    'edit_file': '编辑文件'
+    'edit_file': '编辑文件',
+    'Read': '读取文件',
+    'read_file': '读取文件'
   }
   return nameMap[toolName] || toolName
 }
@@ -589,6 +591,9 @@ const renderResult = (toolCall: ToolCallResult) => {
         h('span', {}, noteResult.message || '笔记已保存')
       ])
     }
+    case 'Read':
+    case 'read_file':
+      return renderReadResult(result)
     default:
       // For string results, preserve line breaks
       if (typeof result === 'string') {
@@ -648,6 +653,156 @@ const renderWebSearchResult = (result: unknown) => {
       item.url ? h('a', { href: item.url, target: '_blank', class: 'result-url' }, item.url) : null
     ]))
   ])
+}
+
+// 渲染 Read 工具结果（支持 base64 图片显示）
+const renderReadResult = (result: unknown) => {
+  if (!result) {
+    return h('div', { class: 'tool-result-empty' }, '无结果')
+  }
+
+  // Handle string result (JSON string from logs)
+  let resultData: unknown
+  if (typeof result === 'string') {
+    try {
+      resultData = JSON.parse(result)
+    } catch {
+      // 不是 JSON，直接显示文本
+      return h('pre', { class: 'detail-code' }, result)
+    }
+  } else {
+    resultData = result
+  }
+
+  // Check if result is an array with image content (Claude Read tool format)
+  // Format: [{ type: "image", source: { type: "base64", data: "...", media_type: "image/jpeg" } }]
+  if (Array.isArray(resultData)) {
+    const displayableImages: Array<{ dataUrl: string; mediaType: string }> = []
+    const otherContent: Array<unknown> = []
+
+    for (const item of resultData) {
+      if (typeof item === 'object' && item !== null) {
+        const itemObj = item as Record<string, unknown>
+        if (itemObj.type === 'image' && itemObj.source) {
+          const source = itemObj.source as Record<string, unknown>
+          if (source.type === 'base64' && source.data && source.media_type) {
+            const mediaType = source.media_type as string
+            // Check if browser can display this image type
+            const displayableTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/bmp', 'image/ico']
+            if (displayableTypes.includes(mediaType)) {
+              displayableImages.push({
+                dataUrl: `data:${mediaType};base64,${source.data}`,
+                mediaType
+              })
+            } else {
+              otherContent.push(item)
+            }
+          } else {
+            otherContent.push(item)
+          }
+        } else if (itemObj.type === 'text') {
+          // Text content
+          const text = itemObj.text as string
+          otherContent.push({ type: 'text', text })
+        } else {
+          otherContent.push(item)
+        }
+      } else {
+        otherContent.push(item)
+      }
+    }
+
+    // Build result children
+    const children: Array<ReturnType<typeof h>> = []
+
+    // Display images
+    if (displayableImages.length > 0) {
+      children.push(h('div', { class: 'read-images-container' },
+        displayableImages.map((img, idx) =>
+          h('div', { key: idx, class: 'read-image-item' }, [
+            h('img', {
+              src: img.dataUrl,
+              class: 'read-image',
+              alt: `Image ${idx + 1}`,
+              onClick: () => {
+                // Open image in new tab for full view
+                window.open(img.dataUrl, '_blank')
+              }
+            }),
+            h('div', { class: 'read-image-info' }, [
+              h('span', { class: 'image-type' }, img.mediaType)
+            ])
+          ])
+        )
+      ))
+    }
+
+    // Display other content as formatted JSON or text
+    if (otherContent.length > 0) {
+      for (const item of otherContent) {
+        if (typeof item === 'object' && item !== null && (item as Record<string, unknown>).type === 'text') {
+          const textObj = item as { text: string }
+          children.push(h('div', { class: 'read-text-content' }, [
+            h('div', { class: 'content-label' }, '文本内容：'),
+            h('pre', { class: 'detail-code' }, textObj.text)
+          ]))
+        } else {
+          children.push(h('div', { class: 'read-json-content' }, [
+            h('div', { class: 'content-label' }, '其他内容：'),
+            h('pre', { class: 'detail-code' }, formatJson(item))
+          ]))
+        }
+      }
+    }
+
+    if (children.length > 0) {
+      return h('div', { class: 'read-result-container' }, children)
+    }
+  }
+
+  // Check if result is a single object with image/text content
+  if (typeof resultData === 'object' && resultData !== null) {
+    const obj = resultData as Record<string, unknown>
+    if (obj.type === 'image' && obj.source) {
+      const source = obj.source as Record<string, unknown>
+      if (source.type === 'base64' && source.data && source.media_type) {
+        const mediaType = source.media_type as string
+        const displayableTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/bmp', 'image/ico']
+        if (displayableTypes.includes(mediaType)) {
+          const dataUrl = `data:${mediaType};base64,${source.data}`
+          return h('div', { class: 'read-result-container' }, [
+            h('div', { class: 'read-images-container' }, [
+              h('div', { class: 'read-image-item' }, [
+                h('img', {
+                  src: dataUrl,
+                  class: 'read-image',
+                  alt: 'Image',
+                  onClick: () => window.open(dataUrl, '_blank')
+                }),
+                h('div', { class: 'read-image-info' }, [
+                  h('span', { class: 'image-type' }, mediaType)
+                ])
+              ])
+            ])
+          ])
+        }
+      }
+    }
+    if (obj.type === 'text' && obj.text) {
+      return h('div', { class: 'read-result-container' }, [
+        h('div', { class: 'read-text-content' }, [
+          h('div', { class: 'content-label' }, '文本内容：'),
+          h('pre', { class: 'detail-code' }, String(obj.text))
+        ])
+      ])
+    }
+  }
+
+  // Default: display as JSON or text
+  if (typeof resultData === 'string') {
+    return h('pre', { class: 'detail-code' }, resultData)
+  }
+  return h('pre', { class: 'detail-code' }, formatJson(resultData))
 }
 
 // 渲染 Edit 结果
@@ -1403,5 +1558,62 @@ const formatJson = (obj: unknown) => {
 .error-icon {
   font-size: 18px;
   color: #dc2626;
+}
+
+/* Read 工具结果样式 */
+.read-result-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.read-images-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.read-image-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
+.read-image {
+  max-width: 100%;
+  max-height: 400px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.read-image:hover {
+  transform: scale(1.02);
+}
+
+.read-image-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.image-type {
+  padding: 2px 6px;
+  background: #e0e7ff;
+  color: #3730a3;
+  border-radius: 4px;
+  font-family: 'SF Mono', 'Monaco', monospace;
+}
+
+.read-text-content,
+.read-json-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 </style>
