@@ -277,7 +277,7 @@ func TestLogRepository_GetTotalStats(t *testing.T) {
 	now := time.Now()
 	start := now.AddDate(0, 0, -30)
 
-	requests, tokens, cost, err := repo.GetTotalStats(context.Background(), start, now)
+	requests, tokens, cost, promptTokens, completionTokens, err := repo.GetTotalStats(context.Background(), start, now)
 	if err != nil {
 		t.Fatalf("Failed to get total stats: %v", err)
 	}
@@ -292,6 +292,14 @@ func TestLogRepository_GetTotalStats(t *testing.T) {
 
 	if cost != 100 {
 		t.Errorf("Expected 100 cost, got %d", cost)
+	}
+
+	if promptTokens != 1000 {
+		t.Errorf("Expected 1000 prompt tokens, got %d", promptTokens)
+	}
+
+	if completionTokens != 500 {
+		t.Errorf("Expected 500 completion tokens, got %d", completionTokens)
 	}
 }
 

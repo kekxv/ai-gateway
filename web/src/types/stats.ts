@@ -43,6 +43,9 @@ export interface Stats {
   totalCost: number
   totalRequests: number
   totalTokens: number
+  totalPromptTokens: number
+  totalCompletionTokens: number
+  statsDays: number
   providerCount: number
   modelCount: number
 }

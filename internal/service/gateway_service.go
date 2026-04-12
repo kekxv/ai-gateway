@@ -804,7 +804,6 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 	var blockTexts = make(map[int]*strings.Builder) // track text per content block
 	var inputTokens int = 0
 	var outputTokens int = 0
-	var tokenSource = "unknown" // Track where tokens came from
 
 	// Debug: capture first few lines for troubleshooting
 	lineCount := 0
@@ -865,7 +864,6 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 
 		switch eventType {
 		case "message_start":
-			tokenSource = "message_start"
 			// Standard Anthropic format
 			var event struct {
 				Message struct {
@@ -969,9 +967,6 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 			}
 
 		case "message_delta":
-			if tokenSource == "unknown" || tokenSource == "message_start" {
-				tokenSource = "message_delta"
-			}
 			// Standard format
 			var event struct {
 				Usage struct {
@@ -1009,7 +1004,6 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 
 		// Handle additional event types that might contain usage (Azure/third-party providers)
 		case "usage", "token_usage", "final_usage":
-			tokenSource = eventType
 			// Some providers send usage in a separate event
 			var event struct {
 				InputTokens       int `json:"input_tokens"`
@@ -1071,13 +1065,7 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 	if usage.CompletionTokens == 0 && content != "" {
 		usage.CompletionTokens = len(content) / 4
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-		tokenSource = "estimated"
-		log.Printf("[getAnthropicCapturedData] Provider '%s' estimated completion tokens: %d (content length: %d)", s.providerName, usage.CompletionTokens, len(content))
 	}
-
-	// Log final token counts and source
-	log.Printf("[getAnthropicCapturedData] Provider '%s' token summary: prompt=%d, completion=%d, total=%d, source=%s",
-		s.providerName, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, tokenSource)
 
 	return
 }
@@ -1152,14 +1140,6 @@ func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 			tokenSource = "estimated_all"
 		}
 	}
-
-	// Log token accounting summary
-	modelName := ""
-	if s.model != nil {
-		modelName = s.model.Name
-	}
-	log.Printf("[LogAfterComplete] Provider '%s' model '%s' tokens: prompt=%d, completion=%d, total=%d, source=%s, latency=%dms",
-		s.providerName, modelName, promptTokens, completionTokens, promptTokens+completionTokens, tokenSource, latency)
 
 	// Warn if all tokens are estimated (potential issue with provider)
 	if tokenSource == "estimated_all" || tokenSource == "estimated_request" {
@@ -2227,7 +2207,6 @@ func (s *GatewayService) sendRawUpstreamRequest(ctx context.Context, url, apiKey
 // updateAnthropicLogAndCalculateCost updates log and calculates cost for Anthropic format responses
 func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, req *models.AnthropicMessagesRequest, resp *models.AnthropicMessagesResponse, latency int, logID uint, respHeaders map[string]string) {
 	var promptTokens, completionTokens, totalTokens int
-	var tokenSource = "usage" // Track where tokens came from
 
 	// Try standard Anthropic usage format first
 	if resp.Usage != nil {
@@ -2275,7 +2254,6 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 
 	// Fallback 2: estimate tokens if not provided
 	if promptTokens == 0 && req != nil {
-		tokenSource = "estimated"
 		// Estimate input tokens from request content (~4 chars per token)
 		totalChars := 0
 		if !req.System.IsEmpty() {
@@ -2294,7 +2272,6 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 	}
 
 	if completionTokens == 0 && resp != nil {
-		tokenSource = "estimated"
 		// Estimate output tokens from response content (~4 chars per token)
 		totalChars := 0
 		for _, block := range resp.Content {
@@ -2309,13 +2286,6 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 	}
 
 	totalTokens = promptTokens + completionTokens
-
-	// Log token source for debugging
-	if tokenSource == "estimated" {
-		log.Printf("[updateAnthropicLogAndCalculateCost] Provider '%s' token estimation: prompt=%d, completion=%d, total=%d (estimated)", providerName, promptTokens, completionTokens, totalTokens)
-	} else if promptTokens > 0 || completionTokens > 0 {
-		log.Printf("[updateAnthropicLogAndCalculateCost] Provider '%s' token usage: prompt=%d, completion=%d, total=%d (from response)", providerName, promptTokens, completionTokens, totalTokens)
-	}
 
 	cost := s.billingService.CalculateCost(promptTokens, completionTokens, model.InputTokenPrice, model.OutputTokenPrice)
 

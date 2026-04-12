@@ -65,6 +65,10 @@
         <div class="stat-content">
           <div class="stat-value">{{ formatNumber(stats?.totalTokens || 0) }}</div>
           <div class="stat-label">{{ t('dashboard.totalTokens') }}</div>
+          <div class="stat-detail">
+            {{ formatNumber(stats?.totalPromptTokens || 0) }} / {{ formatNumber(stats?.totalCompletionTokens || 0) }}
+          </div>
+          <div class="stat-days">{{ stats?.statsDays || 30 }}天统计</div>
         </div>
       </div>
 
@@ -618,6 +622,18 @@ onMounted(() => {
   margin-top: 2px;
 }
 
+.stat-detail {
+  font-size: 11px;
+  color: #8b5cf6;
+  margin-top: 4px;
+}
+
+.stat-days {
+  font-size: 10px;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+
 /* 图表区域 */
 .charts-grid {
   display: grid;
@@ -716,6 +732,11 @@ onMounted(() => {
   font-size: 13px;
   font-weight: 500;
   color: #475569;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 
 .empty-cell {

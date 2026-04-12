@@ -240,7 +240,10 @@ func (h *StatsHandler) GetStats(c *gin.Context) {
 
 	// Get total stats (use larger range for totals - last 90 days)
 	totalStartDate := now.AddDate(0, 0, -90)
-	totalRequests, totalTokens, totalCost, _ := h.logRepo.GetTotalStats(ctx, totalStartDate, now)
+	totalRequests, totalTokens, totalCost, totalPromptTokens, totalCompletionTokens, _ := h.logRepo.GetTotalStats(ctx, totalStartDate, now)
+
+	// Calculate stats days (from startDate to endDate)
+	statsDays := int(endDate.Sub(startDate).Hours() / 24) + 1
 
 	// Get provider and model counts from database
 	providerCount, _ := h.providerRepo.Count(ctx)
@@ -331,6 +334,9 @@ func (h *StatsHandler) GetStats(c *gin.Context) {
 		"totalCost":              totalCost,
 		"totalRequests":          totalRequests,
 		"totalTokens":            totalTokens,
+		"totalPromptTokens":      totalPromptTokens,
+		"totalCompletionTokens":  totalCompletionTokens,
+		"statsDays":              statsDays,
 		"providerCount":          providerCount,
 		"modelCount":             modelCount,
 	})

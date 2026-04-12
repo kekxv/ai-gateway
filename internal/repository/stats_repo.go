@@ -94,17 +94,19 @@ func (r *LogRepository) GetDailyUsage(ctx context.Context, startDate, endDate ti
 }
 
 // GetTotalStats returns total stats for a given period
-func (r *LogRepository) GetTotalStats(ctx context.Context, startDate, endDate time.Time) (int64, int64, int64, error) {
+func (r *LogRepository) GetTotalStats(ctx context.Context, startDate, endDate time.Time) (int64, int64, int64, int64, int64, error) {
 	var result struct {
-		RequestCount int64
-		TotalTokens  int64
-		TotalCost    int64
+		RequestCount     int64
+		TotalTokens      int64
+		TotalCost        int64
+		PromptTokens     int64
+		CompletionTokens int64
 	}
 	err := r.db.WithContext(ctx).Model(&models.Log{}).
-		Select("COUNT(*) as request_count, SUM(totalTokens) as total_tokens, SUM(cost) as total_cost").
+		Select("COUNT(*) as request_count, SUM(totalTokens) as total_tokens, SUM(cost) as total_cost, SUM(promptTokens) as prompt_tokens, SUM(completionTokens) as completion_tokens").
 		Where("createdAt >= ? AND createdAt <= ?", startDate, endDate).
 		Scan(&result).Error
-	return result.RequestCount, result.TotalTokens, result.TotalCost, err
+	return result.RequestCount, result.TotalTokens, result.TotalCost, result.PromptTokens, result.CompletionTokens, err
 }
 
 // GetUserStats returns user statistics

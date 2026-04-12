@@ -266,8 +266,8 @@ describe('ToolExecutor', () => {
         {
           role: 'user',
           content: [
-            { type: 'text', text: 'Look at this' },
-            { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } }
+            { type: 'text' as const, text: 'Look at this' },
+            { type: 'image_url' as const, image_url: { url: 'data:image/png;base64,abc' } }
           ]
         }
       ]
