@@ -368,8 +368,64 @@ func TestConvertRequest_AnthropicToOpenAI_WithImage(t *testing.T) {
 		}
 	}
 }
+func TestConvertRequest_AnthropicToOpenAI_WithTools(t *testing.T) {
+	converter := NewProtocolConverter()
 
-func TestConvertRequest_NoConversion(t *testing.T) {
+	anthropicReq := &models.AnthropicMessagesRequest{
+		Model: "claude-3-5-sonnet",
+		Messages: []models.AnthropicMessage{
+			{Role: "user", Content: models.AnthropicContent{StringContent: "What's the weather?"}},
+		},
+		Tools: []models.AnthropicTool{
+			{
+				Name:        "get_weather",
+				Description: "Get weather in a city",
+				InputSchema: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"city": map[string]interface{}{"type": "string"},
+					},
+				},
+			},
+		},
+		ToolChoice: &models.AnthropicToolChoice{Type: "auto"},
+		TopP:       0.9,
+		MaxTokens:  100,
+	}
+
+	result, err := converter.ConvertRequest(anthropicReq, ProtocolAnthropic, ProtocolOpenAI)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	openAIReq := result.(*ChatRequest)
+
+	if len(openAIReq.Tools) != 1 {
+		t.Errorf("Tools count = %d, want 1", len(openAIReq.Tools))
+	}
+	if openAIReq.Tools[0].Function.Name != "get_weather" {
+		t.Errorf("Tool name = %s, want get_weather", openAIReq.Tools[0].Function.Name)
+	}
+	if openAIReq.Extra["top_p"] != 0.9 {
+		t.Errorf("top_p = %v, want 0.9", openAIReq.Extra["top_p"])
+	}
+	if openAIReq.Extra["tool_choice"] != "auto" {
+		t.Errorf("tool_choice = %v, want auto", openAIReq.Extra["tool_choice"])
+	}
+
+	// Verify JSON marshaling includes Extra fields
+	data, _ := json.Marshal(openAIReq)
+	var m map[string]interface{}
+	json.Unmarshal(data, &m)
+	if m["top_p"] != 0.9 {
+		t.Errorf("JSON marshaled top_p = %v, want 0.9", m["top_p"])
+	}
+	if m["tool_choice"] != "auto" {
+		t.Errorf("JSON marshaled tool_choice = %v, want auto", m["tool_choice"])
+	}
+}
+
+func TestConvertRequest_AnthropicToOpenAI_NoConversion(t *testing.T) {
 	converter := NewProtocolConverter()
 
 	openAIReq := &ChatRequest{
@@ -487,6 +543,38 @@ func TestConvertResponse_AnthropicToOpenAI_Basic(t *testing.T) {
 		t.Errorf("PromptTokens = %d, want 10", openAIResp.Usage.PromptTokens)
 	}
 }
+func TestChatRequest_MarshalJSON(t *testing.T) {
+	req := &ChatRequest{
+		Model: "gpt-4",
+		Messages: []ChatMessage{
+			{Role: "user", Content: ChatMessageContent{StringContent: "Hello"}},
+		},
+		Extra: map[string]interface{}{
+			"top_p":       0.9,
+			"tool_choice": "auto",
+		},
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if m["model"] != "gpt-4" {
+		t.Errorf("model = %v, want gpt-4", m["model"])
+	}
+	if m["top_p"] != 0.9 {
+		t.Errorf("top_p = %v, want 0.9", m["top_p"])
+	}
+	if m["tool_choice"] != "auto" {
+		t.Errorf("tool_choice = %v, want auto", m["tool_choice"])
+	}
+}
 
 func TestConvertFinishReason(t *testing.T) {
 	tests := []struct {
@@ -554,6 +642,12 @@ func TestGenerateAnthropicStreamEvents(t *testing.T) {
 	if !strings.Contains(start, `"id":"msg_test123"`) {
 		t.Error("message_start event should contain the message ID")
 	}
+	if !strings.Contains(start, `"model":"claude-3"`) {
+		t.Error("message_start event should contain the model name")
+	}
+	if !strings.HasSuffix(start, "\n\n") {
+		t.Error("SSE event should end with double newline")
+	}
 
 	// Test content_block_start
 	blockStart := converter.GenerateAnthropicContentBlockStart(0)
@@ -568,6 +662,15 @@ func TestGenerateAnthropicStreamEvents(t *testing.T) {
 	}
 	if !strings.Contains(delta, "Hello") {
 		t.Error("content_block_delta event should contain the text")
+	}
+
+	// Test thinking_delta
+	thinkingDelta := converter.GenerateAnthropicThinkingDelta(0, "Hmm...")
+	if !strings.Contains(thinkingDelta, "thinking_delta") {
+		t.Error("thinking_delta event should contain 'thinking_delta'")
+	}
+	if !strings.Contains(thinkingDelta, "Hmm...") {
+		t.Error("thinking_delta event should contain the thinking text")
 	}
 
 	// Test content_block_stop
@@ -595,6 +698,7 @@ func TestGenerateAnthropicStreamEvents(t *testing.T) {
 func TestConvertOpenAIStreamChunkToAnthropic(t *testing.T) {
 	converter := NewProtocolConverter()
 	state := &StreamConversionState{}
+	contentIndex := 0
 
 	// First chunk with content
 	chunk1 := &StreamChunk{
@@ -617,11 +721,14 @@ func TestConvertOpenAIStreamChunkToAnthropic(t *testing.T) {
 	chunk1.Choices[0].Delta.Role = "assistant"
 	chunk1.Choices[0].Delta.Content = "Hello"
 
-	result := converter.ConvertOpenAIStreamChunkToAnthropic(chunk1, "msg_test", 0, state)
+	result := converter.ConvertOpenAIStreamChunkToAnthropic(chunk1, "msg_test", "claude-3", &contentIndex, state)
 
 	// Should contain message_start, content_block_start, and content_block_delta
 	if !strings.Contains(result, "message_start") {
 		t.Error("First chunk should contain message_start event")
+	}
+	if !strings.Contains(result, `"model":"claude-3"`) {
+		t.Error("message_start should contain model name")
 	}
 	if !strings.Contains(result, "content_block_start") {
 		t.Error("First chunk should contain content_block_start event")
@@ -657,7 +764,7 @@ func TestConvertOpenAIStreamChunkToAnthropic(t *testing.T) {
 		},
 	}
 
-	result2 := converter.ConvertOpenAIStreamChunkToAnthropic(chunk2, "msg_test", 0, state)
+	result2 := converter.ConvertOpenAIStreamChunkToAnthropic(chunk2, "msg_test", "claude-3", &contentIndex, state)
 
 	// Should contain content_block_stop, message_delta, and message_stop
 	if !strings.Contains(result2, "content_block_stop") {
@@ -668,6 +775,154 @@ func TestConvertOpenAIStreamChunkToAnthropic(t *testing.T) {
 	}
 	if !strings.Contains(result2, "message_stop") {
 		t.Error("Final chunk should contain message_stop event")
+	}
+	if !state.MessageFinished {
+		t.Error("State should show MessageFinished = true")
+	}
+}
+
+func TestConvertOpenAIStreamChunkToAnthropic_Reasoning(t *testing.T) {
+	converter := NewProtocolConverter()
+	state := &StreamConversionState{}
+	contentIndex := 0
+
+	// First chunk with reasoning
+	chunk1 := &StreamChunk{}
+	chunk1.Choices = []struct {
+		Index int `json:"index"`
+		Delta struct {
+			Role      string     `json:"role,omitempty"`
+			Content   string     `json:"content,omitempty"`
+			Reasoning string     `json:"reasoning,omitempty"`
+			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
+	}{
+		{Index: 0},
+	}
+	chunk1.Choices[0].Delta.Reasoning = "Let me think..."
+
+	result := converter.ConvertOpenAIStreamChunkToAnthropic(chunk1, "msg_test", "claude-3", &contentIndex, state)
+
+	if !strings.Contains(result, "content_block_start") {
+		t.Error("Should contain content_block_start for reasoning")
+	}
+	if !strings.Contains(result, "thinking_delta") {
+		t.Error("Should contain thinking_delta")
+	}
+	if !state.ThinkingStarted {
+		t.Error("State should show ThinkingStarted = true")
+	}
+
+	// Second chunk with content
+	chunk2 := &StreamChunk{}
+	chunk2.Choices = []struct {
+		Index int `json:"index"`
+		Delta struct {
+			Role      string     `json:"role,omitempty"`
+			Content   string     `json:"content,omitempty"`
+			Reasoning string     `json:"reasoning,omitempty"`
+			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
+	}{
+		{Index: 0},
+	}
+	chunk2.Choices[0].Delta.Content = "The answer is 42."
+
+	result2 := converter.ConvertOpenAIStreamChunkToAnthropic(chunk2, "msg_test", "claude-3", &contentIndex, state)
+
+	if !strings.Contains(result2, "content_block_stop") {
+		t.Error("Should close thinking block")
+	}
+	if !strings.Contains(result2, "content_block_start") {
+		t.Error("Should start new content block for text")
+	}
+	if !strings.Contains(result2, "text_delta") {
+		t.Error("Should contain text_delta")
+	}
+	if contentIndex != 1 {
+		t.Errorf("contentIndex = %d, want 1", contentIndex)
+	}
+}
+
+func TestConvertOpenAIStreamChunkToAnthropic_ToolUse(t *testing.T) {
+	converter := NewProtocolConverter()
+	state := &StreamConversionState{
+		LastToolIndex: -1,
+	}
+	contentIndex := 0
+
+	// First chunk with tool use
+	chunk1 := &StreamChunk{}
+	chunk1.Choices = []struct {
+		Index int `json:"index"`
+		Delta struct {
+			Role      string     `json:"role,omitempty"`
+			Content   string     `json:"content,omitempty"`
+			Reasoning string     `json:"reasoning,omitempty"`
+			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
+	}{
+		{Index: 0},
+	}
+	chunk1.Choices[0].Delta.ToolCalls = []ToolCall{
+		{
+			Index: 0,
+			ID:    "tool_123",
+			Type:  "function",
+			Function: FunctionCall{
+				Name: "get_weather",
+			},
+		},
+	}
+
+	result := converter.ConvertOpenAIStreamChunkToAnthropic(chunk1, "msg_test", "claude-3", &contentIndex, state)
+
+	if !strings.Contains(result, "content_block_start") {
+		t.Error("Should contain content_block_start for tool_use")
+	}
+	if !strings.Contains(result, "tool_use") {
+		t.Error("Should contain tool_use type")
+	}
+	if !strings.Contains(result, "get_weather") {
+		t.Error("Should contain tool name")
+	}
+	if !state.ToolUseStarted {
+		t.Error("State should show ToolUseStarted = true")
+	}
+
+	// Second chunk with arguments
+	chunk2 := &StreamChunk{}
+	chunk2.Choices = []struct {
+		Index int `json:"index"`
+		Delta struct {
+			Role      string     `json:"role,omitempty"`
+			Content   string     `json:"content,omitempty"`
+			Reasoning string     `json:"reasoning,omitempty"`
+			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
+	}{
+		{Index: 0},
+	}
+	chunk2.Choices[0].Delta.ToolCalls = []ToolCall{
+		{
+			Index: 0,
+			Function: FunctionCall{
+				Arguments: `{"city": "London"}`,
+			},
+		},
+	}
+
+	result2 := converter.ConvertOpenAIStreamChunkToAnthropic(chunk2, "msg_test", "claude-3", &contentIndex, state)
+
+	if !strings.Contains(result2, "input_json_delta") {
+		t.Error("Should contain input_json_delta")
+	}
+	if !strings.Contains(result2, `{\"city\": \"London\"}`) {
+		t.Error("Should contain partial arguments")
 	}
 }
 
@@ -772,23 +1027,30 @@ func TestConvertRequest_AnthropicToOpenAI_MixedContent(t *testing.T) {
 		t.Fatalf("Messages count = %d, want 1", len(openAIReq.Messages))
 	}
 
-	// Multiple text blocks should be merged into one text part
-	if len(openAIReq.Messages[0].Content.Parts) != 2 {
-		t.Errorf("Content parts = %d, want 2 (merged text + image)", len(openAIReq.Messages[0].Content.Parts))
+	// Text blocks are now preserved as separate parts
+	if len(openAIReq.Messages[0].Content.Parts) != 3 {
+		t.Errorf("Content parts = %d, want 3 (separate parts)", len(openAIReq.Messages[0].Content.Parts))
 	}
 
-	// Check merged text part (text blocks are merged with newline)
+	// Check first text part
 	if openAIReq.Messages[0].Content.Parts[0].Type != "text" {
 		t.Errorf("First part type = %s, want text", openAIReq.Messages[0].Content.Parts[0].Type)
 	}
-	expectedMergedText := "What's in this image?\nAnd can you also describe the text below?"
-	if openAIReq.Messages[0].Content.Parts[0].Text != expectedMergedText {
-		t.Errorf("First part text = %s, want '%s'", openAIReq.Messages[0].Content.Parts[0].Text, expectedMergedText)
+	if openAIReq.Messages[0].Content.Parts[0].Text != "What's in this image?" {
+		t.Errorf("First part text = %s, want 'What's in this image?'", openAIReq.Messages[0].Content.Parts[0].Text)
 	}
 
-	// Check image part
+	// Check second image part
 	if openAIReq.Messages[0].Content.Parts[1].Type != "image_url" {
 		t.Errorf("Second part type = %s, want image_url", openAIReq.Messages[0].Content.Parts[1].Type)
+	}
+
+	// Check third text part
+	if openAIReq.Messages[0].Content.Parts[2].Type != "text" {
+		t.Errorf("Third part type = %s, want text", openAIReq.Messages[0].Content.Parts[2].Type)
+	}
+	if openAIReq.Messages[0].Content.Parts[2].Text != "And can you also describe the text below?" {
+		t.Errorf("Third part text = %s, want 'And can you also describe the text below?'", openAIReq.Messages[0].Content.Parts[2].Text)
 	}
 	expectedURL := "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
 	if openAIReq.Messages[0].Content.Parts[1].ImageURL.URL != expectedURL {
@@ -905,5 +1167,131 @@ func TestConvertResponse_AnthropicToOpenAI_WithUsage(t *testing.T) {
 	}
 	if openAIResp.Usage.CompletionTokens != 50 {
 		t.Errorf("CompletionTokens = %d, want 50", openAIResp.Usage.CompletionTokens)
+	}
+}
+
+func TestConvertRequest_AnthropicToOpenAI_WithToolUse(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	anthropicReq := &models.AnthropicMessagesRequest{
+		Model: "claude-3-5-sonnet",
+		Messages: []models.AnthropicMessage{
+			{
+				Role: "assistant",
+				Content: models.AnthropicContent{
+					Blocks: []models.AnthropicContentBlock{
+						{Type: "text", Text: "I'll check the weather."},
+						{
+							Type: "tool_use",
+							ID:   "tool_123",
+							Name: "get_weather",
+							Input: map[string]interface{}{
+								"city": "London",
+							},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: models.AnthropicContent{
+					Blocks: []models.AnthropicContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_123",
+							Content:   "The weather is sunny.",
+						},
+					},
+				},
+			},
+		},
+		MaxTokens: 100,
+	}
+
+	result, err := converter.ConvertRequest(anthropicReq, ProtocolAnthropic, ProtocolOpenAI)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	openAIReq := result.(*ChatRequest)
+
+	if len(openAIReq.Messages) != 2 {
+		t.Fatalf("Messages count = %d, want 2", len(openAIReq.Messages))
+	}
+
+	// Check tool call message
+	msg1 := openAIReq.Messages[0]
+	if msg1.Role != "assistant" {
+		t.Errorf("First message role = %s, want assistant", msg1.Role)
+	}
+	if len(msg1.ToolCalls) != 1 {
+		t.Errorf("First message tool calls = %d, want 1", len(msg1.ToolCalls))
+	}
+	if msg1.ToolCalls[0].ID != "tool_123" {
+		t.Errorf("Tool call ID = %s, want tool_123", msg1.ToolCalls[0].ID)
+	}
+
+	// Check tool result message
+	msg2 := openAIReq.Messages[1]
+	if msg2.Role != "tool" {
+		t.Errorf("Second message role = %s, want tool", msg2.Role)
+	}
+	if msg2.ToolCallID != "tool_123" {
+		t.Errorf("Tool call ID = %s, want tool_123", msg2.ToolCallID)
+	}
+	if msg2.Content.StringContent != "The weather is sunny." {
+		t.Errorf("Tool result content = %s, want 'The weather is sunny.'", msg2.Content.StringContent)
+	}
+}
+
+func TestConvertResponse_OpenAIToAnthropic_WithToolCalls(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	openAIResp := &ChatResponse{
+		ID:    "chatcmpl-123",
+		Model: "gpt-4",
+		Choices: []Choice{
+			{
+				Index: 0,
+				Message: &ChatMessage{
+					Role:    "assistant",
+					Content: ChatMessageContent{StringContent: "Calling tool..."},
+					ToolCalls: []ToolCall{
+						{
+							ID:   "tool_123",
+							Type: "function",
+							Function: FunctionCall{
+								Name:      "get_weather",
+								Arguments: `{"city": "London"}`,
+							},
+						},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+		},
+	}
+
+	result, err := converter.ConvertResponse(openAIResp, ProtocolOpenAI, ProtocolAnthropic, "claude-3")
+	if err != nil {
+		t.Fatalf("ConvertResponse failed: %v", err)
+	}
+
+	anthropicResp := result.(*models.AnthropicMessagesResponse)
+
+	if len(anthropicResp.Content) != 2 {
+		t.Errorf("Content count = %d, want 2 (text + tool_use)", len(anthropicResp.Content))
+	}
+	if anthropicResp.Content[0].Type != "text" {
+		t.Errorf("First block type = %s, want text", anthropicResp.Content[0].Type)
+	}
+	if anthropicResp.Content[1].Type != "tool_use" {
+		t.Errorf("Second block type = %s, want tool_use", anthropicResp.Content[1].Type)
+	}
+	if anthropicResp.Content[1].ID != "tool_123" {
+		t.Errorf("Tool use ID = %s, want tool_123", anthropicResp.Content[1].ID)
+	}
+	if anthropicResp.StopReason != models.AnthropicStopToolUse {
+		t.Errorf("StopReason = %s, want tool_use", anthropicResp.StopReason)
 	}
 }

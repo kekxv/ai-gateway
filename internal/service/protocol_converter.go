@@ -188,8 +188,44 @@ func (c *ProtocolConverter) anthropicToOpenAIRequest(req *models.AnthropicMessag
 	if req.TopP > 0 {
 		openAIReq.Extra["top_p"] = req.TopP
 	}
+	if req.TopK > 0 {
+		openAIReq.Extra["top_k"] = req.TopK
+	}
 	if len(req.StopSequences) > 0 {
 		openAIReq.Extra["stop"] = req.StopSequences
+	}
+
+	// Map Tools
+	if len(req.Tools) > 0 {
+		var tools []ToolDefinition
+		for _, t := range req.Tools {
+			tools = append(tools, ToolDefinition{
+				Type: "function",
+				Function: ToolFunctionSpec{
+					Name:        t.Name,
+					Description: t.Description,
+					Parameters:  t.InputSchema,
+				},
+			})
+		}
+		openAIReq.Tools = tools
+	}
+
+	// Map ToolChoice
+	if req.ToolChoice != nil {
+		switch req.ToolChoice.Type {
+		case "auto":
+			openAIReq.Extra["tool_choice"] = "auto"
+		case "any":
+			openAIReq.Extra["tool_choice"] = "required"
+		case "tool":
+			openAIReq.Extra["tool_choice"] = map[string]interface{}{
+				"type": "function",
+				"function": map[string]string{
+					"name": req.ToolChoice.Name,
+				},
+			}
+		}
 	}
 
 	// Build messages - add system message first if present
@@ -203,11 +239,53 @@ func (c *ProtocolConverter) anthropicToOpenAIRequest(req *models.AnthropicMessag
 
 	// Convert messages
 	for _, msg := range req.Messages {
-		content := convertAnthropicContentToOpenAI(msg.Content)
-		messages = append(messages, ChatMessage{
-			Role:    msg.Role,
-			Content: content,
-		})
+		var toolCalls []ToolCall
+		var hasToolResult bool
+		var toolResultID string
+		var toolResultContent string
+
+		// Check for tool_use or tool_result in content blocks
+		if len(msg.Content.Blocks) > 0 {
+			for _, block := range msg.Content.Blocks {
+				if block.Type == "tool_use" {
+					inputJson, _ := json.Marshal(block.Input)
+					toolCalls = append(toolCalls, ToolCall{
+						ID:   block.ID,
+						Type: "function",
+						Function: FunctionCall{
+							Name:      block.Name,
+							Arguments: string(inputJson),
+						},
+					})
+				} else if block.Type == "tool_result" {
+					hasToolResult = true
+					toolResultID = block.ToolUseID
+					switch v := block.Content.(type) {
+					case string:
+						toolResultContent = v
+					default:
+						b, _ := json.Marshal(v)
+						toolResultContent = string(b)
+					}
+				}
+			}
+		}
+
+		if hasToolResult {
+			// In OpenAI, tool results are separate messages
+			messages = append(messages, ChatMessage{
+				Role:       "tool",
+				ToolCallID: toolResultID,
+				Content:    ChatMessageContent{StringContent: toolResultContent},
+			})
+		} else {
+			content := convertAnthropicContentToOpenAI(msg.Content)
+			messages = append(messages, ChatMessage{
+				Role:      msg.Role,
+				Content:   content,
+				ToolCalls: toolCalls,
+			})
+		}
 	}
 	openAIReq.Messages = messages
 
@@ -223,13 +301,21 @@ func convertAnthropicContentToOpenAI(content models.AnthropicContent) ChatMessag
 
 	// Convert content blocks
 	if len(content.Blocks) > 0 {
-		var textParts []string     // Collect all text blocks
-		var nonTextParts []ChatContentPart // Collect non-text blocks (image, video)
+		var parts []ChatContentPart
 
 		for _, block := range content.Blocks {
 			switch block.Type {
 			case "text":
-				textParts = append(textParts, block.Text)
+				parts = append(parts, ChatContentPart{
+					Type: "text",
+					Text: block.Text,
+				})
+			case "thinking":
+				// Convert thinking to text wrapped in <think> tags for OpenAI
+				parts = append(parts, ChatContentPart{
+					Type: "text",
+					Text: "<think>" + block.Thinking + "</think>",
+				})
 			case "image":
 				if block.Source != nil {
 					var url string
@@ -238,7 +324,7 @@ func convertAnthropicContentToOpenAI(content models.AnthropicContent) ChatMessag
 					} else {
 						url = block.Source.URL
 					}
-					nonTextParts = append(nonTextParts, ChatContentPart{
+					parts = append(parts, ChatContentPart{
 						Type:     "image_url",
 						ImageURL: &ChatImageURL{URL: url},
 					})
@@ -251,33 +337,35 @@ func convertAnthropicContentToOpenAI(content models.AnthropicContent) ChatMessag
 					} else {
 						url = block.Source.URL
 					}
-					nonTextParts = append(nonTextParts, ChatContentPart{
+					parts = append(parts, ChatContentPart{
 						Type:     "video_url",
 						VideoURL: &ChatMediaURL{URL: url},
 					})
 				}
+			case "tool_result":
+				// For tool_result, we might need special handling if it's mixed with other content
+				// In OpenAI, tool results are separate messages with role: tool.
+				// But Anthropic allows tool_result blocks within a user message.
+				// Here we just convert the content to text for OpenAI compatibility if needed
+				var resultText string
+				switch v := block.Content.(type) {
+				case string:
+					resultText = v
+				default:
+					b, _ := json.Marshal(v)
+					resultText = string(b)
+				}
+				parts = append(parts, ChatContentPart{
+					Type: "text",
+					Text: resultText,
+				})
 			}
 		}
 
-		// Merge all text parts into one
-		mergedText := strings.Join(textParts, "\n")
-
-		// If only text (no images/videos), return as simple string
-		if len(nonTextParts) == 0 {
-			return ChatMessageContent{StringContent: mergedText}
+		// If we only have one text part, return as simple string
+		if len(parts) == 1 && parts[0].Type == "text" {
+			return ChatMessageContent{StringContent: parts[0].Text}
 		}
-
-		// If we have mixed content (text + images/videos), build parts array
-		var parts []ChatContentPart
-		// Add merged text first (if any)
-		if mergedText != "" {
-			parts = append(parts, ChatContentPart{
-				Type: "text",
-				Text: mergedText,
-			})
-		}
-		// Add non-text parts
-		parts = append(parts, nonTextParts...)
 
 		return ChatMessageContent{Parts: parts}
 	}
@@ -301,10 +389,25 @@ func (c *ProtocolConverter) openAIToAnthropicResponse(resp *ChatResponse, modelN
 	if len(resp.Choices) > 0 {
 		choice := resp.Choices[0]
 		if choice.Message != nil {
-			content = append(content, models.AnthropicContentBlock{
-				Type: "text",
-				Text: choice.Message.Content.GetText(),
-			})
+			// Add text content if present
+			if text := choice.Message.Content.GetText(); text != "" {
+				content = append(content, models.AnthropicContentBlock{
+					Type: "text",
+					Text: text,
+				})
+			}
+
+			// Add tool calls
+			for _, tc := range choice.Message.ToolCalls {
+				var input map[string]interface{}
+				json.Unmarshal([]byte(tc.Function.Arguments), &input)
+				content = append(content, models.AnthropicContentBlock{
+					Type:  "tool_use",
+					ID:    tc.ID,
+					Name:  tc.Function.Name,
+					Input: input,
+				})
+			}
 		}
 		stopReason = convertFinishReasonToAnthropic(choice.FinishReason)
 	}
@@ -402,6 +505,46 @@ func (c *ProtocolConverter) GenerateAnthropicContentDelta(index int, text string
 	return formatSSE(models.AnthropicEventContentBlockDelta, event)
 }
 
+// GenerateAnthropicThinkingDelta generates content_block_delta event for thinking
+func (c *ProtocolConverter) GenerateAnthropicThinkingDelta(index int, thinking string) string {
+	event := models.AnthropicStreamEvent{
+		Type:  models.AnthropicEventContentBlockDelta,
+		Index: index,
+		Delta: &models.AnthropicDelta{
+			Type:     "thinking_delta",
+			Thinking: thinking,
+		},
+	}
+	return formatSSE(models.AnthropicEventContentBlockDelta, event)
+}
+
+// GenerateAnthropicToolUseBlockStart generates content_block_start event for tool_use
+func (c *ProtocolConverter) GenerateAnthropicToolUseBlockStart(index int, id, name string) string {
+	event := models.AnthropicStreamEvent{
+		Type:  models.AnthropicEventContentBlockStart,
+		Index: index,
+		ContentBlock: &models.AnthropicContentBlock{
+			Type: "tool_use",
+			ID:   id,
+			Name: name,
+		},
+	}
+	return formatSSE(models.AnthropicEventContentBlockStart, event)
+}
+
+// GenerateAnthropicToolUseDelta generates content_block_delta event for tool_use input
+func (c *ProtocolConverter) GenerateAnthropicToolUseDelta(index int, inputDelta string) string {
+	event := models.AnthropicStreamEvent{
+		Type:  models.AnthropicEventContentBlockDelta,
+		Index: index,
+		Delta: &models.AnthropicDelta{
+			Type:        "input_json_delta",
+			PartialJSON: inputDelta,
+		},
+	}
+	return formatSSE(models.AnthropicEventContentBlockDelta, event)
+}
+
 // GenerateAnthropicContentBlockStop generates content_block_stop event
 func (c *ProtocolConverter) GenerateAnthropicContentBlockStop(index int) string {
 	event := models.AnthropicStreamEvent{
@@ -434,48 +577,119 @@ func (c *ProtocolConverter) GenerateAnthropicMessageStop() string {
 }
 
 // ConvertOpenAIStreamChunkToAnthropic converts an OpenAI stream chunk to Anthropic format
-func (c *ProtocolConverter) ConvertOpenAIStreamChunkToAnthropic(chunk *StreamChunk, messageID string, contentIndex int, state *StreamConversionState) string {
+func (c *ProtocolConverter) ConvertOpenAIStreamChunkToAnthropic(chunk *StreamChunk, messageID string, modelName string, contentIndex *int, state *StreamConversionState) string {
 	var result strings.Builder
 
 	// Send message_start if this is the first chunk
 	if !state.MessageStarted {
-		result.WriteString(c.GenerateAnthropicStreamStart(messageID, ""))
-		result.WriteString("\n")
+		result.WriteString(c.GenerateAnthropicStreamStart(messageID, modelName))
 		state.MessageStarted = true
-	}
-
-	// Send content_block_start if this is the first content
-	if !state.ContentBlockStarted && len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
-		result.WriteString(c.GenerateAnthropicContentBlockStart(contentIndex))
-		result.WriteString("\n")
-		state.ContentBlockStarted = true
 	}
 
 	// Send content delta
 	for _, choice := range chunk.Choices {
+		// Handle Tool Calls
+		if len(choice.Delta.ToolCalls) > 0 {
+			for _, tc := range choice.Delta.ToolCalls {
+				// If we have a new tool call or switched tool call
+				if state.LastToolIndex != tc.Index {
+					// Stop previous tool call if it was active
+					if state.ToolUseStarted {
+						result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
+						*contentIndex++
+					}
+					// If we were thinking or having content, stop them
+					if state.ThinkingStarted || state.ContentBlockStarted {
+						result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
+						*contentIndex++
+						state.ThinkingStarted = false
+						state.ContentBlockStarted = false
+					}
+
+					// Start new tool use block
+					// OpenAI sometimes sends ID and Name in first chunk, sometimes later
+					// We need to ensure we have them before starting
+					state.ToolUseStarted = true
+					state.LastToolIndex = tc.Index
+					result.WriteString(c.GenerateAnthropicToolUseBlockStart(*contentIndex, tc.ID, tc.Function.Name))
+				}
+
+				// Handle tool call input delta
+				if tc.Function.Arguments != "" {
+					result.WriteString(c.GenerateAnthropicToolUseDelta(*contentIndex, tc.Function.Arguments))
+					state.AccumulatedContent += tc.Function.Arguments
+				}
+			}
+			continue
+		}
+
+		// Handle Reasoning (Thinking)
+		if choice.Delta.Reasoning != "" {
+			if !state.ThinkingStarted {
+				// If we were doing tool use, stop it
+				if state.ToolUseStarted {
+					result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
+					*contentIndex++
+					state.ToolUseStarted = false
+					state.LastToolIndex = -1
+				}
+				// If we had content, stop it
+				if state.ContentBlockStarted {
+					result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
+					*contentIndex++
+					state.ContentBlockStarted = false
+				}
+
+				result.WriteString(c.GenerateAnthropicContentBlockStart(*contentIndex))
+				state.ThinkingStarted = true
+			}
+			result.WriteString(c.GenerateAnthropicThinkingDelta(*contentIndex, choice.Delta.Reasoning))
+			state.AccumulatedContent += choice.Delta.Reasoning
+			continue
+		}
+
+		// If we were thinking and now have content, stop thinking block and start text block
+		if state.ThinkingStarted && choice.Delta.Content != "" {
+			result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
+			*contentIndex++
+			state.ThinkingStarted = false
+			state.ContentBlockStarted = false
+		}
+
+		// If we were doing tool use and now have content, stop tool use block and start text block
+		if state.ToolUseStarted && choice.Delta.Content != "" {
+			result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
+			*contentIndex++
+			state.ToolUseStarted = false
+			state.LastToolIndex = -1
+			state.ContentBlockStarted = false
+		}
+
+		// Handle Content
 		if choice.Delta.Content != "" {
-			result.WriteString(c.GenerateAnthropicContentDelta(contentIndex, choice.Delta.Content))
-			result.WriteString("\n")
+			if !state.ContentBlockStarted {
+				result.WriteString(c.GenerateAnthropicContentBlockStart(*contentIndex))
+				state.ContentBlockStarted = true
+			}
+			result.WriteString(c.GenerateAnthropicContentDelta(*contentIndex, choice.Delta.Content))
 			state.AccumulatedContent += choice.Delta.Content
 		}
 
 		// Handle finish reason
-		if choice.FinishReason != nil && *choice.FinishReason != "" {
-			// Close content block
-			if state.ContentBlockStarted {
-				result.WriteString(c.GenerateAnthropicContentBlockStop(contentIndex))
-				result.WriteString("\n")
+		if choice.FinishReason != nil && *choice.FinishReason != "" && !state.MessageFinished {
+			// Close current block
+			if state.ContentBlockStarted || state.ThinkingStarted || state.ToolUseStarted {
+				result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
 			}
 
 			// Send message_delta with stop reason
 			stopReason := convertFinishReasonToAnthropic(*choice.FinishReason)
 			estimatedTokens := len(state.AccumulatedContent) / 4 // rough estimate
 			result.WriteString(c.GenerateAnthropicMessageDelta(stopReason, estimatedTokens))
-			result.WriteString("\n")
 
 			// Send message_stop
 			result.WriteString(c.GenerateAnthropicMessageStop())
-			result.WriteString("\n")
+			state.MessageFinished = true
 		}
 	}
 
@@ -485,7 +699,11 @@ func (c *ProtocolConverter) ConvertOpenAIStreamChunkToAnthropic(chunk *StreamChu
 // StreamConversionState tracks state during stream conversion
 type StreamConversionState struct {
 	MessageStarted      bool
+	ThinkingStarted     bool
 	ContentBlockStarted bool
+	ToolUseStarted      bool
+	LastToolIndex       int
+	MessageFinished     bool
 	AccumulatedContent  string
 }
 
@@ -527,5 +745,5 @@ func convertStopReasonToOpenAI(reason string) string {
 
 func formatSSE(eventType string, data interface{}) string {
 	jsonData, _ := json.Marshal(data)
-	return fmt.Sprintf("event: %s\ndata: %s\n", eventType, string(jsonData))
+	return fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, string(jsonData))
 }

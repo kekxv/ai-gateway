@@ -64,6 +64,8 @@ func (as AnthropicSystem) GetText() string {
 	for _, block := range as.Blocks {
 		if block.Type == "text" {
 			result += block.Text
+		} else if block.Type == "thinking" {
+			result += block.Thinking
 		}
 	}
 	return result
@@ -124,19 +126,26 @@ func (ac AnthropicContent) GetText() string {
 	if ac.StringContent != "" {
 		return ac.StringContent
 	}
+	var result string
 	for _, block := range ac.Blocks {
 		if block.Type == "text" {
-			return block.Text
+			result += block.Text
+		} else if block.Type == "thinking" {
+			result += block.Thinking
 		}
 	}
-	return ""
+	return result
 }
 
 // AnthropicContentBlock for multimodal content
 type AnthropicContentBlock struct {
-	Type   string                  `json:"type"`             // "text", "image", "video", "tool_use", "tool_result"
+	Type   string                  `json:"type"`             // "text", "image", "video", "tool_use", "tool_result", "thinking"
 	Text   string                  `json:"text,omitempty"`   // for text type
 	Source *AnthropicMediaSource   `json:"source,omitempty"` // for image/video type
+
+	// Thinking fields
+	Thinking string                `json:"thinking,omitempty"` // for thinking type
+	Signature string               `json:"signature,omitempty"` // for thinking type
 
 	// Tool use fields
 	ID     string                  `json:"id,omitempty"`
@@ -210,9 +219,11 @@ type AnthropicStreamEvent struct {
 
 // AnthropicDelta for streaming content changes
 type AnthropicDelta struct {
-	Type       string `json:"type,omitempty"`       // "text_delta", "input_json_delta"
-	Text       string `json:"text,omitempty"`
-	StopReason string `json:"stop_reason,omitempty"`
+	Type        string `json:"type,omitempty"` // "text_delta", "input_json_delta", "thinking_delta"
+	Text        string `json:"text,omitempty"`
+	Thinking    string `json:"thinking,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"` // for tool_use input_json_delta
+	StopReason  string `json:"stop_reason,omitempty"`
 }
 
 // AnthropicErrorDetail for error details in streaming

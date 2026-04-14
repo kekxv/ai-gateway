@@ -123,6 +123,34 @@ type ChatRequest struct {
 	Extra            map[string]interface{} `json:"-"`                          // Additional fields
 }
 
+// MarshalJSON implements custom marshaling to merge Extra fields
+func (r ChatRequest) MarshalJSON() ([]byte, error) {
+	type Alias ChatRequest
+	b, err := json.Marshal(&struct {
+		*Alias
+	}{
+		Alias: (*Alias)(&r),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(r.Extra) == 0 {
+		return b, nil
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+
+	for k, v := range r.Extra {
+		m[k] = v
+	}
+
+	return json.Marshal(m)
+}
+
 // StreamOptions for OpenAI streaming API to get usage data
 type StreamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
@@ -313,6 +341,11 @@ type RealtimeLogUpdater struct {
 	usage        *Usage          // token 使用量
 	finishReason string          // 结束原因
 
+	// 实时日志更新器
+	isAnthropicStream   bool   // true if upstream returns Anthropic format
+	lastAnthropicEvent string // last event type received in Anthropic stream
+	currentToolIndex   int    // index of tool currently being streamed
+
 	// 控制
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -327,6 +360,7 @@ func NewRealtimeLogUpdater(
 	apiKey *models.GatewayAPIKey,
 	model *models.Model,
 	debounceDur time.Duration,
+	isAnthropicStream bool,
 ) *RealtimeLogUpdater {
 	if debounceDur == 0 {
 		debounceDur = 200 * time.Millisecond
@@ -335,19 +369,21 @@ func NewRealtimeLogUpdater(
 	ctx, cancel := context.WithCancel(context.Background())
 
 	u := &RealtimeLogUpdater{
-		logRepo:       logRepo,
-		logDetailRepo: logDetailRepo,
-		logID:         logID,
-		apiKey:        apiKey,
-		model:         model,
-		dataChan:      make(chan []byte, 100),
-		doneChan:      make(chan struct{}),
-		debounceDur:   debounceDur,
-		maxInterval:   time.Second, // 最大 1 秒写入一次
-		role:          "assistant", // 默认角色
-		usage:         &Usage{},
-		ctx:           ctx,
-		cancel:        cancel,
+		logRepo:           logRepo,
+		logDetailRepo:     logDetailRepo,
+		logID:             logID,
+		apiKey:            apiKey,
+		model:             model,
+		dataChan:          make(chan []byte, 100),
+		doneChan:          make(chan struct{}),
+		debounceDur:       debounceDur,
+		maxInterval:       time.Second, // 最大 1 秒写入一次
+		role:              "assistant", // 默认角色
+		usage:             &Usage{},
+		isAnthropicStream: isAnthropicStream,
+		currentToolIndex:  -1,
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 
 	u.wg.Add(1)
@@ -459,6 +495,86 @@ func (u *RealtimeLogUpdater) parseAndUpdateContent(data []byte) {
 		if line == "" {
 			continue
 		}
+
+		// Handle Anthropic stream format
+		if u.isAnthropicStream {
+			if strings.HasPrefix(line, "event:") {
+				u.lastAnthropicEvent = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+				continue
+			}
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+
+			dataStr := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			switch u.lastAnthropicEvent {
+			case "message_start":
+				var event struct {
+					Message struct {
+						Usage struct {
+							InputTokens  int `json:"input_tokens"`
+							OutputTokens int `json:"output_tokens"`
+						} `json:"usage"`
+					} `json:"message"`
+				}
+				if err := json.Unmarshal([]byte(dataStr), &event); err == nil {
+					u.usage.PromptTokens = event.Message.Usage.InputTokens
+					u.usage.CompletionTokens = event.Message.Usage.OutputTokens
+				}
+			case "content_block_start":
+				var event struct {
+					Index        int                          `json:"index"`
+					ContentBlock models.AnthropicContentBlock `json:"content_block"`
+				}
+				if err := json.Unmarshal([]byte(dataStr), &event); err == nil {
+					if event.ContentBlock.Type == "tool_use" {
+						u.currentToolIndex = event.Index
+						u.mergeToolCall(ToolCall{
+							Index:    event.Index,
+							ID:       event.ContentBlock.ID,
+							Type:     "function",
+							Function: FunctionCall{Name: event.ContentBlock.Name},
+						})
+					}
+				}
+			case "content_block_delta":
+				var event struct {
+					Index int                    `json:"index"`
+					Delta models.AnthropicDelta `json:"delta"`
+				}
+				if err := json.Unmarshal([]byte(dataStr), &event); err == nil {
+					switch event.Delta.Type {
+					case "text_delta":
+						u.content.WriteString(event.Delta.Text)
+					case "thinking_delta":
+						u.reasoning.WriteString(event.Delta.Thinking)
+					case "input_json_delta":
+						u.mergeToolCall(ToolCall{
+							Index:    event.Index,
+							Function: FunctionCall{Arguments: event.Delta.PartialJSON},
+						})
+					}
+				}
+			case "message_delta":
+				var event struct {
+					Delta struct {
+						StopReason string `json:"stop_reason"`
+					} `json:"delta"`
+					Usage struct {
+						OutputTokens int `json:"output_tokens"`
+					} `json:"usage"`
+				}
+				if err := json.Unmarshal([]byte(dataStr), &event); err == nil {
+					u.finishReason = event.Delta.StopReason
+					if event.Usage.OutputTokens > 0 {
+						u.usage.CompletionTokens = event.Usage.OutputTokens
+					}
+				}
+			}
+			continue
+		}
+
+		// Handle OpenAI stream format
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
@@ -1403,8 +1519,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 
 	// Handle error responses
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		body, _ := s.readDecompressedBody(resp)
 		log.Printf("[HandleChatCompletions] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
 		latency := int(time.Since(startTime).Milliseconds())
 		s.handleUpstreamError(ctx, resp, route)
@@ -1436,6 +1551,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 				apiKey,
 				model,
 				200*time.Millisecond,
+				false,
 			)
 		}
 
@@ -1586,6 +1702,26 @@ func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey st
 
 	log.Printf("[sendUpstreamRequest] Sending request to: %s, stream: %v, model: %s", url, stream, req.Model)
 	return s.httpClient.Do(httpReq)
+}
+
+// readDecompressedBody reads response body and decompresses it if necessary
+func (s *GatewayService) readDecompressedBody(resp *http.Response) ([]byte, error) {
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		decompressed, err := utils.GzipDecompress(body)
+		if err != nil {
+			log.Printf("[readDecompressedBody] Gzip decompress failed: %v", err)
+			return body, nil // Return raw body if decompression fails
+		}
+		return decompressed, nil
+	}
+
+	return body, nil
 }
 
 // handleUpstreamError handles upstream errors, including auto-disabling routes for 429
@@ -1977,8 +2113,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		}
 
 		if resp.StatusCode >= 400 {
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			body, _ := s.readDecompressedBody(resp)
 			log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s, Request body: %s", resp.StatusCode, string(body), targetURL, string(rawReqBodyModified))
 			latency := int(time.Since(startTime).Milliseconds())
 			s.handleUpstreamError(ctx, resp, route)
@@ -2003,9 +2138,18 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			// Estimate prompt tokens for fallback
 			streamResp.estimatedPromptTokens = estimateAnthropicPromptTokens(req)
 
-			// Note: realtimeLogger is NOT set for Anthropic direct forwarding
-			// because RealtimeLogUpdater only supports OpenAI SSE format.
-			// Token counting will be done in LogAfterComplete using getAnthropicCapturedData.
+			// 初始化实时日志更新器
+			if logEntry.ID != 0 {
+				streamResp.realtimeLogger = NewRealtimeLogUpdater(
+					s.logRepo,
+					s.logDetailRepo,
+					logEntry.ID,
+					apiKey,
+					model,
+					200*time.Millisecond,
+					true,
+				)
+			}
 
 			log.Printf("[HandleAnthropicMessages] Response type: anthropic (direct stream)")
 			return streamResp, nil
@@ -2074,8 +2218,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	}
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		body, _ := s.readDecompressedBody(resp)
 		log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
 		latency := int(time.Since(startTime).Milliseconds())
 		s.handleUpstreamError(ctx, resp, route)
@@ -2105,6 +2248,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 				apiKey,
 				model,
 				200*time.Millisecond,
+				false,
 			)
 		}
 
@@ -2113,8 +2257,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	}
 
 	// Handle non-streaming response (convert back to Anthropic format)
-	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	body, err := s.readDecompressedBody(resp)
 	if err != nil {
 		log.Printf("[HandleAnthropicMessages] Read response body failed: %v", err)
 		latency := int(time.Since(startTime).Milliseconds())
@@ -2395,16 +2538,14 @@ func (s *GatewayService) HandleAnthropicCountTokens(ctx context.Context, apiKey 
 		}
 
 		if resp.StatusCode >= 400 {
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			body, _ := s.readDecompressedBody(resp)
 			log.Printf("[HandleAnthropicCountTokens] Upstream error: status=%d, body=%s, URL: %s, falling back to local estimation", resp.StatusCode, string(body), targetURL)
 			// Fallback to local estimation (provider might not support count_tokens endpoint)
 			return s.estimateAnthropicTokens(req), nil
 		}
 
 		// Parse response
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		body, err := s.readDecompressedBody(resp)
 		if err != nil {
 			log.Printf("[HandleAnthropicCountTokens] Failed to read response body: %v, falling back to local estimation", err)
 			return s.estimateAnthropicTokens(req), nil

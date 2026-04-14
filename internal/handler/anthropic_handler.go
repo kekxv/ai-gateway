@@ -178,7 +178,9 @@ func (h *AnthropicHandler) handleStreamResponse(c *gin.Context, result interface
 	contentIndex := 0
 
 	// Track state for stream conversion
-	state := &service.StreamConversionState{}
+	state := &service.StreamConversionState{
+		LastToolIndex: -1,
+	}
 	
 	// Buffer for partial SSE lines
 	var lineBuffer strings.Builder
@@ -228,6 +230,21 @@ func (h *AnthropicHandler) handleStreamResponse(c *gin.Context, result interface
 				}
 				lineBuffer.Reset()
 			}
+
+			// Final check for completion if not already finished
+			if !state.MessageFinished {
+				var finalResult strings.Builder
+				if state.ContentBlockStarted || state.ThinkingStarted {
+					finalResult.WriteString(converter.GenerateAnthropicContentBlockStop(contentIndex))
+				}
+				finalResult.WriteString(converter.GenerateAnthropicMessageDelta(models.AnthropicStopEndTurn, len(state.AccumulatedContent)/4))
+				finalResult.WriteString(converter.GenerateAnthropicMessageStop())
+				w.Write([]byte(finalResult.String()))
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				state.MessageFinished = true
+			}
 			return false
 		}
 		
@@ -245,17 +262,16 @@ func (h *AnthropicHandler) convertStreamData(data []byte, messageID string, cont
 		if strings.HasPrefix(line, "data: ") {
 			jsonData := strings.TrimPrefix(line, "data: ")
 
-			// Skip [DONE] marker
+			// Skip [DONE] marker - we handle completion via finish_reason or stream end
 			if jsonData == "[DONE]" {
-				// Send final events
-				if state.ContentBlockStarted {
-					result.WriteString(converter.GenerateAnthropicContentBlockStop(*contentIndex))
-					result.WriteString("\n")
+				if !state.MessageFinished {
+					if state.ContentBlockStarted || state.ThinkingStarted {
+						result.WriteString(converter.GenerateAnthropicContentBlockStop(*contentIndex))
+					}
+					result.WriteString(converter.GenerateAnthropicMessageDelta(models.AnthropicStopEndTurn, len(state.AccumulatedContent)/4))
+					result.WriteString(converter.GenerateAnthropicMessageStop())
+					state.MessageFinished = true
 				}
-				result.WriteString(converter.GenerateAnthropicMessageDelta(models.AnthropicStopEndTurn, 0))
-				result.WriteString("\n")
-				result.WriteString(converter.GenerateAnthropicMessageStop())
-				result.WriteString("\n")
 				continue
 			}
 
@@ -266,7 +282,7 @@ func (h *AnthropicHandler) convertStreamData(data []byte, messageID string, cont
 			}
 
 			// Convert to Anthropic format
-			converted := converter.ConvertOpenAIStreamChunkToAnthropic(&chunk, messageID, *contentIndex, state)
+			converted := converter.ConvertOpenAIStreamChunkToAnthropic(&chunk, messageID, modelName, contentIndex, state)
 			result.WriteString(converted)
 		}
 	}
