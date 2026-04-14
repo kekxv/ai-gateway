@@ -1642,13 +1642,40 @@ func (s *GatewayService) checkPermission(ctx context.Context, apiKey *models.Gat
 
 	// Check if model is allowed in any of the channels
 	for _, channelID := range channelIDs {
-		allowedModels, err := s.channelRepo.GetAllowedModels(ctx, channelID)
+		channel, err := s.channelRepo.FindByID(ctx, channelID)
 		if err != nil {
 			continue
 		}
-		for _, am := range allowedModels {
-			if am.ModelID == modelID {
-				return nil
+
+		// If channel supports all models, check if model has routes to channel's providers
+		if channel.SupportsAllModels {
+			// Get channel's providers
+			providerBindings, err := s.channelRepo.GetProviders(ctx, channelID)
+			if err != nil {
+				continue
+			}
+			providerIDs := make([]uint, len(providerBindings))
+			for i, pb := range providerBindings {
+				providerIDs[i] = pb.ProviderID
+			}
+
+			// Check if model has routes to any of these providers
+			if len(providerIDs) > 0 {
+				routes, err := s.modelRouteRepo.FindByModelAndProviders(ctx, modelID, providerIDs)
+				if err == nil && len(routes) > 0 {
+					return nil
+				}
+			}
+		} else {
+			// Check ChannelAllowedModel table
+			allowedModels, err := s.channelRepo.GetAllowedModels(ctx, channelID)
+			if err != nil {
+				continue
+			}
+			for _, am := range allowedModels {
+				if am.ModelID == modelID {
+					return nil
+				}
 			}
 		}
 	}

@@ -696,10 +696,11 @@ func (h *ProviderHandler) AddModels(c *gin.Context) {
 // ChannelHandler
 type ChannelHandler struct {
 	channelRepo *repository.ChannelRepository
+	modelRepo   *repository.ModelRepository
 }
 
-func NewChannelHandler(channelRepo *repository.ChannelRepository) *ChannelHandler {
-	return &ChannelHandler{channelRepo: channelRepo}
+func NewChannelHandler(channelRepo *repository.ChannelRepository, modelRepo *repository.ModelRepository) *ChannelHandler {
+	return &ChannelHandler{channelRepo: channelRepo, modelRepo: modelRepo}
 }
 
 func (h *ChannelHandler) ListChannels(c *gin.Context) {
@@ -847,8 +848,29 @@ func (h *ChannelHandler) UpdateChannel(c *gin.Context) {
 
 func (h *ChannelHandler) DeleteChannel(c *gin.Context) {
 	id := parseUintParam(c.Param("id"))
+	ctx := c.Request.Context()
 
-	if err := h.channelRepo.Delete(c.Request.Context(), id); err != nil {
+	// Check if channel exists
+	_, err := h.channelRepo.FindByID(ctx, id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Channel not found"})
+		return
+	}
+
+	// Clean up ChannelProvider associations
+	if err := h.channelRepo.UnbindAllProviders(ctx, id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Clean up ChannelAllowedModel associations
+	if err := h.channelRepo.UnbindAllModels(ctx, id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Delete the channel
+	if err := h.channelRepo.Delete(ctx, id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -888,6 +910,30 @@ func (h *ChannelHandler) BindModels(c *gin.Context) {
 		return
 	}
 
+	// Validate that all model IDs exist
+	if len(req.ModelIDs) > 0 {
+		validModelIDs, err := h.modelRepo.ValidateModelIDs(c.Request.Context(), req.ModelIDs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if len(validModelIDs) != len(req.ModelIDs) {
+			// Filter out invalid model IDs
+			validSet := make(map[uint]bool)
+			for _, id := range validModelIDs {
+				validSet[id] = true
+			}
+			var invalidIDs []uint
+			for _, id := range req.ModelIDs {
+				if !validSet[id] {
+					invalidIDs = append(invalidIDs, id)
+				}
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model IDs: " + fmt.Sprintf("%v", invalidIDs)})
+			return
+		}
+	}
+
 	if err := h.channelRepo.BindModels(c.Request.Context(), id, req.ModelIDs); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -902,14 +948,16 @@ type ModelHandler struct {
 	modelRouteRepo  *repository.ModelRouteRepository
 	modelAliasRepo  *repository.ModelAliasRepository
 	channelRepo     *repository.ChannelRepository
+	providerRepo    *repository.ProviderRepository
 }
 
-func NewModelHandler(modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository, modelAliasRepo *repository.ModelAliasRepository, channelRepo *repository.ChannelRepository) *ModelHandler {
+func NewModelHandler(modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository, modelAliasRepo *repository.ModelAliasRepository, channelRepo *repository.ChannelRepository, providerRepo *repository.ProviderRepository) *ModelHandler {
 	return &ModelHandler{
 		modelRepo:       modelRepo,
 		modelRouteRepo:  modelRouteRepo,
 		modelAliasRepo:  modelAliasRepo,
 		channelRepo:     channelRepo,
+		providerRepo:    providerRepo,
 	}
 }
 
@@ -1154,7 +1202,7 @@ func (h *ModelHandler) DeleteModel(c *gin.Context) {
 		return
 	}
 
-	// Clean up ChannelAllowedModel associations (no longer blocking deletion)
+	// Clean up ChannelAllowedModel associations
 	h.channelRepo.DeleteModelBindings(ctx, id)
 
 	// Delete associated routes first
@@ -1165,6 +1213,9 @@ func (h *ModelHandler) DeleteModel(c *gin.Context) {
 
 	// Delete aliases
 	h.modelAliasRepo.DeleteByModelID(ctx, id)
+
+	// Delete ProviderModel associations
+	h.providerRepo.UnbindModelFromAllProviders(ctx, id)
 
 	// Delete model
 	if err := h.modelRepo.Delete(ctx, id); err != nil {

@@ -376,9 +376,9 @@ const submitForm = async () => {
 
   submitting.value = true
   try {
-    // Determine model_ids: if supportsAllModels, use all provider-associated models
+    // When supportsAllModels is true, we don't bind models - the backend will check dynamically
     const modelIdsToSubmit = form.supportsAllModels
-      ? providerAssociatedModels.value.map(m => m.id)
+      ? [] // Empty array - backend uses supportsAllModels flag to check dynamically
       : form.model_ids
 
     if (isEdit.value && selectedChannel.value) {
@@ -391,8 +391,13 @@ const submitForm = async () => {
       if (form.provider_ids.length > 0) {
         await channelApi.bindProviders(selectedChannel.value.id, form.provider_ids)
       }
-      if (modelIdsToSubmit.length > 0) {
+      // Only bind models if supportsAllModels is false
+      if (!form.supportsAllModels && modelIdsToSubmit.length > 0) {
         await channelApi.bindModels(selectedChannel.value.id, modelIdsToSubmit)
+      }
+      // If supportsAllModels changed from true to false, clear model bindings
+      if (form.supportsAllModels && selectedChannel.value.supportsAllModels !== form.supportsAllModels) {
+        await channelApi.bindModels(selectedChannel.value.id, [])
       }
     } else {
       const response = await channelApi.create({
@@ -405,7 +410,8 @@ const submitForm = async () => {
       if (form.provider_ids.length > 0) {
         await channelApi.bindProviders(channelId, form.provider_ids)
       }
-      if (modelIdsToSubmit.length > 0) {
+      // Only bind models if supportsAllModels is false
+      if (!form.supportsAllModels && modelIdsToSubmit.length > 0) {
         await channelApi.bindModels(channelId, modelIdsToSubmit)
       }
     }

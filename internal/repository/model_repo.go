@@ -136,6 +136,19 @@ func (r *ModelRepository) UpdatePrices(ctx context.Context, id uint, inputPrice,
 		}).Error
 }
 
+// ValidateModelIDs returns only the IDs that exist in the Model table
+func (r *ModelRepository) ValidateModelIDs(ctx context.Context, modelIDs []uint) ([]uint, error) {
+	var validIDs []uint
+	err := r.db.WithContext(ctx).
+		Model(&models.Model{}).
+		Where("id IN ?", modelIDs).
+		Pluck("id", &validIDs).Error
+	if err != nil {
+		return nil, err
+	}
+	return validIDs, nil
+}
+
 func (r *ModelRepository) FindWithRoutes(ctx context.Context, id uint) (*models.Model, error) {
 	var model models.Model
 	err := r.db.WithContext(ctx).
@@ -218,6 +231,15 @@ func (r *ModelRouteRepository) Delete(ctx context.Context, id uint) error {
 // DeleteByProviderID deletes all routes for a specific provider
 func (r *ModelRouteRepository) DeleteByProviderID(ctx context.Context, providerID uint) error {
 	return r.db.WithContext(ctx).Where("providerId = ?", providerID).Delete(&models.ModelRoute{}).Error
+}
+
+// FindByModelAndProviders finds routes for a model that point to specific providers
+func (r *ModelRouteRepository) FindByModelAndProviders(ctx context.Context, modelID uint, providerIDs []uint) ([]models.ModelRoute, error) {
+	var routes []models.ModelRoute
+	err := r.db.WithContext(ctx).
+		Where("modelId = ? AND providerId IN ?", modelID, providerIDs).
+		Find(&routes).Error
+	return routes, err
 }
 
 // UpdateRoutesForModel updates all routes for a model (delete old, create new)

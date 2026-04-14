@@ -170,6 +170,17 @@ func InitDatabase(dbPath string) (*gorm.DB, error) {
 		`)
 	}
 
+	// Clean up orphan records in association tables
+	// These records may exist due to historical foreign key constraint issues
+	db.Exec(`DELETE FROM ModelRoute WHERE modelId NOT IN (SELECT id FROM Model)`)
+	db.Exec(`DELETE FROM ProviderModel WHERE modelId NOT IN (SELECT id FROM Model)`)
+	db.Exec(`DELETE FROM ModelAlias WHERE modelId NOT IN (SELECT id FROM Model)`)
+	db.Exec(`DELETE FROM ChannelAllowedModel WHERE modelId NOT IN (SELECT id FROM Model)`)
+	db.Exec(`DELETE FROM ModelRoute WHERE providerId NOT IN (SELECT id FROM Provider)`)
+	db.Exec(`DELETE FROM ProviderModel WHERE providerId NOT IN (SELECT id FROM Provider)`)
+	db.Exec(`DELETE FROM ChannelProvider WHERE providerId NOT IN (SELECT id FROM Provider)`)
+	db.Exec(`DELETE FROM ProviderType WHERE providerId NOT IN (SELECT id FROM Provider)`)
+
 	return db, nil
 }
 

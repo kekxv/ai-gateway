@@ -139,6 +139,13 @@ func (r *ProviderRepository) UnbindAllModels(ctx context.Context, providerID uin
 		Delete(&models.ProviderModel{}).Error
 }
 
+// UnbindModelFromAllProviders removes all provider associations for a model
+func (r *ProviderRepository) UnbindModelFromAllProviders(ctx context.Context, modelID uint) error {
+	return r.db.WithContext(ctx).
+		Where("modelId = ?", modelID).
+		Delete(&models.ProviderModel{}).Error
+}
+
 // GetProvidersByModelID returns all provider IDs associated with a model
 func (r *ProviderRepository) GetProvidersByModelID(ctx context.Context, modelID uint) ([]uint, error) {
 	var providerIDs []uint
@@ -200,6 +207,20 @@ func (r *ChannelRepository) BindProviders(ctx context.Context, channelID uint, p
 		}
 	}
 	return nil
+}
+
+// UnbindAllProviders removes all provider associations for a channel
+func (r *ChannelRepository) UnbindAllProviders(ctx context.Context, channelID uint) error {
+	return r.db.WithContext(ctx).
+		Where("channelId = ?", channelID).
+		Delete(&models.ChannelProvider{}).Error
+}
+
+// UnbindAllModels removes all model associations for a channel
+func (r *ChannelRepository) UnbindAllModels(ctx context.Context, channelID uint) error {
+	return r.db.WithContext(ctx).
+		Where("channelId = ?", channelID).
+		Delete(&models.ChannelAllowedModel{}).Error
 }
 
 func (r *ChannelRepository) BindModels(ctx context.Context, channelID uint, modelIDs []uint) error {
