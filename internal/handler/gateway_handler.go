@@ -41,7 +41,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	stream := req.Stream
 
 	// Pass request headers for forwarding and logging
-	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), apiKey, &req, stream, c.Request.Header)
+	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), apiKey, &req, stream, c.Request.Header, c.Request.URL.Path)
 	if err != nil {
 		log.Printf("[ChatCompletions] Error: %v, Model: %s, Stream: %v", err, req.Model, stream)
 		switch err {

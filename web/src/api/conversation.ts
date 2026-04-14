@@ -40,6 +40,10 @@ export const conversationApi = {
   generateTitle: (id: number) =>
     api.post<{ data: { title: string } }>(`/conversations/${id}/generate-title`),
 
+  // Update conversation title
+  updateTitle: (id: number, title: string) =>
+    api.put<{ message: string; title: string }>(`/conversations/${id}/title`, { title }),
+
   // Send a message with streaming (OpenAI-compatible format)
   // Frontend builds full request with model and messages
   sendMessageStream: async (

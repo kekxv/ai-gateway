@@ -90,6 +90,7 @@ func (h *AnthropicHandler) CreateMessages(c *gin.Context) {
 		req.Stream,
 		c.Request.Header,
 		c.Request.URL.RawQuery,
+			c.Request.URL.Path,
 	)
 
 	if err != nil {

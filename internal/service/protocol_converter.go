@@ -223,14 +223,13 @@ func convertAnthropicContentToOpenAI(content models.AnthropicContent) ChatMessag
 
 	// Convert content blocks
 	if len(content.Blocks) > 0 {
-		var parts []ChatContentPart
+		var textParts []string     // Collect all text blocks
+		var nonTextParts []ChatContentPart // Collect non-text blocks (image, video)
+
 		for _, block := range content.Blocks {
 			switch block.Type {
 			case "text":
-				parts = append(parts, ChatContentPart{
-					Type: "text",
-					Text: block.Text,
-				})
+				textParts = append(textParts, block.Text)
 			case "image":
 				if block.Source != nil {
 					var url string
@@ -239,7 +238,7 @@ func convertAnthropicContentToOpenAI(content models.AnthropicContent) ChatMessag
 					} else {
 						url = block.Source.URL
 					}
-					parts = append(parts, ChatContentPart{
+					nonTextParts = append(nonTextParts, ChatContentPart{
 						Type:     "image_url",
 						ImageURL: &ChatImageURL{URL: url},
 					})
@@ -252,7 +251,7 @@ func convertAnthropicContentToOpenAI(content models.AnthropicContent) ChatMessag
 					} else {
 						url = block.Source.URL
 					}
-					parts = append(parts, ChatContentPart{
+					nonTextParts = append(nonTextParts, ChatContentPart{
 						Type:     "video_url",
 						VideoURL: &ChatMediaURL{URL: url},
 					})
@@ -260,10 +259,26 @@ func convertAnthropicContentToOpenAI(content models.AnthropicContent) ChatMessag
 			}
 		}
 
-		// If only text, simplify to string
-		if len(parts) == 1 && parts[0].Type == "text" {
-			return ChatMessageContent{StringContent: parts[0].Text}
+		// Merge all text parts into one
+		mergedText := strings.Join(textParts, "\n")
+
+		// If only text (no images/videos), return as simple string
+		if len(nonTextParts) == 0 {
+			return ChatMessageContent{StringContent: mergedText}
 		}
+
+		// If we have mixed content (text + images/videos), build parts array
+		var parts []ChatContentPart
+		// Add merged text first (if any)
+		if mergedText != "" {
+			parts = append(parts, ChatContentPart{
+				Type: "text",
+				Text: mergedText,
+			})
+		}
+		// Add non-text parts
+		parts = append(parts, nonTextParts...)
+
 		return ChatMessageContent{Parts: parts}
 	}
 

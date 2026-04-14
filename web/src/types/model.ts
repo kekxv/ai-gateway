@@ -46,6 +46,8 @@ export interface CreateModelRequest {
   description?: string
   input_price?: number
   output_price?: number
+  channelIds?: number[]
+  routes?: ModelRoute[]
 }
 
 export interface UpdateModelRequest {

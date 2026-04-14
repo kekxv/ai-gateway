@@ -189,8 +189,10 @@ type AnthropicMessagesResponse struct {
 
 // AnthropicUsage for token tracking
 type AnthropicUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens            int `json:"input_tokens"`
+	OutputTokens           int `json:"output_tokens"`
+	CacheReadInputTokens   int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 }
 
 // ================================== Anthropic Streaming Types ==================================

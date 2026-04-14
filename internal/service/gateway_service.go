@@ -1285,7 +1285,7 @@ func NewGatewayService(
 // HandleChatCompletions handles chat completions requests
 // For streaming, returns (*StreamingResponse, error)
 // For non-streaming, returns (*ChatResponse, error)
-func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *models.GatewayAPIKey, req *ChatRequest, stream bool, requestHeaders http.Header) (interface{}, error) {
+func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *models.GatewayAPIKey, req *ChatRequest, stream bool, requestHeaders http.Header, requestPath string) (interface{}, error) {
 	startTime := time.Now()
 
 	// Extract and filter headers for forwarding and logging
@@ -1325,6 +1325,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		ProviderName:   route.Provider.Name,
 		Status:         0, // pending
 		RequestHeaders: headersJSON,
+		RequestPath:    requestPath,
 	}
 	// Log for real API keys or chat keys (IsChatKey=true)
 	if apiKey.ID != 0 || apiKey.IsChatKey {
@@ -1450,6 +1451,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil)
 		return nil, err
 	}
+
 
 	// Debug: print raw response for title generation requests
 	if req.MaxTokens <= 100 {
@@ -1848,7 +1850,7 @@ func weightedRandomSelect(weights []int) int {
 // HandleAnthropicMessages handles Anthropic Messages API requests
 // Supports direct forwarding if provider supports anthropic type, otherwise converts to OpenAI format
 // rawReqBody is the original request body for direct forwarding (preserves exact format)
-func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *models.GatewayAPIKey, req *models.AnthropicMessagesRequest, rawReqBody []byte, stream bool, requestHeaders http.Header, rawQuery string) (interface{}, error) {
+func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *models.GatewayAPIKey, req *models.AnthropicMessagesRequest, rawReqBody []byte, stream bool, requestHeaders http.Header, rawQuery string, requestPath string) (interface{}, error) {
 	startTime := time.Now()
 
 	// Extract and filter headers for forwarding and logging
@@ -1887,6 +1889,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		ProviderName:   route.Provider.Name,
 		Status:         0, // pending
 		RequestHeaders: headersJSON,
+		RequestPath:    requestPath,
 	}
 	if apiKey.ID != 0 || apiKey.IsChatKey {
 		if err := s.logRepo.Create(ctx, logEntry); err != nil {
@@ -2018,6 +2021,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			return nil, err
 		}
 
+
 		var anthropicResp models.AnthropicMessagesResponse
 		if err := json.Unmarshal(body, &anthropicResp); err != nil {
 			log.Printf("[HandleAnthropicMessages] Parse response failed: %v, body: %s", err, string(body))
@@ -2118,6 +2122,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		return nil, err
 	}
 
+
 	var chatResp ChatResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
 		log.Printf("[HandleAnthropicMessages] Parse response failed: %v, body: %s", err, string(body))
@@ -2206,12 +2211,14 @@ func (s *GatewayService) sendRawUpstreamRequest(ctx context.Context, url, apiKey
 
 // updateAnthropicLogAndCalculateCost updates log and calculates cost for Anthropic format responses
 func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, req *models.AnthropicMessagesRequest, resp *models.AnthropicMessagesResponse, latency int, logID uint, respHeaders map[string]string) {
-	var promptTokens, completionTokens, totalTokens int
+	var promptTokens, completionTokens, totalTokens, cacheReadTokens, cacheWriteTokens int
 
 	// Try standard Anthropic usage format first
 	if resp.Usage != nil {
 		promptTokens = resp.Usage.InputTokens
 		completionTokens = resp.Usage.OutputTokens
+		cacheReadTokens = resp.Usage.CacheReadInputTokens
+		cacheWriteTokens = resp.Usage.CacheCreationInputTokens
 	}
 
 	// Fallback 1: Try alternative field names (some providers use different naming)
@@ -2304,6 +2311,8 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 			"promptTokens":        promptTokens,
 			"completionTokens":    completionTokens,
 			"totalTokens":         totalTokens,
+				"cacheReadTokens":     cacheReadTokens,
+				"cacheWriteTokens":    cacheWriteTokens,
 			"cost":                 cost,
 			"ownerChannelId":     ownerChannelID,
 			"ownerChannelUserId": ownerChannelUserID,

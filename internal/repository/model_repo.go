@@ -215,6 +215,11 @@ func (r *ModelRouteRepository) Delete(ctx context.Context, id uint) error {
 	return r.db.WithContext(ctx).Delete(&models.ModelRoute{}, id).Error
 }
 
+// DeleteByProviderID deletes all routes for a specific provider
+func (r *ModelRouteRepository) DeleteByProviderID(ctx context.Context, providerID uint) error {
+	return r.db.WithContext(ctx).Where("providerId = ?", providerID).Delete(&models.ModelRoute{}).Error
+}
+
 // UpdateRoutesForModel updates all routes for a model (delete old, create new)
 func (r *ModelRouteRepository) UpdateRoutesForModel(ctx context.Context, modelID uint, routes []models.ModelRoute) error {
 	// Delete existing routes for this model

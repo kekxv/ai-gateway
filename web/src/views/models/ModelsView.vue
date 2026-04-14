@@ -119,7 +119,7 @@
     </div>
 
     <!-- Create/Edit Dialog -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? t('model.editTitle') : t('model.createTitle')" width="500px">
+    <el-dialog v-model="dialogVisible" :title="isEdit ? t('model.editTitle') : t('model.createTitle')" width="600px">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="120px">
         <el-form-item :label="t('model.name')" prop="name">
           <el-input v-model="form.name" placeholder="e.g., gpt-4, claude-3-opus" />
@@ -136,6 +136,56 @@
         </el-form-item>
         <el-form-item :label="t('model.outputPrice')">
           <el-input-number v-model="form.output_price" :precision="6" :step="0.001" :min="0" class="w-full" />
+        </el-form-item>
+
+        <!-- Routes Section -->
+        <el-form-item label="关联路由">
+          <div class="w-full">
+            <div class="text-xs text-gray-500 mb-2">配置供应商路由，设置权重以控制负载均衡</div>
+
+            <!-- Existing Routes -->
+            <div v-if="form.routes.length" class="space-y-2 mb-3">
+              <div
+                v-for="(route, index) in form.routes"
+                :key="index"
+                class="flex items-center gap-3 p-3 bg-gray-50 rounded-lg"
+              >
+                <div class="flex-1">
+                  <div class="font-medium text-gray-800">{{ route.provider?.name || getProviderName(route.providerId) || 'Provider #' + route.providerId }}</div>
+                </div>
+                <el-input-number
+                  v-model="route.weight"
+                  :min="1"
+                  :max="100"
+                  size="small"
+                  class="w-24"
+                  placeholder="权重"
+                />
+                <el-switch
+                  v-model="route.disabled"
+                  active-text="禁用"
+                  inactive-text="启用"
+                />
+                <el-button size="small" type="danger" link @click="removeFormRoute(index)">
+                  <el-icon><Delete /></el-icon>
+                </el-button>
+              </div>
+            </div>
+            <div v-else class="text-center py-4 text-gray-400 mb-3 bg-gray-50 rounded-lg">
+              暂无路由配置，添加供应商路由
+            </div>
+
+            <!-- Add New Route -->
+            <div class="border-t pt-3">
+              <div class="flex gap-2 items-end">
+                <el-select v-model="newRoute.providerId" placeholder="选择供应商" class="flex-1">
+                  <el-option v-for="p in providers" :key="p.id" :label="p.name" :value="p.id" />
+                </el-select>
+                <el-input-number v-model="newRoute.weight" :min="1" :max="100" placeholder="权重" class="w-24" />
+                <el-button type="primary" size="small" @click="addFormRoute">添加</el-button>
+              </div>
+            </div>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -238,7 +288,8 @@ const form = reactive({
   aliases: [] as string[],
   description: '',
   input_price: 0,
-  output_price: 0
+  output_price: 0,
+  routes: [] as ModelRoute[]
 })
 
 const newRoute = reactive({
@@ -309,6 +360,45 @@ const resetForm = () => {
   form.description = ''
   form.input_price = 0
   form.output_price = 0
+  form.routes = []
+  newRoute.providerId = null
+  newRoute.weight = 1
+}
+
+const getProviderName = (providerId: number | undefined) => {
+  if (!providerId) return ''
+  const provider = providers.value.find(p => p.id === providerId)
+  return provider?.name || ''
+}
+
+const addFormRoute = () => {
+  if (!newRoute.providerId) {
+    ElMessage.warning('请选择供应商')
+    return
+  }
+  // Check if already added
+  if (form.routes.some(r => r.providerId === newRoute.providerId)) {
+    ElMessage.warning('该供应商已添加')
+    return
+  }
+  const provider = providers.value.find(p => p.id === newRoute.providerId)
+  form.routes.push({
+    id: 0,
+    modelId: 0,
+    channelId: 0,
+    providerId: newRoute.providerId,
+    provider,
+    modelName: '',
+    weight: newRoute.weight,
+    disabled: false,
+    disabledUntil: null
+  })
+  newRoute.providerId = null
+  newRoute.weight = 1
+}
+
+const removeFormRoute = (index: number) => {
+  form.routes.splice(index, 1)
 }
 
 const openCreateDialog = () => {
@@ -317,7 +407,7 @@ const openCreateDialog = () => {
   dialogVisible.value = true
 }
 
-const openEditDialog = (model: Model) => {
+const openEditDialog = async (model: Model) => {
   isEdit.value = true
   selectedModel.value = model
   form.name = model.name
@@ -325,6 +415,29 @@ const openEditDialog = (model: Model) => {
   form.description = model.description || ''
   form.input_price = model.inputTokenPrice || model.input_price || 0
   form.output_price = model.outputTokenPrice || model.output_price || 0
+
+  // Load routes for this model
+  try {
+    const response = await modelApi.getRoutes(model.id)
+    const loadedRoutes = response.data.routes || response.data || []
+    form.routes = loadedRoutes.map(r => {
+      const pid = r.providerId || r.provider_id || r.provider?.id || 0
+      return {
+        ...r,
+        providerId: pid,
+        provider: r.provider || providers.value.find(p => p.id === pid)
+      }
+    })
+  } catch (error) {
+    form.routes = model.modelRoutes || model.routes || []
+    // Add provider info to routes
+    form.routes = form.routes.map(r => {
+      const pid = r.providerId || r.provider_id || r.provider?.id || 0
+      const provider = providers.value.find(p => p.id === pid)
+      return { ...r, providerId: pid, provider }
+    })
+  }
+
   dialogVisible.value = true
 }
 
@@ -346,14 +459,28 @@ const submitForm = async () => {
         input_price: form.input_price,
         output_price: form.output_price
       })
+      // Save routes if any
+      if (form.routes.length > 0) {
+        await modelApi.updateRoutes(selectedModel.value.id, form.routes)
+      }
     } else {
-      await modelApi.create({
+      const response = await modelApi.create({
         name: form.name,
         aliases: form.aliases,
         description: form.description,
         input_price: form.input_price,
         output_price: form.output_price
       })
+      // Save routes for newly created model
+      const newModelId = response.data.id
+      if (form.routes.length > 0 && newModelId) {
+        const routesToCreate = form.routes.map(r => ({
+          ...r,
+          modelId: newModelId,
+          providerId: r.providerId
+        }))
+        await modelApi.updateRoutes(newModelId, routesToCreate)
+      }
     }
     ElMessage.success(t('common.success'))
     dialogVisible.value = false

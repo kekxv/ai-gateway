@@ -18,15 +18,19 @@ type ProviderHandler struct {
 	providerTypeRepo   *repository.ProviderTypeRepository
 	modelRepo          *repository.ModelRepository
 	modelRouteRepo     *repository.ModelRouteRepository
+	modelAliasRepo     *repository.ModelAliasRepository
+	channelRepo        *repository.ChannelRepository
 	modelSyncService   *service.ModelSyncService
 }
 
-func NewProviderHandler(providerRepo *repository.ProviderRepository, providerTypeRepo *repository.ProviderTypeRepository, modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository, modelSyncService *service.ModelSyncService) *ProviderHandler {
+func NewProviderHandler(providerRepo *repository.ProviderRepository, providerTypeRepo *repository.ProviderTypeRepository, modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository, modelAliasRepo *repository.ModelAliasRepository, channelRepo *repository.ChannelRepository, modelSyncService *service.ModelSyncService) *ProviderHandler {
 	return &ProviderHandler{
 		providerRepo:       providerRepo,
 		providerTypeRepo:   providerTypeRepo,
 		modelRepo:          modelRepo,
 		modelRouteRepo:     modelRouteRepo,
+		modelAliasRepo:     modelAliasRepo,
+		channelRepo:        channelRepo,
 		modelSyncService:   modelSyncService,
 	}
 }
@@ -258,10 +262,50 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 
 func (h *ProviderHandler) DeleteProvider(c *gin.Context) {
 	id := parseUintParam(c.Param("id"))
+	ctx := c.Request.Context()
 
-	if err := h.providerRepo.Delete(c.Request.Context(), id); err != nil {
+	// Check if provider exists
+	_, err := h.providerRepo.FindByID(ctx, id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Provider not found"})
+		return
+	}
+
+	// 1. Get all model IDs associated with this provider
+	modelIDs, _ := h.providerRepo.GetModelIDsByProviderID(ctx, id)
+
+	// 2. Delete ProviderModel associations
+	h.providerRepo.UnbindAllModels(ctx, id)
+
+	// 3. Delete ModelRoutes pointing to this provider
+	h.modelRouteRepo.DeleteByProviderID(ctx, id)
+
+	// 4. Delete ProviderTypes (handled by cascade or manually)
+	h.providerTypeRepo.DeleteByProviderID(ctx, id)
+
+	// 5. Delete the provider
+	if err := h.providerRepo.Delete(ctx, id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	// 6. Check and clean up orphaned models
+	for _, modelID := range modelIDs {
+		// Check if model has other provider associations
+		otherProviders, _ := h.providerRepo.GetProvidersByModelID(ctx, modelID)
+		if len(otherProviders) == 0 {
+			// Check if model has channel associations (keep models with channels)
+			channels, _ := h.channelRepo.GetChannelsByModelID(ctx, modelID)
+			if len(channels) == 0 {
+				// Clean up aliases and routes, then delete model
+				h.modelAliasRepo.DeleteByModelID(ctx, modelID)
+				routes, _ := h.modelRouteRepo.FindByModel(ctx, modelID)
+				for _, route := range routes {
+					h.modelRouteRepo.Delete(ctx, route.ID)
+				}
+				h.modelRepo.Delete(ctx, modelID)
+			}
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Provider deleted"})
@@ -669,14 +713,15 @@ func (h *ChannelHandler) ListChannels(c *gin.Context) {
 
 func (h *ChannelHandler) CreateChannel(c *gin.Context) {
 	var req struct {
-		Name            string `json:"name" binding:"required"`
-		Shared          bool   `json:"shared"`
-		ProviderID      uint   `json:"providerId"`
-		ProviderIDSnake uint   `json:"provider_id"`
-		ProviderIDs     []uint `json:"providerIds"`
-		ModelIDs        []uint `json:"modelIds"`
-		ModelIDsSnake   []uint `json:"models"`
-		Enabled         bool   `json:"enabled"`
+		Name              string `json:"name" binding:"required"`
+		Shared            bool   `json:"shared"`
+		ProviderID        uint   `json:"providerId"`
+		ProviderIDSnake   uint   `json:"provider_id"`
+		ProviderIDs       []uint `json:"providerIds"`
+		ModelIDs          []uint `json:"modelIds"`
+		ModelIDsSnake     []uint `json:"models"`
+		Enabled           bool   `json:"enabled"`
+		SupportsAllModels bool   `json:"supportsAllModels"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -685,9 +730,10 @@ func (h *ChannelHandler) CreateChannel(c *gin.Context) {
 	}
 
 	channel := &models.Channel{
-		Name:    req.Name,
-		Shared:  req.Shared,
-		Enabled: true,
+		Name:              req.Name,
+		Shared:            req.Shared,
+		Enabled:           true,
+		SupportsAllModels: req.SupportsAllModels,
 	}
 
 	if err := h.channelRepo.Create(c.Request.Context(), channel); err != nil {
@@ -738,14 +784,15 @@ func (h *ChannelHandler) UpdateChannel(c *gin.Context) {
 	id := parseUintParam(c.Param("id"))
 
 	var req struct {
-		Name            string `json:"name"`
-		Enabled         bool   `json:"enabled"`
-		Shared          bool   `json:"shared"`
-		ProviderID      uint   `json:"providerId"`
-		ProviderIDSnake uint   `json:"provider_id"`
-		ProviderIDs     []uint `json:"providerIds"`
-		ModelIDs        []uint `json:"modelIds"`
-		ModelIDsSnake   []uint `json:"models"`
+		Name              string `json:"name"`
+		Enabled           bool   `json:"enabled"`
+		Shared            bool   `json:"shared"`
+		SupportsAllModels bool   `json:"supportsAllModels"`
+		ProviderID        uint   `json:"providerId"`
+		ProviderIDSnake   uint   `json:"provider_id"`
+		ProviderIDs       []uint `json:"providerIds"`
+		ModelIDs          []uint `json:"modelIds"`
+		ModelIDsSnake     []uint `json:"models"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -764,6 +811,7 @@ func (h *ChannelHandler) UpdateChannel(c *gin.Context) {
 	}
 	channel.Enabled = req.Enabled
 	channel.Shared = req.Shared
+	channel.SupportsAllModels = req.SupportsAllModels
 
 	if err := h.channelRepo.Update(c.Request.Context(), channel); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -941,6 +989,7 @@ func (h *ModelHandler) CreateModel(c *gin.Context) {
 		InputTokenPriceSnake int64  `json:"input_price"`
 		OutputTokenPrice     int64  `json:"outputTokenPrice"`
 		OutputTokenPriceSnake int64  `json:"output_price"`
+		ChannelIDs           []uint `json:"channelIds"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -989,6 +1038,13 @@ func (h *ModelHandler) CreateModel(c *gin.Context) {
 			ModelID: model.ID,
 			Alias:   alias,
 		})
+	}
+
+	// Bind model to channels if channelIds provided
+	if len(req.ChannelIDs) > 0 {
+		for _, channelID := range req.ChannelIDs {
+			h.channelRepo.BindModelToChannel(ctx, channelID, model.ID)
+		}
 	}
 
 	// Return model with aliases
@@ -1098,15 +1154,8 @@ func (h *ModelHandler) DeleteModel(c *gin.Context) {
 		return
 	}
 
-	// Check if model is associated with any channels
-	channelBindings, _ := h.channelRepo.GetChannelsByModelID(ctx, id)
-	if len(channelBindings) > 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":    "无法删除，该模型被渠道关联",
-			"channels": len(channelBindings),
-		})
-		return
-	}
+	// Clean up ChannelAllowedModel associations (no longer blocking deletion)
+	h.channelRepo.DeleteModelBindings(ctx, id)
 
 	// Delete associated routes first
 	routes, _ := h.modelRouteRepo.FindByModel(ctx, id)

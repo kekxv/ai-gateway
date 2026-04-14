@@ -4,6 +4,7 @@ export interface Channel {
   name: string
   enabled: boolean
   shared: boolean
+  supportsAllModels?: boolean
   userId?: number
   // Associated providers (many-to-many)
   providers?: { id: number; name: string }[]
@@ -23,12 +24,14 @@ export interface CreateChannelRequest {
   name: string
   enabled?: boolean
   shared?: boolean
+  supportsAllModels?: boolean
 }
 
 export interface UpdateChannelRequest {
   name?: string
   enabled?: boolean
   shared?: boolean
+  supportsAllModels?: boolean
 }
 
 export interface BindProvidersRequest {

@@ -34,6 +34,9 @@
             <el-tag v-if="channel.shared" type="info" size="small" effect="plain">
               {{ t('channel.shared') }}
             </el-tag>
+            <el-tag v-if="channel.supportsAllModels" type="warning" size="small" effect="plain">
+              All Models
+            </el-tag>
           </div>
         </div>
 
@@ -118,7 +121,16 @@
           </el-select>
         </el-form-item>
 
-        <el-form-item :label="t('model.title')">
+        <el-form-item label="支持所有模型">
+          <div class="flex items-center gap-4">
+            <el-switch v-model="form.supportsAllModels" />
+            <span class="text-xs text-gray-500">
+              开启后，渠道将自动支持所选供应商关联的所有模型
+            </span>
+          </div>
+        </el-form-item>
+
+        <el-form-item :label="t('model.title')" v-if="!form.supportsAllModels">
           <div class="w-full">
             <div class="flex items-center justify-between mb-2">
               <el-input v-model="modelSearch" placeholder="Search models..." clearable class="w-40" size="small">
@@ -143,6 +155,24 @@
               </div>
             </div>
             <div class="text-xs text-gray-500 mt-1">Selected: {{ form.model_ids.length }}</div>
+          </div>
+        </el-form-item>
+
+        <el-form-item v-if="form.supportsAllModels && providerAssociatedModels.length > 0">
+          <div class="w-full">
+            <div class="text-xs text-gray-500 mb-2">供应商关联的模型 ({{ providerAssociatedModels.length }} 个):</div>
+            <div class="max-h-32 overflow-y-auto">
+              <div class="flex flex-wrap gap-1">
+                <el-tag
+                  v-for="model in providerAssociatedModels"
+                  :key="model.id"
+                  size="small"
+                  type="info"
+                >
+                  {{ model.name }}
+                </el-tag>
+              </div>
+            </div>
           </div>
         </el-form-item>
 
@@ -216,7 +246,8 @@ const form = reactive({
   provider_ids: [] as number[],
   model_ids: [] as number[],
   enabled: true,
-  shared: false
+  shared: false,
+  supportsAllModels: false
 })
 
 const rules: FormRules = {
@@ -228,6 +259,20 @@ const filteredModels = computed(() => {
   if (!modelSearch.value) return models.value
   const term = modelSearch.value.toLowerCase()
   return models.value.filter(m => m.name.toLowerCase().includes(term))
+})
+
+// Models associated with selected providers (through routes)
+const providerAssociatedModels = computed(() => {
+  if (form.provider_ids.length === 0) return []
+  const providerIdSet = new Set(form.provider_ids)
+  return models.value.filter(m => {
+    // Check if model has routes pointing to selected providers
+    const routes = m.modelRoutes || m.routes || []
+    return routes.some(r => {
+      const pid = r.providerId || r.provider_id || r.provider?.id
+      return pid !== undefined && providerIdSet.has(pid)
+    })
+  })
 })
 
 const selectAllModels = computed({
@@ -298,6 +343,7 @@ const resetForm = () => {
   form.model_ids = []
   form.enabled = true
   form.shared = false
+  form.supportsAllModels = false
   modelSearch.value = ''
 }
 
@@ -315,6 +361,7 @@ const openEditDialog = (channel: Channel) => {
   form.model_ids = channel.allowedModels?.map(m => m.id) || channel.models?.map(m => typeof m === 'object' ? m.id : m) || []
   form.enabled = channel.enabled
   form.shared = channel.shared
+  form.supportsAllModels = channel.supportsAllModels || false
   modelSearch.value = ''
   dialogVisible.value = true
 }
@@ -329,30 +376,37 @@ const submitForm = async () => {
 
   submitting.value = true
   try {
+    // Determine model_ids: if supportsAllModels, use all provider-associated models
+    const modelIdsToSubmit = form.supportsAllModels
+      ? providerAssociatedModels.value.map(m => m.id)
+      : form.model_ids
+
     if (isEdit.value && selectedChannel.value) {
       await channelApi.update(selectedChannel.value.id, {
         name: form.name,
         enabled: form.enabled,
-        shared: form.shared
+        shared: form.shared,
+        supportsAllModels: form.supportsAllModels
       })
       if (form.provider_ids.length > 0) {
         await channelApi.bindProviders(selectedChannel.value.id, form.provider_ids)
       }
-      if (form.model_ids.length > 0) {
-        await channelApi.bindModels(selectedChannel.value.id, form.model_ids)
+      if (modelIdsToSubmit.length > 0) {
+        await channelApi.bindModels(selectedChannel.value.id, modelIdsToSubmit)
       }
     } else {
       const response = await channelApi.create({
         name: form.name,
         enabled: form.enabled,
-        shared: form.shared
+        shared: form.shared,
+        supportsAllModels: form.supportsAllModels
       })
       const channelId = response.data.id
       if (form.provider_ids.length > 0) {
         await channelApi.bindProviders(channelId, form.provider_ids)
       }
-      if (form.model_ids.length > 0) {
-        await channelApi.bindModels(channelId, form.model_ids)
+      if (modelIdsToSubmit.length > 0) {
+        await channelApi.bindModels(channelId, modelIdsToSubmit)
       }
     }
     ElMessage.success(t('common.success'))

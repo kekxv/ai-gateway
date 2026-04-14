@@ -122,6 +122,33 @@ func (r *ProviderRepository) FindAutoLoadProviders(ctx context.Context) ([]model
 	return providers, err
 }
 
+// GetModelIDsByProviderID returns all model IDs associated with a provider
+func (r *ProviderRepository) GetModelIDsByProviderID(ctx context.Context, providerID uint) ([]uint, error) {
+	var modelIDs []uint
+	err := r.db.WithContext(ctx).
+		Model(&models.ProviderModel{}).
+		Where("providerId = ?", providerID).
+		Pluck("modelId", &modelIDs).Error
+	return modelIDs, err
+}
+
+// UnbindAllModels removes all model associations for a provider
+func (r *ProviderRepository) UnbindAllModels(ctx context.Context, providerID uint) error {
+	return r.db.WithContext(ctx).
+		Where("providerId = ?", providerID).
+		Delete(&models.ProviderModel{}).Error
+}
+
+// GetProvidersByModelID returns all provider IDs associated with a model
+func (r *ProviderRepository) GetProvidersByModelID(ctx context.Context, modelID uint) ([]uint, error) {
+	var providerIDs []uint
+	err := r.db.WithContext(ctx).
+		Model(&models.ProviderModel{}).
+		Where("modelId = ?", modelID).
+		Pluck("providerId", &providerIDs).Error
+	return providerIDs, err
+}
+
 type ChannelRepository struct {
 	db *gorm.DB
 }
@@ -186,6 +213,12 @@ func (r *ChannelRepository) BindModels(ctx context.Context, channelID uint, mode
 	return nil
 }
 
+// BindModelToChannel adds a single model binding to a channel (without clearing existing bindings)
+func (r *ChannelRepository) BindModelToChannel(ctx context.Context, channelID uint, modelID uint) error {
+	binding := models.ChannelAllowedModel{ChannelID: channelID, ModelID: modelID}
+	return r.db.WithContext(ctx).Create(&binding).Error
+}
+
 func (r *ChannelRepository) GetProviders(ctx context.Context, channelID uint) ([]models.ChannelProvider, error) {
 	var providers []models.ChannelProvider
 	err := r.db.WithContext(ctx).Where("channelId = ?", channelID).Find(&providers).Error
@@ -214,15 +247,16 @@ func (r *ChannelRepository) DeleteModelBindings(ctx context.Context, modelID uin
 
 // ChannelWithRelations represents a channel with its associated providers and models
 type ChannelWithRelations struct {
-	ID            uint                   `json:"id"`
-	Name          string                 `json:"name"`
-	Enabled       bool                   `json:"enabled"`
-	Shared        bool                   `json:"shared"`
-	UserID        *uint                  `json:"userId,omitempty"`
-	Providers     []ProviderInfo         `json:"providers"`
-	AllowedModels []ModelInfo            `json:"allowedModels"`
-	CreatedAt     time.Time              `json:"createdAt"`
-	UpdatedAt     time.Time              `json:"updatedAt"`
+	ID               uint                   `json:"id"`
+	Name             string                 `json:"name"`
+	Enabled          bool                   `json:"enabled"`
+	Shared           bool                   `json:"shared"`
+	SupportsAllModels bool                  `json:"supportsAllModels"`
+	UserID           *uint                  `json:"userId,omitempty"`
+	Providers        []ProviderInfo         `json:"providers"`
+	AllowedModels    []ModelInfo            `json:"allowedModels"`
+	CreatedAt        time.Time              `json:"createdAt"`
+	UpdatedAt        time.Time              `json:"updatedAt"`
 }
 
 type ProviderInfo struct {
@@ -245,13 +279,14 @@ func (r *ChannelRepository) ListWithRelations(ctx context.Context, userID *uint)
 	result := make([]ChannelWithRelations, len(channels))
 	for i, ch := range channels {
 		result[i] = ChannelWithRelations{
-			ID:        ch.ID,
-			Name:      ch.Name,
-			Enabled:   ch.Enabled,
-			Shared:    ch.Shared,
-			UserID:    ch.UserID,
-			CreatedAt: ch.CreatedAt,
-			UpdatedAt: ch.UpdatedAt,
+			ID:               ch.ID,
+			Name:             ch.Name,
+			Enabled:          ch.Enabled,
+			Shared:           ch.Shared,
+			SupportsAllModels: ch.SupportsAllModels,
+			UserID:           ch.UserID,
+			CreatedAt:        ch.CreatedAt,
+			UpdatedAt:        ch.UpdatedAt,
 		}
 
 		// Get providers
@@ -316,13 +351,14 @@ func (r *ChannelRepository) ListWithRelationsPaginated(ctx context.Context, user
 	result := make([]ChannelWithRelations, len(channels))
 	for i, ch := range channels {
 		result[i] = ChannelWithRelations{
-			ID:        ch.ID,
-			Name:      ch.Name,
-			Enabled:   ch.Enabled,
-			Shared:    ch.Shared,
-			UserID:    ch.UserID,
-			CreatedAt: ch.CreatedAt,
-			UpdatedAt: ch.UpdatedAt,
+			ID:               ch.ID,
+			Name:             ch.Name,
+			Enabled:          ch.Enabled,
+			Shared:           ch.Shared,
+			SupportsAllModels: ch.SupportsAllModels,
+			UserID:           ch.UserID,
+			CreatedAt:        ch.CreatedAt,
+			UpdatedAt:        ch.UpdatedAt,
 		}
 
 		// Get providers

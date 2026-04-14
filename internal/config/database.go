@@ -85,6 +85,26 @@ func InitDatabase(dbPath string) (*gorm.DB, error) {
 		db.Exec("ALTER TABLE `messages` ADD COLUMN `tool_calls` TEXT")
 	}
 
+	// Add requestPath column to Log table if not exists
+	if !columnExists(db, "Log", "requestPath") {
+		db.Exec("ALTER TABLE `Log` ADD COLUMN `requestPath` VARCHAR(255)")
+	}
+
+	// Add cacheReadTokens column to Log table if not exists
+	if !columnExists(db, "Log", "cacheReadTokens") {
+		db.Exec("ALTER TABLE `Log` ADD COLUMN `cacheReadTokens` INTEGER DEFAULT 0")
+	}
+
+	// Add cacheWriteTokens column to Log table if not exists
+	if !columnExists(db, "Log", "cacheWriteTokens") {
+		db.Exec("ALTER TABLE `Log` ADD COLUMN `cacheWriteTokens` INTEGER DEFAULT 0")
+	}
+
+	// Add supportsAllModels column to Channel table if not exists
+	if !columnExists(db, "Channel", "supportsAllModels") {
+		db.Exec("ALTER TABLE `Channel` ADD COLUMN `supportsAllModels` INTEGER DEFAULT 0 NOT NULL")
+	}
+
 	// Migrate alias data to ModelAlias table (only when table is newly created)
 	// Use raw SQL to create table to avoid GORM SQLite AutoMigrate bug with foreign keys
 	if !db.Migrator().HasTable(&models.ModelAlias{}) {
@@ -184,6 +204,8 @@ func fixLogTableNullableAPIKeyID(db *gorm.DB) {
 			latency INTEGER NOT NULL DEFAULT 0,
 			promptTokens INTEGER NOT NULL DEFAULT 0,
 			completionTokens INTEGER NOT NULL DEFAULT 0,
+			cacheReadTokens INTEGER DEFAULT 0,
+			cacheWriteTokens INTEGER DEFAULT 0,
 			totalTokens INTEGER NOT NULL DEFAULT 0,
 			cost INTEGER NOT NULL DEFAULT 0,
 			status INTEGER NOT NULL DEFAULT 200,
@@ -193,6 +215,7 @@ func fixLogTableNullableAPIKeyID(db *gorm.DB) {
 			providerName TEXT,
 			ownerChannelId INTEGER,
 			ownerChannelUserId INTEGER,
+			requestPath VARCHAR(255),
 			requestHeaders TEXT,
 			responseHeaders TEXT,
 			createdAt DATETIME

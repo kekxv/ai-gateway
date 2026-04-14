@@ -670,3 +670,240 @@ func TestConvertOpenAIStreamChunkToAnthropic(t *testing.T) {
 		t.Error("Final chunk should contain message_stop event")
 	}
 }
+
+// Test multiple messages conversion
+func TestConvertRequest_AnthropicToOpenAI_MultipleMessages(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	anthropicReq := &models.AnthropicMessagesRequest{
+		Model: "claude-3-5-sonnet",
+		Messages: []models.AnthropicMessage{
+			{Role: "user", Content: models.AnthropicContent{StringContent: "What is AI?"}},
+			{Role: "assistant", Content: models.AnthropicContent{StringContent: "AI is artificial intelligence."}},
+			{Role: "user", Content: models.AnthropicContent{StringContent: "Can you give examples?"}},
+		},
+		MaxTokens: 100,
+	}
+
+	result, err := converter.ConvertRequest(anthropicReq, ProtocolAnthropic, ProtocolOpenAI)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	openAIReq := result.(*ChatRequest)
+
+	if len(openAIReq.Messages) != 3 {
+		t.Errorf("Messages count = %d, want 3", len(openAIReq.Messages))
+	}
+
+	if openAIReq.Messages[0].Role != "user" {
+		t.Errorf("First message role = %s, want user", openAIReq.Messages[0].Role)
+	}
+	if openAIReq.Messages[0].Content.GetText() != "What is AI?" {
+		t.Errorf("First message content = %s, want 'What is AI?'", openAIReq.Messages[0].Content.GetText())
+	}
+	if openAIReq.Messages[1].Role != "assistant" {
+		t.Errorf("Second message role = %s, want assistant", openAIReq.Messages[1].Role)
+	}
+}
+
+// Test long text conversion
+func TestConvertRequest_AnthropicToOpenAI_LongText(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	longText := "This is a very long text message that contains multiple sentences and paragraphs. It tests the converter's ability to handle large content without truncation or errors. The content should be preserved exactly as provided in the original message."
+
+	anthropicReq := &models.AnthropicMessagesRequest{
+		Model: "claude-3-5-sonnet",
+		Messages: []models.AnthropicMessage{
+			{Role: "user", Content: models.AnthropicContent{StringContent: longText}},
+		},
+		MaxTokens: 1000,
+	}
+
+	result, err := converter.ConvertRequest(anthropicReq, ProtocolAnthropic, ProtocolOpenAI)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	openAIReq := result.(*ChatRequest)
+
+	if openAIReq.Messages[0].Content.GetText() != longText {
+		t.Errorf("Long text content not preserved correctly")
+	}
+}
+
+// Test mixed content (text + image)
+func TestConvertRequest_AnthropicToOpenAI_MixedContent(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	anthropicReq := &models.AnthropicMessagesRequest{
+		Model: "claude-3-5-sonnet",
+		Messages: []models.AnthropicMessage{
+			{
+				Role: "user",
+				Content: models.AnthropicContent{
+					Blocks: []models.AnthropicContentBlock{
+						{Type: "text", Text: "What's in this image?"},
+						{
+							Type: "image",
+							Source: &models.AnthropicImageSource{
+								Type:      "base64",
+								MediaType: "image/jpeg",
+								Data:      "/9j/4AAQSkZJRg==",
+							},
+						},
+						{Type: "text", Text: "And can you also describe the text below?"},
+					},
+				},
+			},
+		},
+		MaxTokens: 100,
+	}
+
+	result, err := converter.ConvertRequest(anthropicReq, ProtocolAnthropic, ProtocolOpenAI)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	openAIReq := result.(*ChatRequest)
+
+	if len(openAIReq.Messages) != 1 {
+		t.Fatalf("Messages count = %d, want 1", len(openAIReq.Messages))
+	}
+
+	// Multiple text blocks should be merged into one text part
+	if len(openAIReq.Messages[0].Content.Parts) != 2 {
+		t.Errorf("Content parts = %d, want 2 (merged text + image)", len(openAIReq.Messages[0].Content.Parts))
+	}
+
+	// Check merged text part (text blocks are merged with newline)
+	if openAIReq.Messages[0].Content.Parts[0].Type != "text" {
+		t.Errorf("First part type = %s, want text", openAIReq.Messages[0].Content.Parts[0].Type)
+	}
+	expectedMergedText := "What's in this image?\nAnd can you also describe the text below?"
+	if openAIReq.Messages[0].Content.Parts[0].Text != expectedMergedText {
+		t.Errorf("First part text = %s, want '%s'", openAIReq.Messages[0].Content.Parts[0].Text, expectedMergedText)
+	}
+
+	// Check image part
+	if openAIReq.Messages[0].Content.Parts[1].Type != "image_url" {
+		t.Errorf("Second part type = %s, want image_url", openAIReq.Messages[0].Content.Parts[1].Type)
+	}
+	expectedURL := "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
+	if openAIReq.Messages[0].Content.Parts[1].ImageURL.URL != expectedURL {
+		t.Errorf("Image URL = %s, want %s", openAIReq.Messages[0].Content.Parts[1].ImageURL.URL, expectedURL)
+	}
+}
+
+// Test conversation history with system message
+func TestConvertRequest_AnthropicToOpenAI_ConversationHistory(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	anthropicReq := &models.AnthropicMessagesRequest{
+		Model: "claude-3-5-sonnet",
+		System: models.AnthropicSystem{StringContent: "You are a helpful assistant that speaks concisely."},
+		Messages: []models.AnthropicMessage{
+			{Role: "user", Content: models.AnthropicContent{StringContent: "Hello"}},
+			{Role: "assistant", Content: models.AnthropicContent{StringContent: "Hi! How can I help?"}},
+			{Role: "user", Content: models.AnthropicContent{StringContent: "What is 2+2?"}},
+			{Role: "assistant", Content: models.AnthropicContent{StringContent: "2+2 equals 4."}},
+			{Role: "user", Content: models.AnthropicContent{StringContent: "Thanks"}},
+		},
+		MaxTokens: 100,
+	}
+
+	result, err := converter.ConvertRequest(anthropicReq, ProtocolAnthropic, ProtocolOpenAI)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	openAIReq := result.(*ChatRequest)
+
+	// Should have system + 5 messages = 6 total
+	if len(openAIReq.Messages) != 6 {
+		t.Errorf("Messages count = %d, want 6 (system + 5 messages)", len(openAIReq.Messages))
+	}
+
+	// Check system message is first
+	if openAIReq.Messages[0].Role != "system" {
+		t.Errorf("First message role = %s, want system", openAIReq.Messages[0].Role)
+	}
+	if openAIReq.Messages[0].Content.GetText() != "You are a helpful assistant that speaks concisely." {
+		t.Errorf("System content = %s, want 'You are a helpful assistant that speaks concisely.'", openAIReq.Messages[0].Content.GetText())
+	}
+}
+
+// Test URL-based image source
+func TestConvertRequest_AnthropicToOpenAI_ImageURL(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	anthropicReq := &models.AnthropicMessagesRequest{
+		Model: "claude-3-5-sonnet",
+		Messages: []models.AnthropicMessage{
+			{
+				Role: "user",
+				Content: models.AnthropicContent{
+					Blocks: []models.AnthropicContentBlock{
+						{
+							Type: "image",
+							Source: &models.AnthropicMediaSource{
+								Type: "url",
+								URL:  "https://example.com/image.jpg",
+							},
+						},
+					},
+				},
+			},
+		},
+		MaxTokens: 100,
+	}
+
+	result, err := converter.ConvertRequest(anthropicReq, ProtocolAnthropic, ProtocolOpenAI)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	openAIReq := result.(*ChatRequest)
+
+	if openAIReq.Messages[0].Content.Parts[0].Type != "image_url" {
+		t.Errorf("Part type = %s, want image_url", openAIReq.Messages[0].Content.Parts[0].Type)
+	}
+	if openAIReq.Messages[0].Content.Parts[0].ImageURL.URL != "https://example.com/image.jpg" {
+		t.Errorf("Image URL = %s, want https://example.com/image.jpg", openAIReq.Messages[0].Content.Parts[0].ImageURL.URL)
+	}
+}
+
+// Test response conversion with usage
+func TestConvertResponse_AnthropicToOpenAI_WithUsage(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	anthropicResp := &models.AnthropicMessagesResponse{
+		ID:   "msg_123",
+		Type: "message",
+		Role: "assistant",
+		Content: []models.AnthropicContentBlock{
+			{Type: "text", Text: "Hello!"},
+		},
+		Model:      "claude-3-5-sonnet",
+		StopReason: models.AnthropicStopEndTurn,
+		Usage: &models.AnthropicUsage{
+			InputTokens:  100,
+			OutputTokens: 50,
+		},
+	}
+
+	result, err := converter.ConvertResponse(anthropicResp, ProtocolAnthropic, ProtocolOpenAI, "")
+	if err != nil {
+		t.Fatalf("ConvertResponse failed: %v", err)
+	}
+
+	openAIResp := result.(*ChatResponse)
+
+	if openAIResp.Usage.PromptTokens != 100 {
+		t.Errorf("PromptTokens = %d, want 100", openAIResp.Usage.PromptTokens)
+	}
+	if openAIResp.Usage.CompletionTokens != 50 {
+		t.Errorf("CompletionTokens = %d, want 50", openAIResp.Usage.CompletionTokens)
+	}
+}

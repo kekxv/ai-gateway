@@ -43,6 +43,10 @@
               </button>
               <template #dropdown>
                 <el-dropdown-menu>
+                  <el-dropdown-item command="rename">
+                    <el-icon><Edit /></el-icon>
+                    重命名
+                  </el-dropdown-item>
                   <el-dropdown-item command="delete">
                     <el-icon><Delete /></el-icon>
                     删除对话
@@ -234,6 +238,15 @@
                       <el-icon><Delete /></el-icon>
                     </button>
                   </div>
+                </div>
+                <!-- Error Message -->
+                <div v-if="block.message.hasError" class="error-bubble">
+                  <el-icon class="error-icon"><WarningFilled /></el-icon>
+                  <span class="error-text">{{ block.message.error }}</span>
+                  <button class="retry-btn" @click="retryLastMessage" title="重试">
+                    <el-icon><RefreshRight /></el-icon>
+                    重试
+                  </button>
                 </div>
                 <!-- Think Block -->
                 <ThinkBlock
@@ -569,7 +582,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Setting, ChatLineRound, Monitor,
   Loading, Promotion, MoreFilled, Delete, MagicStick, Close, Menu, Paperclip, Operation,
-  Edit, RefreshRight, DocumentCopy, Collection, Check, Cpu
+  Edit, RefreshRight, DocumentCopy, Collection, Check, Cpu, WarningFilled
 } from '@element-plus/icons-vue'
 import { conversationApi, modelApi } from '@/api/conversation'
 import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart, ChatRequest, ChatMessage, OpenAIReasoningEffort, GeminiThinkingLevel } from '@/types/conversation'
@@ -801,6 +814,8 @@ interface ExtendedMessage extends Message {
   thinkContent?: string
   hasThink?: boolean
   toolCalls?: ToolCallResult[]
+  error?: string
+  hasError?: boolean
 }
 
 // Edit state
@@ -1005,6 +1020,38 @@ const regenerateFromUser = async (userIndex: number) => {
   const messagesForApi = buildChatHistory()
 
   // Send the message
+  sending.value = true
+  await streamWithToolCalls(currentConversation.value.id, buildRequestWithThinking({
+    model: selectedModel.value,
+    messages: messagesForApi,
+    stream: true,
+    temperature: settingsForm.temperature,
+    max_tokens: settingsForm.max_tokens,
+    tools: toolsStore.getToolsForModel()
+  }))
+}
+
+// Retry last message after an error
+const retryLastMessage = async () => {
+  if (!currentConversation.value || sending.value) return
+
+  // Find and remove the last error message
+  const lastErrorIndex = messages.value.findIndex((m, idx) =>
+    idx === messages.value.length - 1 && (m as ExtendedMessage).hasError
+  )
+  if (lastErrorIndex === -1) return
+
+  messages.value = messages.value.slice(0, lastErrorIndex)
+
+  // Find the last user message
+  const lastUserIndex = messages.value.length - 1
+  const lastUserMessage = messages.value[lastUserIndex]
+  if (!lastUserMessage || lastUserMessage.role !== 'user') return
+
+  // Build messages for API
+  const messagesForApi = buildChatHistory()
+
+  // Retry sending
   sending.value = true
   await streamWithToolCalls(currentConversation.value.id, buildRequestWithThinking({
     model: selectedModel.value,
@@ -1670,7 +1717,28 @@ const streamWithToolCalls = async (
           resolve()
         },
         (error) => {
-          ElMessage.error(error)
+          // Add error message bubble
+          const errorMsg: ExtendedMessage = {
+            id: -Date.now(),
+            conversation_id: conversationId,
+            role: 'assistant',
+            content: '',
+            error: error,
+            hasError: true,
+            created_at: new Date().toISOString()
+          }
+          messages.value.push(errorMsg)
+          sending.value = false
+          streamingRawContent.value = ''
+          streamingContent.value = ''
+          streamingThinkContent.value = ''
+          throttledStreamingContent.value = ''
+          throttledStreamingThink.value = ''
+          streamingToolCallResults.value = []
+          if (throttleTimer) {
+            clearTimeout(throttleTimer)
+            throttleTimer = null
+          }
           reject(new Error(error))
         },
         async (toolCalls) => {
@@ -2172,6 +2240,26 @@ const handleConversationAction = async (action: string, conv: Conversation) => {
         messages.value = []
       }
       ElMessage.success('已删除')
+    } catch {
+      // Cancelled
+    }
+  } else if (action === 'rename') {
+    try {
+      const { value } = await ElMessageBox.prompt('请输入新标题', '重命名', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        inputValue: conv.title,
+        inputPattern: /^.{1,100}$/,
+        inputErrorMessage: '标题长度需要在1-100字符之间'
+      })
+      if (value) {
+        await conversationApi.updateTitle(conv.id, value)
+        conv.title = value
+        if (currentConversation.value?.id === conv.id) {
+          currentConversation.value.title = value
+        }
+        ElMessage.success('标题已更新')
+      }
     } catch {
       // Cancelled
     }
@@ -2895,6 +2983,47 @@ onUnmounted(() => {
 .assistant-bubble :deep(.markdown-content) {
   font-size: 14px;
   color: #1f2937;
+}
+
+/* Error bubble styles */
+.error-bubble {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+  border: 1px solid #fecaca;
+  padding: 12px 16px;
+  border-radius: 8px;
+  max-width: 85%;
+}
+
+.error-icon {
+  color: #ef4444;
+  font-size: 20px;
+}
+
+.error-text {
+  color: #991b1b;
+  font-size: 14px;
+  flex: 1;
+}
+
+.retry-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #ef4444;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.retry-btn:hover {
+  background: #dc2626;
 }
 
 .cursor {

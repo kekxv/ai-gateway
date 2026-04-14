@@ -114,7 +114,7 @@ func main() {
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userRepo, logRepo, authService)
-	providerHandler := handler.NewProviderHandler(providerRepo, providerTypeRepo, modelRepo, modelRouteRepo, modelSyncService)
+	providerHandler := handler.NewProviderHandler(providerRepo, providerTypeRepo, modelRepo, modelRouteRepo, modelAliasRepo, channelRepo, modelSyncService)
 	channelHandler := handler.NewChannelHandler(channelRepo)
 	modelHandler := handler.NewModelHandler(modelRepo, modelRouteRepo, modelAliasRepo, channelRepo)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyRepo, authService)
@@ -326,6 +326,7 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 	admin.DELETE("/conversations/:id/messages/after/:message_id", deps.ChatHandler.DeleteMessagesAfter)
 	admin.POST("/conversations/:id/chat", deps.ChatHandler.SendMessage)
 	admin.POST("/conversations/:id/generate-title", deps.ChatHandler.GenerateTitle)
+	admin.PUT("/conversations/:id/title", deps.ChatHandler.UpdateTitle)
 	admin.POST("/chat/upload", deps.ChatHandler.UploadFile)
 
 	// Tools API (JWT required)

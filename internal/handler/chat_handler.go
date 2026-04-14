@@ -189,6 +189,50 @@ func (h *ChatHandler) UpdateConversation(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": conversation})
 }
 
+// UpdateTitle updates only the title of a conversation
+func (h *ChatHandler) UpdateTitle(c *gin.Context) {
+	user := middleware.GetCurrentUser(c)
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	id := c.Param("id")
+	var conversationID uint
+	if err := parseUint(id, &conversationID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+
+	var req struct {
+		Title string `json:"title" binding:"required,max=100"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx := c.Request.Context()
+	conversation, err := h.conversationRepo.GetByID(ctx, conversationID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Conversation not found"})
+		return
+	}
+
+	// Check ownership
+	if conversation.UserID != user.ID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied"})
+		return
+	}
+
+	if err := h.conversationRepo.UpdateTitle(ctx, conversationID, req.Title); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Title updated", "title": req.Title})
+}
+
 // DeleteConversation deletes a conversation
 func (h *ChatHandler) DeleteConversation(c *gin.Context) {
 	user := middleware.GetCurrentUser(c)
@@ -366,7 +410,7 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 		LogDetails:       true,  // Enable detailed logging for chat
 	}
 
-	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, req.Stream, c.Request.Header)
+	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, req.Stream, c.Request.Header, c.Request.URL.Path)
 	if err != nil {
 		switch err {
 		case service.ErrModelNotFound:
@@ -702,7 +746,7 @@ func (h *ChatHandler) GenerateTitle(c *gin.Context) {
 	}
 
 	// Call gateway service to generate title
-	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, false, c.Request.Header)
+	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, false, c.Request.Header, c.Request.URL.Path)
 	if err != nil {
 		log.Printf("[GenerateTitle] HandleChatCompletions error: %v, model: %s", err, conversation.Model)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate title: " + err.Error()})
