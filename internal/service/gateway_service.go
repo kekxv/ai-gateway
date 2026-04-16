@@ -768,6 +768,7 @@ type StreamingResponse struct {
 	model          *models.Model
 	providerName   string
 	request        *ChatRequest
+	anthropicReq   *models.AnthropicMessagesRequest // For Gemini streaming fallback
 	startTime      time.Time
 	logRepo        *repository.LogRepository
 	logDetailRepo  *repository.LogDetailRepository
@@ -779,6 +780,12 @@ type StreamingResponse struct {
 
 	// Protocol indicator for Anthropic streaming
 	isAnthropicStream bool // true if upstream returns Anthropic format, false if OpenAI format
+	isGeminiStream    bool // true if upstream returns Gemini format
+
+	// For Gemini stream conversion
+	contentIndex int
+	streamState  *StreamConversionState
+	geminiScanner *bufio.Scanner
 
 	// Estimated prompt tokens for fallback (used when upstream doesn't provide token usage)
 	estimatedPromptTokens int
@@ -790,6 +797,7 @@ func NewStreamingResponse(resp *http.Response, ctx context.Context) *StreamingRe
 		ResponseBody:   resp,
 		capturedBuffer: &bytes.Buffer{},
 		ctx:            ctx,
+		streamState:    &StreamConversionState{},
 	}
 }
 
@@ -807,8 +815,53 @@ func (s *StreamingResponse) Read(p []byte) (n int, err error) {
 		}
 	}
 
+	// Handle Gemini stream conversion to Anthropic SSE
+	if s.isGeminiStream {
+		if s.geminiScanner == nil {
+			s.geminiScanner = bufio.NewScanner(s.ResponseBody.Body)
+			s.geminiScanner.Split(GeminiStreamSplitter)
+		}
+
+		// If we have data in our capturedBuffer, return it first
+		if s.capturedBuffer.Len() > 0 {
+			return s.capturedBuffer.Read(p)
+		}
+
+		if s.geminiScanner.Scan() {
+			data := s.geminiScanner.Bytes()
+			if len(data) > 0 {
+				var chunk models.GeminiGenerateContentResponse
+				if err := json.Unmarshal(data, &chunk); err == nil {
+					converter := NewProtocolConverter()
+					anthropicSSE := converter.ConvertGeminiStreamChunkToAnthropic(&chunk, generateMessageID(), s.model.Name, &s.contentIndex, s.streamState)
+
+					if anthropicSSE != "" {
+						// Write to capturedBuffer and then read from it
+						s.capturedBuffer.WriteString(anthropicSSE)
+
+						// For real-time logging
+						if s.realtimeLogger != nil {
+							dataCopy := []byte(anthropicSSE)
+							s.realtimeLogger.PushData(dataCopy)
+						}
+
+						return s.capturedBuffer.Read(p)
+					}
+				}
+			}
+			// If we didn't return data, try reading again
+			return s.Read(p)
+		}
+
+		if err := s.geminiScanner.Err(); err != nil {
+			return 0, err
+		}
+		return 0, io.EOF
+	}
+
 	n, err = s.ResponseBody.Body.Read(p)
 	if n > 0 {
+		// Capture data for logging
 		s.capturedBuffer.Write(p[:n])
 
 		// 推送数据到实时日志更新器
@@ -819,6 +872,76 @@ func (s *StreamingResponse) Read(p []byte) (n int, err error) {
 		}
 	}
 	return
+}
+
+// GeminiStreamSplitter is a custom split function for Gemini's JSON array stream
+func GeminiStreamSplitter(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+
+	// Gemini stream starts with '[' and ends with ']'
+	// Elements are separated by ','
+	// Example: [ {..}, {..} ]
+
+	start := -1
+	for i, b := range data {
+		if b == '{' {
+			start = i
+			break
+		}
+		if b == '[' || b == ',' || b == ' ' || b == '\n' || b == '\r' || b == '\t' || b == ']' {
+			continue
+		}
+	}
+
+	if start == -1 {
+		if atEOF {
+			return len(data), nil, nil
+		}
+		return 0, nil, nil
+	}
+
+	// Find the matching '}'
+	depth := 0
+	inString := false
+	escaped := false
+
+	for i := start; i < len(data); i++ {
+		b := data[i]
+
+		if escaped {
+			escaped = false
+			continue
+		}
+
+		if b == '\\' {
+			escaped = true
+			continue
+		}
+
+		if b == '"' {
+			inString = !inString
+			continue
+		}
+
+		if !inString {
+			if b == '{' {
+				depth++
+			} else if b == '}' {
+				depth--
+				if depth == 0 {
+					return i + 1, data[start : i+1], nil
+				}
+			}
+		}
+	}
+
+	if atEOF {
+		return len(data), nil, nil
+	}
+
+	return 0, nil, nil
 }
 
 // IsAnthropicStream returns whether the upstream stream is in Anthropic format
@@ -1609,7 +1732,7 @@ func (s *GatewayService) checkBalance(ctx context.Context, userID *uint, model *
 }
 
 // sendUpstreamRequest sends a request to the upstream provider
-func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey string, req *ChatRequest, stream bool, forwardHeaders map[string]string) (*http.Response, error) {
+func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey string, req interface{}, stream bool, forwardHeaders map[string]string) (*http.Response, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		log.Printf("[sendUpstreamRequest] Marshal request failed: %v", err)
@@ -1630,7 +1753,19 @@ func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey st
 		httpReq.Header.Set(key, value)
 	}
 
-	log.Printf("[sendUpstreamRequest] Sending request to: %s, stream: %v, model: %s", url, stream, req.Model)
+	// Extract model name for logging
+	modelName := "unknown"
+	switch v := req.(type) {
+	case *ChatRequest:
+		modelName = v.Model
+	case *models.AnthropicMessagesRequest:
+		modelName = v.Model
+	case *models.GeminiGenerateContentRequest:
+		// Gemini model name is usually in the URL, not the body,
+		// but let's try to get it if we can
+	}
+
+	log.Printf("[sendUpstreamRequest] Sending request to: %s, stream: %v, model: %s", url, stream, modelName)
 	return s.httpClient.Do(httpReq)
 }
 
@@ -1914,7 +2049,7 @@ func weightedRandomSelect(weights []int) int {
 }
 
 // HandleAnthropicMessages handles Anthropic Messages API requests
-// Supports direct forwarding if provider supports anthropic type, otherwise converts to OpenAI format
+// Supports direct forwarding if provider supports anthropic type, otherwise converts to OpenAI or Gemini format
 // rawReqBody is the original request body for direct forwarding (preserves exact format)
 func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *models.GatewayAPIKey, req *models.AnthropicMessagesRequest, rawReqBody []byte, stream bool, requestHeaders http.Header, rawQuery string, requestPath string) (interface{}, error) {
 	startTime := time.Now()
@@ -1996,8 +2131,9 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		s.logRepo.UpdateByID(ctx, logEntry.ID, updates)
 	}
 
-	// 5. Determine if provider supports anthropic protocol
+	// 5. Determine if provider supports anthropic, gemini or openai protocol
 	providerSupportsAnthropic := route.Provider.HasType("anthropic")
+	providerSupportsGemini := route.Provider.HasType("gemini")
 	converter := NewProtocolConverter()
 
 	// Determine the upstream model name
@@ -2114,8 +2250,120 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		return &anthropicResp, nil
 	}
 
-	// Convert to OpenAI format - provider doesn't support anthropic
-	log.Printf("[HandleAnthropicMessages] Provider '%s' doesn't support anthropic, converting to OpenAI format", route.Provider.Name)
+	if providerSupportsGemini {
+		// Native Gemini protocol support
+		baseURL := route.Provider.GetBaseURLForType("gemini")
+		// Gemini URL format: https://generativelanguage.googleapis.com/v1beta/models/{model}:{generateContent|streamGenerateContent}?key={apiKey}
+		action := "generateContent"
+		if stream {
+			action = "streamGenerateContent"
+		}
+
+		// Ensure v1beta or v1 is in the URL
+		geminiBaseURL := strings.TrimSuffix(baseURL, "/")
+		if !strings.Contains(geminiBaseURL, "/v1") {
+			geminiBaseURL = geminiBaseURL + "/v1beta"
+		}
+
+		targetURL := fmt.Sprintf("%s/models/%s:%s?key=%s", geminiBaseURL, upstreamModelName, action, route.Provider.APIKey)
+
+		log.Printf("[HandleAnthropicMessages] Provider '%s' supports gemini, converting and forwarding to: %s/models/%s:%s", route.Provider.Name, geminiBaseURL, upstreamModelName, action)
+
+		// Convert Anthropic request to Gemini request
+		geminiReq, err := converter.ConvertRequest(req, ProtocolAnthropic, ProtocolGemini)
+		if err != nil {
+			log.Printf("[HandleAnthropicMessages] Convert to Gemini request failed: %v", err)
+			return nil, err
+		}
+
+		// Send Gemini format request
+		resp, err := s.sendUpstreamRequest(ctx, targetURL, "", geminiReq, stream, forwardHeaders)
+		if err != nil {
+			log.Printf("[HandleAnthropicMessages] Upstream Gemini request failed: %v, URL: %s", err, targetURL)
+			latency := int(time.Since(startTime).Milliseconds())
+			updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
+			return nil, ErrUpstreamFailed
+		}
+
+		if resp.StatusCode >= 400 {
+			body, _ := s.readDecompressedBody(resp)
+			log.Printf("[HandleAnthropicMessages] Upstream Gemini error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
+			latency := int(time.Since(startTime).Milliseconds())
+			s.handleUpstreamError(ctx, resp, route)
+			updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
+			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+
+		// Handle streaming response (Gemini format -> Anthropic SSE)
+		if stream {
+			streamResp := NewStreamingResponse(resp, ctx)
+			streamResp.logID = logEntry.ID
+			streamResp.apiKey = apiKey
+			streamResp.model = model
+			streamResp.providerName = route.Provider.Name
+			streamResp.isAnthropicStream = false
+			streamResp.isGeminiStream = true
+			streamResp.anthropicReq = req
+			streamResp.startTime = startTime
+			streamResp.logRepo = s.logRepo
+			streamResp.logDetailRepo = s.logDetailRepo
+			streamResp.billingService = s.billingService
+			streamResp.responseHeaders = extractResponseHeaders(resp.Header)
+
+			if logEntry.ID != 0 {
+				streamResp.realtimeLogger = NewRealtimeLogUpdater(
+					s.logRepo,
+					s.logDetailRepo,
+					logEntry.ID,
+					apiKey,
+					model,
+					200*time.Millisecond,
+					true, // We'll treat it as Anthropic-compatible SSE for the logger after conversion
+				)
+			}
+
+			log.Printf("[HandleAnthropicMessages] Response type: anthropic (converted from gemini stream)")
+			return streamResp, nil
+		}
+
+		// Handle non-streaming response (Gemini format -> Anthropic format)
+		body, err := s.readDecompressedBody(resp)
+		if err != nil {
+			log.Printf("[HandleAnthropicMessages] Read Gemini response body failed: %v", err)
+			latency := int(time.Since(startTime).Milliseconds())
+			updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil)
+			return nil, err
+		}
+
+
+		var geminiResp models.GeminiGenerateContentResponse
+		if err := json.Unmarshal(body, &geminiResp); err != nil {
+			log.Printf("[HandleAnthropicMessages] Parse Gemini response failed: %v, body: %s", err, string(body))
+			latency := int(time.Since(startTime).Milliseconds())
+			updateLog(latency, 0, 0, 0, 0, 500, fmt.Sprintf("Parse error: %v", err), nil)
+			return nil, err
+		}
+
+		// Convert Gemini response back to Anthropic format
+		anthropicResp, err := converter.ConvertResponse(&geminiResp, ProtocolGemini, ProtocolAnthropic, req.Model)
+		if err != nil {
+			log.Printf("[HandleAnthropicMessages] Convert Gemini response failed: %v", err)
+			return nil, err
+		}
+
+		log.Printf("[HandleAnthropicMessages] Response type: anthropic (converted from gemini)")
+
+		// Update log and calculate cost
+		latency := int(time.Since(startTime).Milliseconds())
+		respHeaders := extractResponseHeaders(resp.Header)
+		// Reuse anthropic log update but we need to map usage
+		s.updateAnthropicLogAndCalculateCost(ctx, apiKey, model, route.Provider.Name, req, anthropicResp.(*models.AnthropicMessagesResponse), latency, logEntry.ID, respHeaders)
+
+		return anthropicResp, nil
+	}
+
+	// Convert to OpenAI format - provider doesn't support anthropic or gemini
+	log.Printf("[HandleAnthropicMessages] Provider '%s' doesn't support anthropic or gemini, converting to OpenAI format", route.Provider.Name)
 
 	openAIReq, err := converter.ConvertRequest(req, ProtocolAnthropic, ProtocolOpenAI)
 	if err != nil {

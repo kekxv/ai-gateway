@@ -18,6 +18,13 @@ type AnthropicMessagesRequest struct {
 	Tools         []AnthropicTool           `json:"tools,omitempty"`
 	ToolChoice    *AnthropicToolChoice      `json:"tool_choice,omitempty"`
 	Metadata      map[string]interface{}    `json:"metadata,omitempty"`
+	Thinking      *AnthropicThinkingConfig  `json:"thinking,omitempty"`
+}
+
+// AnthropicThinkingConfig represents thinking configuration
+type AnthropicThinkingConfig struct {
+	Type         string `json:"type"` // "enabled" or "disabled"
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 
 // AnthropicSystem can be string or array of content blocks

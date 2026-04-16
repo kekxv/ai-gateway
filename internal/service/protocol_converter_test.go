@@ -1386,32 +1386,107 @@ func TestConvertResponse_OpenAIToAnthropic_WithReasoning(t *testing.T) {
 	}
 }
 
-func TestConvertOpenAIStreamChunkToAnthropic_Thinking(t *testing.T) {
+func TestConvertRequest_AnthropicToGemini_Basic(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	anthropicReq := &models.AnthropicMessagesRequest{
+		Model: "gemini-1.5-flash",
+		Messages: []models.AnthropicMessage{
+			{Role: "user", Content: models.AnthropicContent{StringContent: "Hello"}},
+		},
+		System:    models.AnthropicSystem{StringContent: "You are a helpful assistant"},
+		MaxTokens: 100,
+	}
+
+	result, err := converter.ConvertRequest(anthropicReq, ProtocolAnthropic, ProtocolGemini)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	geminiReq, ok := result.(*models.GeminiGenerateContentRequest)
+	if !ok {
+		t.Fatalf("Expected *models.GeminiGenerateContentRequest, got %T", result)
+	}
+
+	if geminiReq.SystemInstruction == nil || geminiReq.SystemInstruction.Parts[0].Text != "You are a helpful assistant" {
+		t.Errorf("System instruction not converted correctly")
+	}
+
+	if len(geminiReq.Contents) != 1 || geminiReq.Contents[0].Role != "user" || geminiReq.Contents[0].Parts[0].Text != "Hello" {
+		t.Errorf("Message content not converted correctly")
+	}
+
+	if *geminiReq.GenerationConfig.MaxOutputTokens != 100 {
+		t.Errorf("MaxTokens not converted correctly")
+	}
+}
+
+func TestConvertResponse_GeminiToAnthropic_Basic(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	geminiResp := &models.GeminiGenerateContentResponse{
+		Candidates: []models.GeminiCandidate{
+			{
+				Content: models.GeminiContent{
+					Role: "model",
+					Parts: []models.GeminiPart{
+						{Text: "Hi there!"},
+					},
+				},
+				FinishReason: "STOP",
+			},
+		},
+		UsageMetadata: &models.GeminiUsageMetadata{
+			PromptTokenCount:     10,
+			CandidatesTokenCount: 5,
+		},
+	}
+
+	result, err := converter.ConvertResponse(geminiResp, ProtocolGemini, ProtocolAnthropic, "gemini-1.5-flash")
+	if err != nil {
+		t.Fatalf("ConvertResponse failed: %v", err)
+	}
+
+	anthropicResp, ok := result.(*models.AnthropicMessagesResponse)
+	if !ok {
+		t.Fatalf("Expected *models.AnthropicMessagesResponse, got %T", result)
+	}
+
+	if len(anthropicResp.Content) != 1 || anthropicResp.Content[0].Text != "Hi there!" {
+		t.Errorf("Response text not converted correctly")
+	}
+
+	if anthropicResp.Usage.InputTokens != 10 || anthropicResp.Usage.OutputTokens != 5 {
+		t.Errorf("Usage metadata not converted correctly")
+	}
+}
+
+func TestConvertGeminiStreamChunkToAnthropic(t *testing.T) {
 	converter := NewProtocolConverter()
 	state := &StreamConversionState{}
 	contentIndex := 0
 
-	chunk := &StreamChunk{}
-	chunk.Choices = []struct {
-		Index int `json:"index"`
-		Delta struct {
-			Role      string     `json:"role,omitempty"`
-			Content   string     `json:"content,omitempty"`
-			Reasoning string     `json:"reasoning,omitempty"`
-			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-		} `json:"delta"`
-		FinishReason *string `json:"finish_reason"`
-	}{
-		{Index: 0},
+	chunk := &models.GeminiGenerateContentResponse{
+		Candidates: []models.GeminiCandidate{
+			{
+				Content: models.GeminiContent{
+					Parts: []models.GeminiPart{
+						{Text: "Streamed content"},
+					},
+				},
+			},
+		},
 	}
-	chunk.Choices[0].Delta.Reasoning = "Thinking..."
 
-	result := converter.ConvertOpenAIStreamChunkToAnthropic(chunk, "msg_123", "claude-3", &contentIndex, state)
+	result := converter.ConvertGeminiStreamChunkToAnthropic(chunk, "msg_test", "gemini-1.5-flash", &contentIndex, state)
 
-	if !strings.Contains(result, `"type":"thinking"`) {
-		t.Errorf("Result should contain type:thinking, got %s", result)
+	if !strings.Contains(result, "message_start") {
+		t.Error("Should contain message_start")
 	}
-	if !strings.Contains(result, `"thinking":"Thinking..."`) {
-		t.Errorf("Result should contain thinking delta")
+	if !strings.Contains(result, "content_block_start") {
+		t.Error("Should contain content_block_start")
+	}
+	if !strings.Contains(result, "Streamed content") {
+		t.Error("Should contain streamed text")
 	}
 }

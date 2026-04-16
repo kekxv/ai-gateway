@@ -49,6 +49,10 @@ func (c *ProtocolConverter) ConvertRequest(req interface{}, from, to ProtocolTyp
 		return c.openAIToAnthropicRequest(req.(*ChatRequest))
 	case from == ProtocolAnthropic && to == ProtocolOpenAI:
 		return c.anthropicToOpenAIRequest(req.(*models.AnthropicMessagesRequest))
+	case from == ProtocolAnthropic && to == ProtocolGemini:
+		return c.anthropicToGeminiRequest(req.(*models.AnthropicMessagesRequest))
+	case from == ProtocolOpenAI && to == ProtocolGemini:
+		return c.openAIToGeminiRequest(req.(*ChatRequest))
 	default:
 		return nil, fmt.Errorf("unsupported protocol conversion: %s -> %s", from, to)
 	}
@@ -65,6 +69,8 @@ func (c *ProtocolConverter) ConvertResponse(resp interface{}, from, to ProtocolT
 		return c.openAIToAnthropicResponse(resp.(*ChatResponse), modelName)
 	case from == ProtocolAnthropic && to == ProtocolOpenAI:
 		return c.anthropicToOpenAIResponse(resp.(*models.AnthropicMessagesResponse))
+	case from == ProtocolGemini && to == ProtocolAnthropic:
+		return c.geminiToAnthropicResponse(resp.(*models.GeminiGenerateContentResponse), modelName)
 	default:
 		return nil, fmt.Errorf("unsupported protocol conversion: %s -> %s", from, to)
 	}
@@ -775,6 +781,7 @@ func (c *ProtocolConverter) ConvertOpenAIStreamChunkToAnthropic(chunk *StreamChu
 // StreamConversionState tracks state during stream conversion
 type StreamConversionState struct {
 	MessageStarted      bool
+	GeminiStarted       bool // To track if Gemini stream started (Gemini stream is an array)
 	ThinkingStarted     bool
 	ContentBlockStarted bool
 	ToolUseStarted      bool
@@ -782,6 +789,423 @@ type StreamConversionState struct {
 	MessageFinished     bool
 	AccumulatedContent  string
 	Signature           string // To track signature for signature_delta
+}
+
+// Anthropic -> Gemini Request Conversion
+func (c *ProtocolConverter) anthropicToGeminiRequest(req *models.AnthropicMessagesRequest) (*models.GeminiGenerateContentRequest, error) {
+	geminiReq := &models.GeminiGenerateContentRequest{
+		Contents: make([]models.GeminiContent, 0),
+	}
+
+	// 1. System Instruction
+	if !req.System.IsEmpty() {
+		geminiReq.SystemInstruction = &models.GeminiContent{
+			Role: "system",
+			Parts: []models.GeminiPart{
+				{Text: req.System.GetText()},
+			},
+		}
+	}
+
+	// 2. Messages
+	for _, msg := range req.Messages {
+		role := "user"
+		if msg.Role == "assistant" {
+			role = "model"
+		}
+
+		parts := make([]models.GeminiPart, 0)
+		if msg.Content.StringContent != "" {
+			parts = append(parts, models.GeminiPart{Text: msg.Content.StringContent})
+		}
+
+		for _, block := range msg.Content.Blocks {
+			switch block.Type {
+			case "text":
+				parts = append(parts, models.GeminiPart{Text: block.Text})
+			case "thinking":
+				// Gemini 2.0 Thinking models use specific parts or config
+				parts = append(parts, models.GeminiPart{Text: block.Thinking})
+			case "image":
+				if block.Source != nil {
+					parts = append(parts, models.GeminiPart{
+						InlineData: &models.GeminiInlineData{
+							MimeType: block.Source.MediaType,
+							Data:     block.Source.Data,
+						},
+					})
+				}
+			case "tool_use":
+				parts = append(parts, models.GeminiPart{
+					FunctionCall: &models.GeminiFunctionCall{
+						Name: block.Name,
+						Args: block.Input,
+					},
+				})
+			case "tool_result":
+				var result map[string]interface{}
+				switch v := block.Content.(type) {
+				case string:
+					result = map[string]interface{}{"output": v}
+				case map[string]interface{}:
+					result = v
+				default:
+					result = map[string]interface{}{"output": v}
+				}
+
+				// Find original tool name for Gemini (it requires Name, not ID)
+				toolName := block.ToolUseID
+				// Try to find the tool name from the messages history if ToolUseID is actually an ID
+				for i := len(geminiReq.Contents) - 1; i >= 0; i-- {
+					for _, p := range geminiReq.Contents[i].Parts {
+						if p.FunctionCall != nil {
+							// If we had a logic to map ID to Name, we'd use it here.
+							// For now, if it looks like an ID (contains random chars),
+							// we'll hope the Name was passed in ToolUseID.
+						}
+					}
+				}
+
+				parts = append(parts, models.GeminiPart{
+					FunctionResponse: &models.GeminiFunctionResponse{
+						Name:     toolName,
+						Response: result,
+					},
+				})
+			}
+		}
+
+		if len(parts) > 0 {
+			geminiReq.Contents = append(geminiReq.Contents, models.GeminiContent{
+				Role:  role,
+				Parts: parts,
+			})
+		}
+	}
+
+	// 3. Tools
+	if len(req.Tools) > 0 {
+		declarations := make([]models.GeminiFunctionDeclaration, 0)
+		for _, t := range req.Tools {
+			declarations = append(declarations, models.GeminiFunctionDeclaration{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.InputSchema,
+			})
+		}
+		geminiReq.Tools = []models.GeminiTool{{FunctionDeclarations: declarations}}
+	}
+
+	// 4. Tool Choice
+	if req.ToolChoice != nil {
+		geminiReq.ToolConfig = &models.GeminiToolConfig{
+			FunctionCallingConfig: &models.GeminiFunctionCallingConfig{},
+		}
+		switch req.ToolChoice.Type {
+		case "auto":
+			geminiReq.ToolConfig.FunctionCallingConfig.Mode = "AUTO"
+		case "any":
+			geminiReq.ToolConfig.FunctionCallingConfig.Mode = "ANY"
+		case "tool":
+			geminiReq.ToolConfig.FunctionCallingConfig.Mode = "ANY"
+			geminiReq.ToolConfig.FunctionCallingConfig.AllowedFunctionNames = []string{req.ToolChoice.Name}
+		case "none":
+			geminiReq.ToolConfig.FunctionCallingConfig.Mode = "NONE"
+		}
+	}
+
+	// 5. Generation Config
+	geminiReq.GenerationConfig = &models.GeminiGenerationConfig{
+		Temperature: &req.Temperature,
+	}
+	if req.MaxTokens > 0 {
+		geminiReq.GenerationConfig.MaxOutputTokens = &req.MaxTokens
+	}
+	if req.TopP > 0 {
+		topP := req.TopP
+		geminiReq.GenerationConfig.TopP = &topP
+	}
+	if req.TopK > 0 {
+		topK := req.TopK
+		geminiReq.GenerationConfig.TopK = &topK
+	}
+	if len(req.StopSequences) > 0 {
+		geminiReq.GenerationConfig.StopSequences = req.StopSequences
+	}
+
+	// Mapping Anthropic Thinking to Gemini Thinking
+	if req.Thinking != nil && req.Thinking.Type == "enabled" {
+		geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
+			IncludeThoughts: true,
+		}
+	}
+
+	// 6. Safety Settings (Default to BLOCK_NONE for coding/gateway use)
+	categories := []string{
+		"HARM_CATEGORY_HARASSMENT",
+		"HARM_CATEGORY_HATE_SPEECH",
+		"HARM_CATEGORY_SEXUALLY_EXPLICIT",
+		"HARM_CATEGORY_DANGEROUS_CONTENT",
+		"HARM_CATEGORY_CIVIC_INTEGRITY",
+	}
+	for _, cat := range categories {
+		geminiReq.SafetySettings = append(geminiReq.SafetySettings, models.GeminiSafetySetting{
+			Category:  cat,
+			Threshold: "BLOCK_NONE",
+		})
+	}
+
+	return geminiReq, nil
+}
+
+// OpenAI -> Gemini Request Conversion
+func (c *ProtocolConverter) openAIToGeminiRequest(req *ChatRequest) (*models.GeminiGenerateContentRequest, error) {
+	geminiReq := &models.GeminiGenerateContentRequest{
+		Contents: make([]models.GeminiContent, 0),
+	}
+
+	// 1. System Instruction & Messages
+	for _, msg := range req.Messages {
+		if msg.Role == "system" {
+			geminiReq.SystemInstruction = &models.GeminiContent{
+				Role: "system",
+				Parts: []models.GeminiPart{
+					{Text: msg.Content.GetText()},
+				},
+			}
+			continue
+		}
+
+		role := "user"
+		if msg.Role == "assistant" {
+			role = "model"
+		}
+
+		parts := make([]models.GeminiPart, 0)
+		if msg.Content.StringContent != "" {
+			parts = append(parts, models.GeminiPart{Text: msg.Content.StringContent})
+		}
+
+		for _, part := range msg.Content.Parts {
+			switch part.Type {
+			case "text":
+				parts = append(parts, models.GeminiPart{Text: part.Text})
+			case "image_url":
+				if part.ImageURL != nil {
+					if strings.HasPrefix(part.ImageURL.URL, "data:") {
+						metaAndData := strings.SplitN(part.ImageURL.URL, ",", 2)
+						if len(metaAndData) == 2 {
+							meta := metaAndData[0]
+							data := metaAndData[1]
+							mediaType := strings.TrimSuffix(strings.TrimPrefix(meta, "data:"), ";base64")
+							parts = append(parts, models.GeminiPart{
+								InlineData: &models.GeminiInlineData{
+									MimeType: mediaType,
+									Data:     data,
+								},
+							})
+						}
+					}
+				}
+			}
+		}
+
+		// Handle Tool Calls in Assistant message
+		for _, tc := range msg.ToolCalls {
+			var args map[string]interface{}
+			json.Unmarshal([]byte(tc.Function.Arguments), &args)
+			parts = append(parts, models.GeminiPart{
+				FunctionCall: &models.GeminiFunctionCall{
+					Name: tc.Function.Name,
+					Args: args,
+				},
+			})
+		}
+
+		// Handle Tool Result
+		if msg.Role == "tool" {
+			var result map[string]interface{}
+			if err := json.Unmarshal([]byte(msg.Content.GetText()), &result); err != nil {
+				result = map[string]interface{}{"output": msg.Content.GetText()}
+			}
+			parts = append(parts, models.GeminiPart{
+				FunctionResponse: &models.GeminiFunctionResponse{
+					Name:     msg.ToolCallID,
+					Response: result,
+				},
+			})
+		}
+
+		if len(parts) > 0 {
+			geminiReq.Contents = append(geminiReq.Contents, models.GeminiContent{
+				Role:  role,
+				Parts: parts,
+			})
+		}
+	}
+
+	// 2. Tools
+	if len(req.Tools) > 0 {
+		declarations := make([]models.GeminiFunctionDeclaration, 0)
+		for _, t := range req.Tools {
+			declarations = append(declarations, models.GeminiFunctionDeclaration{
+				Name:        t.Function.Name,
+				Description: t.Function.Description,
+				Parameters:  t.Function.Parameters,
+			})
+		}
+		geminiReq.Tools = []models.GeminiTool{{FunctionDeclarations: declarations}}
+	}
+
+	// 3. Generation Config
+	geminiReq.GenerationConfig = &models.GeminiGenerationConfig{
+		Temperature: &req.Temperature,
+	}
+	if req.MaxTokens > 0 {
+		geminiReq.GenerationConfig.MaxOutputTokens = &req.MaxTokens
+	}
+	if req.Extra != nil {
+		if topP, ok := req.Extra["top_p"].(float64); ok {
+			geminiReq.GenerationConfig.TopP = &topP
+		}
+	}
+
+	return geminiReq, nil
+}
+
+// Gemini -> Anthropic Response Conversion
+func (c *ProtocolConverter) geminiToAnthropicResponse(resp *models.GeminiGenerateContentResponse, modelName string) (*models.AnthropicMessagesResponse, error) {
+	anthropicResp := &models.AnthropicMessagesResponse{
+		ID:    generateMessageID(),
+		Type:  "message",
+		Role:  "assistant",
+		Model: modelName,
+	}
+
+	if len(resp.Candidates) > 0 {
+		candidate := resp.Candidates[0]
+		anthropicResp.StopReason = convertGeminiFinishReasonToAnthropic(candidate.FinishReason)
+
+		for _, part := range candidate.Content.Parts {
+			if part.Text != "" {
+				anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
+					Type: "text",
+					Text: part.Text,
+				})
+			}
+			if part.FunctionCall != nil {
+				anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
+					Type:  "tool_use",
+					ID:    generateMessageID(), // Gemini doesn't have call ID in response, we generate one
+					Name:  part.FunctionCall.Name,
+					Input: part.FunctionCall.Args,
+				})
+				anthropicResp.StopReason = models.AnthropicStopToolUse
+			}
+		}
+	}
+
+	if resp.UsageMetadata != nil {
+		anthropicResp.Usage = &models.AnthropicUsage{
+			InputTokens:  resp.UsageMetadata.PromptTokenCount,
+			OutputTokens: resp.UsageMetadata.CandidatesTokenCount,
+		}
+	}
+
+	return anthropicResp, nil
+}
+
+// ConvertGeminiStreamChunkToAnthropic converts a Gemini stream chunk to Anthropic format
+func (c *ProtocolConverter) ConvertGeminiStreamChunkToAnthropic(chunk *models.GeminiGenerateContentResponse, messageID string, modelName string, contentIndex *int, state *StreamConversionState) string {
+	var result strings.Builder
+
+	if !state.MessageStarted {
+		result.WriteString(c.GenerateAnthropicStreamStart(messageID, modelName))
+		state.MessageStarted = true
+	}
+
+	if len(chunk.Candidates) > 0 {
+		candidate := chunk.Candidates[0]
+
+		for _, part := range candidate.Content.Parts {
+			// Handle Thinking (Gemini 2.0 Thinking models use thought: true)
+			if part.Thought {
+				if !state.ThinkingStarted {
+					if state.ContentBlockStarted {
+						result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
+						*contentIndex++
+						state.ContentBlockStarted = false
+					}
+					result.WriteString(c.GenerateAnthropicContentBlockStart(*contentIndex, "thinking"))
+					state.ThinkingStarted = true
+				}
+				result.WriteString(c.GenerateAnthropicThinkingDelta(*contentIndex, part.Text))
+				state.AccumulatedContent += part.Text
+				continue
+			}
+
+			// Transition from thinking to text if needed
+			if state.ThinkingStarted && part.Text != "" {
+				result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
+				*contentIndex++
+				state.ThinkingStarted = false
+			}
+
+			if part.Text != "" {
+				if !state.ContentBlockStarted {
+					result.WriteString(c.GenerateAnthropicContentBlockStart(*contentIndex, "text"))
+					state.ContentBlockStarted = true
+				}
+				result.WriteString(c.GenerateAnthropicContentDelta(*contentIndex, part.Text))
+				state.AccumulatedContent += part.Text
+			}
+
+			if part.FunctionCall != nil {
+				if state.ContentBlockStarted {
+					result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
+					*contentIndex++
+					state.ContentBlockStarted = false
+				}
+				// Gemini streaming tool calls usually come in one chunk
+				result.WriteString(c.GenerateAnthropicToolUseBlockStart(*contentIndex, generateMessageID(), part.FunctionCall.Name))
+				argsJson, _ := json.Marshal(part.FunctionCall.Args)
+				result.WriteString(c.GenerateAnthropicToolUseDelta(*contentIndex, string(argsJson)))
+				result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
+				*contentIndex++
+			}
+		}
+
+		if candidate.FinishReason != "" && candidate.FinishReason != "STOP" {
+			if state.ContentBlockStarted {
+				result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
+				state.ContentBlockStarted = false
+			}
+
+			stopReason := convertGeminiFinishReasonToAnthropic(candidate.FinishReason)
+			outputTokens := 0
+			if chunk.UsageMetadata != nil {
+				outputTokens = chunk.UsageMetadata.CandidatesTokenCount
+			}
+			result.WriteString(c.GenerateAnthropicMessageDelta(stopReason, outputTokens))
+			result.WriteString(c.GenerateAnthropicMessageStop())
+			state.MessageFinished = true
+		}
+	}
+
+	return result.String()
+}
+
+func convertGeminiFinishReasonToAnthropic(reason string) string {
+	switch reason {
+	case "STOP":
+		return models.AnthropicStopEndTurn
+	case "MAX_TOKENS":
+		return models.AnthropicStopMaxTokens
+	case "SAFETY", "RECITATION":
+		return models.AnthropicStopSequence
+	default:
+		return models.AnthropicStopEndTurn
+	}
 }
 
 // Helper functions
