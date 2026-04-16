@@ -36,6 +36,10 @@ type LoginResponse struct {
 	Role    string `json:"role"`
 }
 
+type RefreshResponse struct {
+	Token string `json:"token"`
+}
+
 type ChangePasswordRequest struct {
 	CurrentPassword string `json:"currentPassword" binding:"required"`
 	NewPassword     string `json:"newPassword" binding:"required,min=8"`
@@ -126,6 +130,34 @@ func (s *AuthService) Login(ctx context.Context, req *LoginRequest) (*LoginRespo
 		Message: "登录成功",
 		Token:   token,
 		Role:    user.Role,
+	}, nil
+}
+
+// RefreshToken generates a new token for an authenticated user
+func (s *AuthService) RefreshToken(ctx context.Context, userID uint) (*RefreshResponse, error) {
+	user, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil {
+		return nil, ErrUserNotFound
+	}
+
+	// Check if user is disabled
+	if user.Disabled {
+		return nil, ErrUserDisabled
+	}
+
+	// Check if user is expired
+	if user.ValidUntil != nil && time.Now().After(*user.ValidUntil) {
+		return nil, ErrUserExpired
+	}
+
+	// Generate new JWT token
+	token, err := utils.GenerateToken(user.ID, user.Email, user.Role, s.jwtSecret, s.jwtExpiry)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RefreshResponse{
+		Token: token,
 	}, nil
 }
 

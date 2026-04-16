@@ -38,6 +38,8 @@ web/node_modules/
 web/dist/
 web/.DS_Store
 
+/claude-code-router
+/gemini-claude-code
 # TypeScript
 *.tsbuildinfo
 dist/

@@ -1,11 +1,15 @@
 import { api } from './index'
-import type { User, LoginRequest, LoginResponse, ChangePasswordRequest, CreateUserRequest, UpdateUserRequest } from '@/types/user'
+import type { User, LoginRequest, LoginResponse, RefreshResponse, ChangePasswordRequest, CreateUserRequest, UpdateUserRequest } from '@/types/user'
 import type { TotpSetupResponse, TotpVerifyRequest, TotpDisableRequest } from '@/types/totp'
 
 export const authApi = {
   // Login
   login: (data: LoginRequest) =>
     api.post<LoginResponse>('/auth/login', data),
+
+  // Refresh token
+  refreshToken: () =>
+    api.post<RefreshResponse>('/auth/refresh'),
 
   // Get current user
   getCurrentUser: () =>

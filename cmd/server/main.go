@@ -245,6 +245,11 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 	// ========== Auth API (No JWT required) ==========
 	r.POST("/api/auth/login", deps.AuthHandler.Login)
 
+	// ========== Token Refresh (JWT required) ==========
+	refresh := r.Group("/api")
+	refresh.Use(middleware.JWTAuth(deps.JWTSecret))
+	refresh.POST("/auth/refresh", deps.AuthHandler.RefreshToken)
+
 	// ========== Admin API (JWT required) ==========
 	admin := r.Group("/api")
 	admin.Use(middleware.JWTAuth(deps.JWTSecret))

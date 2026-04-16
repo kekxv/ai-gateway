@@ -46,6 +46,32 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// RefreshToken handles token refresh
+func (h *AuthHandler) RefreshToken(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	if userID == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	resp, err := h.authService.RefreshToken(c.Request.Context(), userID)
+	if err != nil {
+		switch err {
+		case service.ErrUserNotFound:
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
+		case service.ErrUserDisabled:
+			c.JSON(http.StatusForbidden, gin.H{"error": "User is disabled"})
+		case service.ErrUserExpired:
+			c.JSON(http.StatusForbidden, gin.H{"error": "User account has expired"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
 // ChangePassword handles password change
 func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	userID := middleware.GetUserID(c)

@@ -24,6 +24,10 @@ export interface LoginResponse {
   user?: User
 }
 
+export interface RefreshResponse {
+  token: string
+}
+
 export interface ChangePasswordRequest {
   currentPassword: string
   newPassword: string
