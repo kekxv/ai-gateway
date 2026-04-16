@@ -240,14 +240,38 @@ func (c *ProtocolConverter) anthropicToOpenAIRequest(req *models.AnthropicMessag
 	// Convert messages
 	for _, msg := range req.Messages {
 		var toolCalls []ToolCall
-		var hasToolResult bool
-		var toolResultID string
-		var toolResultContent string
+		var toolResultMessages []ChatMessage
 
-		// Check for tool_use or tool_result in content blocks
+		// Pre-scan for tool results and tool calls
+		var otherBlocks []models.AnthropicContentBlock
 		if len(msg.Content.Blocks) > 0 {
 			for _, block := range msg.Content.Blocks {
-				if block.Type == "tool_use" {
+				if block.Type == "tool_result" {
+					var resultText string
+					switch v := block.Content.(type) {
+					case string:
+						resultText = v
+					case []interface{}:
+						// Handle array of blocks in tool_result
+						for _, b := range v {
+							if bm, ok := b.(map[string]interface{}); ok {
+								if bt, ok := bm["type"].(string); ok && bt == "text" {
+									if txt, ok := bm["text"].(string); ok {
+										resultText += txt
+									}
+								}
+							}
+						}
+					default:
+						b, _ := json.Marshal(v)
+						resultText = string(b)
+					}
+					toolResultMessages = append(toolResultMessages, ChatMessage{
+						Role:       "tool",
+						ToolCallID: block.ToolUseID,
+						Content:    ChatMessageContent{StringContent: resultText},
+					})
+				} else if block.Type == "tool_use" {
 					inputJson, _ := json.Marshal(block.Input)
 					toolCalls = append(toolCalls, ToolCall{
 						ID:   block.ID,
@@ -257,34 +281,32 @@ func (c *ProtocolConverter) anthropicToOpenAIRequest(req *models.AnthropicMessag
 							Arguments: string(inputJson),
 						},
 					})
-				} else if block.Type == "tool_result" {
-					hasToolResult = true
-					toolResultID = block.ToolUseID
-					switch v := block.Content.(type) {
-					case string:
-						toolResultContent = v
-					default:
-						b, _ := json.Marshal(v)
-						toolResultContent = string(b)
-					}
+				} else {
+					otherBlocks = append(otherBlocks, block)
 				}
 			}
 		}
 
-		if hasToolResult {
-			// In OpenAI, tool results are separate messages
-			messages = append(messages, ChatMessage{
-				Role:       "tool",
-				ToolCallID: toolResultID,
-				Content:    ChatMessageContent{StringContent: toolResultContent},
-			})
-		} else {
-			content := convertAnthropicContentToOpenAI(msg.Content)
+		// Convert remaining content (text, image, thinking)
+		var content ChatMessageContent
+		if len(otherBlocks) > 0 {
+			content = convertAnthropicContentToOpenAI(models.AnthropicContent{Blocks: otherBlocks})
+		} else if msg.Content.StringContent != "" {
+			content = ChatMessageContent{StringContent: msg.Content.StringContent}
+		}
+
+		// If we have content or tool calls, add the message
+		if content.StringContent != "" || len(content.Parts) > 0 || len(toolCalls) > 0 {
 			messages = append(messages, ChatMessage{
 				Role:      msg.Role,
 				Content:   content,
 				ToolCalls: toolCalls,
 			})
+		}
+
+		// Add any tool result messages
+		if len(toolResultMessages) > 0 {
+			messages = append(messages, toolResultMessages...)
 		}
 	}
 	openAIReq.Messages = messages
@@ -343,14 +365,20 @@ func convertAnthropicContentToOpenAI(content models.AnthropicContent) ChatMessag
 					})
 				}
 			case "tool_result":
-				// For tool_result, we might need special handling if it's mixed with other content
-				// In OpenAI, tool results are separate messages with role: tool.
-				// But Anthropic allows tool_result blocks within a user message.
-				// Here we just convert the content to text for OpenAI compatibility if needed
 				var resultText string
 				switch v := block.Content.(type) {
 				case string:
 					resultText = v
+				case []interface{}:
+					for _, b := range v {
+						if bm, ok := b.(map[string]interface{}); ok {
+							if bt, ok := bm["type"].(string); ok && bt == "text" {
+								if txt, ok := bm["text"].(string); ok {
+									resultText += txt
+								}
+							}
+						}
+					}
 				default:
 					b, _ := json.Marshal(v)
 					resultText = string(b)
@@ -389,6 +417,14 @@ func (c *ProtocolConverter) openAIToAnthropicResponse(resp *ChatResponse, modelN
 	if len(resp.Choices) > 0 {
 		choice := resp.Choices[0]
 		if choice.Message != nil {
+			// Add reasoning (thinking) if present
+			if reasoning := choice.Message.Reasoning; reasoning != "" {
+				content = append(content, models.AnthropicContentBlock{
+					Type:     "thinking",
+					Thinking: reasoning,
+				})
+			}
+
 			// Add text content if present
 			if text := choice.Message.Content.GetText(); text != "" {
 				content = append(content, models.AnthropicContentBlock{
@@ -435,9 +471,25 @@ func (c *ProtocolConverter) anthropicToOpenAIResponse(resp *models.AnthropicMess
 
 	// Convert content to message
 	var content string
+	var reasoning string
+	var toolCalls []ToolCall
+
 	for _, block := range resp.Content {
-		if block.Type == "text" {
+		switch block.Type {
+		case "text":
 			content += block.Text
+		case "thinking":
+			reasoning += block.Thinking
+		case "tool_use":
+			inputJson, _ := json.Marshal(block.Input)
+			toolCalls = append(toolCalls, ToolCall{
+				ID:   block.ID,
+				Type: "function",
+				Function: FunctionCall{
+					Name:      block.Name,
+					Arguments: string(inputJson),
+				},
+			})
 		}
 	}
 
@@ -445,8 +497,10 @@ func (c *ProtocolConverter) anthropicToOpenAIResponse(resp *models.AnthropicMess
 		{
 			Index: 0,
 			Message: &ChatMessage{
-				Role:    "assistant",
-				Content: ChatMessageContent{StringContent: content},
+				Role:      "assistant",
+				Content:   ChatMessageContent{StringContent: content},
+				Reasoning: reasoning,
+				ToolCalls: toolCalls,
 			},
 			FinishReason: convertStopReasonToOpenAI(resp.StopReason),
 		},
@@ -480,14 +534,18 @@ func (c *ProtocolConverter) GenerateAnthropicStreamStart(messageID, modelName st
 }
 
 // GenerateAnthropicContentBlockStart generates content_block_start event
-func (c *ProtocolConverter) GenerateAnthropicContentBlockStart(index int) string {
+func (c *ProtocolConverter) GenerateAnthropicContentBlockStart(index int, blockType string) string {
 	event := models.AnthropicStreamEvent{
 		Type:  models.AnthropicEventContentBlockStart,
 		Index: index,
 		ContentBlock: &models.AnthropicContentBlock{
-			Type: "text",
-			Text: "",
+			Type: blockType,
 		},
+	}
+	if blockType == "text" {
+		event.ContentBlock.Text = ""
+	} else if blockType == "thinking" {
+		event.ContentBlock.Thinking = ""
 	}
 	return formatSSE(models.AnthropicEventContentBlockStart, event)
 }
@@ -513,6 +571,19 @@ func (c *ProtocolConverter) GenerateAnthropicThinkingDelta(index int, thinking s
 		Delta: &models.AnthropicDelta{
 			Type:     "thinking_delta",
 			Thinking: thinking,
+		},
+	}
+	return formatSSE(models.AnthropicEventContentBlockDelta, event)
+}
+
+// GenerateAnthropicSignatureDelta generates content_block_delta event for signature
+func (c *ProtocolConverter) GenerateAnthropicSignatureDelta(index int, signature string) string {
+	event := models.AnthropicStreamEvent{
+		Type:  models.AnthropicEventContentBlockDelta,
+		Index: index,
+		Delta: &models.AnthropicDelta{
+			Type:      "signature_delta",
+			Signature: signature,
 		},
 	}
 	return formatSSE(models.AnthropicEventContentBlockDelta, event)
@@ -607,8 +678,6 @@ func (c *ProtocolConverter) ConvertOpenAIStreamChunkToAnthropic(chunk *StreamChu
 					}
 
 					// Start new tool use block
-					// OpenAI sometimes sends ID and Name in first chunk, sometimes later
-					// We need to ensure we have them before starting
 					state.ToolUseStarted = true
 					state.LastToolIndex = tc.Index
 					result.WriteString(c.GenerateAnthropicToolUseBlockStart(*contentIndex, tc.ID, tc.Function.Name))
@@ -623,8 +692,15 @@ func (c *ProtocolConverter) ConvertOpenAIStreamChunkToAnthropic(chunk *StreamChu
 			continue
 		}
 
-		// Handle Reasoning (Thinking)
-		if choice.Delta.Reasoning != "" {
+		// Handle Reasoning (Thinking) - support both Reasoning (Ollama/Gemma) and ReasoningContent (O1/O3)
+		reasoning := choice.Delta.Reasoning
+		if reasoning == "" {
+			// Try to get from extra fields if it's O1/O3 reasoning_content
+			// Note: We'll need to check if reasoning_content is in choice.Delta.Extra or similar
+			// For now, let's assume it's part of reasoning field or we'll need to add it to StreamChunk
+		}
+
+		if reasoning != "" {
 			if !state.ThinkingStarted {
 				// If we were doing tool use, stop it
 				if state.ToolUseStarted {
@@ -640,11 +716,11 @@ func (c *ProtocolConverter) ConvertOpenAIStreamChunkToAnthropic(chunk *StreamChu
 					state.ContentBlockStarted = false
 				}
 
-				result.WriteString(c.GenerateAnthropicContentBlockStart(*contentIndex))
+				result.WriteString(c.GenerateAnthropicContentBlockStart(*contentIndex, "thinking"))
 				state.ThinkingStarted = true
 			}
-			result.WriteString(c.GenerateAnthropicThinkingDelta(*contentIndex, choice.Delta.Reasoning))
-			state.AccumulatedContent += choice.Delta.Reasoning
+			result.WriteString(c.GenerateAnthropicThinkingDelta(*contentIndex, reasoning))
+			state.AccumulatedContent += reasoning
 			continue
 		}
 
@@ -668,7 +744,7 @@ func (c *ProtocolConverter) ConvertOpenAIStreamChunkToAnthropic(chunk *StreamChu
 		// Handle Content
 		if choice.Delta.Content != "" {
 			if !state.ContentBlockStarted {
-				result.WriteString(c.GenerateAnthropicContentBlockStart(*contentIndex))
+				result.WriteString(c.GenerateAnthropicContentBlockStart(*contentIndex, "text"))
 				state.ContentBlockStarted = true
 			}
 			result.WriteString(c.GenerateAnthropicContentDelta(*contentIndex, choice.Delta.Content))
@@ -705,6 +781,7 @@ type StreamConversionState struct {
 	LastToolIndex       int
 	MessageFinished     bool
 	AccumulatedContent  string
+	Signature           string // To track signature for signature_delta
 }
 
 // Helper functions

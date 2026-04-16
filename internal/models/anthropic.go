@@ -219,9 +219,10 @@ type AnthropicStreamEvent struct {
 
 // AnthropicDelta for streaming content changes
 type AnthropicDelta struct {
-	Type        string `json:"type,omitempty"` // "text_delta", "input_json_delta", "thinking_delta"
+	Type        string `json:"type,omitempty"` // "text_delta", "input_json_delta", "thinking_delta", "signature_delta"
 	Text        string `json:"text,omitempty"`
 	Thinking    string `json:"thinking,omitempty"`
+	Signature   string `json:"signature,omitempty"`   // for signature_delta
 	PartialJSON string `json:"partial_json,omitempty"` // for tool_use input_json_delta
 	StopReason  string `json:"stop_reason,omitempty"`
 }

@@ -72,12 +72,12 @@ curl -s "$BASE_URL/anthropic/v1/messages" \
     -H "anthropic-version: 2023-06-01" \
     -d '{
         "model": "'"$MODEL"'",
-        "max_tokens": 50,
+        "max_tokens": 500,
         "messages": [
             {"role": "user", "content": "Count from 1 to 5"}
         ],
         "stream": true
-    }' | head -30
+    }'
 
 echo ""
 echo "=== Test completed ==="

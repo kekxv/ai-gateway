@@ -225,12 +225,13 @@ func (c ChatMessageContent) GetText() string {
 	if c.StringContent != "" {
 		return c.StringContent
 	}
+	var texts []string
 	for _, part := range c.Parts {
 		if part.Type == "text" {
-			return part.Text
+			texts = append(texts, part.Text)
 		}
 	}
-	return ""
+	return strings.Join(texts, "")
 }
 
 // GetTextWithReasoning returns content text, falling back to reasoning if content is empty
@@ -527,7 +528,8 @@ func (u *RealtimeLogUpdater) parseAndUpdateContent(data []byte) {
 					ContentBlock models.AnthropicContentBlock `json:"content_block"`
 				}
 				if err := json.Unmarshal([]byte(dataStr), &event); err == nil {
-					if event.ContentBlock.Type == "tool_use" {
+					switch event.ContentBlock.Type {
+					case "tool_use":
 						u.currentToolIndex = event.Index
 						u.mergeToolCall(ToolCall{
 							Index:    event.Index,
@@ -535,6 +537,8 @@ func (u *RealtimeLogUpdater) parseAndUpdateContent(data []byte) {
 							Type:     "function",
 							Function: FunctionCall{Name: event.ContentBlock.Name},
 						})
+					case "thinking":
+						// Start a new thinking block in content for logging if needed
 					}
 				}
 			case "content_block_delta":
@@ -548,6 +552,8 @@ func (u *RealtimeLogUpdater) parseAndUpdateContent(data []byte) {
 						u.content.WriteString(event.Delta.Text)
 					case "thinking_delta":
 						u.reasoning.WriteString(event.Delta.Thinking)
+					case "signature_delta":
+						// Some providers send signature_delta
 					case "input_json_delta":
 						u.mergeToolCall(ToolCall{
 							Index:    event.Index,
@@ -916,8 +922,8 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 	var contentBuilder strings.Builder
 
 	scanner := bufio.NewScanner(strings.NewReader(rawData))
-	var currentBlockIndex int = -1
 	var blockTexts = make(map[int]*strings.Builder) // track text per content block
+	var blockTypes = make(map[int]string)           // track type per content block
 	var inputTokens int = 0
 	var outputTokens int = 0
 
@@ -940,30 +946,21 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 		}
 
 		// Parse SSE format: event: xxx\ndata: xxx
-		// Note: Some providers don't put a space after the colon (e.g., "event:message_start" instead of "event: message_start")
 		var eventType string
 		var eventData string
 
-		// Check for event line - support both "event: " and "event:" formats
+		// Check for event line
 		if strings.HasPrefix(line, "event:") {
-			// Remove "event:" prefix and any optional space
-			eventType = strings.TrimPrefix(line, "event:")
-			eventType = strings.TrimSpace(eventType)
-			// Read next line for data
+			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 			if scanner.Scan() {
 				dataLine := scanner.Text()
 				lineCount++
-				// Support both "data: " and "data:" formats
 				if strings.HasPrefix(dataLine, "data:") {
-					eventData = strings.TrimPrefix(dataLine, "data:")
-					eventData = strings.TrimSpace(eventData)
+					eventData = strings.TrimSpace(strings.TrimPrefix(dataLine, "data:"))
 				}
 			}
 		} else if strings.HasPrefix(line, "data:") {
-			// Some providers might send data without event prefix
-			// Support both "data: " and "data:" formats
-			eventData = strings.TrimPrefix(line, "data:")
-			eventData = strings.TrimSpace(eventData)
+			eventData = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		}
 
 		if eventData == "" {
@@ -971,16 +968,17 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 		}
 
 		// Parse the event data as JSON to detect type if not provided
-		var baseEvent struct {
-			Type string `json:"type"`
-		}
-		if eventType == "" && json.Unmarshal([]byte(eventData), &baseEvent) == nil {
-			eventType = baseEvent.Type
+		if eventType == "" {
+			var baseEvent struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal([]byte(eventData), &baseEvent) == nil {
+				eventType = baseEvent.Type
+			}
 		}
 
 		switch eventType {
 		case "message_start":
-			// Standard Anthropic format
 			var event struct {
 				Message struct {
 					Usage struct {
@@ -994,60 +992,20 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 				outputTokens = event.Message.Usage.OutputTokens
 			}
 
-			// Fallback: Try alternative field names for message_start
-			if inputTokens == 0 && outputTokens == 0 {
-				var altEvent struct {
-					Message struct {
-						Usage struct {
-							InputTokens       int `json:"input_tokens"`
-							OutputTokens      int `json:"output_tokens"`
-							InputTokensCount  int `json:"inputTokensCount"`
-							OutputTokensCount int `json:"outputTokensCount"`
-						} `json:"usage"`
-						// Some providers put usage directly in message
-						InputTokens  int `json:"input_tokens"`
-						OutputTokens int `json:"output_tokens"`
-					} `json:"message"`
-					// Some providers have usage at top level
-					Usage struct {
-						InputTokens  int `json:"input_tokens"`
-						OutputTokens int `json:"output_tokens"`
-					} `json:"usage"`
-				}
-				if json.Unmarshal([]byte(eventData), &altEvent) == nil {
-					if altEvent.Message.Usage.InputTokensCount > 0 {
-						inputTokens = altEvent.Message.Usage.InputTokensCount
-					} else if altEvent.Message.Usage.InputTokens > 0 {
-						inputTokens = altEvent.Message.Usage.InputTokens
-					} else if altEvent.Message.InputTokens > 0 {
-						inputTokens = altEvent.Message.InputTokens
-					} else if altEvent.Usage.InputTokens > 0 {
-						inputTokens = altEvent.Usage.InputTokens
-					}
-
-					if altEvent.Message.Usage.OutputTokensCount > 0 {
-						outputTokens = altEvent.Message.Usage.OutputTokensCount
-					} else if altEvent.Message.Usage.OutputTokens > 0 {
-						outputTokens = altEvent.Message.Usage.OutputTokens
-					} else if altEvent.Message.OutputTokens > 0 {
-						outputTokens = altEvent.Message.OutputTokens
-					} else if altEvent.Usage.OutputTokens > 0 {
-						outputTokens = altEvent.Usage.OutputTokens
-					}
-				}
-			}
-
 		case "content_block_start":
 			var event struct {
-				Index int `json:"index"`
+				Index        int `json:"index"`
 				ContentBlock struct {
 					Type string `json:"type"`
+					Name string `json:"name,omitempty"`
+					ID   string `json:"id,omitempty"`
 				} `json:"content_block"`
 			}
 			if err := json.Unmarshal([]byte(eventData), &event); err == nil {
-				currentBlockIndex = event.Index
-				if event.ContentBlock.Type == "text" {
-					blockTexts[currentBlockIndex] = &strings.Builder{}
+				blockTypes[event.Index] = event.ContentBlock.Type
+				blockTexts[event.Index] = &strings.Builder{}
+				if event.ContentBlock.Type == "tool_use" {
+					blockTexts[event.Index].WriteString(fmt.Sprintf("[Tool Use: %s, ID: %s]\n", event.ContentBlock.Name, event.ContentBlock.ID))
 				}
 			}
 
@@ -1055,35 +1013,44 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 			var event struct {
 				Index int `json:"index"`
 				Delta struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
+					Type        string `json:"type"`
+					Text        string `json:"text,omitempty"`
+					Thinking    string `json:"thinking,omitempty"`
+					PartialJSON string `json:"partial_json,omitempty"`
 				} `json:"delta"`
 			}
 			if err := json.Unmarshal([]byte(eventData), &event); err == nil {
-				if event.Delta.Type == "text_delta" && event.Delta.Text != "" {
-					if builder, ok := blockTexts[event.Index]; ok {
+				if builder, ok := blockTexts[event.Index]; ok {
+					switch event.Delta.Type {
+					case "text_delta":
 						builder.WriteString(event.Delta.Text)
-					} else {
-						// Fallback: write directly to content
-						contentBuilder.WriteString(event.Delta.Text)
+					case "thinking_delta":
+						builder.WriteString(event.Delta.Thinking)
+					case "input_json_delta":
+						builder.WriteString(event.Delta.PartialJSON)
 					}
 				}
 			}
 
 		case "content_block_stop":
-			// Content block finished, flush its text to main content
 			var event struct {
 				Index int `json:"index"`
 			}
 			if err := json.Unmarshal([]byte(eventData), &event); err == nil {
 				if builder, ok := blockTexts[event.Index]; ok {
-					contentBuilder.WriteString(builder.String())
+					blockType := blockTypes[event.Index]
+					if blockType == "thinking" {
+						contentBuilder.WriteString("<think>")
+						contentBuilder.WriteString(builder.String())
+						contentBuilder.WriteString("</think>")
+					} else {
+						contentBuilder.WriteString(builder.String())
+					}
 					delete(blockTexts, event.Index)
 				}
 			}
 
 		case "message_delta":
-			// Standard format
 			var event struct {
 				Usage struct {
 					OutputTokens int `json:"output_tokens"`
@@ -1094,90 +1061,26 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 					outputTokens = event.Usage.OutputTokens
 				}
 			}
-
-			// Fallback: Alternative formats for message_delta
-			if outputTokens == 0 {
-				var altEvent struct {
-					Usage struct {
-						OutputTokens      int `json:"output_tokens"`
-						OutputTokensCount int `json:"outputTokensCount"`
-					} `json:"usage"`
-					OutputTokens int `json:"output_tokens"` // Some providers have it at top level
-				}
-				if json.Unmarshal([]byte(eventData), &altEvent) == nil {
-					if altEvent.Usage.OutputTokensCount > 0 {
-						outputTokens = altEvent.Usage.OutputTokensCount
-					} else if altEvent.Usage.OutputTokens > 0 {
-						outputTokens = altEvent.Usage.OutputTokens
-					} else if altEvent.OutputTokens > 0 {
-						outputTokens = altEvent.OutputTokens
-					}
-				}
-			}
-
-		case "message_stop":
-			// Message finished, nothing specific to extract
-
-		// Handle additional event types that might contain usage (Azure/third-party providers)
-		case "usage", "token_usage", "final_usage":
-			// Some providers send usage in a separate event
-			var event struct {
-				InputTokens       int `json:"input_tokens"`
-				OutputTokens      int `json:"output_tokens"`
-				TotalTokens       int `json:"total_tokens"`
-				PromptTokens      int `json:"prompt_tokens"`      // OpenAI style naming
-				CompletionTokens  int `json:"completion_tokens"`
-				InputTokensCount  int `json:"inputTokensCount"`
-				OutputTokensCount int `json:"outputTokensCount"`
-			}
-			if json.Unmarshal([]byte(eventData), &event) == nil {
-				if event.InputTokens > 0 {
-					inputTokens = event.InputTokens
-				} else if event.PromptTokens > 0 {
-					inputTokens = event.PromptTokens
-				} else if event.InputTokensCount > 0 {
-					inputTokens = event.InputTokensCount
-				}
-				if event.OutputTokens > 0 {
-					outputTokens = event.OutputTokens
-				} else if event.CompletionTokens > 0 {
-					outputTokens = event.CompletionTokens
-				} else if event.OutputTokensCount > 0 {
-					outputTokens = event.OutputTokensCount
-				}
-			}
-
-		case "error":
-			var event struct {
-				Error struct {
-					Type    string `json:"type"`
-					Message string `json:"message"`
-				} `json:"error"`
-			}
-			if json.Unmarshal([]byte(eventData), &event) == nil {
-				log.Printf("[getAnthropicCapturedData] Error event received: type=%s, message=%s", event.Error.Type, event.Error.Message)
-			}
 		}
 	}
 
-	// Flush any remaining block texts
-	for _, builder := range blockTexts {
-		contentBuilder.WriteString(builder.String())
+	// Flush any remaining blocks
+	for index, builder := range blockTexts {
+		blockType := blockTypes[index]
+		if blockType == "thinking" {
+			contentBuilder.WriteString("<think>")
+			contentBuilder.WriteString(builder.String())
+			contentBuilder.WriteString("</think>")
+		} else {
+			contentBuilder.WriteString(builder.String())
+		}
 	}
 
 	content = contentBuilder.String()
-
-	// Set usage values
 	usage.PromptTokens = inputTokens
 	usage.CompletionTokens = outputTokens
 	usage.TotalTokens = inputTokens + outputTokens
 
-	// Debug logging when no tokens found
-	if inputTokens == 0 && outputTokens == 0 && len(firstLines) > 0 {
-		log.Printf("[getAnthropicCapturedData] WARNING: No token usage found in stream for provider '%s'. First 10 lines:\n%s", s.providerName, strings.Join(firstLines, "\n"))
-	}
-
-	// Fallback: estimate tokens if not provided
 	if usage.CompletionTokens == 0 && content != "" {
 		usage.CompletionTokens = len(content) / 4
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
