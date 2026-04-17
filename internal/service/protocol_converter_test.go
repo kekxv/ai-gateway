@@ -1753,3 +1753,66 @@ func TestConvertResponse_GeminiToAnthropic_EmptyCandidates(t *testing.T) {
 		t.Errorf("OutputTokens = %d, want 0", anthropicResp.Usage.OutputTokens)
 	}
 }
+
+// Test Anthropic to Gemini request with image content
+func TestConvertRequest_AnthropicToGemini_WithImage(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	anthropicReq := &models.AnthropicMessagesRequest{
+		Model:     "gemini-2.0-flash-exp",
+		MaxTokens: 1024,
+		Messages: []models.AnthropicMessage{
+			{
+				Role: "user",
+				Content: models.AnthropicContent{
+					Blocks: []models.AnthropicContentBlock{
+						{Type: "text", Text: "What is in this image?"},
+						{
+							Type: "image",
+							Source: &models.AnthropicMediaSource{
+								Type:      "base64",
+								MediaType: "image/jpeg",
+								Data:      "/9j/4AAQSkZJRgABAQAA",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := converter.ConvertRequest(anthropicReq, ProtocolAnthropic, ProtocolGemini)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	geminiReq, ok := result.(*models.GeminiGenerateContentRequest)
+	if !ok {
+		t.Fatalf("Expected *models.GeminiGenerateContentRequest, got %T", result)
+	}
+
+	// Check there are 2 parts (text + image)
+	if len(geminiReq.Contents) != 1 {
+		t.Fatalf("Contents count = %d, want 1", len(geminiReq.Contents))
+	}
+	if len(geminiReq.Contents[0].Parts) != 2 {
+		t.Errorf("Parts count = %d, want 2 (text + image)", len(geminiReq.Contents[0].Parts))
+	}
+
+	// Check text part
+	if geminiReq.Contents[0].Parts[0].Text != "What is in this image?" {
+		t.Errorf("First part text = %s, want 'What is in this image?'", geminiReq.Contents[0].Parts[0].Text)
+	}
+
+	// Check image part
+	if geminiReq.Contents[0].Parts[1].InlineData == nil {
+		t.Error("Second part should have InlineData for image")
+	} else {
+		if geminiReq.Contents[0].Parts[1].InlineData.MimeType != "image/jpeg" {
+			t.Errorf("InlineData MimeType = %s, want image/jpeg", geminiReq.Contents[0].Parts[1].InlineData.MimeType)
+		}
+		if geminiReq.Contents[0].Parts[1].InlineData.Data != "/9j/4AAQSkZJRgABAQAA" {
+			t.Errorf("InlineData Data = %s, want /9j/4AAQSkZJRgABAQAA", geminiReq.Contents[0].Parts[1].InlineData.Data)
+		}
+	}
+}
