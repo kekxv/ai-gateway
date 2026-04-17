@@ -893,9 +893,23 @@ const setThinkingMode = (mode: ThinkingMode) => {
   thinkingMode.value = mode
 }
 
-// Get thinking config for API request - supports both OpenAI and Gemini formats
-const getThinkingConfig = (): { reasoning_effort?: OpenAIReasoningEffort; generationConfig?: { thinkingConfig?: { thinkingLevel?: GeminiThinkingLevel } } } | undefined => {
+// Get thinking config for API request - supports OpenAI, Gemini, and DeepSeek/Ollama formats
+const getThinkingConfig = (): {
+  think?: boolean
+  reasoning_effort?: OpenAIReasoningEffort
+  generationConfig?: { thinkingConfig?: { thinkingLevel?: GeminiThinkingLevel } }
+} | undefined => {
   if (thinkingMode.value === 'auto') return undefined
+
+  // DeepSeek/Ollama format: think (boolean)
+  const thinkMap: Record<ThinkingMode, boolean | undefined> = {
+    auto: undefined,
+    high: undefined,    // think doesn't have levels
+    medium: undefined,
+    low: undefined,
+    minimal: undefined,
+    none: false         // think: false to disable thinking
+  }
 
   // OpenAI format: reasoning_effort
   const reasoningEffortMap: Record<ThinkingMode, OpenAIReasoningEffort | undefined> = {
@@ -917,10 +931,12 @@ const getThinkingConfig = (): { reasoning_effort?: OpenAIReasoningEffort; genera
     none: 'NONE'
   }
 
+  const thinkValue = thinkMap[thinkingMode.value]
   const effort = reasoningEffortMap[thinkingMode.value]
   const level = thinkingLevelMap[thinkingMode.value]
 
   return {
+    think: thinkValue,
     reasoning_effort: effort,
     generationConfig: level ? { thinkingConfig: { thinkingLevel: level } } : undefined
   }
@@ -933,6 +949,7 @@ const buildRequestWithThinking = (baseRequest: ChatRequest): ChatRequest => {
 
   return {
     ...baseRequest,
+    think: thinkingConfig.think,
     reasoning_effort: thinkingConfig.reasoning_effort,
     generationConfig: thinkingConfig.generationConfig
   }

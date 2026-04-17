@@ -1108,7 +1108,14 @@ func (c *ProtocolConverter) openAIToGeminiRequest(req *ChatRequest) (*models.Gem
 		}
 	}
 
-	// Handle ReasoningEffort -> Gemini ThinkingLevel
+	// Handle Think parameter (DeepSeek/Ollama format: false to disable thinking)
+		if req.Think != nil && !*req.Think {
+			geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
+				ThinkingLevel: "NONE",
+			}
+		}
+
+		// Handle ReasoningEffort -> Gemini ThinkingLevel
 	if req.ReasoningEffort != "" {
 		thinkingLevel := ""
 		switch req.ReasoningEffort {

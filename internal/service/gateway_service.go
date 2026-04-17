@@ -123,6 +123,7 @@ type ChatRequest struct {
 	MaxTokens        int                    `json:"max_tokens,omitempty"`
 	Tools            []ToolDefinition       `json:"tools,omitempty"`
 	ReasoningEffort  string                 `json:"reasoning_effort,omitempty"` // "none", "low", "medium", "high" - OpenAI format
+	Think            *bool                  `json:"think,omitempty"`            // DeepSeek/Ollama format: false to disable thinking
 	Thinking         *ThinkingConfig        `json:"thinking,omitempty"`         // Anthropic format
 	GenerationConfig *GenerationConfig      `json:"generationConfig,omitempty"` // Gemini format
 	Extra            map[string]interface{} `json:"-"`                          // Additional fields

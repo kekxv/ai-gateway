@@ -77,7 +77,8 @@ export interface ChatRequest {
       parameters: Record<string, unknown>
     }
   }>
-  enable_thinking?: boolean                  // Deprecated: use reasoning_effort instead
+  enable_thinking?: boolean                  // Deprecated: use reasoning_effort or think instead
+  think?: boolean                             // DeepSeek/Ollama: false to disable thinking
   reasoning_effort?: OpenAIReasoningEffort   // OpenAI thinking/reasoning effort level
   generationConfig?: {                       // Gemini generation config
     thinkingConfig?: {
