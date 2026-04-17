@@ -1496,3 +1496,260 @@ func TestConvertGeminiStreamChunkToAnthropic(t *testing.T) {
 		t.Error("Should contain streamed text")
 	}
 }
+
+// Test Anthropic tool schema conversion to Gemini and response back
+func TestConvertRequest_AnthropicToGemini_WithTools(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	// Tool schema similar to TaskCreate from logs
+	anthropicReq := &models.AnthropicMessagesRequest{
+		Model: "gemini-2.0-flash",
+		Messages: []models.AnthropicMessage{
+			{Role: "user", Content: models.AnthropicContent{StringContent: "Create a task for testing"}},
+		},
+		Tools: []models.AnthropicTool{
+			{
+				Name:        "TaskCreate",
+				Description: "Create a structured task for tracking work",
+				InputSchema: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"subject": map[string]interface{}{
+							"type":        "string",
+							"description": "A brief title for the task",
+						},
+						"description": map[string]interface{}{
+							"type":        "string",
+							"description": "What needs to be done",
+						},
+						"activeForm": map[string]interface{}{
+							"type":        "string",
+							"description": "Present continuous form shown in spinner",
+						},
+						"metadata": map[string]interface{}{
+							"type":        "object",
+							"description": "Arbitrary metadata to attach to the task",
+						},
+					},
+					"required": []string{"subject", "description"},
+				},
+			},
+		},
+		MaxTokens: 100,
+	}
+
+	result, err := converter.ConvertRequest(anthropicReq, ProtocolAnthropic, ProtocolGemini)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	geminiReq, ok := result.(*models.GeminiGenerateContentRequest)
+	if !ok {
+		t.Fatalf("Expected *models.GeminiGenerateContentRequest, got %T", result)
+	}
+
+	// Check tool conversion
+	if len(geminiReq.Tools) != 1 {
+		t.Fatalf("Tools count = %d, want 1", len(geminiReq.Tools))
+	}
+
+	if len(geminiReq.Tools[0].FunctionDeclarations) != 1 {
+		t.Fatalf("FunctionDeclarations count = %d, want 1", len(geminiReq.Tools[0].FunctionDeclarations))
+	}
+
+	fnDecl := geminiReq.Tools[0].FunctionDeclarations[0]
+	if fnDecl.Name != "TaskCreate" {
+		t.Errorf("Function name = %s, want TaskCreate", fnDecl.Name)
+	}
+
+	// Check schema was cleaned (no $schema, additionalProperties, etc.)
+	params := fnDecl.Parameters
+	if params["$schema"] != nil {
+		t.Error("Schema should not contain $schema field")
+	}
+	if params["additionalProperties"] != nil {
+		t.Error("Schema should not contain additionalProperties field")
+	}
+	if params["type"] != "object" {
+		t.Errorf("Schema type = %v, want object", params["type"])
+	}
+}
+
+// Test Gemini response with FunctionCall converted back to Anthropic
+func TestConvertResponse_GeminiToAnthropic_WithFunctionCall(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	// Gemini response with proper FunctionCall Args (not empty {})
+	geminiResp := &models.GeminiGenerateContentResponse{
+		Candidates: []models.GeminiCandidate{
+			{
+				Content: models.GeminiContent{
+					Role: "model",
+					Parts: []models.GeminiPart{
+						{
+							FunctionCall: &models.GeminiFunctionCall{
+								Name: "TaskCreate",
+								Args: map[string]interface{}{
+									"subject":     "Test task",
+									"description": "This is a test task description",
+									"activeForm":  "Testing task creation",
+								},
+							},
+						},
+					},
+				},
+				FinishReason: "STOP",
+			},
+		},
+		UsageMetadata: &models.GeminiUsageMetadata{
+			PromptTokenCount:     50,
+			CandidatesTokenCount: 20,
+		},
+	}
+
+	result, err := converter.ConvertResponse(geminiResp, ProtocolGemini, ProtocolAnthropic, "gemini-2.0-flash")
+	if err != nil {
+		t.Fatalf("ConvertResponse failed: %v", err)
+	}
+
+	anthropicResp, ok := result.(*models.AnthropicMessagesResponse)
+	if !ok {
+		t.Fatalf("Expected *models.AnthropicMessagesResponse, got %T", result)
+	}
+
+	// Check tool_use content block
+	if len(anthropicResp.Content) != 1 {
+		t.Fatalf("Content count = %d, want 1", len(anthropicResp.Content))
+	}
+
+	toolBlock := anthropicResp.Content[0]
+	if toolBlock.Type != "tool_use" {
+		t.Errorf("Content block type = %s, want tool_use", toolBlock.Type)
+	}
+	if toolBlock.Name != "TaskCreate" {
+		t.Errorf("Tool name = %s, want TaskCreate", toolBlock.Name)
+	}
+
+	// Check Args were preserved (not empty)
+	if toolBlock.Input == nil {
+		t.Fatal("Tool input should not be nil")
+	}
+
+	input := toolBlock.Input
+	if input["subject"] != "Test task" {
+		t.Errorf("Input subject = %v, want 'Test task'", input["subject"])
+	}
+	if input["description"] != "This is a test task description" {
+		t.Errorf("Input description = %v, want 'This is a test task description'", input["description"])
+	}
+
+	// Check usage
+	if anthropicResp.Usage.InputTokens != 50 {
+		t.Errorf("InputTokens = %d, want 50", anthropicResp.Usage.InputTokens)
+	}
+	if anthropicResp.Usage.OutputTokens != 20 {
+		t.Errorf("OutputTokens = %d, want 20", anthropicResp.Usage.OutputTokens)
+	}
+}
+
+// Test Gemini response with empty FunctionCall Args (edge case)
+func TestConvertResponse_GeminiToAnthropic_EmptyFunctionCallArgs(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	// Gemini response with empty Args {} - model limitation
+	geminiResp := &models.GeminiGenerateContentResponse{
+		Candidates: []models.GeminiCandidate{
+			{
+				Content: models.GeminiContent{
+					Role: "model",
+					Parts: []models.GeminiPart{
+						{
+							FunctionCall: &models.GeminiFunctionCall{
+								Name: "TaskCreate",
+								Args: map[string]interface{}{}, // Empty args
+							},
+						},
+					},
+				},
+				FinishReason: "STOP",
+			},
+		},
+		UsageMetadata: &models.GeminiUsageMetadata{
+			PromptTokenCount:     30,
+			CandidatesTokenCount: 10,
+		},
+	}
+
+	result, err := converter.ConvertResponse(geminiResp, ProtocolGemini, ProtocolAnthropic, "gemma-4-31b-it")
+	if err != nil {
+		t.Fatalf("ConvertResponse failed: %v", err)
+	}
+
+	anthropicResp, ok := result.(*models.AnthropicMessagesResponse)
+	if !ok {
+		t.Fatalf("Expected *models.AnthropicMessagesResponse, got %T", result)
+	}
+
+	// Should still produce a tool_use block
+	if len(anthropicResp.Content) != 1 {
+		t.Fatalf("Content count = %d, want 1", len(anthropicResp.Content))
+	}
+
+	toolBlock := anthropicResp.Content[0]
+	if toolBlock.Type != "tool_use" {
+		t.Errorf("Content block type = %s, want tool_use", toolBlock.Type)
+	}
+	if toolBlock.Name != "TaskCreate" {
+		t.Errorf("Tool name = %s, want TaskCreate", toolBlock.Name)
+	}
+
+	// Empty args should result in empty map (not nil)
+	if toolBlock.Input == nil {
+		t.Error("Tool input should not be nil even for empty args")
+	}
+	if len(toolBlock.Input) != 0 {
+		t.Errorf("Tool input should be empty map, got %v", toolBlock.Input)
+	}
+}
+
+// Test Gemini empty response handling
+func TestConvertResponse_GeminiToAnthropic_EmptyCandidates(t *testing.T) {
+	converter := NewProtocolConverter()
+
+	// Gemini response with no candidates
+	geminiResp := &models.GeminiGenerateContentResponse{
+		Candidates: []models.GeminiCandidate{},
+	}
+
+	result, err := converter.ConvertResponse(geminiResp, ProtocolGemini, ProtocolAnthropic, "gemini-2.0-flash")
+	if err != nil {
+		t.Fatalf("ConvertResponse failed: %v", err)
+	}
+
+	anthropicResp, ok := result.(*models.AnthropicMessagesResponse)
+	if !ok {
+		t.Fatalf("Expected *models.AnthropicMessagesResponse, got %T", result)
+	}
+
+	// Should have default empty text block
+	if len(anthropicResp.Content) != 1 {
+		t.Fatalf("Content count = %d, want 1", len(anthropicResp.Content))
+	}
+	if anthropicResp.Content[0].Type != "text" {
+		t.Errorf("Content type = %s, want text", anthropicResp.Content[0].Type)
+	}
+	if anthropicResp.Content[0].Text != "" {
+		t.Errorf("Content text = %s, want empty string", anthropicResp.Content[0].Text)
+	}
+
+	// Should have default usage (zero values)
+	if anthropicResp.Usage == nil {
+		t.Fatal("Usage should not be nil")
+	}
+	if anthropicResp.Usage.InputTokens != 0 {
+		t.Errorf("InputTokens = %d, want 0", anthropicResp.Usage.InputTokens)
+	}
+	if anthropicResp.Usage.OutputTokens != 0 {
+		t.Errorf("OutputTokens = %d, want 0", anthropicResp.Usage.OutputTokens)
+	}
+}
