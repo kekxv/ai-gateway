@@ -9,6 +9,7 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -813,12 +814,74 @@ func (h *ChatHandler) GenerateTitle(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"title": title}})
 }
 
-// trimQuotes removes surrounding quotes from a string
+// trimQuotes removes surrounding quotes and thinking tags from a string
 func trimQuotes(s string) string {
+	// Remove thinking/reasoning tags first
+	s = removeThinkingTags(s)
 	s = trimChar(s, '"')
 	s = trimChar(s, '\'')
 	s = trimChar(s, '`')
 	return s
+}
+
+// removeThinkingTags removes <think>, <thinking>, <reasoning> tags and their content
+func removeThinkingTags(s string) string {
+	// Remove <think>...</think>
+	for {
+		start := strings.Index(s, "<think>")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(s, "</think>")
+		if end == -1 || end <= start {
+			// No closing tag, remove from start to end of string
+			s = s[:start]
+			break
+		}
+		s = s[:start] + s[end+8:]
+	}
+
+	// Remove <thinking>...</thinking>
+	for {
+		start := strings.Index(s, "<thinking>")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(s, "</thinking>")
+		if end == -1 || end <= start {
+			s = s[:start]
+			break
+		}
+		s = s[:start] + s[end+11:]
+	}
+
+	// Remove <reasoning>...</reasoning>
+	for {
+		start := strings.Index(s, "<reasoning>")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(s, "</reasoning>")
+		if end == -1 || end <= start {
+			s = s[:start]
+			break
+		}
+		s = s[:start] + s[end+12:]
+	}
+
+	// Remove incomplete tags at start/end
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "<think>") || strings.HasPrefix(s, "<thinking>") || strings.HasPrefix(s, "<reasoning>") {
+		// Find the end of the tag
+		for i, c := range s {
+			if c == '>' {
+				s = s[i+1:]
+				break
+			}
+		}
+	}
+
+	return strings.TrimSpace(s)
 }
 
 func trimChar(s string, c byte) string {

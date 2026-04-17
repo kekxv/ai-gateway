@@ -1089,7 +1089,7 @@ func (c *ProtocolConverter) openAIToGeminiRequest(req *ChatRequest) (*models.Gem
 			declarations = append(declarations, models.GeminiFunctionDeclaration{
 				Name:        t.Function.Name,
 				Description: t.Function.Description,
-				Parameters:  t.Function.Parameters,
+				Parameters:  cleanSchemaForGemini(t.Function.Parameters),
 			})
 		}
 		geminiReq.Tools = []models.GeminiTool{{FunctionDeclarations: declarations}}
@@ -1105,6 +1105,32 @@ func (c *ProtocolConverter) openAIToGeminiRequest(req *ChatRequest) (*models.Gem
 	if req.Extra != nil {
 		if topP, ok := req.Extra["top_p"].(float64); ok {
 			geminiReq.GenerationConfig.TopP = &topP
+		}
+	}
+
+	// Handle ReasoningEffort -> Gemini ThinkingLevel
+	if req.ReasoningEffort != "" {
+		thinkingLevel := ""
+		switch req.ReasoningEffort {
+		case "none":
+			thinkingLevel = "NONE"
+		case "low":
+			thinkingLevel = "LOW"
+		case "medium":
+			thinkingLevel = "MEDIUM"
+		case "high":
+			thinkingLevel = "HIGH"
+		}
+		if thinkingLevel != "" {
+			geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
+				ThinkingLevel: thinkingLevel,
+			}
+		}
+	}
+	// Handle GenerationConfig.ThinkingConfig if present
+	if req.GenerationConfig != nil && req.GenerationConfig.ThinkingConfig != nil {
+		geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
+			ThinkingLevel: req.GenerationConfig.ThinkingConfig.ThinkingLevel,
 		}
 	}
 

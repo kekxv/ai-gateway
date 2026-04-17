@@ -122,8 +122,26 @@ type ChatRequest struct {
 	Temperature      float64                `json:"temperature,omitempty"`
 	MaxTokens        int                    `json:"max_tokens,omitempty"`
 	Tools            []ToolDefinition       `json:"tools,omitempty"`
-	ReasoningEffort  string                 `json:"reasoning_effort,omitempty"` // "none", "low", "medium", "high" - disable thinking
+	ReasoningEffort  string                 `json:"reasoning_effort,omitempty"` // "none", "low", "medium", "high" - OpenAI format
+	Thinking         *ThinkingConfig        `json:"thinking,omitempty"`         // Anthropic format
+	GenerationConfig *GenerationConfig      `json:"generationConfig,omitempty"` // Gemini format
 	Extra            map[string]interface{} `json:"-"`                          // Additional fields
+}
+
+// ThinkingConfig for Anthropic-style thinking control
+type ThinkingConfig struct {
+	Type          string `json:"type"`                    // "enabled" or "disabled"
+	BudgetTokens  int    `json:"budget_tokens,omitempty"` // Token budget for thinking
+}
+
+// GenerationConfig for Gemini-style generation config (including thinkingLevel)
+type GenerationConfig struct {
+	ThinkingConfig *GeminiThinkingConfig `json:"thinkingConfig,omitempty"`
+}
+
+// GeminiThinkingConfig for Gemini thinking level control
+type GeminiThinkingConfig struct {
+	ThinkingLevel string `json:"thinkingLevel,omitempty"` // "NONE", "LOW", "MEDIUM", "HIGH", "MINIMAL"
 }
 
 // MarshalJSON implements custom marshaling to merge Extra fields

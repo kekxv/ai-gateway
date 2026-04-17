@@ -227,7 +227,75 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
 - \`lineWidth\`: 线条宽度，默认1
 - \`globalCompositeOperation\`: 合成模式，如 \`"source-over"\`, \`"multiply"\`, \`"screen"\`, \`"overlay"\``,
           items: {
-            type: 'object'
+            type: 'object',
+            properties: {
+              type: {
+                type: 'string',
+                description: '操作类型，如 rect, circle, line, fillText, setStyle 等'
+              },
+              x: {
+                type: 'number',
+                description: 'x 坐标'
+              },
+              y: {
+                type: 'number',
+                description: 'y 坐标'
+              },
+              width: {
+                type: 'number',
+                description: '宽度'
+              },
+              height: {
+                type: 'number',
+                description: '高度'
+              },
+              radius: {
+                type: 'number',
+                description: '半径（用于 circle, arc, roundRect）'
+              },
+              fill: {
+                type: 'string',
+                description: '填充颜色，如 #ff0000 (红色)、#00ff00 (绿色)、#0000ff (蓝色)'
+              },
+              stroke: {
+                type: 'string',
+                description: '描边颜色，如 #000000 (黑色)'
+              },
+              lineWidth: {
+                type: 'number',
+                description: '线条宽度，默认 1'
+              },
+              text: {
+                type: 'string',
+                description: '文字内容（用于 fillText, strokeText）'
+              },
+              font: {
+                type: 'string',
+                description: '字体，如 16px Arial、24px sans-serif'
+              },
+              points: {
+                type: 'array',
+                description: '点坐标数组（用于 polyline, polygon）',
+                items: {
+                  type: 'object',
+                  properties: {
+                    x: { type: 'number', description: 'x 坐标' },
+                    y: { type: 'number', description: 'y 坐标' }
+                  }
+                }
+              },
+              stops: {
+                type: 'array',
+                description: '渐变停止点数组（用于 linearGradient, radialGradient）',
+                items: {
+                  type: 'object',
+                  properties: {
+                    offset: { type: 'number', description: '偏移位置 0-1' },
+                    color: { type: 'string', description: '颜色值' }
+                  }
+                }
+              }
+            }
           }
         }
       },
