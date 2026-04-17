@@ -213,7 +213,7 @@ func (c *ProtocolConverter) anthropicToOpenAIRequest(req *models.AnthropicMessag
 				Function: ToolFunctionSpec{
 					Name:        t.Name,
 					Description: t.Description,
-					Parameters:  t.InputSchema,
+					Parameters:  cleanSchemaForGemini(t.InputSchema),
 				},
 			})
 		}
@@ -902,7 +902,7 @@ func (c *ProtocolConverter) anthropicToGeminiRequest(req *models.AnthropicMessag
 			declarations = append(declarations, models.GeminiFunctionDeclaration{
 				Name:        t.Name,
 				Description: t.Description,
-				Parameters:  t.InputSchema,
+				Parameters:  cleanSchemaForGemini(t.InputSchema),
 			})
 		}
 		geminiReq.Tools = []models.GeminiTool{{FunctionDeclarations: declarations}}
@@ -1188,7 +1188,7 @@ func (c *ProtocolConverter) geminiToOpenAIResponse(resp *models.GeminiGenerateCo
 					Type: "function",
 					Function: FunctionCall{
 						Name:      part.FunctionCall.Name,
-						Arguments: fmt.Sprintf("%v", part.FunctionCall.Args),
+						Arguments: func() string { b, _ := json.Marshal(part.FunctionCall.Args); return string(b) }(),
 					},
 				})
 			}
@@ -1385,7 +1385,7 @@ func (c *ProtocolConverter) ConvertGeminiStreamChunkToOpenAI(chunk *models.Gemin
 						"type":  "function",
 						"function": map[string]interface{}{
 							"name":      part.FunctionCall.Name,
-							"arguments": part.FunctionCall.Args,
+							"arguments": func() string { b, _ := json.Marshal(part.FunctionCall.Args); return string(b) }(),
 						},
 					},
 				}
@@ -1460,4 +1460,63 @@ func formatOpenAISSE(data interface{}) string {
 func formatSSE(eventType string, data interface{}) string {
 	jsonData, _ := json.Marshal(data)
 	return fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, string(jsonData))
+}
+
+// cleanSchemaForGemini removes JSON Schema fields that Gemini doesn't support
+// Gemini's function declaration parameters schema doesn't support:
+// - $schema (JSON Schema version)
+// - additionalProperties
+// - propertyNames
+// - exclusiveMinimum / exclusiveMaximum
+// - const
+// - examples
+// - default (sometimes)
+// - $id, $ref, definitions, $defs
+func cleanSchemaForGemini(schema map[string]interface{}) map[string]interface{} {
+	if schema == nil {
+		return nil
+	}
+
+	// Fields to remove (Gemini doesn't support these)
+	unsupportedFields := []string{
+		"$schema", "$id", "$ref", "$defs", "definitions",
+		"additionalProperties", "propertyNames",
+		"exclusiveMinimum", "exclusiveMaximum",
+		"const", "examples", "default",
+	}
+
+	result := make(map[string]interface{})
+	for k, v := range schema {
+		// Skip unsupported fields
+		skip := false
+		for _, uf := range unsupportedFields {
+			if k == uf {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+
+		// Recursively clean nested objects
+		switch val := v.(type) {
+		case map[string]interface{}:
+			result[k] = cleanSchemaForGemini(val)
+		case []interface{}:
+			cleanedArray := make([]interface{}, len(val))
+			for i, item := range val {
+				if itemMap, ok := item.(map[string]interface{}); ok {
+					cleanedArray[i] = cleanSchemaForGemini(itemMap)
+				} else {
+					cleanedArray[i] = item
+				}
+			}
+			result[k] = cleanedArray
+		default:
+			result[k] = v
+		}
+	}
+
+	return result
 }

@@ -141,7 +141,7 @@ export const conversationApi = {
                 // Some models use 'reasoning', some 'reasoning_content'
                 const reasoning = delta.reasoning || delta.reasoning_content
 
-                if (reasoning) {
+                if (reasoning && typeof reasoning === 'string') {
                   // Open think tag on first reasoning chunk
                   if (!inReasoning) {
                     inReasoning = true
@@ -161,7 +161,7 @@ export const conversationApi = {
                     inReasoning = false
                   }
 
-                  if (delta.content) {
+                  if (delta.content && typeof delta.content === 'string') {
                     onContent(delta.content)
                   }
                 }
