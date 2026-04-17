@@ -3,6 +3,7 @@ package utils
 import (
 	"crypto/rand"
 	"encoding/base32"
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -37,7 +38,7 @@ func GenerateQRCode(secret, email string) (string, error) {
 		return "", err
 	}
 
-	base64Img := base32.StdEncoding.EncodeToString(png)
+	base64Img := base64.StdEncoding.EncodeToString(png)
 	return "data:image/png;base64," + base64Img, nil
 }
 

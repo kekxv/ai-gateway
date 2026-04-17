@@ -193,16 +193,16 @@
     </el-dialog>
 
     <!-- TOTP Setup Dialog -->
-    <el-dialog v-model="totpSetupDialogVisible" title="设置 TOTP" width="420px" destroy-on-close>
+    <el-dialog v-model="totpSetupDialogVisible" title="设置 TOTP" width="480px" destroy-on-close>
       <div v-if="totpSetupData" class="totp-dialog">
         <p class="totp-instruction">使用验证器应用扫描二维码：</p>
         <div class="totp-qr">
-          <img :src="totpSetupData.qr_code_url" alt="TOTP QR Code" />
+          <img :src="totpSetupData.qrCodeDataUrl" alt="TOTP QR Code" />
         </div>
         <div class="totp-secret">
           <span class="totp-secret-label">或手动输入密钥：</span>
           <div class="totp-secret-value">
-            <code>{{ totpSetupData.secret }}</code>
+            <code class="totp-secret-code">{{ totpSetupData.secret }}</code>
             <el-button size="small" text @click="copySecret">复制</el-button>
           </div>
         </div>
@@ -322,7 +322,7 @@ const passwordRules: FormRules = {
   confirm_password: [
     { required: true, message: '请确认新密码', trigger: 'blur' },
     {
-      validator: (value, callback) => {
+      validator: (_rule, value, callback) => {
         if (value !== passwordForm.new_password) {
           callback(new Error('两次密码输入不一致'))
         } else {
@@ -957,11 +957,14 @@ const confirmDisableTotp = async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
 }
-.totp-secret-value code {
+.totp-secret-code {
   font-family: 'SF Mono', monospace;
-  font-size: 14px;
+  font-size: 13px;
   color: #111827;
+  word-break: break-all;
+  flex: 1;
 }
 .totp-input {
   text-align: center;

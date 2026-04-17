@@ -1,8 +1,7 @@
 // TOTP types
 export interface TotpSetupResponse {
   secret: string
-  qr_code_url: string
-  qrCodeDataUrl?: string
+  qrCodeDataUrl: string
 }
 
 export interface TotpVerifyRequest {
