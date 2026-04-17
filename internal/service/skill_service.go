@@ -150,6 +150,19 @@ func (s *SkillService) GetCatalog(ctx context.Context, userID uint) ([]models.Sk
 
 // GenerateSkillsXML generates the XML format for chat prompt
 func (s *SkillService) GenerateSkillsXML(catalog []models.SkillCatalogItem) string {
+	// Count enabled skills first
+	enabledCount := 0
+	for _, item := range catalog {
+		if item.Enabled {
+			enabledCount++
+		}
+	}
+
+	// Return empty string if no enabled skills
+	if enabledCount == 0 {
+		return ""
+	}
+
 	var sb strings.Builder
 	sb.WriteString("<available_skills>\n")
 	for _, item := range catalog {
