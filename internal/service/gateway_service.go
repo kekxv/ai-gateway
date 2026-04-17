@@ -306,10 +306,11 @@ type StreamChunk struct {
 	Choices []struct {
 		Index        int `json:"index"`
 		Delta        struct {
-			Role      string     `json:"role,omitempty"`
-			Content   string     `json:"content,omitempty"`
-			Reasoning string     `json:"reasoning,omitempty"` // For Ollama/Gemma thinking
-			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+			Role             string     `json:"role,omitempty"`
+			Content          string     `json:"content,omitempty"`
+			Reasoning        string     `json:"reasoning,omitempty"`         // For Ollama/Gemma thinking
+			ReasoningContent string     `json:"reasoning_content,omitempty"` // For O1/O3 thinking
+			ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -779,8 +780,9 @@ type StreamingResponse struct {
 	realtimeLogger *RealtimeLogUpdater
 
 	// Protocol indicator for Anthropic streaming
-	isAnthropicStream bool // true if upstream returns Anthropic format, false if OpenAI format
-	isGeminiStream    bool // true if upstream returns Gemini format
+	isAnthropicStream bool         // true if upstream returns Anthropic format, false if OpenAI format
+	isGeminiStream    bool         // true if upstream returns Gemini format
+	TargetProtocol    ProtocolType // Protocol to output (OpenAI, Anthropic, Gemini)
 
 	// For Gemini stream conversion
 	contentIndex int
@@ -833,15 +835,22 @@ func (s *StreamingResponse) Read(p []byte) (n int, err error) {
 				var chunk models.GeminiGenerateContentResponse
 				if err := json.Unmarshal(data, &chunk); err == nil {
 					converter := NewProtocolConverter()
-					anthropicSSE := converter.ConvertGeminiStreamChunkToAnthropic(&chunk, generateMessageID(), s.model.Name, &s.contentIndex, s.streamState)
+					var convertedSSE string
 
-					if anthropicSSE != "" {
+					if s.TargetProtocol == ProtocolAnthropic {
+						convertedSSE = converter.ConvertGeminiStreamChunkToAnthropic(&chunk, generateMessageID(), s.model.Name, &s.contentIndex, s.streamState)
+					} else {
+						// Default to OpenAI for web chat and other compatible clients
+						convertedSSE = converter.ConvertGeminiStreamChunkToOpenAI(&chunk, generateMessageID(), s.model.Name, s.streamState)
+					}
+
+					if convertedSSE != "" {
 						// Write to capturedBuffer and then read from it
-						s.capturedBuffer.WriteString(anthropicSSE)
+						s.capturedBuffer.WriteString(convertedSSE)
 
 						// For real-time logging
 						if s.realtimeLogger != nil {
-							dataCopy := []byte(anthropicSSE)
+							dataCopy := []byte(convertedSSE)
 							s.realtimeLogger.PushData(dataCopy)
 						}
 
@@ -1513,17 +1522,18 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	// 5. Build upstream request
 	// Determine provider type to use (primary type from ProviderTypes or default)
 	providerType := "openai" // default for chat/completions (prefer openai type)
+	providerSupportsGemini := route.Provider.HasType("gemini")
+
 	if route.Provider.HasType("openai") {
 		providerType = "openai"
+	} else if providerSupportsGemini {
+		providerType = "gemini"
 	} else if len(route.Provider.ProviderTypes) > 0 {
-			// Fallback: use first available type (may require protocol conversion)
-			providerType = route.Provider.ProviderTypes[0].Type
-		} else if route.Provider.Type != "" {
+		// Fallback: use first available type (may require protocol conversion)
+		providerType = route.Provider.ProviderTypes[0].Type
+	} else if route.Provider.Type != "" {
 		providerType = route.Provider.Type
 	}
-	// Get base URL for the specific type (with fallback to default)
-	baseURL := route.Provider.GetBaseURLForType(providerType)
-	targetURL := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(baseURL, "/"))
 
 	// Always use Model.Name for upstream request (not alias)
 	upstreamReq := *req
@@ -1534,8 +1544,47 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		upstreamReq.StreamOptions = &StreamOptions{IncludeUsage: true}
 	}
 
+	// Prepare converter
+	converter := NewProtocolConverter()
+	var finalReq interface{} = &upstreamReq
+	var targetURL string
+
+	if providerType == "gemini" {
+		// Native Gemini protocol support
+		baseURL := route.Provider.GetBaseURLForType("gemini")
+		action := "generateContent"
+		if stream {
+			action = "streamGenerateContent"
+		}
+
+		// Ensure v1beta or v1 is in the URL
+		geminiBaseURL := strings.TrimSuffix(baseURL, "/")
+		if !strings.Contains(geminiBaseURL, "/v1") {
+			geminiBaseURL = geminiBaseURL + "/v1beta"
+		}
+
+		targetURL = fmt.Sprintf("%s/models/%s:%s?key=%s", geminiBaseURL, upstreamReq.Model, action, route.Provider.APIKey)
+
+		// Convert OpenAI request to Gemini request
+		geminiReq, err := converter.ConvertRequest(&upstreamReq, ProtocolOpenAI, ProtocolGemini)
+		if err != nil {
+			log.Printf("[HandleChatCompletions] Convert to Gemini request failed: %v", err)
+			return nil, err
+		}
+		finalReq = geminiReq
+	} else {
+		// Get base URL for the specific type (with fallback to default)
+		baseURL := route.Provider.GetBaseURLForType(providerType)
+		targetURL = fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(baseURL, "/"))
+	}
+
 	// 6. Send upstream request with forwarded headers
-	resp, err := s.sendUpstreamRequest(ctx, targetURL, route.Provider.APIKey, &upstreamReq, stream, forwardHeaders)
+	upstreamAPIKey := route.Provider.APIKey
+	if providerType == "gemini" {
+		upstreamAPIKey = "" // API key is already in the URL for Gemini
+	}
+
+	resp, err := s.sendUpstreamRequest(ctx, targetURL, upstreamAPIKey, finalReq, stream, forwardHeaders)
 	if err != nil {
 		log.Printf("[HandleChatCompletions] Upstream request failed: %v, URL: %s, Model: %s", err, targetURL, model.Name)
 		latency := int(time.Since(startTime).Milliseconds())
@@ -1568,6 +1617,11 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		// Extract response headers
 		streamResp.responseHeaders = extractResponseHeaders(resp.Header)
 
+		if providerType == "gemini" {
+			streamResp.isGeminiStream = true
+			streamResp.TargetProtocol = ProtocolOpenAI
+		}
+
 		// 初始化实时日志更新器
 		if logEntry.ID != 0 {
 			streamResp.realtimeLogger = NewRealtimeLogUpdater(
@@ -1594,6 +1648,25 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		return nil, err
 	}
 
+	if providerType == "gemini" {
+		var geminiResp models.GeminiGenerateContentResponse
+		if err := json.Unmarshal(body, &geminiResp); err != nil {
+			log.Printf("[HandleChatCompletions] Parse Gemini response failed: %v, body: %s", err, string(body))
+			return nil, err
+		}
+
+		openAIResp, err := converter.ConvertResponse(&geminiResp, ProtocolGemini, ProtocolOpenAI, model.Name)
+		if err != nil {
+			log.Printf("[HandleChatCompletions] Convert Gemini response failed: %v", err)
+			return nil, err
+		}
+		
+		chatResp := openAIResp.(*ChatResponse)
+		latency := int(time.Since(startTime).Milliseconds())
+		respHeaders := extractResponseHeaders(resp.Header)
+		s.updateLogAndCalculateCost(ctx, apiKey, model, route.Provider.Name, req, chatResp, latency, logEntry.ID, respHeaders)
+		return chatResp, nil
+	}
 
 	// Debug: print raw response for title generation requests
 	if req.MaxTokens <= 100 {
@@ -1746,7 +1819,9 @@ func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey st
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	if apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 
 	// Forward additional headers
 	for key, value := range forwardHeaders {

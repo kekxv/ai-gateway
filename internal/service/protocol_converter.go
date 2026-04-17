@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/kekxv/ai-gateway/internal/models"
@@ -701,9 +702,7 @@ func (c *ProtocolConverter) ConvertOpenAIStreamChunkToAnthropic(chunk *StreamChu
 		// Handle Reasoning (Thinking) - support both Reasoning (Ollama/Gemma) and ReasoningContent (O1/O3)
 		reasoning := choice.Delta.Reasoning
 		if reasoning == "" {
-			// Try to get from extra fields if it's O1/O3 reasoning_content
-			// Note: We'll need to check if reasoning_content is in choice.Delta.Extra or similar
-			// For now, let's assume it's part of reasoning field or we'll need to add it to StreamChunk
+			reasoning = choice.Delta.ReasoningContent
 		}
 
 		if reasoning != "" {
@@ -825,7 +824,10 @@ func (c *ProtocolConverter) anthropicToGeminiRequest(req *models.AnthropicMessag
 				parts = append(parts, models.GeminiPart{Text: block.Text})
 			case "thinking":
 				// Gemini 2.0 Thinking models use specific parts or config
-				parts = append(parts, models.GeminiPart{Text: block.Thinking})
+				parts = append(parts, models.GeminiPart{
+					Text:    block.Thinking,
+					Thought: true,
+				})
 			case "image":
 				if block.Source != nil {
 					parts = append(parts, models.GeminiPart{
@@ -856,13 +858,21 @@ func (c *ProtocolConverter) anthropicToGeminiRequest(req *models.AnthropicMessag
 				// Find original tool name for Gemini (it requires Name, not ID)
 				toolName := block.ToolUseID
 				// Try to find the tool name from the messages history if ToolUseID is actually an ID
-				for i := len(geminiReq.Contents) - 1; i >= 0; i-- {
-					for _, p := range geminiReq.Contents[i].Parts {
-						if p.FunctionCall != nil {
-							// If we had a logic to map ID to Name, we'd use it here.
-							// For now, if it looks like an ID (contains random chars),
-							// we'll hope the Name was passed in ToolUseID.
+				// Anthropic uses random IDs, but Gemini expects the function name
+				found := false
+				for i := len(req.Messages) - 1; i >= 0; i-- {
+					msg := req.Messages[i]
+					if msg.Role == "assistant" {
+						for _, b := range msg.Content.Blocks {
+							if b.Type == "tool_use" && b.ID == block.ToolUseID {
+								toolName = b.Name
+								found = true
+								break
+							}
 						}
+					}
+					if found {
+						break
 					}
 				}
 
@@ -1087,7 +1097,12 @@ func (c *ProtocolConverter) geminiToAnthropicResponse(resp *models.GeminiGenerat
 		anthropicResp.StopReason = convertGeminiFinishReasonToAnthropic(candidate.FinishReason)
 
 		for _, part := range candidate.Content.Parts {
-			if part.Text != "" {
+			if part.Thought {
+				anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
+					Type:     "thinking",
+					Thinking: part.Text,
+				})
+			} else if part.Text != "" {
 				anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
 					Type: "text",
 					Text: part.Text,
@@ -1175,10 +1190,14 @@ func (c *ProtocolConverter) ConvertGeminiStreamChunkToAnthropic(chunk *models.Ge
 			}
 		}
 
-		if candidate.FinishReason != "" && candidate.FinishReason != "STOP" {
+		if candidate.FinishReason != "" {
 			if state.ContentBlockStarted {
 				result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
 				state.ContentBlockStarted = false
+			}
+			if state.ThinkingStarted {
+				result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
+				state.ThinkingStarted = false
 			}
 
 			stopReason := convertGeminiFinishReasonToAnthropic(candidate.FinishReason)
@@ -1242,6 +1261,112 @@ func convertStopReasonToOpenAI(reason string) string {
 	default:
 		return "stop"
 	}
+}
+
+// ConvertGeminiStreamChunkToOpenAI converts a Gemini stream chunk to OpenAI format
+func (c *ProtocolConverter) ConvertGeminiStreamChunkToOpenAI(chunk *models.GeminiGenerateContentResponse, messageID string, modelName string, state *StreamConversionState) string {
+	var result strings.Builder
+
+	if len(chunk.Candidates) > 0 {
+		candidate := chunk.Candidates[0]
+
+		for _, part := range candidate.Content.Parts {
+			delta := map[string]interface{}{}
+
+			// Handle Thinking
+			if part.Thought {
+				if !state.ThinkingStarted {
+					state.ThinkingStarted = true
+				}
+				delta["reasoning_content"] = part.Text
+				state.AccumulatedContent += part.Text
+			} else if part.Text != "" {
+				// Transition from thinking to content
+				if state.ThinkingStarted {
+					state.ThinkingStarted = false
+				}
+				delta["content"] = part.Text
+				state.AccumulatedContent += part.Text
+			}
+
+			if part.FunctionCall != nil {
+				toolCalls := []map[string]interface{}{
+					{
+						"index": 0,
+						"id":    generateMessageID(),
+						"type":  "function",
+						"function": map[string]interface{}{
+							"name":      part.FunctionCall.Name,
+							"arguments": part.FunctionCall.Args,
+						},
+					},
+				}
+				delta["tool_calls"] = toolCalls
+			}
+
+			if len(delta) > 0 {
+				chunkObj := map[string]interface{}{
+					"id":      messageID,
+					"object":  "chat.completion.chunk",
+					"created": time.Now().Unix(),
+					"model":   modelName,
+					"choices": []map[string]interface{}{
+						{
+							"index": 0,
+							"delta": delta,
+						},
+					},
+				}
+				result.WriteString(formatOpenAISSE(chunkObj))
+			}
+		}
+
+		if candidate.FinishReason != "" {
+			finishReason := strings.ToLower(candidate.FinishReason)
+			if finishReason == "stop" {
+				finishReason = "stop"
+			}
+
+			chunkObj := map[string]interface{}{
+				"id":      messageID,
+				"object":  "chat.completion.chunk",
+				"created": time.Now().Unix(),
+				"model":   modelName,
+				"choices": []map[string]interface{}{
+					{
+						"index":         0,
+						"delta":         map[string]interface{}{},
+						"finish_reason": finishReason,
+					},
+				},
+			}
+			result.WriteString(formatOpenAISSE(chunkObj))
+		}
+	}
+
+	// Handle usage metadata if present in the last chunk
+	if chunk.UsageMetadata != nil {
+		usageObj := map[string]interface{}{
+			"id":      messageID,
+			"object":  "chat.completion.chunk",
+			"created": time.Now().Unix(),
+			"model":   modelName,
+			"choices": []map[string]interface{}{},
+			"usage": map[string]interface{}{
+				"prompt_tokens":     chunk.UsageMetadata.PromptTokenCount,
+				"completion_tokens": chunk.UsageMetadata.CandidatesTokenCount,
+				"total_tokens":      chunk.UsageMetadata.TotalTokenCount,
+			},
+		}
+		result.WriteString(formatOpenAISSE(usageObj))
+	}
+
+	return result.String()
+}
+
+func formatOpenAISSE(data interface{}) string {
+	jsonData, _ := json.Marshal(data)
+	return fmt.Sprintf("data: %s\n\n", string(jsonData))
 }
 
 func formatSSE(eventType string, data interface{}) string {
