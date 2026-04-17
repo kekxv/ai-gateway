@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"fmt"
 	"io"
 	"log"
@@ -1867,7 +1868,10 @@ func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey st
 		modelName = "gemini-model"
 	}
 
-	log.Printf("[sendUpstreamRequest] Sending request to: %s, stream: %v, model: %s", url, stream, modelName)
+	var apiKeyRegex = regexp.MustCompile(`(key=)[^&]+`)
+	// 使用方式：
+	maskedUrl := apiKeyRegex.ReplaceAllString(url, "$1***")
+	log.Printf("[sendUpstreamRequest] Sending request to: %s, stream: %v, model: %s", maskedUrl, stream, modelName)
 	return s.httpClient.Do(httpReq)
 }
 
@@ -2603,8 +2607,11 @@ func (s *GatewayService) sendAnthropicUpstreamRequest(ctx context.Context, url, 
 // This is useful when the upstream has different field requirements
 func (s *GatewayService) sendRawUpstreamRequest(ctx context.Context, url, apiKey string, reqBody []byte, stream bool, forwardHeaders map[string]string, headers map[string]string) (*http.Response, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
+	var apiKeyRegex = regexp.MustCompile(`(key=)[^&]+`)
+	// 使用方式：
+	maskedUrl := apiKeyRegex.ReplaceAllString(url, "$1***")
 	if err != nil {
-		log.Printf("[sendRawUpstreamRequest] Create request failed: %v, URL: %s", err, url)
+		log.Printf("[sendRawUpstreamRequest] Create request failed: %v, URL: %s", err, maskedUrl)
 		return nil, err
 	}
 
@@ -2624,9 +2631,9 @@ func (s *GatewayService) sendRawUpstreamRequest(ctx context.Context, url, apiKey
 	var reqMap map[string]interface{}
 	if err := json.Unmarshal(reqBody, &reqMap); err == nil {
 		modelName, _ := reqMap["model"].(string)
-		log.Printf("[sendRawUpstreamRequest] Sending request to: %s, stream: %v, model: %s", url, stream, modelName)
+		log.Printf("[sendRawUpstreamRequest] Sending request to: %s, stream: %v, model: %s", maskedUrl, stream, modelName)
 	} else {
-		log.Printf("[sendRawUpstreamRequest] Sending request to: %s, stream: %v", url, stream)
+		log.Printf("[sendRawUpstreamRequest] Sending request to: %s, stream: %v", maskedUrl, stream)
 	}
 
 	return s.httpClient.Do(httpReq)

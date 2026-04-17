@@ -2,5 +2,7 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/claude-code-router" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/gemini-claude-code" vcs="Git" />
   </component>
 </project>
