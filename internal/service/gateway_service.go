@@ -31,6 +31,14 @@ var (
 	ErrUpstreamFailed     = errors.New("upstream request failed")
 )
 
+// apiKeyMaskRegex matches API keys in URLs (key=, api_key=, token=, etc.)
+var apiKeyMaskRegex = regexp.MustCompile(`(?i)(key|api_key|apikey|token|secret|access_token)=[^&\s]+`)
+
+// maskAPIKeyInURL hides API keys in URLs for safe logging
+func maskAPIKeyInURL(urlStr string) string {
+	return apiKeyMaskRegex.ReplaceAllString(urlStr, "$1=***")
+}
+
 // Headers that should NOT be forwarded to upstream
 var excludedHeaders = []string{
 	"authorization",
@@ -1632,7 +1640,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 
 	resp, err := s.sendUpstreamRequest(ctx, targetURL, upstreamAPIKey, finalReq, stream, forwardHeaders)
 	if err != nil {
-		log.Printf("[HandleChatCompletions] Upstream request failed: %v, URL: %s, Model: %s", err, targetURL, model.Name)
+		log.Printf("[HandleChatCompletions] Upstream request failed: %v, URL: %s, Model: %s", err, maskAPIKeyInURL(targetURL), model.Name)
 		latency := int(time.Since(startTime).Milliseconds())
 		updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
 		return nil, ErrUpstreamFailed
@@ -1641,7 +1649,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	// Handle error responses
 	if resp.StatusCode >= 400 {
 		body, _ := s.readDecompressedBody(resp)
-		log.Printf("[HandleChatCompletions] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
+		log.Printf("[HandleChatCompletions] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), maskAPIKeyInURL(targetURL))
 		latency := int(time.Since(startTime).Milliseconds())
 		s.handleUpstreamError(ctx, resp, route)
 		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
@@ -1860,7 +1868,7 @@ func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey st
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
-		log.Printf("[sendUpstreamRequest] Create request failed: %v, URL: %s", err, url)
+		log.Printf("[sendUpstreamRequest] Create request failed: %v, URL: %s", err, maskAPIKeyInURL(url))
 		return nil, err
 	}
 
@@ -1887,10 +1895,7 @@ func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey st
 		modelName = "gemini-model"
 	}
 
-	var apiKeyRegex = regexp.MustCompile(`(key=)[^&]+`)
-	// 使用方式：
-	maskedUrl := apiKeyRegex.ReplaceAllString(url, "$1***")
-	log.Printf("[sendUpstreamRequest] Sending request to: %s, stream: %v, model: %s", maskedUrl, stream, modelName)
+	log.Printf("[sendUpstreamRequest] Sending request to: %s, stream: %v, model: %s", maskAPIKeyInURL(url), stream, modelName)
 	return s.httpClient.Do(httpReq)
 }
 
@@ -2272,7 +2277,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			targetURL = fmt.Sprintf("%s?%s", targetURL, rawQuery)
 		}
 
-		log.Printf("[HandleAnthropicMessages] Provider '%s' supports anthropic, direct forwarding to: %s", route.Provider.Name, targetURL)
+		log.Printf("[HandleAnthropicMessages] Provider '%s' supports anthropic, direct forwarding to: %s", route.Provider.Name, maskAPIKeyInURL(targetURL))
 
 		// Update model name in raw request body for direct forwarding
 		var rawReqBodyModified []byte
@@ -2297,7 +2302,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		}
 		resp, err := s.sendRawUpstreamRequest(ctx, targetURL, route.Provider.APIKey, rawReqBodyModified, stream, forwardHeaders, headers)
 		if err != nil {
-			log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s, Request body: %s", err, targetURL, string(rawReqBodyModified))
+			log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s, Request body: %s", err, maskAPIKeyInURL(targetURL), string(rawReqBodyModified))
 			latency := int(time.Since(startTime).Milliseconds())
 			updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
 			return nil, ErrUpstreamFailed
@@ -2305,7 +2310,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 
 		if resp.StatusCode >= 400 {
 			body, _ := s.readDecompressedBody(resp)
-			log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s, Request body: %s", resp.StatusCode, string(body), targetURL, string(rawReqBodyModified))
+			log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s, Request body: %s", resp.StatusCode, string(body), maskAPIKeyInURL(targetURL), string(rawReqBodyModified))
 			latency := int(time.Since(startTime).Milliseconds())
 			s.handleUpstreamError(ctx, resp, route)
 			updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
@@ -2404,7 +2409,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		// Send Gemini format request
 		resp, err := s.sendUpstreamRequest(ctx, targetURL, "", geminiReq, stream, forwardHeaders)
 		if err != nil {
-			log.Printf("[HandleAnthropicMessages] Upstream Gemini request failed: %v, URL: %s", err, targetURL)
+			log.Printf("[HandleAnthropicMessages] Upstream Gemini request failed: %v, URL: %s", err, maskAPIKeyInURL(targetURL))
 			latency := int(time.Since(startTime).Milliseconds())
 			updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
 			return nil, ErrUpstreamFailed
@@ -2412,7 +2417,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 
 		if resp.StatusCode >= 400 {
 			body, _ := s.readDecompressedBody(resp)
-			log.Printf("[HandleAnthropicMessages] Upstream Gemini error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
+			log.Printf("[HandleAnthropicMessages] Upstream Gemini error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), maskAPIKeyInURL(targetURL))
 			latency := int(time.Since(startTime).Milliseconds())
 			s.handleUpstreamError(ctx, resp, route)
 			updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
@@ -2500,7 +2505,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	baseURL := route.Provider.GetBaseURLForType("openai")
 	targetURL := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(baseURL, "/"))
 
-	log.Printf("[HandleAnthropicMessages] Sending OpenAI format request to: %s, stream: %v, model: %s", targetURL, stream, upstreamModelName)
+	log.Printf("[HandleAnthropicMessages] Sending OpenAI format request to: %s, stream: %v, model: %s", maskAPIKeyInURL(targetURL), stream, upstreamModelName)
 
 	// Update model name in request
 	chatReq := openAIReq.(*ChatRequest)
@@ -2514,7 +2519,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	// Send OpenAI format request
 	resp, err := s.sendUpstreamRequest(ctx, targetURL, route.Provider.APIKey, chatReq, stream, forwardHeaders)
 	if err != nil {
-		log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s", err, targetURL)
+		log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s", err, maskAPIKeyInURL(targetURL))
 		latency := int(time.Since(startTime).Milliseconds())
 		updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
 		return nil, ErrUpstreamFailed
@@ -2522,7 +2527,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 
 	if resp.StatusCode >= 400 {
 		body, _ := s.readDecompressedBody(resp)
-		log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
+		log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), maskAPIKeyInURL(targetURL))
 		latency := int(time.Since(startTime).Milliseconds())
 		s.handleUpstreamError(ctx, resp, route)
 		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
@@ -2605,7 +2610,7 @@ func (s *GatewayService) sendAnthropicUpstreamRequest(ctx context.Context, url, 
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
-		log.Printf("[sendAnthropicUpstreamRequest] Create request failed: %v, URL: %s", err, url)
+		log.Printf("[sendAnthropicUpstreamRequest] Create request failed: %v, URL: %s", err, maskAPIKeyInURL(url))
 		return nil, err
 	}
 
@@ -2626,11 +2631,8 @@ func (s *GatewayService) sendAnthropicUpstreamRequest(ctx context.Context, url, 
 // This is useful when the upstream has different field requirements
 func (s *GatewayService) sendRawUpstreamRequest(ctx context.Context, url, apiKey string, reqBody []byte, stream bool, forwardHeaders map[string]string, headers map[string]string) (*http.Response, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
-	var apiKeyRegex = regexp.MustCompile(`(key=)[^&]+`)
-	// 使用方式：
-	maskedUrl := apiKeyRegex.ReplaceAllString(url, "$1***")
 	if err != nil {
-		log.Printf("[sendRawUpstreamRequest] Create request failed: %v, URL: %s", err, maskedUrl)
+		log.Printf("[sendRawUpstreamRequest] Create request failed: %v, URL: %s", err, maskAPIKeyInURL(url))
 		return nil, err
 	}
 
@@ -2650,9 +2652,9 @@ func (s *GatewayService) sendRawUpstreamRequest(ctx context.Context, url, apiKey
 	var reqMap map[string]interface{}
 	if err := json.Unmarshal(reqBody, &reqMap); err == nil {
 		modelName, _ := reqMap["model"].(string)
-		log.Printf("[sendRawUpstreamRequest] Sending request to: %s, stream: %v, model: %s", maskedUrl, stream, modelName)
+		log.Printf("[sendRawUpstreamRequest] Sending request to: %s, stream: %v, model: %s", maskAPIKeyInURL(url), stream, modelName)
 	} else {
-		log.Printf("[sendRawUpstreamRequest] Sending request to: %s, stream: %v", maskedUrl, stream)
+		log.Printf("[sendRawUpstreamRequest] Sending request to: %s, stream: %v", maskAPIKeyInURL(url), stream)
 	}
 
 	return s.httpClient.Do(httpReq)
@@ -2829,7 +2831,7 @@ func (s *GatewayService) HandleAnthropicCountTokens(ctx context.Context, apiKey 
 		baseURL := route.Provider.GetBaseURLForType("anthropic")
 		targetURL := fmt.Sprintf("%s/messages/count_tokens", strings.TrimSuffix(baseURL, "/"))
 
-		log.Printf("[HandleAnthropicCountTokens] Provider '%s' supports anthropic, direct forwarding to: %s", route.Provider.Name, targetURL)
+		log.Printf("[HandleAnthropicCountTokens] Provider '%s' supports anthropic, direct forwarding to: %s", route.Provider.Name, maskAPIKeyInURL(targetURL))
 
 		headers := map[string]string{
 			"x-api-key":         route.Provider.APIKey,
@@ -2838,14 +2840,14 @@ func (s *GatewayService) HandleAnthropicCountTokens(ctx context.Context, apiKey 
 
 		resp, err := s.sendRawUpstreamRequest(ctx, targetURL, route.Provider.APIKey, rawReqBody, false, forwardHeaders, headers)
 		if err != nil {
-			log.Printf("[HandleAnthropicCountTokens] Upstream request failed: %v, URL: %s, falling back to local estimation", err, targetURL)
+			log.Printf("[HandleAnthropicCountTokens] Upstream request failed: %v, URL: %s, falling back to local estimation", err, maskAPIKeyInURL(targetURL))
 			// Fallback to local estimation
 			return s.estimateAnthropicTokens(req), nil
 		}
 
 		if resp.StatusCode >= 400 {
 			body, _ := s.readDecompressedBody(resp)
-			log.Printf("[HandleAnthropicCountTokens] Upstream error: status=%d, body=%s, URL: %s, falling back to local estimation", resp.StatusCode, string(body), targetURL)
+			log.Printf("[HandleAnthropicCountTokens] Upstream error: status=%d, body=%s, URL: %s, falling back to local estimation", resp.StatusCode, string(body), maskAPIKeyInURL(targetURL))
 			// Fallback to local estimation (provider might not support count_tokens endpoint)
 			return s.estimateAnthropicTokens(req), nil
 		}

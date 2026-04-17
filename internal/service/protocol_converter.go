@@ -537,6 +537,7 @@ func (c *ProtocolConverter) GenerateAnthropicStreamStart(messageID, modelName st
 			Role:    "assistant",
 			Content: []models.AnthropicContentBlock{},
 			Model:   modelName,
+			Usage:   &models.AnthropicUsage{InputTokens: 0, OutputTokens: 0}, // Default usage to avoid null pointer errors
 		},
 	}
 	return formatSSE(models.AnthropicEventMessageStart, event)
@@ -1109,13 +1110,13 @@ func (c *ProtocolConverter) openAIToGeminiRequest(req *ChatRequest) (*models.Gem
 	}
 
 	// Handle Think parameter (DeepSeek/Ollama format: false to disable thinking)
-		if req.Think != nil && !*req.Think {
-			geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
-				ThinkingLevel: "NONE",
-			}
+	if req.Think != nil && !*req.Think {
+		geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
+			ThinkingLevel: "NONE",
 		}
+	}
 
-		// Handle ReasoningEffort -> Gemini ThinkingLevel
+	// Handle ReasoningEffort -> Gemini ThinkingLevel
 	if req.ReasoningEffort != "" {
 		thinkingLevel := ""
 		switch req.ReasoningEffort {
@@ -1146,41 +1147,60 @@ func (c *ProtocolConverter) openAIToGeminiRequest(req *ChatRequest) (*models.Gem
 
 // Gemini -> Anthropic Response Conversion
 func (c *ProtocolConverter) geminiToAnthropicResponse(resp *models.GeminiGenerateContentResponse, modelName string) (*models.AnthropicMessagesResponse, error) {
+	// Initialize with empty Content and default Usage to avoid null pointer errors
 	anthropicResp := &models.AnthropicMessagesResponse{
-		ID:    generateMessageID(),
-		Type:  "message",
-		Role:  "assistant",
-		Model: modelName,
+		ID:      generateMessageID(),
+		Type:    "message",
+		Role:    "assistant",
+		Model:   modelName,
+		Content: []models.AnthropicContentBlock{},
+		Usage:   &models.AnthropicUsage{InputTokens: 0, OutputTokens: 0},
 	}
 
-	if len(resp.Candidates) > 0 {
-		candidate := resp.Candidates[0]
-		anthropicResp.StopReason = convertGeminiFinishReasonToAnthropic(candidate.FinishReason)
+	// Handle empty candidates - add empty text block to satisfy Anthropic SDK
+	if len(resp.Candidates) == 0 {
+		anthropicResp.Content = []models.AnthropicContentBlock{
+			{Type: "text", Text: ""},
+		}
+		anthropicResp.StopReason = models.AnthropicStopEndTurn
+		return anthropicResp, nil
+	}
 
-		for _, part := range candidate.Content.Parts {
-			if part.Thought {
-				anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
-					Type:     "thinking",
-					Thinking: part.Text,
-				})
-			} else if part.Text != "" {
-				anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
-					Type: "text",
-					Text: part.Text,
-				})
-			}
-			if part.FunctionCall != nil {
-				anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
-					Type:  "tool_use",
-					ID:    generateMessageID(), // Gemini doesn't have call ID in response, we generate one
-					Name:  part.FunctionCall.Name,
-					Input: part.FunctionCall.Args,
-				})
-				anthropicResp.StopReason = models.AnthropicStopToolUse
-			}
+	candidate := resp.Candidates[0]
+	anthropicResp.StopReason = convertGeminiFinishReasonToAnthropic(candidate.FinishReason)
+
+	// Handle empty Parts - add empty text block to satisfy Anthropic SDK
+	if len(candidate.Content.Parts) == 0 {
+		anthropicResp.Content = []models.AnthropicContentBlock{
+			{Type: "text", Text: ""},
+		}
+		return anthropicResp, nil
+	}
+
+	for _, part := range candidate.Content.Parts {
+		if part.Thought {
+			anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
+				Type:     "thinking",
+				Thinking: part.Text,
+			})
+		} else if part.Text != "" {
+			anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
+				Type: "text",
+				Text: part.Text,
+			})
+		}
+		if part.FunctionCall != nil {
+			anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
+				Type:  "tool_use",
+				ID:    generateMessageID(), // Gemini doesn't have call ID in response, we generate one
+				Name:  part.FunctionCall.Name,
+				Input: part.FunctionCall.Args,
+			})
+			anthropicResp.StopReason = models.AnthropicStopToolUse
 		}
 	}
 
+	// Update Usage if available
 	if resp.UsageMetadata != nil {
 		anthropicResp.Usage = &models.AnthropicUsage{
 			InputTokens:  resp.UsageMetadata.PromptTokenCount,
@@ -1193,53 +1213,66 @@ func (c *ProtocolConverter) geminiToAnthropicResponse(resp *models.GeminiGenerat
 
 // Gemini -> OpenAI Response Conversion
 func (c *ProtocolConverter) geminiToOpenAIResponse(resp *models.GeminiGenerateContentResponse, modelName string) (*ChatResponse, error) {
+	// Initialize with default Usage to avoid null pointer errors
 	openAIResp := &ChatResponse{
 		ID:      "chatcmpl-" + strings.ReplaceAll(uuid.New().String(), "-", ""),
 		Object:  "chat.completion",
 		Created: time.Now().Unix(),
 		Model:   modelName,
+		Usage:   &Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0},
 	}
 
-	if len(resp.Candidates) > 0 {
-		candidate := resp.Candidates[0]
-		message := &ChatMessage{
-			Role: "assistant",
-		}
-
-		var contentBuilder strings.Builder
-		for _, part := range candidate.Content.Parts {
-			if part.Thought {
-				contentBuilder.WriteString("<think>")
-				contentBuilder.WriteString(part.Text)
-				contentBuilder.WriteString("</think>")
-			} else if part.Text != "" {
-				contentBuilder.WriteString(part.Text)
-			}
-			if part.FunctionCall != nil {
-				message.ToolCalls = append(message.ToolCalls, ToolCall{
-					ID:   generateMessageID(),
-					Type: "function",
-					Function: FunctionCall{
-						Name:      part.FunctionCall.Name,
-						Arguments: func() string { b, _ := json.Marshal(part.FunctionCall.Args); return string(b) }(),
-					},
-				})
-			}
-		}
-		message.Content = ChatMessageContent{StringContent: contentBuilder.String()}
-		
+	// Handle empty candidates - add empty message to satisfy OpenAI format
+	if len(resp.Candidates) == 0 {
 		openAIResp.Choices = []Choice{
 			{
 				Index:        0,
-				Message:      message,
-				FinishReason: strings.ToLower(candidate.FinishReason),
+				Message:      &ChatMessage{Role: "assistant", Content: ChatMessageContent{StringContent: ""}},
+				FinishReason: "stop",
 			},
 		}
-		if openAIResp.Choices[0].FinishReason == "" {
-			openAIResp.Choices[0].FinishReason = "stop"
-		}
+		return openAIResp, nil
 	}
 
+	candidate := resp.Candidates[0]
+	message := &ChatMessage{
+		Role: "assistant",
+	}
+
+	var contentBuilder strings.Builder
+	for _, part := range candidate.Content.Parts {
+		if part.Thought {
+			contentBuilder.WriteString("<think>")
+			contentBuilder.WriteString(part.Text)
+			contentBuilder.WriteString("</think>")
+		} else if part.Text != "" {
+			contentBuilder.WriteString(part.Text)
+		}
+		if part.FunctionCall != nil {
+			message.ToolCalls = append(message.ToolCalls, ToolCall{
+				ID:   generateMessageID(),
+				Type: "function",
+				Function: FunctionCall{
+					Name:      part.FunctionCall.Name,
+					Arguments: func() string { b, _ := json.Marshal(part.FunctionCall.Args); return string(b) }(),
+				},
+			})
+		}
+	}
+	message.Content = ChatMessageContent{StringContent: contentBuilder.String()}
+
+	openAIResp.Choices = []Choice{
+		{
+			Index:        0,
+			Message:      message,
+			FinishReason: strings.ToLower(candidate.FinishReason),
+		},
+	}
+	if openAIResp.Choices[0].FinishReason == "" {
+		openAIResp.Choices[0].FinishReason = "stop"
+	}
+
+	// Update Usage if available
 	if resp.UsageMetadata != nil {
 		openAIResp.Usage = &Usage{
 			PromptTokens:     resp.UsageMetadata.PromptTokenCount,
@@ -1411,6 +1444,7 @@ func (c *ProtocolConverter) ConvertGeminiStreamChunkToOpenAI(chunk *models.Gemin
 			}
 
 			if part.FunctionCall != nil {
+				argsJson, _ := json.Marshal(part.FunctionCall.Args)
 				toolCalls := []map[string]interface{}{
 					{
 						"index": 0,
@@ -1418,7 +1452,7 @@ func (c *ProtocolConverter) ConvertGeminiStreamChunkToOpenAI(chunk *models.Gemin
 						"type":  "function",
 						"function": map[string]interface{}{
 							"name":      part.FunctionCall.Name,
-							"arguments": func() string { b, _ := json.Marshal(part.FunctionCall.Args); return string(b) }(),
+							"arguments": string(argsJson),
 						},
 					},
 				}
