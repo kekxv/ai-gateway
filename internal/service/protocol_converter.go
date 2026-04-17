@@ -72,6 +72,8 @@ func (c *ProtocolConverter) ConvertResponse(resp interface{}, from, to ProtocolT
 		return c.anthropicToOpenAIResponse(resp.(*models.AnthropicMessagesResponse))
 	case from == ProtocolGemini && to == ProtocolAnthropic:
 		return c.geminiToAnthropicResponse(resp.(*models.GeminiGenerateContentResponse), modelName)
+	case from == ProtocolGemini && to == ProtocolOpenAI:
+		return c.geminiToOpenAIResponse(resp.(*models.GeminiGenerateContentResponse), modelName)
 	default:
 		return nil, fmt.Errorf("unsupported protocol conversion: %s -> %s", from, to)
 	}
@@ -992,6 +994,12 @@ func (c *ProtocolConverter) openAIToGeminiRequest(req *ChatRequest) (*models.Gem
 		}
 
 		parts := make([]models.GeminiPart, 0)
+		if msg.Reasoning != "" {
+			parts = append(parts, models.GeminiPart{
+				Text:    msg.Reasoning,
+				Thought: true,
+			})
+		}
 		if msg.Content.StringContent != "" {
 			parts = append(parts, models.GeminiPart{Text: msg.Content.StringContent})
 		}
@@ -1038,9 +1046,29 @@ func (c *ProtocolConverter) openAIToGeminiRequest(req *ChatRequest) (*models.Gem
 			if err := json.Unmarshal([]byte(msg.Content.GetText()), &result); err != nil {
 				result = map[string]interface{}{"output": msg.Content.GetText()}
 			}
+
+			// Find original tool name for Gemini (it requires Name, not ID)
+			toolName := msg.ToolCallID
+			found := false
+			for i := len(req.Messages) - 1; i >= 0; i-- {
+				m := req.Messages[i]
+				if m.Role == "assistant" {
+					for _, tc := range m.ToolCalls {
+						if tc.ID == msg.ToolCallID {
+							toolName = tc.Function.Name
+							found = true
+							break
+						}
+					}
+				}
+				if found {
+					break
+				}
+			}
+
 			parts = append(parts, models.GeminiPart{
 				FunctionResponse: &models.GeminiFunctionResponse{
-					Name:     msg.ToolCallID,
+					Name:     toolName,
 					Response: result,
 				},
 			})
@@ -1128,6 +1156,66 @@ func (c *ProtocolConverter) geminiToAnthropicResponse(resp *models.GeminiGenerat
 	}
 
 	return anthropicResp, nil
+}
+
+// Gemini -> OpenAI Response Conversion
+func (c *ProtocolConverter) geminiToOpenAIResponse(resp *models.GeminiGenerateContentResponse, modelName string) (*ChatResponse, error) {
+	openAIResp := &ChatResponse{
+		ID:      "chatcmpl-" + strings.ReplaceAll(uuid.New().String(), "-", ""),
+		Object:  "chat.completion",
+		Created: time.Now().Unix(),
+		Model:   modelName,
+	}
+
+	if len(resp.Candidates) > 0 {
+		candidate := resp.Candidates[0]
+		message := &ChatMessage{
+			Role: "assistant",
+		}
+
+		var contentBuilder strings.Builder
+		for _, part := range candidate.Content.Parts {
+			if part.Thought {
+				contentBuilder.WriteString("<think>")
+				contentBuilder.WriteString(part.Text)
+				contentBuilder.WriteString("</think>")
+			} else if part.Text != "" {
+				contentBuilder.WriteString(part.Text)
+			}
+			if part.FunctionCall != nil {
+				message.ToolCalls = append(message.ToolCalls, ToolCall{
+					ID:   generateMessageID(),
+					Type: "function",
+					Function: FunctionCall{
+						Name:      part.FunctionCall.Name,
+						Arguments: fmt.Sprintf("%v", part.FunctionCall.Args),
+					},
+				})
+			}
+		}
+		message.Content = ChatMessageContent{StringContent: contentBuilder.String()}
+		
+		openAIResp.Choices = []Choice{
+			{
+				Index:        0,
+				Message:      message,
+				FinishReason: strings.ToLower(candidate.FinishReason),
+			},
+		}
+		if openAIResp.Choices[0].FinishReason == "" {
+			openAIResp.Choices[0].FinishReason = "stop"
+		}
+	}
+
+	if resp.UsageMetadata != nil {
+		openAIResp.Usage = &Usage{
+			PromptTokens:     resp.UsageMetadata.PromptTokenCount,
+			CompletionTokens: resp.UsageMetadata.CandidatesTokenCount,
+			TotalTokens:      resp.UsageMetadata.TotalTokenCount,
+		}
+	}
+
+	return openAIResp, nil
 }
 
 // ConvertGeminiStreamChunkToAnthropic converts a Gemini stream chunk to Anthropic format

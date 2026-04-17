@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/kekxv/ai-gateway/internal/models"
 	"github.com/kekxv/ai-gateway/internal/repository"
 	"github.com/kekxv/ai-gateway/internal/utils"
@@ -43,6 +44,7 @@ var excludedHeaders = []string{
 	"te",
 	"trailer",
 	"upgrade",
+	"accept-encoding",
 	"proxy-authorization",
 	"proxy-authenticate",
 	"proxy-connection",
@@ -785,9 +787,11 @@ type StreamingResponse struct {
 	TargetProtocol    ProtocolType // Protocol to output (OpenAI, Anthropic, Gemini)
 
 	// For Gemini stream conversion
-	contentIndex int
-	streamState  *StreamConversionState
-	geminiScanner *bufio.Scanner
+	contentIndex    int
+	streamState     *StreamConversionState
+	geminiScanner   *bufio.Scanner
+	StreamMessageID string        // Consistent ID for the whole stream
+	pipeBuffer      *bytes.Buffer // For protocol conversion pipe
 
 	// Estimated prompt tokens for fallback (used when upstream doesn't provide token usage)
 	estimatedPromptTokens int
@@ -796,10 +800,12 @@ type StreamingResponse struct {
 // NewStreamingResponse creates a new streaming response wrapper
 func NewStreamingResponse(resp *http.Response, ctx context.Context) *StreamingResponse {
 	return &StreamingResponse{
-		ResponseBody:   resp,
-		capturedBuffer: &bytes.Buffer{},
-		ctx:            ctx,
-		streamState:    &StreamConversionState{},
+		ResponseBody:    resp,
+		capturedBuffer:  &bytes.Buffer{},
+		pipeBuffer:      &bytes.Buffer{},
+		ctx:             ctx,
+		streamState:     &StreamConversionState{},
+		StreamMessageID: "chatcmpl-" + strings.ReplaceAll(uuid.New().String(), "-", ""),
 	}
 }
 
@@ -824,9 +830,9 @@ func (s *StreamingResponse) Read(p []byte) (n int, err error) {
 			s.geminiScanner.Split(GeminiStreamSplitter)
 		}
 
-		// If we have data in our capturedBuffer, return it first
-		if s.capturedBuffer.Len() > 0 {
-			return s.capturedBuffer.Read(p)
+		// If we have data in our pipeBuffer, return it first
+		if s.pipeBuffer.Len() > 0 {
+			return s.pipeBuffer.Read(p)
 		}
 
 		if s.geminiScanner.Scan() {
@@ -838,14 +844,15 @@ func (s *StreamingResponse) Read(p []byte) (n int, err error) {
 					var convertedSSE string
 
 					if s.TargetProtocol == ProtocolAnthropic {
-						convertedSSE = converter.ConvertGeminiStreamChunkToAnthropic(&chunk, generateMessageID(), s.model.Name, &s.contentIndex, s.streamState)
+						convertedSSE = converter.ConvertGeminiStreamChunkToAnthropic(&chunk, s.StreamMessageID, s.model.Name, &s.contentIndex, s.streamState)
 					} else {
 						// Default to OpenAI for web chat and other compatible clients
-						convertedSSE = converter.ConvertGeminiStreamChunkToOpenAI(&chunk, generateMessageID(), s.model.Name, s.streamState)
+						convertedSSE = converter.ConvertGeminiStreamChunkToOpenAI(&chunk, s.StreamMessageID, s.model.Name, s.streamState)
 					}
 
 					if convertedSSE != "" {
-						// Write to capturedBuffer and then read from it
+						// Write to pipeBuffer and capturedBuffer
+						s.pipeBuffer.WriteString(convertedSSE)
 						s.capturedBuffer.WriteString(convertedSSE)
 
 						// For real-time logging
@@ -854,17 +861,29 @@ func (s *StreamingResponse) Read(p []byte) (n int, err error) {
 							s.realtimeLogger.PushData(dataCopy)
 						}
 
-						return s.capturedBuffer.Read(p)
+						return s.pipeBuffer.Read(p)
 					}
 				}
 			}
-			// If we didn't return data, try reading again
+			// If we scanned but didn't return data, try again
 			return s.Read(p)
 		}
 
 		if err := s.geminiScanner.Err(); err != nil {
 			return 0, err
 		}
+
+		// Stream ended, check if we need to send [DONE]
+		if !s.streamState.MessageFinished {
+			s.streamState.MessageFinished = true
+			if s.TargetProtocol == ProtocolOpenAI {
+				doneMarker := "data: [DONE]\n\n"
+				s.pipeBuffer.WriteString(doneMarker)
+				// We don't necessarily need to capture [DONE] for logs, but we can
+				return s.pipeBuffer.Read(p)
+			}
+		}
+
 		return 0, io.EOF
 	}
 
@@ -888,6 +907,8 @@ func GeminiStreamSplitter(data []byte, atEOF bool) (advance int, token []byte, e
 	if atEOF && len(data) == 0 {
 		return 0, nil, nil
 	}
+
+	// log.Printf("[GeminiStreamSplitter] Data len: %d, atEOF: %v", len(data), atEOF)
 
 	// Gemini stream starts with '[' and ends with ']'
 	// Elements are separated by ','
@@ -1003,12 +1024,17 @@ func (s *StreamingResponse) GetCapturedData() (content string, usage *Usage, raw
 		// Extract content and reasoning from choices
 		for _, choice := range chunk.Choices {
 			// Handle reasoning tokens
-			if choice.Delta.Reasoning != "" {
+			reasoning := choice.Delta.Reasoning
+			if reasoning == "" {
+				reasoning = choice.Delta.ReasoningContent
+			}
+
+			if reasoning != "" {
 				if !inReasoning {
 					contentBuilder.WriteString("<think>")
 					inReasoning = true
 				}
-				contentBuilder.WriteString(choice.Delta.Reasoning)
+				contentBuilder.WriteString(reasoning)
 			}
 
 			// Handle regular content tokens
@@ -1836,8 +1862,9 @@ func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey st
 	case *models.AnthropicMessagesRequest:
 		modelName = v.Model
 	case *models.GeminiGenerateContentRequest:
-		// Gemini model name is usually in the URL, not the body,
-		// but let's try to get it if we can
+		// Model name is usually in the URL for Gemini native protocol
+		// We'll leave it as unknown if we can't find it easily
+		modelName = "gemini-model"
 	}
 
 	log.Printf("[sendUpstreamRequest] Sending request to: %s, stream: %v, model: %s", url, stream, modelName)
