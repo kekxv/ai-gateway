@@ -712,8 +712,9 @@ func TestConvertOpenAIStreamChunkToAnthropic(t *testing.T) {
 		Delta struct {
 			Role      string     `json:"role,omitempty"`
 			Content   string     `json:"content,omitempty"`
-			Reasoning string     `json:"reasoning,omitempty"`
-			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+			Reasoning        string     `json:"reasoning,omitempty"`
+			ReasoningContent string     `json:"reasoning_content,omitempty"`
+			ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	}{
@@ -756,8 +757,9 @@ func TestConvertOpenAIStreamChunkToAnthropic(t *testing.T) {
 		Delta struct {
 			Role      string     `json:"role,omitempty"`
 			Content   string     `json:"content,omitempty"`
-			Reasoning string     `json:"reasoning,omitempty"`
-			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+			Reasoning        string     `json:"reasoning,omitempty"`
+			ReasoningContent string     `json:"reasoning_content,omitempty"`
+			ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	}{
@@ -796,8 +798,9 @@ func TestConvertOpenAIStreamChunkToAnthropic_Reasoning(t *testing.T) {
 		Delta struct {
 			Role      string     `json:"role,omitempty"`
 			Content   string     `json:"content,omitempty"`
-			Reasoning string     `json:"reasoning,omitempty"`
-			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+			Reasoning        string     `json:"reasoning,omitempty"`
+			ReasoningContent string     `json:"reasoning_content,omitempty"`
+			ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	}{
@@ -824,8 +827,9 @@ func TestConvertOpenAIStreamChunkToAnthropic_Reasoning(t *testing.T) {
 		Delta struct {
 			Role      string     `json:"role,omitempty"`
 			Content   string     `json:"content,omitempty"`
-			Reasoning string     `json:"reasoning,omitempty"`
-			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+			Reasoning        string     `json:"reasoning,omitempty"`
+			ReasoningContent string     `json:"reasoning_content,omitempty"`
+			ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	}{
@@ -863,8 +867,9 @@ func TestConvertOpenAIStreamChunkToAnthropic_ToolUse(t *testing.T) {
 		Delta struct {
 			Role      string     `json:"role,omitempty"`
 			Content   string     `json:"content,omitempty"`
-			Reasoning string     `json:"reasoning,omitempty"`
-			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+			Reasoning        string     `json:"reasoning,omitempty"`
+			ReasoningContent string     `json:"reasoning_content,omitempty"`
+			ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	}{
@@ -903,8 +908,9 @@ func TestConvertOpenAIStreamChunkToAnthropic_ToolUse(t *testing.T) {
 		Delta struct {
 			Role      string     `json:"role,omitempty"`
 			Content   string     `json:"content,omitempty"`
-			Reasoning string     `json:"reasoning,omitempty"`
-			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+			Reasoning        string     `json:"reasoning,omitempty"`
+			ReasoningContent string     `json:"reasoning_content,omitempty"`
+			ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	}{
