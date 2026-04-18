@@ -1579,6 +1579,9 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	var finalReq interface{}
 	var targetURL string
 
+	// Prepare converter for protocol conversion
+	converter := NewProtocolConverter()
+
 	// Determine provider type
 	providerType := "openai"
 	providerSupportsGemini := route.Provider.HasType("gemini")
@@ -1609,11 +1612,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 
 		targetURL = fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(baseURL, "/"))
 	} else if providerType == "gemini" {
-		// For Gemini protocol, fallback to structured req
-		finalReq = req
-		req.Model = upstreamModelName
-
-		// Native Gemini protocol support
+		// For Gemini protocol, convert OpenAI request to Gemini format
 		baseURL := route.Provider.GetBaseURLForType("gemini")
 		action := "generateContent"
 		if stream {
@@ -1627,6 +1626,15 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		}
 
 		targetURL = fmt.Sprintf("%s/models/%s:%s?key=%s", geminiBaseURL, upstreamModelName, action, route.Provider.APIKey)
+
+		// Convert OpenAI request to Gemini request
+		req.Model = upstreamModelName
+		geminiReq, err := converter.ConvertRequest(req, ProtocolOpenAI, ProtocolGemini)
+		if err != nil {
+			log.Printf("[HandleChatCompletions] Convert to Gemini request failed: %v", err)
+			return nil, err
+		}
+		finalReq = geminiReq
 	} else {
 		// For other protocols, fallback to structured req
 		finalReq = req
@@ -1642,9 +1650,6 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	if providerType == "gemini" {
 		upstreamAPIKey = ""
 	}
-
-	// Prepare converter for Gemini response conversion
-	converter := NewProtocolConverter()
 
 	// Logging exactly what we send
 	if bodyBytes, ok := finalReq.([]byte); ok {

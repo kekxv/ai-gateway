@@ -1200,24 +1200,25 @@ func (c *ProtocolConverter) openAIToGeminiRequest(req *ChatRequest) (*models.Gem
 	}
 
 	// Handle Think parameter (DeepSeek/Ollama format: false to disable thinking)
+	// Note: Gemini doesn't support "NONE", use "minimal" instead
 	if req.Think != nil && !*req.Think {
 		geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
-			ThinkingLevel: "NONE",
+			ThinkingLevel: "minimal",
 		}
 	}
 
-	// Handle ReasoningEffort -> Gemini ThinkingLevel
+	// Handle ReasoningEffort -> Gemini ThinkingLevel (lowercase values)
 	if req.ReasoningEffort != "" {
 		thinkingLevel := ""
 		switch req.ReasoningEffort {
 		case "none":
-			thinkingLevel = "NONE"
+			thinkingLevel = "minimal" // Gemini doesn't support "NONE"
 		case "low":
-			thinkingLevel = "LOW"
+			thinkingLevel = "low"
 		case "medium":
-			thinkingLevel = "MEDIUM"
+			thinkingLevel = "medium"
 		case "high":
-			thinkingLevel = "HIGH"
+			thinkingLevel = "high"
 		}
 		if thinkingLevel != "" {
 			geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
