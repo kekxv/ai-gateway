@@ -20,6 +20,8 @@
 import { computed, ref, watch } from 'vue'
 import { marked } from 'marked'
 import CodeBlock from './CodeBlock.vue'
+import katex from 'katex'
+import 'katex/dist/katex.min.css'
 
 interface CodeSegment {
   type: 'code'
@@ -44,6 +46,74 @@ const props = defineProps<{
   content: string
   streaming?: boolean  // 是否在流式输出中
 }>()
+
+// 标准 HTML 标签白名单（不需要转义）
+const STANDARD_HTML_TAGS = new Set([
+  'a', 'abbr', 'acronym', 'address', 'article', 'aside', 'audio', 'b', 'bdi', 'bdo',
+  'big', 'blockquote', 'body', 'br', 'button', 'canvas', 'caption', 'center', 'cite',
+  'code', 'col', 'colgroup', 'data', 'datalist', 'dd', 'del', 'details', 'dfn', 'dialog',
+  'div', 'dl', 'dt', 'em', 'embed', 'fieldset', 'figure', 'font', 'footer', 'form',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'header', 'hr', 'html', 'i', 'iframe',
+  'img', 'input', 'ins', 'kbd', 'label', 'legend', 'li', 'link', 'main', 'map', 'mark',
+  'meta', 'meter', 'nav', 'noscript', 'object', 'ol', 'optgroup', 'option', 'output',
+  'p', 'param', 'picture', 'pre', 'progress', 'q', 'rp', 'rt', 'ruby', 's', 'samp',
+  'script', 'section', 'select', 'small', 'source', 'span', 'strike', 'strong', 'style',
+  'sub', 'summary', 'sup', 'table', 'tbody', 'td', 'template', 'textarea', 'tfoot',
+  'th', 'thead', 'time', 'title', 'tr', 'track', 'tt', 'u', 'ul', 'var', 'video', 'wbr',
+  // SVG 标签
+  'svg', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'g'
+])
+
+/**
+ * 转义伪 HTML 标签（非标准标签如 `段落`）
+ * 只转义不在白名单中的标签，保留标准 HTML 标签
+ */
+const escapePseudoHtmlTags = (content: string): string => {
+  // 匹配 HTML 标签格式：<tagname> 或 </tagname> 或 <tagname attr="...">
+  return content.replace(/<\/?([a-zA-Z][a-zA-Z0-9_-]*)[^>]*>/g, (match, tagName) => {
+    const lowerTagName = tagName.toLowerCase()
+    // 如果是标准 HTML 标签，不转义
+    if (STANDARD_HTML_TAGS.has(lowerTagName)) {
+      return match
+    }
+    // 非标准标签，转义 < 和 >
+    return match.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  })
+}
+
+/**
+ * 渲染 LaTeX 公式
+ * 支持 $...$ 行内公式和 $$...$$ 块级公式
+ */
+const renderLatex = (content: string): string => {
+  // 先处理块级公式 $$...$$，避免与行内公式冲突
+  content = content.replace(/\$\$([\s\S]+?)\$\$/g, (match, latex) => {
+    try {
+      return katex.renderToString(latex.trim(), {
+        displayMode: true,
+        throwOnError: false,
+        trust: true
+      })
+    } catch {
+      return match // 渲染失败时保留原文
+    }
+  })
+
+  // 再处理行内公式 $...$
+  content = content.replace(/\$([^\$\n]+?)\$/g, (match, latex) => {
+    try {
+      return katex.renderToString(latex.trim(), {
+        displayMode: false,
+        throwOnError: false,
+        trust: true
+      })
+    } catch {
+      return match
+    }
+  })
+
+  return content
+}
 
 // Configure marked
 marked.setOptions({
@@ -149,7 +219,7 @@ const parseIncremental = (content: string): Segment[] => {
         if (cached && cached.type === 'html') {
           segments.push({ type: 'html', html: cached.data })
         } else {
-          const renderedHtml = marked.parse(htmlContent) as string
+          const renderedHtml = marked.parse(renderLatex(escapePseudoHtmlTags(htmlContent))) as string
           if (renderedHtml.trim()) {
             renderedCache.value.set(htmlContent, { type: 'html', data: renderedHtml })
             segments.push({ type: 'html', html: renderedHtml })
@@ -177,7 +247,7 @@ const parseIncremental = (content: string): Segment[] => {
       if (cached && cached.type === 'html') {
         segments.push({ type: 'html', html: cached.data })
       } else {
-        const renderedHtml = marked.parse(htmlContent) as string
+        const renderedHtml = marked.parse(renderLatex(escapePseudoHtmlTags(htmlContent))) as string
         if (renderedHtml.trim()) {
           renderedCache.value.set(htmlContent, { type: 'html', data: renderedHtml })
           segments.push({ type: 'html', html: renderedHtml })
@@ -208,7 +278,7 @@ const parseComplete = (content: string): Segment[] => {
     // Add HTML content before this code block
     if (match.index > lastIndex) {
       const htmlContent = content.slice(lastIndex, match.index)
-      const renderedHtml = marked.parse(htmlContent) as string
+      const renderedHtml = marked.parse(renderLatex(escapePseudoHtmlTags(htmlContent))) as string
       if (renderedHtml.trim()) {
         segments.push({
           type: 'html',
@@ -233,7 +303,7 @@ const parseComplete = (content: string): Segment[] => {
   // Add remaining HTML content after last code block
   if (lastIndex < content.length) {
     const htmlContent = content.slice(lastIndex)
-    const renderedHtml = marked.parse(htmlContent) as string
+    const renderedHtml = marked.parse(renderLatex(escapePseudoHtmlTags(htmlContent))) as string
     if (renderedHtml.trim()) {
       segments.push({
         type: 'html',

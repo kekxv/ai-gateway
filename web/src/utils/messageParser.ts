@@ -13,6 +13,7 @@ export interface StreamingParsedContent {
 
 /**
  * 解析消息内容，提取 Think 块
+ * 只有开头的 think 标签才会被识别为思考内容，中间的不算
  */
 export function parseMessageContent(content: string): {
   textContent: string
@@ -23,55 +24,47 @@ export function parseMessageContent(content: string): {
     return { textContent: '', thinkContent: '', hasThink: false }
   }
 
-  if (!content.includes(THINK_START_TAG)) {
+  // 查找第一个 think start 标签的位置
+  const startIndex = content.indexOf(THINK_START_TAG)
+  if (startIndex === -1) {
     return { textContent: content, thinkContent: '', hasThink: false }
   }
 
-  let thinkContent = ''
-  let textContent = ''
-  let lastIndex = 0
-  let hasThink = false
-
-  // 循环查找所有的 think 块
-  let startIndex = content.indexOf(THINK_START_TAG)
-  while (startIndex !== -1) {
-    // 将上一个块结束到当前 think 开始之间的内容添加到普通文本
-    textContent += content.slice(lastIndex, startIndex)
-
-    const endSearchIndex = startIndex + THINK_START_TAG.length
-    let endIndex = content.indexOf(THINK_END_TAG, endSearchIndex)
-
-    if (endIndex !== -1) {
-      // 找到了结束标签
-      thinkContent += content.slice(endSearchIndex, endIndex).trim() + '\n'
-      lastIndex = endIndex + THINK_END_TAG.length
-      hasThink = true
-    } else {
-      // 没找到结束标签，将剩余所有内容视为 think 内容
-      thinkContent += content.slice(endSearchIndex).trim()
-      lastIndex = content.length
-      hasThink = true
-      break
-    }
-
-    startIndex = content.indexOf(THINK_START_TAG, lastIndex)
+  // 检查 think 标签是否在开头（前面只有空白字符）
+  const beforeThink = content.slice(0, startIndex)
+  if (beforeThink.trim() !== '') {
+    // think 标签不在开头，把整个内容当作普通文本
+    return { textContent: content, thinkContent: '', hasThink: false }
   }
 
-  // 添加最后剩余的普通文本
-  if (lastIndex < content.length) {
-    textContent += content.slice(lastIndex)
+  // think 标签在开头，提取 think 内容
+  const endSearchIndex = startIndex + THINK_START_TAG.length
+  const endIndex = content.indexOf(THINK_END_TAG, endSearchIndex)
+
+  let thinkContent = ''
+  let textContent = ''
+
+  if (endIndex !== -1) {
+    // 找到了结束标签
+    thinkContent = content.slice(endSearchIndex, endIndex).trim()
+    // 结束标签后面的内容作为普通文本（不再解析其他 think 块）
+    textContent = content.slice(endIndex + THINK_END_TAG.length).trim()
+  } else {
+    // 没找到结束标签，将剩余所有内容视为 think 内容
+    thinkContent = content.slice(endSearchIndex).trim()
+    textContent = ''
   }
 
   return {
-    textContent: textContent.trim(),
-    thinkContent: thinkContent.trim(),
-    hasThink: hasThink
+    textContent,
+    thinkContent,
+    hasThink: thinkContent.length > 0
   }
 }
 
 /**
  * 流式解析 Think 内容
- * 优化版本：使用 indexOf 替代逐字符遍历
+ * 只有开头的 think 标签才会被识别为思考内容，中间的不算
  */
 export function parseStreamingThinkContent(content: string): StreamingParsedContent {
   if (!content) {
@@ -81,65 +74,62 @@ export function parseStreamingThinkContent(content: string): StreamingParsedCont
   const thinkStartTags = ['<think>', '<|begin_of_thought|>', '<reasoning>']
   const thinkEndTags = ['</think>', '<|end_of_thought|>', '</reasoning>']
 
-  let textContent = ''
-  let thinkContent = ''
-  let inThinkBlock = false
-  let pos = 0
+  // 查找最早的 think start 标签
+  let earliestStart = -1
+  let startTagLen = 0
 
-  while (pos < content.length) {
-    if (!inThinkBlock) {
-      // Look for any think start tag
-      let foundStart = -1
-      let startTagLen = 0
-
-      for (let i = 0; i < thinkStartTags.length; i++) {
-        const idx = content.indexOf(thinkStartTags[i], pos)
-        if (idx !== -1 && (foundStart === -1 || idx < foundStart)) {
-          foundStart = idx
-          startTagLen = thinkStartTags[i].length
-        }
-      }
-
-      if (foundStart !== -1) {
-        // Add text before the tag
-        textContent += content.slice(pos, foundStart)
-        pos = foundStart + startTagLen
-        inThinkBlock = true
-      } else {
-        // No more think tags, add rest as text
-        textContent += content.slice(pos)
-        break
-      }
-    } else {
-      // Look for any think end tag
-      let foundEnd = -1
-      let endTagLen = 0
-
-      for (let i = 0; i < thinkEndTags.length; i++) {
-        const idx = content.indexOf(thinkEndTags[i], pos)
-        if (idx !== -1 && (foundEnd === -1 || idx < foundEnd)) {
-          foundEnd = idx
-          endTagLen = thinkEndTags[i].length
-        }
-      }
-
-      if (foundEnd !== -1) {
-        // Add think content
-        thinkContent += content.slice(pos, foundEnd)
-        pos = foundEnd + endTagLen
-        inThinkBlock = false
-      } else {
-        // No end tag found, rest is think content
-        thinkContent += content.slice(pos)
-        break
-      }
+  for (let i = 0; i < thinkStartTags.length; i++) {
+    const idx = content.indexOf(thinkStartTags[i])
+    if (idx !== -1 && (earliestStart === -1 || idx < earliestStart)) {
+      earliestStart = idx
+      startTagLen = thinkStartTags[i].length
     }
   }
 
-  return {
-    text: textContent.trim(),
-    think: thinkContent.trim(),
-    inThinkBlock
+  // 如果没有找到任何 think start 标签，全部作为普通文本
+  if (earliestStart === -1) {
+    return { text: content, think: '', inThinkBlock: false }
+  }
+
+  // 检查 think 标签是否在开头（前面只有空白字符）
+  const beforeThink = content.slice(0, earliestStart)
+  if (beforeThink.trim() !== '') {
+    // think 标签不在开头，把整个内容当作普通文本
+    return { text: content, think: '', inThinkBlock: false }
+  }
+
+  // think 标签在开头，提取 think 内容
+  const thinkStartPos = earliestStart + startTagLen
+
+  // 查找最早的 think end 标签
+  let earliestEnd = -1
+  let endTagLen = 0
+
+  for (let i = 0; i < thinkEndTags.length; i++) {
+    const idx = content.indexOf(thinkEndTags[i], thinkStartPos)
+    if (idx !== -1 && (earliestEnd === -1 || idx < earliestEnd)) {
+      earliestEnd = idx
+      endTagLen = thinkEndTags[i].length
+    }
+  }
+
+  if (earliestEnd !== -1) {
+    // 找到了结束标签
+    const thinkContent = content.slice(thinkStartPos, earliestEnd)
+    const textContent = content.slice(earliestEnd + endTagLen)
+    return {
+      text: textContent,
+      think: thinkContent,
+      inThinkBlock: false
+    }
+  } else {
+    // 没找到结束标签，还在思考块中，后面都是思考内容
+    const thinkContent = content.slice(thinkStartPos)
+    return {
+      text: '',
+      think: thinkContent,
+      inThinkBlock: true
+    }
   }
 }
 

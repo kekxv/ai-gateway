@@ -23,13 +23,78 @@
 import { ref, computed, watch } from 'vue'
 import { Cpu, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import { marked } from 'marked'
+import katex from 'katex'
+import 'katex/dist/katex.min.css'
 import 'highlight.js/styles/github.css'
+
+// 标准 HTML 标签白名单（不需要转义）
+const STANDARD_HTML_TAGS = new Set([
+  'a', 'abbr', 'acronym', 'address', 'article', 'aside', 'audio', 'b', 'bdi', 'bdo',
+  'big', 'blockquote', 'body', 'br', 'button', 'canvas', 'caption', 'center', 'cite',
+  'code', 'col', 'colgroup', 'data', 'datalist', 'dd', 'del', 'details', 'dfn', 'dialog',
+  'div', 'dl', 'dt', 'em', 'embed', 'fieldset', 'figure', 'font', 'footer', 'form',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'header', 'hr', 'html', 'i', 'iframe',
+  'img', 'input', 'ins', 'kbd', 'label', 'legend', 'li', 'link', 'main', 'map', 'mark',
+  'meta', 'meter', 'nav', 'noscript', 'object', 'ol', 'optgroup', 'option', 'output',
+  'p', 'param', 'picture', 'pre', 'progress', 'q', 'rp', 'rt', 'ruby', 's', 'samp',
+  'script', 'section', 'select', 'small', 'source', 'span', 'strike', 'strong', 'style',
+  'sub', 'summary', 'sup', 'table', 'tbody', 'td', 'template', 'textarea', 'tfoot',
+  'th', 'thead', 'time', 'title', 'tr', 'track', 'tt', 'u', 'ul', 'var', 'video', 'wbr',
+  // SVG 标签
+  'svg', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'g'
+])
+
+/**
+ * 转义伪 HTML 标签（非标准标签如 `段落`）
+ */
+const escapePseudoHtmlTags = (content: string): string => {
+  return content.replace(/<\/?([a-zA-Z][a-zA-Z0-9_-]*)[^>]*>/g, (match, tagName) => {
+    const lowerTagName = tagName.toLowerCase()
+    if (STANDARD_HTML_TAGS.has(lowerTagName)) {
+      return match
+    }
+    return match.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  })
+}
+
+/**
+ * 渲染 LaTeX 公式
+ */
+const renderLatex = (content: string): string => {
+  // 块级公式 $$...$$
+  content = content.replace(/\$\$([\s\S]+?)\$\$/g, (match, latex) => {
+    try {
+      return katex.renderToString(latex.trim(), {
+        displayMode: true,
+        throwOnError: false,
+        trust: true
+      })
+    } catch {
+      return match
+    }
+  })
+
+  // 行内公式 $...$
+  content = content.replace(/\$([^\$\n]+?)\$/g, (match, latex) => {
+    try {
+      return katex.renderToString(latex.trim(), {
+        displayMode: false,
+        throwOnError: false,
+        trust: true
+      })
+    } catch {
+      return match
+    }
+  })
+
+  return content
+}
 
 const props = defineProps<{
   content: string
   tokens?: number
   defaultCollapsed?: boolean
-  forceExpand?: boolean // New prop to force expansion
+  forceExpand?: boolean
 }>()
 
 const isExpanded = ref(props.forceExpand || !props.defaultCollapsed)
@@ -39,7 +104,7 @@ watch(() => props.forceExpand, (newVal) => {
   if (newVal) {
     isExpanded.value = true
   } else if (props.defaultCollapsed) {
-    // If we're no longer forcing expansion and the default is collapsed, 
+    // If we're no longer forcing expansion and the default is collapsed,
     // collapse it (e.g. when content or tools appear)
     isExpanded.value = false
   }
@@ -52,7 +117,7 @@ const toggleExpand = () => {
 // Render markdown content
 const renderedContent = computed(() => {
   if (!props.content) return ''
-  return marked.parse(props.content, {
+  return marked.parse(renderLatex(escapePseudoHtmlTags(props.content)), {
     breaks: true,
     gfm: true
   })
