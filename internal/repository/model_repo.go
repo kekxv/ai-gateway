@@ -25,6 +25,7 @@ func (r *ModelRepository) FindByID(ctx context.Context, id uint) (*models.Model,
 	if err != nil {
 		return nil, err
 	}
+	r.LoadAliases(ctx, &model)
 	return &model, nil
 }
 
@@ -36,6 +37,7 @@ func (r *ModelRepository) FindByName(ctx context.Context, name string) (*models.
 	if err != nil {
 		return nil, err
 	}
+	r.LoadAliases(ctx, &model)
 	return &model, nil
 }
 
@@ -47,6 +49,7 @@ func (r *ModelRepository) FindByNameOrAlias(ctx context.Context, name string) (*
 		Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).
 		Where("name = ?", name).First(&model).Error
 	if err == nil {
+		r.LoadAliases(ctx, &model)
 		return &model, nil
 	}
 
@@ -59,6 +62,7 @@ func (r *ModelRepository) FindByNameOrAlias(ctx context.Context, name string) (*
 	if err != nil {
 		return nil, err
 	}
+	r.LoadAliases(ctx, &model)
 	return &model, nil
 }
 
@@ -69,6 +73,9 @@ func (r *ModelRepository) List(ctx context.Context, userID *uint) ([]models.Mode
 		query = query.Where("userId = ?", *userID)
 	}
 	err := query.Find(&modelsList).Error
+	if err == nil {
+		r.LoadAliasesForList(ctx, modelsList)
+	}
 	return modelsList, err
 }
 
@@ -80,6 +87,9 @@ func (r *ModelRepository) ListWithRoutes(ctx context.Context, userID *uint) ([]m
 		query = query.Where("userId = ?", *userID)
 	}
 	err := query.Find(&modelsList).Error
+	if err == nil {
+		r.LoadAliasesForList(ctx, modelsList)
+	}
 	return modelsList, err
 }
 
@@ -104,6 +114,9 @@ func (r *ModelRepository) ListWithRoutesPaginated(ctx context.Context, userID *u
 		query = query.Where("userId = ?", *userID)
 	}
 	err := query.Offset(offset).Limit(pageSize).Find(&modelsList).Error
+	if err == nil {
+		r.LoadAliasesForList(ctx, modelsList)
+	}
 	return modelsList, total, err
 }
 
@@ -157,7 +170,50 @@ func (r *ModelRepository) FindWithRoutes(ctx context.Context, id uint) (*models.
 	if err != nil {
 		return nil, err
 	}
+	r.LoadAliases(ctx, &model)
 	return &model, nil
+}
+
+// LoadAliases fills the Aliases field for a single model
+func (r *ModelRepository) LoadAliases(ctx context.Context, model *models.Model) {
+	if model == nil {
+		return
+	}
+	var aliases []string
+	if err := r.db.WithContext(ctx).Model(&models.ModelAlias{}).
+		Where("modelId = ?", model.ID).
+		Pluck("alias", &aliases).Error; err != nil {
+		return
+	}
+	model.Aliases = aliases
+}
+
+// LoadAliasesForList fills the Aliases field for a list of models
+func (r *ModelRepository) LoadAliasesForList(ctx context.Context, modelsList []models.Model) {
+	if len(modelsList) == 0 {
+		return
+	}
+
+	modelIDs := make([]uint, len(modelsList))
+	for i, m := range modelsList {
+		modelIDs[i] = m.ID
+	}
+
+	var allAliases []models.ModelAlias
+	if err := r.db.WithContext(ctx).Where("modelId IN ?", modelIDs).Find(&allAliases).Error; err != nil {
+		return
+	}
+
+	// Group aliases by modelId
+	aliasMap := make(map[uint][]string)
+	for _, a := range allAliases {
+		aliasMap[a.ModelID] = append(aliasMap[a.ModelID], a.Alias)
+	}
+
+	// Fill models
+	for i := range modelsList {
+		modelsList[i].Aliases = aliasMap[modelsList[i].ID]
+	}
 }
 
 type ModelRouteRepository struct {

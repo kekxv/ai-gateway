@@ -17,6 +17,7 @@ type Model struct {
 
 	// Associations
 	ModelRoutes []ModelRoute `gorm:"foreignKey:ModelID" json:"modelRoutes,omitempty"`
+	Aliases     []string     `gorm:"-" json:"aliases,omitempty"`
 }
 
 func (Model) TableName() string {
