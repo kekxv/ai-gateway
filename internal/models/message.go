@@ -44,13 +44,17 @@ type ToolFunctionSpec struct {
 
 // ChatRequest is the request body for sending a message (OpenAI-compatible format)
 type ChatRequest struct {
-	Model          string                 `json:"model"`                        // Required: model name
-	Messages       []ChatRequestMessage   `json:"messages"`                     // Required: full chat history
-	Stream         bool                   `json:"stream,omitempty"`
-	Temperature    float64                `json:"temperature,omitempty"`
-	MaxTokens      int                    `json:"max_tokens,omitempty"`
-	Tools          []ToolDefinition       `json:"tools,omitempty"`              // Optional tools for function calling
-	EnableThinking bool                   `json:"enable_thinking,omitempty"`    // Enable thinking/reasoning
+	Model            string                 `json:"model"`                     // Required: model name
+	Messages         []ChatRequestMessage   `json:"messages"`                  // Required: full chat history
+	Stream           bool                   `json:"stream,omitempty"`
+	Temperature      float64                `json:"temperature,omitempty"`
+	MaxTokens        int                    `json:"max_tokens,omitempty"`
+	Tools            []ToolDefinition       `json:"tools,omitempty"`           // Optional tools for function calling
+	EnableThinking   bool                   `json:"enable_thinking,omitempty"` // Enable thinking/reasoning
+	ReasoningEffort  string                 `json:"reasoning_effort,omitempty"`
+	Think            *bool                  `json:"think,omitempty"`
+	Thinking         json.RawMessage        `json:"thinking,omitempty"`
+	GenerationConfig json.RawMessage        `json:"generationConfig,omitempty"`
 }
 
 // ChatRequestMessage represents a message in the chat history

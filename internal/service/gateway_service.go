@@ -2279,19 +2279,33 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 
 		log.Printf("[HandleAnthropicMessages] Provider '%s' supports anthropic, direct forwarding to: %s", route.Provider.Name, maskAPIKeyInURL(targetURL))
 
-		// Update model name in raw request body for direct forwarding
+		// Update model name and max_tokens in raw request body for direct forwarding
 		var rawReqBodyModified []byte
-		if upstreamModelName != req.Model {
-			// Parse raw request, update model name, and re-encode
-			var reqMap map[string]interface{}
-			if err := json.Unmarshal(rawReqBody, &reqMap); err == nil {
+		// Always parse if model name changes OR if max_tokens needs to be ensured
+		var reqMap map[string]interface{}
+		if err := json.Unmarshal(rawReqBody, &reqMap); err == nil {
+			modified := false
+			if upstreamModelName != req.Model {
 				reqMap["model"] = upstreamModelName
+				modified = true
+			}
+			
+			// Ensure max_tokens is present (Anthropic requirement)
+			if val, ok := reqMap["max_tokens"]; !ok || val == nil {
+				reqMap["max_tokens"] = req.MaxTokens
+				modified = true
+			} else if f, ok := val.(float64); ok && f <= 0 {
+				reqMap["max_tokens"] = req.MaxTokens
+				modified = true
+			}
+
+			if modified {
 				rawReqBodyModified, _ = json.Marshal(reqMap)
 			} else {
-				// If parsing fails, use original body
 				rawReqBodyModified = rawReqBody
 			}
 		} else {
+			// If parsing fails, use original body (should not happen if it reached here)
 			rawReqBodyModified = rawReqBody
 		}
 

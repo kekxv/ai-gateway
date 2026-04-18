@@ -374,11 +374,27 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 
 	// Build service request
 	chatReq := &service.ChatRequest{
-		Model:       req.Model,
-		Messages:    chatMessages,
-		Stream:      req.Stream,
-		Temperature: req.Temperature,
-		MaxTokens:   req.MaxTokens,
+		Model:            req.Model,
+		Messages:         chatMessages,
+		Stream:           req.Stream,
+		Temperature:      req.Temperature,
+		MaxTokens:        req.MaxTokens,
+		ReasoningEffort:  req.ReasoningEffort,
+		Think:            req.Think,
+	}
+
+	// Parse advanced thinking configs if present
+	if len(req.Thinking) > 0 {
+		var thinking service.ThinkingConfig
+		if err := json.Unmarshal(req.Thinking, &thinking); err == nil {
+			chatReq.Thinking = &thinking
+		}
+	}
+	if len(req.GenerationConfig) > 0 {
+		var genConfig service.GenerationConfig
+		if err := json.Unmarshal(req.GenerationConfig, &genConfig); err == nil {
+			chatReq.GenerationConfig = &genConfig
+		}
 	}
 
 	// Convert tools

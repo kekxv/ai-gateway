@@ -66,12 +66,10 @@ func (h *AnthropicHandler) CreateMessages(c *gin.Context) {
 		))
 		return
 	}
+	// Default max_tokens to 4096 if not provided or invalid, instead of erroring
+	// Anthropic API requires max_tokens, but some clients/proxies might omit it
 	if req.MaxTokens <= 0 {
-		c.JSON(http.StatusBadRequest, models.NewAnthropicError(
-			models.AnthropicErrorInvalidRequest,
-			"Missing or invalid required field: max_tokens",
-		))
-		return
+		req.MaxTokens = 4096
 	}
 	if len(req.Messages) == 0 {
 		c.JSON(http.StatusBadRequest, models.NewAnthropicError(

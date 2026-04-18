@@ -88,6 +88,44 @@ func (c *ProtocolConverter) openAIToAnthropicRequest(req *ChatRequest) (*models.
 		Temperature: req.Temperature,
 	}
 
+	// Map OpenAI/Ollama reasoning to Anthropic Thinking
+	if req.Think != nil && !*req.Think {
+		anthropicReq.Thinking = &models.AnthropicThinkingConfig{
+			Type: "disabled",
+		}
+	} else if req.ReasoningEffort != "" {
+		if req.ReasoningEffort == "none" {
+			anthropicReq.Thinking = &models.AnthropicThinkingConfig{
+				Type: "disabled",
+			}
+		} else {
+			// Enable thinking and set budget based on effort
+			budget := 1024 // Default
+			switch req.ReasoningEffort {
+			case "low":
+				budget = 1024
+			case "medium":
+				budget = 4096
+			case "high":
+				budget = 8192
+			}
+			anthropicReq.Thinking = &models.AnthropicThinkingConfig{
+				Type:         "enabled",
+				BudgetTokens: budget,
+			}
+			// When thinking is enabled, max_tokens must be greater than budget_tokens
+			if anthropicReq.MaxTokens <= budget {
+				anthropicReq.MaxTokens = budget + 1024
+			}
+		}
+	} else if req.Thinking != nil {
+		// Pass through direct thinking config if present
+		anthropicReq.Thinking = &models.AnthropicThinkingConfig{
+			Type:         req.Thinking.Type,
+			BudgetTokens: req.Thinking.BudgetTokens,
+		}
+	}
+
 	// Handle extra fields
 	if req.Extra != nil {
 		if topP, ok := req.Extra["top_p"].(float64); ok {
@@ -234,6 +272,20 @@ func (c *ProtocolConverter) anthropicToOpenAIRequest(req *models.AnthropicMessag
 					"name": req.ToolChoice.Name,
 				},
 			}
+		}
+	}
+
+	// Map Anthropic Thinking to OpenAI/Ollama parameters
+	if req.Thinking != nil {
+		if req.Thinking.Type == "disabled" {
+			think := false
+			openAIReq.Think = &think
+			openAIReq.ReasoningEffort = "none"
+		} else if req.Thinking.Type == "enabled" {
+			think := true
+			openAIReq.Think = &think
+			// Budget tokens don't have a direct OpenAI equivalent but we can store it in Extra
+			openAIReq.Extra["thinking_budget_tokens"] = req.Thinking.BudgetTokens
 		}
 	}
 

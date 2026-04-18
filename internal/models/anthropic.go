@@ -27,6 +27,30 @@ type AnthropicThinkingConfig struct {
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 
+// UnmarshalJSON handles both boolean and object formats for thinking config
+func (atc *AnthropicThinkingConfig) UnmarshalJSON(data []byte) error {
+	// Try boolean first (e.g., "thinking": false)
+	var b bool
+	if err := json.Unmarshal(data, &b); err == nil {
+		if b {
+			atc.Type = "enabled"
+			atc.BudgetTokens = 1024 // Default budget if enabled via boolean
+		} else {
+			atc.Type = "disabled"
+		}
+		return nil
+	}
+
+	// Try object (standard Anthropic format)
+	type Alias AnthropicThinkingConfig
+	var aux Alias
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*atc = AnthropicThinkingConfig(aux)
+	return nil
+}
+
 // AnthropicSystem can be string or array of content blocks
 type AnthropicSystem struct {
 	StringContent string
