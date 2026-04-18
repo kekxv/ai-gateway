@@ -2555,20 +2555,24 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	// Convert the converted request to a map to ensure Ollama compatibility
 	chatReq := openAIReq.(*ChatRequest)
 	chatReq.Model = upstreamModelName
-	
+
 	var rawReqMap map[string]interface{}
 	reqJSON, _ := json.Marshal(chatReq)
 	json.Unmarshal(reqJSON, &rawReqMap)
 
-	// Ensure Ollama compatibility for thinking (Same as HandleChatCompletions)
+	// Support reasoning_effort for OpenAI/Ollama compatibility
+	// Check if thinking should be disabled based on Anthropic request
 	isThinkingDisabled := false
-	if chatReq.Think != nil && !*chatReq.Think {
+	if req.Thinking != nil && req.Thinking.Type == "disabled" {
+		isThinkingDisabled = true
+	} else if chatReq.Think != nil && !*chatReq.Think {
 		isThinkingDisabled = true
 	} else if chatReq.ReasoningEffort == "none" {
 		isThinkingDisabled = true
 	}
 
 	if isThinkingDisabled {
+		rawReqMap["reasoning_effort"] = "none"
 		rawReqMap["think"] = false
 		if rawReqMap["options"] == nil {
 			rawReqMap["options"] = map[string]interface{}{"think": false}
