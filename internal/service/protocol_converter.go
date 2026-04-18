@@ -1268,12 +1268,14 @@ func (c *ProtocolConverter) geminiToAnthropicResponse(resp *models.GeminiGenerat
 	}
 
 	for _, part := range candidate.Content.Parts {
-		if part.Thought {
+		// Handle thinking - only add if there's actual thinking content
+		if part.Thought && part.Text != "" {
 			anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
 				Type:     "thinking",
 				Thinking: part.Text,
 			})
 		} else if part.Text != "" {
+			// Regular text content
 			anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
 				Type: "text",
 				Text: part.Text,
@@ -1388,7 +1390,8 @@ func (c *ProtocolConverter) ConvertGeminiStreamChunkToAnthropic(chunk *models.Ge
 
 		for _, part := range candidate.Content.Parts {
 			// Handle Thinking (Gemini 2.0 Thinking models use thought: true)
-			if part.Thought {
+			// Only process if there's actual thinking content
+			if part.Thought && part.Text != "" {
 				if !state.ThinkingStarted {
 					if state.ContentBlockStarted {
 						result.WriteString(c.GenerateAnthropicContentBlockStop(*contentIndex))
