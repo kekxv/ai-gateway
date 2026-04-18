@@ -9,6 +9,8 @@
 ### 核心网关功能
 - **多提供商支持**: OpenAI、Gemini、Claude 等多种 AI 服务提供商
 - **智能路由**: 基于权重的随机路由选择，支持自动禁用失败路由
+- **协议转换**: 支持 OpenAI/Claude/Gemini 三种协议之间的自动转换
+- **直传模式**: 对于 OpenAI 兼容的后端，支持请求直传，保持原始 JSON 格式
 - **认证授权**: JWT 认证、API Key 认证、TOTP 双因素认证
 - **计费系统**: 基于 Token 的成本计算和余额管理
 - **日志记录**: 完整的请求日志和详情记录，支持 GZIP 压缩存储
@@ -18,11 +20,16 @@
 ![AI聊天-工具调用](assets/AI聊天-工具调用.png)
 
 - **多模型切换**: 支持在对话中切换不同的 AI 模型
-- **思维链控制**: 支持 OpenAI reasoning_effort 和 Gemini thinkingLevel 参数
+- **思维链控制**: 
+  - 支持 OpenAI `reasoning_effort` 参数（none/minimal/low/medium/high）
+  - 支持 Gemini `thinkingLevel` 参数（minimal/low/medium/high）
+  - 支持 Claude Thinking config（enabled/disabled + budget_tokens）
+  - 三种协议间的思考配置自动映射转换
 - **技能系统**: Agent Skills 支持，可扩展 AI 能力
 - **内置工具**: 提供丰富的内置工具，无需用户编写代码
 - **自定义工具**: 支持用户创建自定义工具（JavaScript 执行）
 - **流式响应**: 实时显示 AI 思考过程和工具调用
+- **响应式界面**: 支持移动端和桌面端，小屏幕优化显示
 
 ### 内置工具
 ![AI聊天-代码分析](assets/AI聊天-代码分析.png)
@@ -30,6 +37,7 @@
 | 工具 | 功能说明 |
 |------|----------|
 | `get_current_time` | 获取当前时间和日期 |
+| `get_location` | 获取用户当前地理位置（需要用户授权） |
 | `execute_javascript` | 执行 JavaScript 代码（计算、数据处理） |
 | `web_search` | 网络搜索（通过后端代理 Google） |
 | `fetch_webpage` | 获取网页内容 |
@@ -265,7 +273,8 @@ ai-gateway/
 - `POST /api/tools/fetch-webpage` - 获取网页内容
 
 ### 网关 API (需 API Key 认证)
-- `POST /api/v1/chat/completions` - 聊天补全
+- `POST /api/v1/chat/completions` - 聊天补全（支持 OpenAI/Claude/Gemini 协议自动转换）
+- `POST /api/v1/messages` - Claude Messages API 兼容接口
 - `GET /api/v1/models` - 模型列表
 - `POST /api/v1/embeddings` - 文本嵌入
 - `POST /api/v1/images/generations` - 图像生成
