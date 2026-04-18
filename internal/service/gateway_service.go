@@ -134,6 +134,7 @@ type ChatRequest struct {
 	Think            *bool                  `json:"think,omitempty"`            // DeepSeek/Ollama format: false to disable thinking
 	Thinking         *ThinkingConfig        `json:"thinking,omitempty"`         // Anthropic format
 	GenerationConfig *GenerationConfig      `json:"generationConfig,omitempty"` // Gemini format
+	Options          map[string]interface{} `json:"options,omitempty"`          // Generic options for Ollama/OpenAI extras
 	Extra            map[string]interface{} `json:"-"`                          // Additional fields
 }
 
@@ -1490,7 +1491,7 @@ func NewGatewayService(
 // HandleChatCompletions handles chat completions requests
 // For streaming, returns (*StreamingResponse, error)
 // For non-streaming, returns (*ChatResponse, error)
-func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *models.GatewayAPIKey, req *ChatRequest, stream bool, requestHeaders http.Header, requestPath string) (interface{}, error) {
+func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *models.GatewayAPIKey, req *ChatRequest, rawBody []byte, stream bool, requestHeaders http.Header, requestPath string) (interface{}, error) {
 	startTime := time.Now()
 
 	// Extract and filter headers for forwarding and logging
@@ -1574,36 +1575,44 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	}
 
 	// 5. Build upstream request
-	// Determine provider type to use (primary type from ProviderTypes or default)
-	providerType := "openai" // default for chat/completions (prefer openai type)
-	providerSupportsGemini := route.Provider.HasType("gemini")
+	upstreamModelName := route.Model.Name
+	var finalReq interface{}
+	var targetURL string
 
+	// Determine provider type
+	providerType := "openai"
+	providerSupportsGemini := route.Provider.HasType("gemini")
 	if route.Provider.HasType("openai") {
 		providerType = "openai"
 	} else if providerSupportsGemini {
 		providerType = "gemini"
-	} else if len(route.Provider.ProviderTypes) > 0 {
-		// Fallback: use first available type (may require protocol conversion)
-		providerType = route.Provider.ProviderTypes[0].Type
-	} else if route.Provider.Type != "" {
-		providerType = route.Provider.Type
 	}
 
-	// Always use Model.Name for upstream request (not alias)
-	upstreamReq := *req
-	upstreamReq.Model = route.Model.Name
+	if providerType == "openai" {
+		// Get base URL
+		baseURL := route.Provider.GetBaseURLForType(providerType)
 
-	// For OpenAI streaming, set stream_options.include_usage to get token usage
-	if stream && providerType == "openai" && upstreamReq.StreamOptions == nil {
-		upstreamReq.StreamOptions = &StreamOptions{IncludeUsage: true}
-	}
+		// ULTRA TRANSPARENT MODE: Forward raw body with only model name replaced
+		// Use string replacement to preserve exact JSON format (直传模式)
+		finalRawBody := rawBody
+		if upstreamModelName != req.Model {
+			// Replace model name in JSON string directly
+			finalRawBody = []byte(strings.Replace(string(rawBody), `"model":"`+req.Model+`"`, `"model":"`+upstreamModelName+`"`, 1))
+			if string(finalRawBody) == string(rawBody) {
+				// Try with space after colon
+				finalRawBody = []byte(strings.Replace(string(rawBody), `"model": "`+req.Model+`"`, `"model":"`+upstreamModelName+`"`, 1))
+			}
+		}
 
-	// Prepare converter
-	converter := NewProtocolConverter()
-	var finalReq interface{} = &upstreamReq
-	var targetURL string
+		// For OpenAI, we send raw bytes directly (直传模式)
+		finalReq = finalRawBody
 
-	if providerType == "gemini" {
+		targetURL = fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(baseURL, "/"))
+	} else if providerType == "gemini" {
+		// For Gemini protocol, fallback to structured req
+		finalReq = req
+		req.Model = upstreamModelName
+
 		// Native Gemini protocol support
 		baseURL := route.Provider.GetBaseURLForType("gemini")
 		action := "generateContent"
@@ -1617,17 +1626,13 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 			geminiBaseURL = geminiBaseURL + "/v1beta"
 		}
 
-		targetURL = fmt.Sprintf("%s/models/%s:%s?key=%s", geminiBaseURL, upstreamReq.Model, action, route.Provider.APIKey)
-
-		// Convert OpenAI request to Gemini request
-		geminiReq, err := converter.ConvertRequest(&upstreamReq, ProtocolOpenAI, ProtocolGemini)
-		if err != nil {
-			log.Printf("[HandleChatCompletions] Convert to Gemini request failed: %v", err)
-			return nil, err
-		}
-		finalReq = geminiReq
+		targetURL = fmt.Sprintf("%s/models/%s:%s?key=%s", geminiBaseURL, upstreamModelName, action, route.Provider.APIKey)
 	} else {
-		// Get base URL for the specific type (with fallback to default)
+		// For other protocols, fallback to structured req
+		finalReq = req
+		req.Model = upstreamModelName
+
+		// Get base URL for the specific type
 		baseURL := route.Provider.GetBaseURLForType(providerType)
 		targetURL = fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(baseURL, "/"))
 	}
@@ -1635,7 +1640,18 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	// 6. Send upstream request with forwarded headers
 	upstreamAPIKey := route.Provider.APIKey
 	if providerType == "gemini" {
-		upstreamAPIKey = "" // API key is already in the URL for Gemini
+		upstreamAPIKey = ""
+	}
+
+	// Prepare converter for Gemini response conversion
+	converter := NewProtocolConverter()
+
+	// Logging exactly what we send
+	if bodyBytes, ok := finalReq.([]byte); ok {
+		log.Printf("[HandleChatCompletions] Final upstream raw body: %s", string(bodyBytes))
+	} else {
+		reqJSON, _ := json.Marshal(finalReq)
+		log.Printf("[HandleChatCompletions] Final upstream JSON body: %s", string(reqJSON))
 	}
 
 	resp, err := s.sendUpstreamRequest(ctx, targetURL, upstreamAPIKey, finalReq, stream, forwardHeaders)
@@ -1860,10 +1876,18 @@ func (s *GatewayService) checkBalance(ctx context.Context, userID *uint, model *
 
 // sendUpstreamRequest sends a request to the upstream provider
 func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey string, req interface{}, stream bool, forwardHeaders map[string]string) (*http.Response, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		log.Printf("[sendUpstreamRequest] Marshal request failed: %v", err)
-		return nil, err
+	var body []byte
+	var err error
+
+	// If req is already []byte, use it directly
+	if rawBody, ok := req.([]byte); ok {
+		body = rawBody
+	} else {
+		body, err = json.Marshal(req)
+		if err != nil {
+			log.Printf("[sendUpstreamRequest] Marshal request failed: %v", err)
+			return nil, err
+		}
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
@@ -1893,6 +1917,10 @@ func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey st
 		// Model name is usually in the URL for Gemini native protocol
 		// We'll leave it as unknown if we can't find it easily
 		modelName = "gemini-model"
+	case map[string]interface{}:
+		if m, ok := v["model"].(string); ok {
+			modelName = m
+		}
 	}
 
 	log.Printf("[sendUpstreamRequest] Sending request to: %s, stream: %v, model: %s", maskAPIKeyInURL(url), stream, modelName)
@@ -2314,6 +2342,9 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			"x-api-key":          route.Provider.APIKey,
 			"anthropic-version":  "2023-06-01",
 		}
+
+		log.Printf("[HandleAnthropicMessages] Final modified raw request body: %s", string(rawReqBodyModified))
+
 		resp, err := s.sendRawUpstreamRequest(ctx, targetURL, route.Provider.APIKey, rawReqBodyModified, stream, forwardHeaders, headers)
 		if err != nil {
 			log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s, Request body: %s", err, maskAPIKeyInURL(targetURL), string(rawReqBodyModified))
@@ -2521,17 +2552,42 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 
 	log.Printf("[HandleAnthropicMessages] Sending OpenAI format request to: %s, stream: %v, model: %s", maskAPIKeyInURL(targetURL), stream, upstreamModelName)
 
-	// Update model name in request
+	// Convert the converted request to a map to ensure Ollama compatibility
 	chatReq := openAIReq.(*ChatRequest)
 	chatReq.Model = upstreamModelName
+	
+	var rawReqMap map[string]interface{}
+	reqJSON, _ := json.Marshal(chatReq)
+	json.Unmarshal(reqJSON, &rawReqMap)
 
-	// For OpenAI streaming, set stream_options.include_usage to get token usage
-	if stream && chatReq.StreamOptions == nil {
-		chatReq.StreamOptions = &StreamOptions{IncludeUsage: true}
+	// Ensure Ollama compatibility for thinking (Same as HandleChatCompletions)
+	isThinkingDisabled := false
+	if chatReq.Think != nil && !*chatReq.Think {
+		isThinkingDisabled = true
+	} else if chatReq.ReasoningEffort == "none" {
+		isThinkingDisabled = true
 	}
 
-	// Send OpenAI format request
-	resp, err := s.sendUpstreamRequest(ctx, targetURL, route.Provider.APIKey, chatReq, stream, forwardHeaders)
+	if isThinkingDisabled {
+		rawReqMap["think"] = false
+		if rawReqMap["options"] == nil {
+			rawReqMap["options"] = map[string]interface{}{"think": false}
+		} else if opts, ok := rawReqMap["options"].(map[string]interface{}); ok {
+			opts["think"] = false
+		}
+	}
+
+	// For OpenAI streaming, set stream_options.include_usage to get token usage
+	if stream && rawReqMap["stream_options"] == nil {
+		rawReqMap["stream_options"] = map[string]interface{}{"include_usage": true}
+	}
+
+	// Send OpenAI format request using the map
+	if finalJSON, err := json.Marshal(rawReqMap); err == nil {
+		log.Printf("[HandleAnthropicMessages] Final converted OpenAI request body: %s", string(finalJSON))
+	}
+
+	resp, err := s.sendUpstreamRequest(ctx, targetURL, route.Provider.APIKey, rawReqMap, stream, forwardHeaders)
 	if err != nil {
 		log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s", err, maskAPIKeyInURL(targetURL))
 		latency := int(time.Since(startTime).Milliseconds())
@@ -2596,8 +2652,8 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		return nil, err
 	}
 
-	// Convert OpenAI response back to Anthropic format
-	anthropicResp, err := converter.ConvertResponse(&chatResp, ProtocolOpenAI, ProtocolAnthropic, req.Model)
+	// Convert OpenAI response to Anthropic format
+	anthropicResp, err := converter.openAIToAnthropicResponse(&chatResp, model.Name)
 	if err != nil {
 		log.Printf("[HandleAnthropicMessages] Convert response failed: %v", err)
 		return nil, err

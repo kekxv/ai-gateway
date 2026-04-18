@@ -427,7 +427,10 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 		LogDetails:       true,  // Enable detailed logging for chat
 	}
 
-	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, req.Stream, c.Request.Header, c.Request.URL.Path)
+	// Serialize chatReq for service consumption
+	rawBody, _ := json.Marshal(chatReq)
+
+	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, rawBody, req.Stream, c.Request.Header, c.Request.URL.Path)
 	if err != nil {
 		switch err {
 		case service.ErrModelNotFound:
@@ -763,7 +766,8 @@ func (h *ChatHandler) GenerateTitle(c *gin.Context) {
 	}
 
 	// Call gateway service to generate title
-	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, false, c.Request.Header, c.Request.URL.Path)
+	titleRawBody, _ := json.Marshal(chatReq)
+	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, titleRawBody, false, c.Request.Header, c.Request.URL.Path)
 	if err != nil {
 		log.Printf("[GenerateTitle] HandleChatCompletions error: %v, model: %s", err, conversation.Model)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate title: " + err.Error()})

@@ -280,11 +280,26 @@ func (c *ProtocolConverter) anthropicToOpenAIRequest(req *models.AnthropicMessag
 		if req.Thinking.Type == "disabled" {
 			think := false
 			openAIReq.Think = &think
-			openAIReq.ReasoningEffort = "none"
+			// Add to Options for Ollama compatibility
+			if openAIReq.Options == nil {
+				openAIReq.Options = make(map[string]interface{})
+			}
+			openAIReq.Options["think"] = false
 		} else if req.Thinking.Type == "enabled" {
 			think := true
 			openAIReq.Think = &think
-			// Budget tokens don't have a direct OpenAI equivalent but we can store it in Extra
+			// Add to Options for Ollama compatibility
+			if openAIReq.Options == nil {
+				openAIReq.Options = make(map[string]interface{})
+			}
+			openAIReq.Options["think"] = true
+			
+			// If budget is very high, we could potentially map it to a reasoning_effort level
+			if req.Thinking.BudgetTokens > 4000 {
+				openAIReq.ReasoningEffort = "high"
+			} else if req.Thinking.BudgetTokens > 1000 {
+				openAIReq.ReasoningEffort = "medium"
+			}
 			openAIReq.Extra["thinking_budget_tokens"] = req.Thinking.BudgetTokens
 		}
 	}
@@ -493,6 +508,8 @@ func (c *ProtocolConverter) openAIToAnthropicResponse(resp *ChatResponse, modelN
 					Text: text,
 				})
 			}
+
+            // ... (rest of the logic)
 
 			// Add tool calls
 			for _, tc := range choice.Message.ToolCalls {

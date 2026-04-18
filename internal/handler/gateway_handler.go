@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -32,16 +33,23 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		return
 	}
 
+	// Read raw body for transparent forwarding
+	rawBody, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read request body"})
+		return
+	}
+
 	var req service.ChatRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := json.Unmarshal(rawBody, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	stream := req.Stream
 
-	// Pass request headers for forwarding and logging
-	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), apiKey, &req, stream, c.Request.Header, c.Request.URL.Path)
+	// Pass rawBody to HandleChatCompletions
+	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), apiKey, &req, rawBody, stream, c.Request.Header, c.Request.URL.Path)
 	if err != nil {
 		log.Printf("[ChatCompletions] Error: %v, Model: %s, Stream: %v", err, req.Model, stream)
 		switch err {
