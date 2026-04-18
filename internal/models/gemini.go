@@ -92,7 +92,7 @@ type GeminiGenerationConfig struct {
 // GeminiThinkingConfig represents a Gemini thinkingConfig object
 type GeminiThinkingConfig struct {
 	IncludeThoughts bool   `json:"includeThoughts,omitempty"`
-	ThinkingLevel   string `json:"thinkingLevel,omitempty"` // "NONE", "LOW", "MEDIUM", "HIGH", "MINIMAL"
+	ThinkingLevel   string `json:"thinkingLevel,omitempty"` // "none", "low", "minimal", "medium", "high"
 }
 
 // GeminiSafetySetting represents a Gemini safetySetting object

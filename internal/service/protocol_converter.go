@@ -1016,9 +1016,30 @@ func (c *ProtocolConverter) anthropicToGeminiRequest(req *models.AnthropicMessag
 	}
 
 	// Mapping Anthropic Thinking to Gemini Thinking
-	if req.Thinking != nil && req.Thinking.Type == "enabled" {
-		geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
-			IncludeThoughts: true,
+	// Map thinking type and budget to thinkingLevel
+	// Note: Gemini thinkingLevel values are: "minimal", "low", "medium", "high" (default is "high")
+	if req.Thinking != nil {
+		if req.Thinking.Type == "disabled" {
+			// Disable thinking - use minimal (Gemini doesn't support "none")
+			geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
+				ThinkingLevel: "minimal",
+			}
+		} else if req.Thinking.Type == "enabled" {
+			// Enable thinking with level based on budget
+			thinkingLevel := "high" // Default for Gemini
+			if req.Thinking.BudgetTokens > 4000 {
+				thinkingLevel = "high"
+			} else if req.Thinking.BudgetTokens > 1000 {
+				thinkingLevel = "medium"
+			} else if req.Thinking.BudgetTokens <= 256 {
+				thinkingLevel = "minimal"
+			} else {
+				thinkingLevel = "low"
+			}
+			geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
+				ThinkingLevel:   thinkingLevel,
+				IncludeThoughts: true,
+			}
 		}
 	}
 
