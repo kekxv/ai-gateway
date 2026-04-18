@@ -1607,6 +1607,16 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 			}
 		}
 
+		// Map reasoning_effort: "minimal" -> "none" for OpenAI backend (disable thinking)
+		// Parse and modify if reasoning_effort is "minimal"
+		if req.ReasoningEffort == "minimal" {
+			var reqMap map[string]interface{}
+			if json.Unmarshal(finalRawBody, &reqMap) == nil {
+				reqMap["reasoning_effort"] = "none"
+				finalRawBody, _ = json.Marshal(reqMap)
+			}
+		}
+
 		// For OpenAI, we send raw bytes directly (直传模式)
 		finalReq = finalRawBody
 

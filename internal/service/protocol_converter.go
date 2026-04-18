@@ -278,8 +278,10 @@ func (c *ProtocolConverter) anthropicToOpenAIRequest(req *models.AnthropicMessag
 	// Map Anthropic Thinking to OpenAI/Ollama parameters
 	if req.Thinking != nil {
 		if req.Thinking.Type == "disabled" {
+			// Thinking disabled -> reasoning_effort = "none" for OpenAI
 			think := false
 			openAIReq.Think = &think
+			openAIReq.ReasoningEffort = "none"
 			// Add to Options for Ollama compatibility
 			if openAIReq.Options == nil {
 				openAIReq.Options = make(map[string]interface{})
@@ -293,12 +295,17 @@ func (c *ProtocolConverter) anthropicToOpenAIRequest(req *models.AnthropicMessag
 				openAIReq.Options = make(map[string]interface{})
 			}
 			openAIReq.Options["think"] = true
-			
-			// If budget is very high, we could potentially map it to a reasoning_effort level
+
+			// Map budget to reasoning_effort level
 			if req.Thinking.BudgetTokens > 4000 {
 				openAIReq.ReasoningEffort = "high"
 			} else if req.Thinking.BudgetTokens > 1000 {
 				openAIReq.ReasoningEffort = "medium"
+			} else if req.Thinking.BudgetTokens <= 256 {
+				// Very low budget -> minimal (which means disable thinking for OpenAI backend)
+				openAIReq.ReasoningEffort = "minimal"
+			} else {
+				openAIReq.ReasoningEffort = "low"
 			}
 			openAIReq.Extra["thinking_budget_tokens"] = req.Thinking.BudgetTokens
 		}
@@ -1227,9 +1234,32 @@ func (c *ProtocolConverter) openAIToGeminiRequest(req *ChatRequest) (*models.Gem
 		}
 	}
 	// Handle GenerationConfig.ThinkingConfig if present
+	// Map OpenAI thinkingLevel to Gemini thinkingLevel
+	// Note: "minimal" or "none" in OpenAI format means disable thinking in Gemini
 	if req.GenerationConfig != nil && req.GenerationConfig.ThinkingConfig != nil {
-		geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
-			ThinkingLevel: req.GenerationConfig.ThinkingConfig.ThinkingLevel,
+		level := req.GenerationConfig.ThinkingConfig.ThinkingLevel
+		switch strings.ToLower(level) {
+		case "minimal", "none":
+			// OpenAI "minimal" -> Gemini "minimal" (disable thinking)
+			geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
+				ThinkingLevel: "minimal",
+			}
+		case "low":
+			geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
+				ThinkingLevel: "low",
+			}
+		case "medium":
+			geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
+				ThinkingLevel: "medium",
+			}
+		case "high":
+			geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
+				ThinkingLevel: "high",
+			}
+		default:
+			geminiReq.GenerationConfig.ThinkingConfig = &models.GeminiThinkingConfig{
+				ThinkingLevel: level, // Pass through as-is
+			}
 		}
 	}
 
