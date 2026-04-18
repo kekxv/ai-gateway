@@ -669,16 +669,28 @@ const extractImageParts = (content: string | object | undefined): ChatContentPar
   if (typeof content === 'string') return []
   if (Array.isArray(content)) {
     return content
-      .filter((item: { type?: string; image_url?: { url?: string } }) =>
-        item.type === 'image_url' && item.image_url?.url
-      )
-      .map((item: { type?: string; image_url?: { url?: string; detail?: string } }) => ({
-        type: 'image_url' as const,
-        image_url: {
-          url: item.image_url!.url!,
-          detail: item.image_url?.detail || undefined
+      .flatMap((item: { type?: string; image_url?: { url?: string; detail?: string }; source?: { type?: string; media_type?: string; data?: string } }) => {
+        // OpenAI-style: { type: "image_url", image_url: { url, detail } }
+        if (item.type === 'image_url' && item.image_url?.url) {
+          return {
+            type: 'image_url' as const,
+            image_url: {
+              url: item.image_url.url,
+              detail: item.image_url?.detail || undefined
+            }
+          }
         }
-      }))
+        // Anthropic-style: { type: "image", source: { type: "base64", media_type, data } }
+        if (item.type === 'image' && item.source?.type === 'base64') {
+          const mediaType = item.source.media_type || 'image/jpeg'
+          const dataUrl = `data:${mediaType};base64,${item.source.data}`
+          return {
+            type: 'image_url' as const,
+            image_url: { url: dataUrl }
+          }
+        }
+        return []
+      })
   }
   return []
 }
@@ -905,7 +917,7 @@ const chatMessages = computed(() => {
             const imageParts: ChatContentPart[] = []
             let hasToolResultOnly = true  // Check if message is only tool_result
 
-            msg.content.forEach((block: { type?: string; text?: string; thinking?: string; name?: string; input?: unknown; id?: string; image_url?: { url?: string }; tool_use_id?: string; content?: unknown; is_error?: boolean }) => {
+            msg.content.forEach((block: { type?: string; text?: string; thinking?: string; name?: string; input?: unknown; id?: string; image_url?: { url?: string }; source?: { type?: string; media_type?: string; data?: string }; tool_use_id?: string; content?: unknown; is_error?: boolean }) => {
               if (block.type === 'text' && block.text) {
                 textContent += block.text
                 hasToolResultOnly = false
@@ -937,6 +949,15 @@ const chatMessages = computed(() => {
                 imageParts.push({
                   type: 'image_url',
                   image_url: { url: block.image_url.url }
+                })
+                hasToolResultOnly = false
+              } else if (block.type === 'image' && block.source?.type === 'base64') {
+                // Anthropic-style image: { type: "image", source: { type: "base64", media_type, data } }
+                const mediaType = block.source.media_type || 'image/jpeg'
+                const dataUrl = `data:${mediaType};base64,${block.source.data}`
+                imageParts.push({
+                  type: 'image_url',
+                  image_url: { url: dataUrl }
                 })
                 hasToolResultOnly = false
               }
