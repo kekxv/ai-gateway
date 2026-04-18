@@ -479,7 +479,7 @@
                 </template>
               </el-dropdown>
 
-              <el-dropdown trigger="click" @command="setThinkingMode" v-if="currentConversation && !isMobile">
+              <el-dropdown trigger="click" @command="setThinkingMode" v-if="currentConversation">
                 <button class="action-btn" :class="{ active: thinkingMode !== 'auto' }">
                   <el-icon><Cpu /></el-icon>
                   <span>思维链</span>
@@ -867,9 +867,9 @@ const executeToolCallsAndContinue = async (
 }
 
 const settingsForm = reactive<ConversationSettings & { system_prompt: string }>({
-  temperature: 0.7,
+  temperature: 1,
   max_tokens: 4096,
-  top_p: 0.9,
+  top_p: 0.95,
   system_prompt: ''
 })
 
@@ -2320,7 +2320,7 @@ onUnmounted(() => {
 
 @media (max-width: 767px) {
   .chat-page {
-    height: calc(100vh - 56px - 56px - 56px);
+    height: calc(100vh - 90px);
   }
 }
 
@@ -2638,6 +2638,7 @@ onUnmounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
+  min-height: 0;
 }
 
 .welcome-screen {
