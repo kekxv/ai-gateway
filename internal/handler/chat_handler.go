@@ -781,22 +781,16 @@ func (h *ChatHandler) GenerateTitle(c *gin.Context) {
 		return
 	}
 
-	// Debug: print parsed response structure
-	log.Printf("[GenerateTitle] Parsed response: ID=%s, Model=%s, choices=%d", chatResp.ID, chatResp.Model, len(chatResp.Choices))
-
 	// Extract title from response
 	title := ""
 	if len(chatResp.Choices) > 0 {
 		choice := chatResp.Choices[0]
-		log.Printf("[GenerateTitle] Choice[0]: Index=%d, FinishReason=%s, Message=%v, Delta=%v", choice.Index, choice.FinishReason, choice.Message, choice.Delta)
 		if choice.Message != nil {
 			// Use GetTextWithReasoning to support models that put content in reasoning field
 			title = choice.Message.GetTextWithReasoning()
-			log.Printf("[GenerateTitle] Message content: StringContent='%s', Reasoning='%s', Parts=%v", choice.Message.Content.StringContent, choice.Message.Reasoning, choice.Message.Content.Parts)
 		}
 		if choice.Delta != nil && title == "" {
 			title = choice.Delta.GetTextWithReasoning()
-			log.Printf("[GenerateTitle] Delta content: StringContent='%s'", choice.Delta.Content.StringContent)
 		}
 	}
 

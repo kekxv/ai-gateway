@@ -1661,14 +1661,6 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		upstreamAPIKey = ""
 	}
 
-	// Logging exactly what we send
-	if bodyBytes, ok := finalReq.([]byte); ok {
-		log.Printf("[HandleChatCompletions] Final upstream raw body: %s", string(bodyBytes))
-	} else {
-		reqJSON, _ := json.Marshal(finalReq)
-		log.Printf("[HandleChatCompletions] Final upstream JSON body: %s", string(reqJSON))
-	}
-
 	resp, err := s.sendUpstreamRequest(ctx, targetURL, upstreamAPIKey, finalReq, stream, forwardHeaders)
 	if err != nil {
 		log.Printf("[HandleChatCompletions] Upstream request failed: %v, URL: %s, Model: %s", err, maskAPIKeyInURL(targetURL), model.Name)
@@ -1751,11 +1743,6 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		respHeaders := extractResponseHeaders(resp.Header)
 		s.updateLogAndCalculateCost(ctx, apiKey, model, route.Provider.Name, req, chatResp, latency, logEntry.ID, respHeaders)
 		return chatResp, nil
-	}
-
-	// Debug: print raw response for title generation requests
-	if req.MaxTokens <= 100 {
-		log.Printf("[HandleChatCompletions] Raw response body for title: %s", string(body))
 	}
 
 	var chatResp ChatResponse
@@ -2320,8 +2307,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			targetURL = fmt.Sprintf("%s?%s", targetURL, rawQuery)
 		}
 
-		log.Printf("[HandleAnthropicMessages] Provider '%s' supports anthropic, direct forwarding to: %s", route.Provider.Name, maskAPIKeyInURL(targetURL))
-
 		// Update model name and max_tokens in raw request body for direct forwarding
 		var rawReqBodyModified []byte
 		// Always parse if model name changes OR if max_tokens needs to be ensured
@@ -2357,8 +2342,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			"x-api-key":          route.Provider.APIKey,
 			"anthropic-version":  "2023-06-01",
 		}
-
-		log.Printf("[HandleAnthropicMessages] Final modified raw request body: %s", string(rawReqBodyModified))
 
 		resp, err := s.sendRawUpstreamRequest(ctx, targetURL, route.Provider.APIKey, rawReqBodyModified, stream, forwardHeaders, headers)
 		if err != nil {
@@ -2407,7 +2390,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 				)
 			}
 
-			log.Printf("[HandleAnthropicMessages] Response type: anthropic (direct stream)")
 			return streamResp, nil
 		}
 
@@ -2429,8 +2411,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			updateLog(latency, 0, 0, 0, 0, 500, fmt.Sprintf("Parse error: %v", err), nil)
 			return nil, err
 		}
-
-		log.Printf("[HandleAnthropicMessages] Response type: anthropic (direct)")
 
 		// Update log and calculate cost
 		latency := int(time.Since(startTime).Milliseconds())
@@ -2456,8 +2436,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		}
 
 		targetURL := fmt.Sprintf("%s/models/%s:%s?key=%s", geminiBaseURL, upstreamModelName, action, route.Provider.APIKey)
-
-		log.Printf("[HandleAnthropicMessages] Provider '%s' supports gemini, converting and forwarding to: %s/models/%s:%s", route.Provider.Name, geminiBaseURL, upstreamModelName, action)
 
 		// Convert Anthropic request to Gemini request
 		geminiReq, err := converter.ConvertRequest(req, ProtocolAnthropic, ProtocolGemini)
@@ -2508,11 +2486,10 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 					apiKey,
 					model,
 					200*time.Millisecond,
-					true, // We'll treat it as Anthropic-compatible SSE for the logger after conversion
+					true,
 				)
 			}
 
-			log.Printf("[HandleAnthropicMessages] Response type: anthropic (converted from gemini stream)")
 			return streamResp, nil
 		}
 
@@ -2541,8 +2518,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			return nil, err
 		}
 
-		log.Printf("[HandleAnthropicMessages] Response type: anthropic (converted from gemini)")
-
 		// Update log and calculate cost
 		latency := int(time.Since(startTime).Milliseconds())
 		respHeaders := extractResponseHeaders(resp.Header)
@@ -2553,8 +2528,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	}
 
 	// Convert to OpenAI format - provider doesn't support anthropic or gemini
-	log.Printf("[HandleAnthropicMessages] Provider '%s' doesn't support anthropic or gemini, converting to OpenAI format", route.Provider.Name)
-
 	openAIReq, err := converter.ConvertRequest(req, ProtocolAnthropic, ProtocolOpenAI)
 	if err != nil {
 		log.Printf("[HandleAnthropicMessages] Convert request failed: %v", err)
@@ -2564,8 +2537,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	// Get OpenAI base URL
 	baseURL := route.Provider.GetBaseURLForType("openai")
 	targetURL := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(baseURL, "/"))
-
-	log.Printf("[HandleAnthropicMessages] Sending OpenAI format request to: %s, stream: %v, model: %s", maskAPIKeyInURL(targetURL), stream, upstreamModelName)
 
 	// Convert the converted request to a map to ensure Ollama compatibility
 	chatReq := openAIReq.(*ChatRequest)
@@ -2599,11 +2570,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	// For OpenAI streaming, set stream_options.include_usage to get token usage
 	if stream && rawReqMap["stream_options"] == nil {
 		rawReqMap["stream_options"] = map[string]interface{}{"include_usage": true}
-	}
-
-	// Send OpenAI format request using the map
-	if finalJSON, err := json.Marshal(rawReqMap); err == nil {
-		log.Printf("[HandleAnthropicMessages] Final converted OpenAI request body: %s", string(finalJSON))
 	}
 
 	resp, err := s.sendUpstreamRequest(ctx, targetURL, route.Provider.APIKey, rawReqMap, stream, forwardHeaders)
@@ -2649,7 +2615,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			)
 		}
 
-		log.Printf("[HandleAnthropicMessages] Response type: anthropic (converted from openai stream)")
 		return streamResp, nil
 	}
 
@@ -2677,8 +2642,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		log.Printf("[HandleAnthropicMessages] Convert response failed: %v", err)
 		return nil, err
 	}
-
-	log.Printf("[HandleAnthropicMessages] Response type: anthropic (converted from openai)")
 
 	// Update log and calculate cost
 	latency := int(time.Since(startTime).Milliseconds())
