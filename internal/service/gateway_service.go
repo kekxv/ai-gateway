@@ -1622,9 +1622,6 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 
 		// Ensure v1beta or v1 is in the URL
 		geminiBaseURL := strings.TrimSuffix(baseURL, "/")
-		if !strings.Contains(geminiBaseURL, "/v1") {
-			geminiBaseURL = geminiBaseURL + "/v1beta"
-		}
 
 		targetURL = fmt.Sprintf("%s/models/%s:%s", geminiBaseURL, upstreamModelName, action)
 		forwardHeaders["x-goog-api-key"] = route.Provider.APIKey
@@ -2424,9 +2421,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 
 		// Ensure v1beta or v1 is in the URL
 		geminiBaseURL := strings.TrimSuffix(baseURL, "/")
-		if !strings.Contains(geminiBaseURL, "/v1") {
-			geminiBaseURL = geminiBaseURL + "/v1beta"
-		}
 
 		targetURL := fmt.Sprintf("%s/models/%s:%s", geminiBaseURL, upstreamModelName, action)
 		forwardHeaders["x-goog-api-key"] = route.Provider.APIKey

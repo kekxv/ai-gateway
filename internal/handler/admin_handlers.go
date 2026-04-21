@@ -398,9 +398,6 @@ func (h *ProviderHandler) fetchGeminiModels(baseURL, apiKey string) ([]map[strin
 
 	// Gemini uses different API endpoint
 	geminiURL := strings.TrimSuffix(baseURL, "/")
-	if !strings.Contains(geminiURL, "/v1beta") {
-		geminiURL = geminiURL + "/v1beta"
-	}
 	geminiURL = geminiURL + "/models"
 
 	req, err := http.NewRequest("GET", geminiURL, nil)

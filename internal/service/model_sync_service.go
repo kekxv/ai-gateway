@@ -287,9 +287,6 @@ func (s *ModelSyncService) fetchOpenAIModels(baseURL, apiKey string) ([]map[stri
 func (s *ModelSyncService) fetchGeminiModels(baseURL, apiKey string) ([]map[string]interface{}, error) {
 	// Gemini uses different API endpoint
 	geminiURL := strings.TrimSuffix(baseURL, "/")
-	if !strings.Contains(geminiURL, "/v1beta") {
-		geminiURL = geminiURL + "/v1beta"
-	}
 	geminiURL = geminiURL + "/models"
 
 	req, err := http.NewRequest("GET", geminiURL, nil)
