@@ -1620,8 +1620,11 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 			action = "streamGenerateContent"
 		}
 
-		// Ensure v1beta or v1 is in the URL
+		// Ensure v1beta or v1 is in the URL (required for Cloudflare AI Gateway)
 		geminiBaseURL := strings.TrimSuffix(baseURL, "/")
+		if !strings.HasSuffix(geminiBaseURL, "/v1") && !strings.HasSuffix(geminiBaseURL, "/v1beta") {
+			geminiBaseURL += "/v1beta"
+		}
 
 		targetURL = fmt.Sprintf("%s/models/%s:%s", geminiBaseURL, upstreamModelName, action)
 		forwardHeaders["x-goog-api-key"] = route.Provider.APIKey
@@ -2419,8 +2422,11 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			action = "streamGenerateContent"
 		}
 
-		// Ensure v1beta or v1 is in the URL
+		// Ensure v1beta or v1 is in the URL (required for Cloudflare AI Gateway)
 		geminiBaseURL := strings.TrimSuffix(baseURL, "/")
+		if !strings.HasSuffix(geminiBaseURL, "/v1") && !strings.HasSuffix(geminiBaseURL, "/v1beta") {
+			geminiBaseURL += "/v1beta"
+		}
 
 		targetURL := fmt.Sprintf("%s/models/%s:%s", geminiBaseURL, upstreamModelName, action)
 		forwardHeaders["x-goog-api-key"] = route.Provider.APIKey

@@ -1,9 +1,5 @@
 import type { ToolCall } from '@/types/tool'
 
-// Think tags
-const THINK_START_TAG = '<think>'
-const THINK_END_TAG = '</think>'
-
 // Streaming parsed content
 export interface StreamingParsedContent {
   text: string
@@ -24,22 +20,38 @@ export function parseMessageContent(content: string): {
     return { textContent: '', thinkContent: '', hasThink: false }
   }
 
+  const thinkStartTags = ['<think>', '<|begin_of_thought|>', '<reasoning>', '<thought>']
+  const thinkEndTags = ['</think>', '<|end_of_thought|>', '</reasoning>', '</thought>']
+
   // 查找第一个 think start 标签的位置
-  const startIndex = content.indexOf(THINK_START_TAG)
-  if (startIndex === -1) {
+  let earliestStart = -1
+  let startTagLen = 0
+  let tagIndex = -1
+
+  for (let i = 0; i < thinkStartTags.length; i++) {
+    const idx = content.indexOf(thinkStartTags[i])
+    if (idx !== -1 && (earliestStart === -1 || idx < earliestStart)) {
+      earliestStart = idx
+      startTagLen = thinkStartTags[i].length
+      tagIndex = i
+    }
+  }
+
+  if (earliestStart === -1) {
     return { textContent: content, thinkContent: '', hasThink: false }
   }
 
   // 检查 think 标签是否在开头（前面只有空白字符）
-  const beforeThink = content.slice(0, startIndex)
+  const beforeThink = content.slice(0, earliestStart)
   if (beforeThink.trim() !== '') {
     // think 标签不在开头，把整个内容当作普通文本
     return { textContent: content, thinkContent: '', hasThink: false }
   }
 
   // think 标签在开头，提取 think 内容
-  const endSearchIndex = startIndex + THINK_START_TAG.length
-  const endIndex = content.indexOf(THINK_END_TAG, endSearchIndex)
+  const endSearchIndex = earliestStart + startTagLen
+  const endTag = thinkEndTags[tagIndex]
+  const endIndex = content.indexOf(endTag, endSearchIndex)
 
   let thinkContent = ''
   let textContent = ''
@@ -48,7 +60,7 @@ export function parseMessageContent(content: string): {
     // 找到了结束标签
     thinkContent = content.slice(endSearchIndex, endIndex).trim()
     // 结束标签后面的内容作为普通文本（不再解析其他 think 块）
-    textContent = content.slice(endIndex + THINK_END_TAG.length).trim()
+    textContent = content.slice(endIndex + endTag.length).trim()
   } else {
     // 没找到结束标签，将剩余所有内容视为 think 内容
     thinkContent = content.slice(endSearchIndex).trim()
@@ -71,8 +83,8 @@ export function parseStreamingThinkContent(content: string): StreamingParsedCont
     return { text: '', think: '', inThinkBlock: false }
   }
 
-  const thinkStartTags = ['<think>', '<|begin_of_thought|>', '<reasoning>']
-  const thinkEndTags = ['</think>', '<|end_of_thought|>', '</reasoning>']
+  const thinkStartTags = ['<think>', '<|begin_of_thought|>', '<reasoning>', '<thought>']
+  const thinkEndTags = ['</think>', '<|end_of_thought|>', '</reasoning>', '</thought>']
 
   // 查找最早的 think start 标签
   let earliestStart = -1

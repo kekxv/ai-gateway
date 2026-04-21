@@ -44,3 +44,4 @@ web/.DS_Store
 *.tsbuildinfo
 dist/
 /server
+/.idea

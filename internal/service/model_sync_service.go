@@ -224,13 +224,19 @@ func (s *ModelSyncService) Run(ctx context.Context) {
 
 // fetchModels fetches models from a provider based on its type
 func (s *ModelSyncService) fetchModels(provider *models.Provider) ([]map[string]interface{}, error) {
-	// Use type-specific base URL for model fetching (prefer openai type)
-	baseURL := provider.GetBaseURLForType("openai")
-	switch strings.ToLower(provider.Type) {
+	// Use type-specific base URL for model fetching
+	typeName := strings.ToLower(provider.Type)
+	baseURL := provider.GetBaseURLForType(typeName)
+
+	switch typeName {
 	case "gemini":
 		return s.fetchGeminiModels(baseURL, provider.APIKey)
 	default:
 		// OpenAI-compatible API (including OpenAI, Anthropic, custom)
+		// For backward compatibility or undefined type, use openai base URL
+		if baseURL == "" {
+			baseURL = provider.GetBaseURLForType("openai")
+		}
 		return s.fetchOpenAIModels(baseURL, provider.APIKey)
 	}
 }
@@ -286,8 +292,14 @@ func (s *ModelSyncService) fetchOpenAIModels(baseURL, apiKey string) ([]map[stri
 // fetchGeminiModels fetches models from Gemini API
 func (s *ModelSyncService) fetchGeminiModels(baseURL, apiKey string) ([]map[string]interface{}, error) {
 	// Gemini uses different API endpoint
-	geminiURL := strings.TrimSuffix(baseURL, "/")
-	geminiURL = geminiURL + "/models"
+	geminiBaseURL := strings.TrimSuffix(baseURL, "/")
+
+	// Ensure v1beta or v1 is in the URL (required for Cloudflare AI Gateway)
+	if !strings.HasSuffix(geminiBaseURL, "/v1") && !strings.HasSuffix(geminiBaseURL, "/v1beta") {
+		geminiBaseURL += "/v1beta"
+	}
+
+	geminiURL := geminiBaseURL + "/models"
 
 	req, err := http.NewRequest("GET", geminiURL, nil)
 	if err != nil {

@@ -838,7 +838,7 @@ func trimQuotes(s string) string {
 	return s
 }
 
-// removeThinkingTags removes <think>, <thinking>, <reasoning> tags and their content
+// removeThinkingTags removes <think>, <thinking>, <reasoning>, <thought> tags and their content
 func removeThinkingTags(s string) string {
 	// Remove <think>...</think>
 	for {
@@ -883,9 +883,23 @@ func removeThinkingTags(s string) string {
 		s = s[:start] + s[end+12:]
 	}
 
+	// Remove <thought>...</thought>
+	for {
+		start := strings.Index(s, "<thought>")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(s, "</thought>")
+		if end == -1 || end <= start {
+			s = s[:start]
+			break
+		}
+		s = s[:start] + s[end+10:]
+	}
+
 	// Remove incomplete tags at start/end
 	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "<think>") || strings.HasPrefix(s, "<thinking>") || strings.HasPrefix(s, "<reasoning>") {
+	if strings.HasPrefix(s, "<think>") || strings.HasPrefix(s, "<thinking>") || strings.HasPrefix(s, "<reasoning>") || strings.HasPrefix(s, "<thought>") {
 		// Find the end of the tag
 		for i, c := range s {
 			if c == '>' {
