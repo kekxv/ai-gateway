@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"regexp"
 	"fmt"
 	"io"
 	"log"
@@ -24,20 +23,12 @@ import (
 )
 
 var (
-	ErrModelNotFound      = errors.New("model not found")
-	ErrNoRouteAvailable   = errors.New("no available route for this model")
-	ErrPermissionDenied   = errors.New("permission denied for this model")
+	ErrModelNotFound       = errors.New("model not found")
+	ErrNoRouteAvailable    = errors.New("no available route for this model")
+	ErrPermissionDenied    = errors.New("permission denied for this model")
 	ErrInsufficientBalance = errors.New("insufficient balance")
-	ErrUpstreamFailed     = errors.New("upstream request failed")
+	ErrUpstreamFailed      = errors.New("upstream request failed")
 )
-
-// apiKeyMaskRegex matches API keys in URLs (key=, api_key=, token=, etc.)
-var apiKeyMaskRegex = regexp.MustCompile(`(?i)(key|api_key|apikey|token|secret|access_token)=[^&\s]+`)
-
-// maskAPIKeyInURL hides API keys in URLs for safe logging
-func maskAPIKeyInURL(urlStr string) string {
-	return apiKeyMaskRegex.ReplaceAllString(urlStr, "$1=***")
-}
 
 // Headers that should NOT be forwarded to upstream
 var excludedHeaders = []string{
@@ -57,7 +48,7 @@ var excludedHeaders = []string{
 	"proxy-authorization",
 	"proxy-authenticate",
 	"proxy-connection",
-	"x-api-key",        // Anthropic API key - should use Provider's key
+	"x-api-key",         // Anthropic API key - should use Provider's key
 	"anthropic-version", // Anthropic version header - we set our own
 }
 
@@ -140,8 +131,8 @@ type ChatRequest struct {
 
 // ThinkingConfig for Anthropic-style thinking control
 type ThinkingConfig struct {
-	Type          string `json:"type"`                    // "enabled" or "disabled"
-	BudgetTokens  int    `json:"budget_tokens,omitempty"` // Token budget for thinking
+	Type         string `json:"type"`                    // "enabled" or "disabled"
+	BudgetTokens int    `json:"budget_tokens,omitempty"` // Token budget for thinking
 }
 
 // GenerationConfig for Gemini-style generation config (including thinkingLevel)
@@ -208,10 +199,10 @@ type ChatMessageContent struct {
 
 // ChatContentPart represents a part of multimodal content
 type ChatContentPart struct {
-	Type     string            `json:"type"` // "text", "image_url", "video_url"
-	Text     string            `json:"text,omitempty"`
-	ImageURL *ChatMediaURL     `json:"image_url,omitempty"`
-	VideoURL *ChatMediaURL     `json:"video_url,omitempty"` // Extended for video support
+	Type     string        `json:"type"` // "text", "image_url", "video_url"
+	Text     string        `json:"text,omitempty"`
+	ImageURL *ChatMediaURL `json:"image_url,omitempty"`
+	VideoURL *ChatMediaURL `json:"video_url,omitempty"` // Extended for video support
 }
 
 // ChatMediaURL represents a media URL or base64 data
@@ -294,9 +285,9 @@ type ChatMessage struct {
 
 // ToolCall represents a tool/function call
 type ToolCall struct {
-	Index    int        `json:"index,omitempty"`
-	ID       string     `json:"id,omitempty"`
-	Type     string     `json:"type"`
+	Index    int          `json:"index,omitempty"`
+	ID       string       `json:"id,omitempty"`
+	Type     string       `json:"type"`
 	Function FunctionCall `json:"function"`
 }
 
@@ -335,8 +326,8 @@ type StreamChunk struct {
 	Created int64  `json:"created"`
 	Model   string `json:"model"`
 	Choices []struct {
-		Index        int `json:"index"`
-		Delta        struct {
+		Index int `json:"index"`
+		Delta struct {
 			Role             string     `json:"role,omitempty"`
 			Content          string     `json:"content,omitempty"`
 			Reasoning        string     `json:"reasoning,omitempty"`         // For Ollama/Gemma thinking
@@ -361,8 +352,8 @@ type RealtimeLogUpdater struct {
 	doneChan chan struct{} // 流结束信号
 
 	// 防抖
-	debounceDur  time.Duration // 200ms 防抖延迟
-	maxInterval  time.Duration // 1s 最大写入间隔
+	debounceDur time.Duration // 200ms 防抖延迟
+	maxInterval time.Duration // 1s 最大写入间隔
 
 	// 累计内容（并发安全）
 	contentMu    sync.Mutex
@@ -375,7 +366,7 @@ type RealtimeLogUpdater struct {
 	finishReason string          // 结束原因
 
 	// 实时日志更新器
-	isAnthropicStream   bool   // true if upstream returns Anthropic format
+	isAnthropicStream  bool   // true if upstream returns Anthropic format
 	lastAnthropicEvent string // last event type received in Anthropic stream
 	currentToolIndex   int    // index of tool currently being streamed
 
@@ -575,7 +566,7 @@ func (u *RealtimeLogUpdater) parseAndUpdateContent(data []byte) {
 				}
 			case "content_block_delta":
 				var event struct {
-					Index int                    `json:"index"`
+					Index int                   `json:"index"`
 					Delta models.AnthropicDelta `json:"delta"`
 				}
 				if err := json.Unmarshal([]byte(dataStr), &event); err == nil {
@@ -795,16 +786,16 @@ type StreamingResponse struct {
 	ctx            context.Context // Context for cancellation detection
 
 	// For logging after streaming is complete
-	logID          uint            // ID of the initial log entry
-	apiKey         *models.GatewayAPIKey
-	model          *models.Model
-	providerName   string
-	request        *ChatRequest
-	anthropicReq   *models.AnthropicMessagesRequest // For Gemini streaming fallback
-	startTime      time.Time
-	logRepo        *repository.LogRepository
-	logDetailRepo  *repository.LogDetailRepository
-	billingService *BillingService
+	logID           uint // ID of the initial log entry
+	apiKey          *models.GatewayAPIKey
+	model           *models.Model
+	providerName    string
+	request         *ChatRequest
+	anthropicReq    *models.AnthropicMessagesRequest // For Gemini streaming fallback
+	startTime       time.Time
+	logRepo         *repository.LogRepository
+	logDetailRepo   *repository.LogDetailRepository
+	billingService  *BillingService
 	responseHeaders map[string]string // Response headers for logging
 
 	// 实时日志更新器
@@ -1370,12 +1361,12 @@ func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 
 	// Update log entry
 	updates := map[string]interface{}{
-		"latency":           int(latency),
+		"latency":          int(latency),
 		"promptTokens":     promptTokens,
 		"completionTokens": completionTokens,
 		"totalTokens":      promptTokens + completionTokens,
-		"cost":              cost,
-		"status":            status,
+		"cost":             cost,
+		"status":           status,
 	}
 	if errMsg != "" {
 		updates["errorMessage"] = errMsg
@@ -1557,12 +1548,12 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 			return
 		}
 		updates := map[string]interface{}{
-			"latency":           latency,
+			"latency":          latency,
 			"promptTokens":     promptTokens,
 			"completionTokens": completionTokens,
 			"totalTokens":      totalTokens,
-			"cost":              cost,
-			"status":            status,
+			"cost":             cost,
+			"status":           status,
 		}
 		if errMsg != "" {
 			updates["errorMessage"] = errMsg
@@ -1635,7 +1626,8 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 			geminiBaseURL = geminiBaseURL + "/v1beta"
 		}
 
-		targetURL = fmt.Sprintf("%s/models/%s:%s?key=%s", geminiBaseURL, upstreamModelName, action, route.Provider.APIKey)
+		targetURL = fmt.Sprintf("%s/models/%s:%s", geminiBaseURL, upstreamModelName, action)
+		forwardHeaders["x-goog-api-key"] = route.Provider.APIKey
 
 		// Convert OpenAI request to Gemini request
 		req.Model = upstreamModelName
@@ -1658,12 +1650,13 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	// 6. Send upstream request with forwarded headers
 	upstreamAPIKey := route.Provider.APIKey
 	if providerType == "gemini" {
+		// Gemini uses x-goog-api-key header instead of Authorization
 		upstreamAPIKey = ""
 	}
 
 	resp, err := s.sendUpstreamRequest(ctx, targetURL, upstreamAPIKey, finalReq, stream, forwardHeaders)
 	if err != nil {
-		log.Printf("[HandleChatCompletions] Upstream request failed: %v, URL: %s, Model: %s", err, maskAPIKeyInURL(targetURL), model.Name)
+		log.Printf("[HandleChatCompletions] Upstream request failed: %v, URL: %s, Model: %s", err, targetURL, model.Name)
 		latency := int(time.Since(startTime).Milliseconds())
 		updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
 		return nil, ErrUpstreamFailed
@@ -1672,7 +1665,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	// Handle error responses
 	if resp.StatusCode >= 400 {
 		body, _ := s.readDecompressedBody(resp)
-		log.Printf("[HandleChatCompletions] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), maskAPIKeyInURL(targetURL))
+		log.Printf("[HandleChatCompletions] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
 		latency := int(time.Since(startTime).Milliseconds())
 		s.handleUpstreamError(ctx, resp, route)
 		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
@@ -1737,7 +1730,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 			log.Printf("[HandleChatCompletions] Convert Gemini response failed: %v", err)
 			return nil, err
 		}
-		
+
 		chatResp := openAIResp.(*ChatResponse)
 		latency := int(time.Since(startTime).Milliseconds())
 		respHeaders := extractResponseHeaders(resp.Header)
@@ -1894,7 +1887,7 @@ func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey st
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
-		log.Printf("[sendUpstreamRequest] Create request failed: %v, URL: %s", err, maskAPIKeyInURL(url))
+		log.Printf("[sendUpstreamRequest] Create request failed: %v, URL: %s", err, url)
 		return nil, err
 	}
 
@@ -1925,7 +1918,7 @@ func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey st
 		}
 	}
 
-	log.Printf("[sendUpstreamRequest] Sending request to: %s, stream: %v, model: %s", maskAPIKeyInURL(url), stream, modelName)
+	log.Printf("[sendUpstreamRequest] Sending request to: %s, stream: %v, model: %s", url, stream, modelName)
 	return s.httpClient.Do(httpReq)
 }
 
@@ -2090,14 +2083,14 @@ func (s *GatewayService) updateLogAndCalculateCost(ctx context.Context, apiKey *
 	// Update log entry
 	if logID > 0 {
 		updates := map[string]interface{}{
-			"latency":              latency,
-			"promptTokens":        promptTokens,
-			"completionTokens":    completionTokens,
-			"totalTokens":         totalTokens,
-			"cost":                 cost,
+			"latency":            latency,
+			"promptTokens":       promptTokens,
+			"completionTokens":   completionTokens,
+			"totalTokens":        totalTokens,
+			"cost":               cost,
 			"ownerChannelId":     ownerChannelID,
 			"ownerChannelUserId": ownerChannelUserID,
-			"status":               200,
+			"status":             200,
 		}
 		if len(respHeaders) > 0 {
 			respHeadersJSON, _ := json.Marshal(respHeaders)
@@ -2274,12 +2267,12 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			return
 		}
 		updates := map[string]interface{}{
-			"latency":           latency,
+			"latency":          latency,
 			"promptTokens":     promptTokens,
 			"completionTokens": completionTokens,
 			"totalTokens":      totalTokens,
-			"cost":              cost,
-			"status":            status,
+			"cost":             cost,
+			"status":           status,
 		}
 		if errMsg != "" {
 			updates["errorMessage"] = errMsg
@@ -2317,7 +2310,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 				reqMap["model"] = upstreamModelName
 				modified = true
 			}
-			
+
 			// Ensure max_tokens is present (Anthropic requirement)
 			if val, ok := reqMap["max_tokens"]; !ok || val == nil {
 				reqMap["max_tokens"] = req.MaxTokens
@@ -2339,13 +2332,13 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 
 		// Send Anthropic format request using raw body (preserves exact format)
 		headers := map[string]string{
-			"x-api-key":          route.Provider.APIKey,
-			"anthropic-version":  "2023-06-01",
+			"x-api-key":         route.Provider.APIKey,
+			"anthropic-version": "2023-06-01",
 		}
 
 		resp, err := s.sendRawUpstreamRequest(ctx, targetURL, route.Provider.APIKey, rawReqBodyModified, stream, forwardHeaders, headers)
 		if err != nil {
-			log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s, Request body: %s", err, maskAPIKeyInURL(targetURL), string(rawReqBodyModified))
+			log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s, Request body: %s", err, targetURL, string(rawReqBodyModified))
 			latency := int(time.Since(startTime).Milliseconds())
 			updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
 			return nil, ErrUpstreamFailed
@@ -2353,7 +2346,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 
 		if resp.StatusCode >= 400 {
 			body, _ := s.readDecompressedBody(resp)
-			log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s, Request body: %s", resp.StatusCode, string(body), maskAPIKeyInURL(targetURL), string(rawReqBodyModified))
+			log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s, Request body: %s", resp.StatusCode, string(body), targetURL, string(rawReqBodyModified))
 			latency := int(time.Since(startTime).Milliseconds())
 			s.handleUpstreamError(ctx, resp, route)
 			updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
@@ -2403,7 +2396,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			return nil, err
 		}
 
-
 		var anthropicResp models.AnthropicMessagesResponse
 		if err := json.Unmarshal(body, &anthropicResp); err != nil {
 			log.Printf("[HandleAnthropicMessages] Parse response failed: %v, body: %s", err, string(body))
@@ -2423,7 +2415,8 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	if providerSupportsGemini {
 		// Native Gemini protocol support
 		baseURL := route.Provider.GetBaseURLForType("gemini")
-		// Gemini URL format: https://generativelanguage.googleapis.com/v1beta/models/{model}:{generateContent|streamGenerateContent}?key={apiKey}
+		// Gemini URL format: https://generativelanguage.googleapis.com/v1beta/models/{model}:{generateContent|streamGenerateContent}
+		// API key is passed via x-goog-api-key header
 		action := "generateContent"
 		if stream {
 			action = "streamGenerateContent"
@@ -2435,7 +2428,8 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			geminiBaseURL = geminiBaseURL + "/v1beta"
 		}
 
-		targetURL := fmt.Sprintf("%s/models/%s:%s?key=%s", geminiBaseURL, upstreamModelName, action, route.Provider.APIKey)
+		targetURL := fmt.Sprintf("%s/models/%s:%s", geminiBaseURL, upstreamModelName, action)
+		forwardHeaders["x-goog-api-key"] = route.Provider.APIKey
 
 		// Convert Anthropic request to Gemini request
 		geminiReq, err := converter.ConvertRequest(req, ProtocolAnthropic, ProtocolGemini)
@@ -2447,7 +2441,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		// Send Gemini format request
 		resp, err := s.sendUpstreamRequest(ctx, targetURL, "", geminiReq, stream, forwardHeaders)
 		if err != nil {
-			log.Printf("[HandleAnthropicMessages] Upstream Gemini request failed: %v, URL: %s", err, maskAPIKeyInURL(targetURL))
+			log.Printf("[HandleAnthropicMessages] Upstream Gemini request failed: %v, URL: %s", err, targetURL)
 			latency := int(time.Since(startTime).Milliseconds())
 			updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
 			return nil, ErrUpstreamFailed
@@ -2455,7 +2449,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 
 		if resp.StatusCode >= 400 {
 			body, _ := s.readDecompressedBody(resp)
-			log.Printf("[HandleAnthropicMessages] Upstream Gemini error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), maskAPIKeyInURL(targetURL))
+			log.Printf("[HandleAnthropicMessages] Upstream Gemini error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
 			latency := int(time.Since(startTime).Milliseconds())
 			s.handleUpstreamError(ctx, resp, route)
 			updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
@@ -2501,7 +2495,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil)
 			return nil, err
 		}
-
 
 		var geminiResp models.GeminiGenerateContentResponse
 		if err := json.Unmarshal(body, &geminiResp); err != nil {
@@ -2574,7 +2567,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 
 	resp, err := s.sendUpstreamRequest(ctx, targetURL, route.Provider.APIKey, rawReqMap, stream, forwardHeaders)
 	if err != nil {
-		log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s", err, maskAPIKeyInURL(targetURL))
+		log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s", err, targetURL)
 		latency := int(time.Since(startTime).Milliseconds())
 		updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
 		return nil, ErrUpstreamFailed
@@ -2582,7 +2575,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 
 	if resp.StatusCode >= 400 {
 		body, _ := s.readDecompressedBody(resp)
-		log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), maskAPIKeyInURL(targetURL))
+		log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
 		latency := int(time.Since(startTime).Milliseconds())
 		s.handleUpstreamError(ctx, resp, route)
 		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
@@ -2627,7 +2620,6 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		return nil, err
 	}
 
-
 	var chatResp ChatResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
 		log.Printf("[HandleAnthropicMessages] Parse response failed: %v, body: %s", err, string(body))
@@ -2659,15 +2651,14 @@ func (s *GatewayService) sendAnthropicUpstreamRequest(ctx context.Context, url, 
 		return nil, err
 	}
 
-
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
-		log.Printf("[sendAnthropicUpstreamRequest] Create request failed: %v, URL: %s", err, maskAPIKeyInURL(url))
+		log.Printf("[sendAnthropicUpstreamRequest] Create request failed: %v, URL: %s", err, url)
 		return nil, err
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", apiKey) // Anthropic uses x-api-key header
+	httpReq.Header.Set("x-api-key", apiKey)               // Anthropic uses x-api-key header
 	httpReq.Header.Set("anthropic-version", "2023-06-01") // Required by Anthropic API
 
 	// Forward additional headers
@@ -2684,7 +2675,7 @@ func (s *GatewayService) sendAnthropicUpstreamRequest(ctx context.Context, url, 
 func (s *GatewayService) sendRawUpstreamRequest(ctx context.Context, url, apiKey string, reqBody []byte, stream bool, forwardHeaders map[string]string, headers map[string]string) (*http.Response, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
-		log.Printf("[sendRawUpstreamRequest] Create request failed: %v, URL: %s", err, maskAPIKeyInURL(url))
+		log.Printf("[sendRawUpstreamRequest] Create request failed: %v, URL: %s", err, url)
 		return nil, err
 	}
 
@@ -2704,9 +2695,9 @@ func (s *GatewayService) sendRawUpstreamRequest(ctx context.Context, url, apiKey
 	var reqMap map[string]interface{}
 	if err := json.Unmarshal(reqBody, &reqMap); err == nil {
 		modelName, _ := reqMap["model"].(string)
-		log.Printf("[sendRawUpstreamRequest] Sending request to: %s, stream: %v, model: %s", maskAPIKeyInURL(url), stream, modelName)
+		log.Printf("[sendRawUpstreamRequest] Sending request to: %s, stream: %v, model: %s", url, stream, modelName)
 	} else {
-		log.Printf("[sendRawUpstreamRequest] Sending request to: %s, stream: %v", maskAPIKeyInURL(url), stream)
+		log.Printf("[sendRawUpstreamRequest] Sending request to: %s, stream: %v", url, stream)
 	}
 
 	return s.httpClient.Do(httpReq)
@@ -2734,7 +2725,7 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 			OutputTokens      int `json:"output_tokens"`
 			InputTokensCount  int `json:"inputTokensCount"`
 			OutputTokensCount int `json:"outputTokensCount"`
-			PromptTokens      int `json:"prompt_tokens"`      // OpenAI style naming
+			PromptTokens      int `json:"prompt_tokens"` // OpenAI style naming
 			CompletionTokens  int `json:"completion_tokens"`
 		}
 		if json.Unmarshal(usageBytes, &altUsage) == nil {
@@ -2810,16 +2801,16 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 	// Update log entry
 	if logID > 0 {
 		updates := map[string]interface{}{
-			"latency":              latency,
-			"promptTokens":        promptTokens,
-			"completionTokens":    completionTokens,
-			"totalTokens":         totalTokens,
-				"cacheReadTokens":     cacheReadTokens,
-				"cacheWriteTokens":    cacheWriteTokens,
-			"cost":                 cost,
+			"latency":            latency,
+			"promptTokens":       promptTokens,
+			"completionTokens":   completionTokens,
+			"totalTokens":        totalTokens,
+			"cacheReadTokens":    cacheReadTokens,
+			"cacheWriteTokens":   cacheWriteTokens,
+			"cost":               cost,
 			"ownerChannelId":     ownerChannelID,
 			"ownerChannelUserId": ownerChannelUserID,
-			"status":               200,
+			"status":             200,
 		}
 		if len(respHeaders) > 0 {
 			respHeadersJSON, _ := json.Marshal(respHeaders)
@@ -2834,6 +2825,7 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 		}
 	}
 }
+
 // HandleAnthropicCountTokens handles Anthropic count_tokens API requests
 func (s *GatewayService) HandleAnthropicCountTokens(ctx context.Context, apiKey *models.GatewayAPIKey, rawReqBody []byte, requestHeaders http.Header) (interface{}, error) {
 	// Parse request to get model name
@@ -2883,7 +2875,7 @@ func (s *GatewayService) HandleAnthropicCountTokens(ctx context.Context, apiKey 
 		baseURL := route.Provider.GetBaseURLForType("anthropic")
 		targetURL := fmt.Sprintf("%s/messages/count_tokens", strings.TrimSuffix(baseURL, "/"))
 
-		log.Printf("[HandleAnthropicCountTokens] Provider '%s' supports anthropic, direct forwarding to: %s", route.Provider.Name, maskAPIKeyInURL(targetURL))
+		log.Printf("[HandleAnthropicCountTokens] Provider '%s' supports anthropic, direct forwarding to: %s", route.Provider.Name, targetURL)
 
 		headers := map[string]string{
 			"x-api-key":         route.Provider.APIKey,
@@ -2892,14 +2884,14 @@ func (s *GatewayService) HandleAnthropicCountTokens(ctx context.Context, apiKey 
 
 		resp, err := s.sendRawUpstreamRequest(ctx, targetURL, route.Provider.APIKey, rawReqBody, false, forwardHeaders, headers)
 		if err != nil {
-			log.Printf("[HandleAnthropicCountTokens] Upstream request failed: %v, URL: %s, falling back to local estimation", err, maskAPIKeyInURL(targetURL))
+			log.Printf("[HandleAnthropicCountTokens] Upstream request failed: %v, URL: %s, falling back to local estimation", err, targetURL)
 			// Fallback to local estimation
 			return s.estimateAnthropicTokens(req), nil
 		}
 
 		if resp.StatusCode >= 400 {
 			body, _ := s.readDecompressedBody(resp)
-			log.Printf("[HandleAnthropicCountTokens] Upstream error: status=%d, body=%s, URL: %s, falling back to local estimation", resp.StatusCode, string(body), maskAPIKeyInURL(targetURL))
+			log.Printf("[HandleAnthropicCountTokens] Upstream error: status=%d, body=%s, URL: %s, falling back to local estimation", resp.StatusCode, string(body), targetURL)
 			// Fallback to local estimation (provider might not support count_tokens endpoint)
 			return s.estimateAnthropicTokens(req), nil
 		}
