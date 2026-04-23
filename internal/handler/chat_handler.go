@@ -555,6 +555,159 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 	c.JSON(http.StatusOK, chatResp)
 }
 
+// StreamChat sends a message and gets AI response without requiring a conversation
+// Used for temporary/ephemeral chat sessions
+func (h *ChatHandler) StreamChat(c *gin.Context) {
+	user := middleware.GetCurrentUser(c)
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	var req models.ChatRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Convert frontend request to service format
+	chatMessages := make([]service.ChatMessage, len(req.Messages))
+	for i, msg := range req.Messages {
+		// Parse content (supports string or array format)
+		var content service.ChatMessageContent
+		if err := json.Unmarshal(msg.Content, &content); err != nil {
+			// Fallback to string
+			content = service.ChatMessageContent{StringContent: string(msg.Content)}
+		}
+
+		// Parse tool_calls if present
+		var toolCalls []service.ToolCall
+		if len(msg.ToolCalls) > 0 {
+			if err := json.Unmarshal(msg.ToolCalls, &toolCalls); err != nil {
+				toolCalls = nil
+			}
+		}
+
+		chatMessages[i] = service.ChatMessage{
+			Role:       msg.Role,
+			Content:    content,
+			ToolCalls:  toolCalls,
+			ToolCallID: msg.ToolCallID,
+		}
+	}
+
+	// Build service request
+	chatReq := &service.ChatRequest{
+		Model:           req.Model,
+		Messages:        chatMessages,
+		Stream:          req.Stream,
+		Temperature:     req.Temperature,
+		MaxTokens:       req.MaxTokens,
+		ReasoningEffort: req.ReasoningEffort,
+		Think:           req.Think,
+	}
+
+	// Parse advanced thinking configs if present
+	if len(req.Thinking) > 0 {
+		var thinking service.ThinkingConfig
+		if err := json.Unmarshal(req.Thinking, &thinking); err == nil {
+			chatReq.Thinking = &thinking
+		}
+	}
+	if len(req.GenerationConfig) > 0 {
+		var genConfig service.GenerationConfig
+		if err := json.Unmarshal(req.GenerationConfig, &genConfig); err == nil {
+			chatReq.GenerationConfig = &genConfig
+		}
+	}
+
+	// Convert tools
+	if len(req.Tools) > 0 {
+		chatReq.Tools = make([]service.ToolDefinition, len(req.Tools))
+		for i, tool := range req.Tools {
+			chatReq.Tools[i] = service.ToolDefinition{
+				Type: tool.Type,
+				Function: service.ToolFunctionSpec{
+					Name:        tool.Function.Name,
+					Description: tool.Function.Description,
+					Parameters:  tool.Function.Parameters,
+				},
+			}
+		}
+	}
+
+	// Handle enable_thinking
+	if req.EnableThinking {
+		chatReq.Extra = map[string]interface{}{"enable_thinking": true}
+	}
+
+	// Create virtual API key for user (bind to all channels)
+	userID := user.ID
+	virtualAPIKey := &models.GatewayAPIKey{
+		ID:                0, // Virtual key, no real ID
+		UserID:            &userID,
+		BindToAllChannels: true, // Allow access to all models
+		IsChatKey:         false, // Don't log for temporary sessions
+		LogDetails:        false, // Don't log details for temporary sessions
+	}
+
+	// Serialize chatReq for service consumption
+	rawBody, _ := json.Marshal(chatReq)
+
+	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, rawBody, req.Stream, c.Request.Header, c.Request.URL.Path)
+	if err != nil {
+		switch err {
+		case service.ErrModelNotFound:
+			c.JSON(http.StatusNotFound, gin.H{"error": "Model not found"})
+		case service.ErrNoRouteAvailable:
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "No available route for this model"})
+		case service.ErrPermissionDenied:
+			c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied for this model"})
+		case service.ErrInsufficientBalance:
+			c.JSON(http.StatusForbidden, gin.H{"error": "Insufficient balance"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	// Handle streaming response
+	if req.Stream {
+		streamResp, ok := result.(*service.StreamingResponse)
+		if !ok {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid streaming response"})
+			return
+		}
+		defer streamResp.Close()
+
+		c.Header("Content-Type", "text/event-stream")
+		c.Header("Cache-Control", "no-cache")
+		c.Header("Connection", "keep-alive")
+
+		c.Stream(func(w io.Writer) bool {
+			buf := make([]byte, 1024)
+			n, err := streamResp.Read(buf)
+			if n > 0 {
+				w.Write(buf[:n])
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}
+			return err == nil
+		})
+		return
+	}
+
+	// Handle non-streaming response
+	chatResp, ok := result.(*service.ChatResponse)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid response"})
+		return
+	}
+
+	c.JSON(http.StatusOK, chatResp)
+}
+
 // AddMessage adds a new message to a conversation (typically from frontend)
 func (h *ChatHandler) AddMessage(c *gin.Context) {
 	user := middleware.GetCurrentUser(c)

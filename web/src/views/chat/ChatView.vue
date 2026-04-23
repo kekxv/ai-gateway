@@ -17,10 +17,23 @@
       </div>
 
       <div class="sidebar-content">
-        <button class="new-chat-btn" @click="createNewConversation">
-          <el-icon><Plus /></el-icon>
-          <span>新对话</span>
-        </button>
+        <div class="new-chat-buttons">
+          <button class="new-chat-btn" @click="createNewConversation(false)">
+            <el-icon><Plus /></el-icon>
+            <span>新对话</span>
+          </button>
+          <button class="temp-chat-btn" @click="createNewConversation(true)" title="临时对话不会保存到数据库">
+            <el-icon><Timer /></el-icon>
+            <span>临时</span>
+          </button>
+        </div>
+
+        <!-- Show temporary conversation indicator -->
+        <div v-if="isTemporaryConversation && currentConversation" class="temporary-indicator">
+          <el-icon><Timer /></el-icon>
+          <span>临时对话</span>
+          <span class="temp-hint">（不保存）</span>
+        </div>
 
         <div class="conversation-list">
           <div
@@ -37,7 +50,6 @@
               <div class="conv-title">{{ conv.title }}</div>
               <div class="conv-meta">
                 <span class="conv-model">{{ conv.model }}</span>
-                <span v-if="conv.model.toLowerCase().includes('codex')" class="conv-mode-tag">Responses</span>
               </div>
             </div>
             <el-dropdown trigger="click" @command="handleConversationAction($event, conv)">
@@ -82,10 +94,6 @@
               <div class="conversation-name">{{ currentConversation.title }}</div>
             </div>
             <div class="selector-cluster">
-              <div class="mode-badge" :class="currentApiMode">
-                <span class="mode-dot"></span>
-                <span>{{ currentApiModeLabel }}</span>
-              </div>
               <div class="model-selector">
                 <el-select
                   v-model="selectedModel"
@@ -143,7 +151,7 @@
           <button class="icon-btn" @click="showSettingsDialog = true" :disabled="!currentConversation" title="设置">
             <el-icon><Setting /></el-icon>
           </button>
-          <button class="primary-btn" @click="createNewConversation">
+          <button class="primary-btn" @click="createNewConversation(false)">
             <el-icon><Plus /></el-icon>
             <span class="hide-mobile">新对话</span>
           </button>
@@ -162,7 +170,7 @@
               <div class="hero-copy">
                 <span class="hero-kicker">AI Gateway Chat</span>
                 <h2>统一聊天入口，按模型自动切换协议</h2>
-                <p>普通模型继续走 Chat Completions，Codex 自动切到 Responses。你只需要选模型，然后开始对话。</p>
+                <p>支持多种模型，自动适配协议。选择模型后开始对话。</p>
               </div>
             </div>
 
@@ -183,25 +191,27 @@
                   <span class="meta-label">当前模型</span>
                   <strong>{{ currentModelLabel }}</strong>
                 </div>
-                <div class="welcome-model-card">
-                  <span class="meta-label">接口模式</span>
-                  <strong>{{ currentApiModeLabel }}</strong>
-                </div>
               </div>
               <div class="feature-grid">
                 <div class="feature-card">
-                  <span class="feature-title">Codex / Responses</span>
-                  <span class="feature-desc">适合代码代理、多阶段输出与更现代的 OpenAI 响应格式。</span>
+                  <span class="feature-title">智能对话</span>
+                  <span class="feature-desc">支持多种 AI 模型，自动适配最佳协议进行对话。</span>
                 </div>
                 <div class="feature-card">
                   <span class="feature-title">多模态输入</span>
                   <span class="feature-desc">继续支持图片粘贴、文件上传、工具与技能联动。</span>
                 </div>
               </div>
-              <button class="start-btn" @click="createNewConversation">
-                <el-icon><ChatLineRound /></el-icon>
-                <span>开始对话</span>
-              </button>
+              <div class="start-buttons">
+                <button class="start-btn" @click="createNewConversation(false)">
+                  <el-icon><ChatLineRound /></el-icon>
+                  <span>开始对话</span>
+                </button>
+                <button class="start-btn temp" @click="createNewConversation(true)" title="临时对话不保存到数据库">
+                  <el-icon><Timer /></el-icon>
+                  <span>临时对话</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -370,15 +380,6 @@
       <!-- Input Area -->
       <div class="input-area">
         <div class="input-container">
-          <div class="input-mode-bar">
-            <div class="mode-badge compact" :class="currentApiMode">
-              <span class="mode-dot"></span>
-              <span>{{ currentApiModeLabel }}</span>
-            </div>
-            <span class="input-mode-text">
-              {{ isResponsesMode ? '当前模型会通过 Responses API 发送请求，适合 Codex 工作流。' : '当前模型使用 Chat Completions 流式返回内容。' }}
-            </span>
-          </div>
           <!-- Enabled Skills & Tools Display -->
           <div v-if="activeSkillName || toolsStore.enabledTools.length > 0" class="enabled-bar-container">
             <!-- Active Skill Display -->
@@ -630,10 +631,11 @@ import { ElMessage, ElMessageBox } from '@/plugins/element-plus-services'
 import {
   Plus, Setting, ChatLineRound, Monitor,
   Loading, Promotion, MoreFilled, Delete, MagicStick, Close, Menu, Paperclip, Operation,
+  Timer,
   Edit, RefreshRight, DocumentCopy, Collection, Check, Cpu, WarningFilled
 } from '@element-plus/icons-vue'
 import { conversationApi, modelApi } from '@/api/conversation'
-import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart, ChatRequest, ChatMessage, OpenAIReasoningEffort, GeminiThinkingLevel, ChatApiMode, ChatModelOption } from '@/types/conversation'
+import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart, ChatRequest, ChatMessage, OpenAIReasoningEffort, GeminiThinkingLevel, ChatModelOption } from '@/types/conversation'
 import { PRESET_PROMPTS } from '@/types/conversation'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ThinkBlock from '@/components/chat/ThinkBlock.vue'
@@ -778,8 +780,15 @@ const sidebarOpen = ref(false)
 const conversations = ref<Conversation[]>([])
 const currentConversation = ref<Conversation | null>(null)
 const messages = ref<ExtendedMessage[]>([])
+
+// Temporary conversation support - conversations that don't persist to database
+const isTemporaryConversation = ref(false)
+const TEMPORARY_CONVERSATION_ID = -1 // Special ID for temporary conversations
 const models = ref<ChatModelOption[]>([])
 const selectedModel = ref('')
+
+// LocalStorage key for remembering user's preferred model
+const LAST_USED_MODEL_KEY = 'ai-gateway-last-used-model'
 const inputContent = ref('')
 const sending = ref(false)
 const streamingContent = ref('')
@@ -792,6 +801,7 @@ const activeSkillInstructions = ref<string | null>(null)
 
 // Streaming state for Think and ToolCalls
 const streamingThinkContent = ref('')
+const streamingHasExplicitReasoning = ref(false)  // Track if reasoning field received (not from thinking tags)
 const streamingToolCallResults = ref<ToolCallResult[]>([])
 const showToolSelector = ref(false)
 
@@ -827,21 +837,38 @@ const stopStreaming = async () => {
 
   // Save partial content if any
   if (streamingContent.value || streamingThinkContent.value) {
-    const parsed = parseStreamingThinkContent(streamingRawContent.value)
+    // Handle explicit reasoning vs thinking tags format
+    let finalContent: string
+    let finalThinkContent: string
+    let savedRawContent: string
+
+    if (streamingHasExplicitReasoning.value) {
+      finalContent = streamingContent.value
+      finalThinkContent = streamingThinkContent.value
+      savedRawContent = finalThinkContent.length > 0
+        ? `<reasoning>${finalThinkContent}</reasoning>\n${finalContent}`
+        : finalContent
+    } else {
+      const parsed = parseStreamingThinkContent(streamingRawContent.value)
+      finalContent = parsed.text
+      finalThinkContent = parsed.think
+      savedRawContent = streamingRawContent.value
+    }
+
     const assistantMsg: ExtendedMessage = {
       id: -Date.now(),
       conversation_id: currentConversation.value!.id,
       role: 'assistant',
-      content: parsed.text,
-      thinkContent: parsed.think,
-      hasThink: parsed.think.length > 0,
+      content: finalContent,
+      thinkContent: finalThinkContent,
+      hasThink: finalThinkContent.length > 0,
       toolCalls: streamingToolCallResults.value.length > 0 ? streamingToolCallResults.value : undefined,
       created_at: new Date().toISOString()
     }
     messages.value.push(assistantMsg)
 
     // Save to history
-    await saveAssistantMessage(currentConversation.value!.id, streamingRawContent.value, streamingToolCallResults.value.length > 0 ? streamingToolCallResults.value : undefined)
+    await saveAssistantMessage(currentConversation.value!.id, savedRawContent, streamingToolCallResults.value.length > 0 ? streamingToolCallResults.value : undefined)
   }
 
   // Clear streaming state
@@ -849,6 +876,7 @@ const stopStreaming = async () => {
   streamingRawContent.value = ''
   streamingContent.value = ''
   streamingThinkContent.value = ''
+  streamingHasExplicitReasoning.value = false
   throttledStreamingContent.value = ''
   throttledStreamingThink.value = ''
   streamingToolCallResults.value = []
@@ -929,19 +957,9 @@ const selectedModelMeta = computed(() => {
   return models.value.find(model => model.name === selectedModel.value) || null
 })
 
-const currentApiMode = computed<ChatApiMode>(() => {
-  return selectedModelMeta.value?.api_mode || 'chat'
-})
-
-const currentApiModeLabel = computed(() => {
-  return currentApiMode.value === 'responses' ? 'Responses' : 'Chat Completions'
-})
-
 const currentModelLabel = computed(() => {
   return selectedModelMeta.value?.alias || selectedModelMeta.value?.name || '未选择模型'
 })
-
-const isResponsesMode = computed(() => currentApiMode.value === 'responses')
 
 const thinkingModeLabel = computed(() => {
   const labels: Record<ThinkingMode, string> = {
@@ -1064,16 +1082,15 @@ const regenerateFromUser = async (userIndex: number) => {
   // Remove messages from this user message onwards (local UI update)
   messages.value = messages.value.slice(0, userIndex)
 
-  // Delete messages from database
-  // Get the previous message ID (or 0 if it's the first message)
-  // deleteMessagesAfter deletes messages with id > prevMessageId
-  // So if prevMessageId = 0, it deletes all messages (id > 0)
+  // Delete messages from database (skip for temporary conversations)
   const prevMessageId = userIndex > 0 ? messages.value[userIndex - 1]?.id : 0
 
-  try {
-    await conversationApi.deleteMessagesAfter(currentConversation.value.id, prevMessageId)
-  } catch (e) {
-    console.error('Failed to delete messages:', e)
+  if (!isTemporaryConversation.value) {
+    try {
+      await conversationApi.deleteMessagesAfter(currentConversation.value.id, prevMessageId)
+    } catch (e) {
+      console.error('Failed to delete messages:', e)
+    }
   }
 
   // Re-add user message
@@ -1088,14 +1105,16 @@ const regenerateFromUser = async (userIndex: number) => {
   isUserAtBottom.value = true
   userHasScrolledDuringOutput.value = false
 
-  // Save user message to database
-  try {
-    await conversationApi.addMessage(currentConversation.value.id, {
-      role: 'user',
-      content: userContent
-    })
-  } catch (e) {
-    console.error('Failed to save user message:', e)
+  // Save user message to database (skip for temporary conversations)
+  if (!isTemporaryConversation.value) {
+    try {
+      await conversationApi.addMessage(currentConversation.value.id, {
+        role: 'user',
+        content: userContent
+      })
+    } catch (e) {
+      console.error('Failed to save user message:', e)
+    }
   }
 
   // Build full messages array
@@ -1104,7 +1123,7 @@ const regenerateFromUser = async (userIndex: number) => {
 
   // Send the message
   sending.value = true
-  await streamWithToolCalls(currentConversation.value.id, buildRequestWithThinking({
+  await streamWithToolCalls(buildRequestWithThinking({
     model: selectedModel.value,
     messages: messagesForApi,
     stream: true,
@@ -1136,7 +1155,7 @@ const retryLastMessage = async () => {
 
   // Retry sending
   sending.value = true
-  await streamWithToolCalls(currentConversation.value.id, buildRequestWithThinking({
+  await streamWithToolCalls(buildRequestWithThinking({
     model: selectedModel.value,
     messages: messagesForApi,
     stream: true,
@@ -1219,11 +1238,13 @@ const confirmEditBlock = async () => {
   // 删除该消息之后的消息（本地）
   messages.value = messages.value.slice(0, originalIndex)
 
-  // Delete messages from database
-  try {
-    await conversationApi.deleteMessagesAfter(currentConversation.value.id, prevMessageId)
-  } catch (e) {
-    console.error('Failed to delete messages:', e)
+  // Delete messages from database (skip for temporary conversations)
+  if (!isTemporaryConversation.value) {
+    try {
+      await conversationApi.deleteMessagesAfter(currentConversation.value.id, prevMessageId)
+    } catch (e) {
+      console.error('Failed to delete messages:', e)
+    }
   }
 
   // 添加更新后的用户消息
@@ -1238,14 +1259,16 @@ const confirmEditBlock = async () => {
   isUserAtBottom.value = true
   userHasScrolledDuringOutput.value = false
 
-  // Save user message to database
-  try {
-    await conversationApi.addMessage(currentConversation.value.id, {
-      role: 'user',
-      content: newContentToStore
-    })
-  } catch (e) {
-    console.error('Failed to save user message:', e)
+  // Save user message to database (skip for temporary conversations)
+  if (!isTemporaryConversation.value) {
+    try {
+      await conversationApi.addMessage(currentConversation.value.id, {
+        role: 'user',
+        content: newContentToStore
+      })
+    } catch (e) {
+      console.error('Failed to save user message:', e)
+    }
   }
 
   // Build full messages array
@@ -1254,7 +1277,7 @@ const confirmEditBlock = async () => {
 
   // 发送消息
   sending.value = true
-  await streamWithToolCalls(currentConversation.value.id, buildRequestWithThinking({
+  await streamWithToolCalls(buildRequestWithThinking({
     model: selectedModel.value,
     messages: messagesForApi,
     stream: true,
@@ -1329,7 +1352,13 @@ const loadModels = async () => {
     const response = await modelApi.listForChat()
     models.value = response.data || []
     if (models.value.length > 0 && !selectedModel.value) {
-      selectedModel.value = models.value[0].name
+      // Try to use last used model from localStorage
+      const lastUsedModel = localStorage.getItem(LAST_USED_MODEL_KEY)
+      if (lastUsedModel && models.value.some(m => m.name === lastUsedModel)) {
+        selectedModel.value = lastUsedModel
+      } else {
+        selectedModel.value = models.value[0].name
+      }
     }
   } catch (error) {
     console.error('Failed to load models:', error)
@@ -1337,7 +1366,31 @@ const loadModels = async () => {
 }
 
 // Create new conversation
-const createNewConversation = async () => {
+const createNewConversation = async (temporary = false) => {
+  if (temporary) {
+    // Create temporary conversation (not saved to database)
+    const model = selectedModel.value || models.value[0]?.name || 'gpt-3.5-turbo'
+    const tempConv: Conversation = {
+      id: TEMPORARY_CONVERSATION_ID,
+      user_id: 0,
+      title: '临时对话',
+      model,
+      system_prompt: '',
+      settings: { temperature: 0.7, max_tokens: 4096, top_p: 0.9 },
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }
+    isTemporaryConversation.value = true
+    currentConversation.value = tempConv
+    messages.value = []
+    selectedModel.value = model
+    inputContent.value = ''
+    if (isMobile.value) sidebarOpen.value = false
+    nextTick(() => textareaRef.value?.focus())
+    return
+  }
+
+  // Create regular conversation (saved to database)
   try {
     const model = selectedModel.value || models.value[0]?.name || 'gpt-3.5-turbo'
     const response = await conversationApi.create({
@@ -1357,6 +1410,9 @@ const createNewConversation = async () => {
 
 // Select conversation
 const selectConversation = async (conv: Conversation) => {
+  // Reset temporary conversation flag when selecting a real conversation
+  isTemporaryConversation.value = conv.id === TEMPORARY_CONVERSATION_ID
+
   currentConversation.value = conv
   selectedModel.value = conv.model
 
@@ -1492,9 +1548,20 @@ const deactivateSkill = () => {
   activeSkillInstructions.value = null
 }
 
-// Update model
+// Update model - also save to localStorage for future conversations
 const updateModel = async () => {
+  // Save to localStorage for remembering user's preference
+  if (selectedModel.value) {
+    localStorage.setItem(LAST_USED_MODEL_KEY, selectedModel.value)
+  }
+
   if (currentConversation.value && selectedModel.value !== currentConversation.value.model) {
+    // Skip API update for temporary conversations
+    if (isTemporaryConversation.value) {
+      currentConversation.value.model = selectedModel.value
+      return
+    }
+
     try {
       await conversationApi.update(currentConversation.value.id, { model: selectedModel.value })
       currentConversation.value.model = selectedModel.value
@@ -1512,6 +1579,7 @@ const sendMessage = async () => {
   streamingRawContent.value = ''
   streamingContent.value = ''
   streamingThinkContent.value = ''
+  streamingHasExplicitReasoning.value = false
   throttledStreamingContent.value = ''
   throttledStreamingThink.value = ''
   streamingToolCallResults.value = []
@@ -1564,14 +1632,16 @@ const sendMessage = async () => {
   userHasScrolledDuringOutput.value = false
   scrollToBottom()
 
-  // Save user message to database first
-  try {
-    await conversationApi.addMessage(currentConversation.value.id, {
-      role: 'user',
-      content: contentToStore
-    })
-  } catch (e) {
-    console.error('Failed to save user message:', e)
+  // Save user message to database first (skip for temporary conversations)
+  if (!isTemporaryConversation.value) {
+    try {
+      await conversationApi.addMessage(currentConversation.value.id, {
+        role: 'user',
+        content: contentToStore
+      })
+    } catch (e) {
+      console.error('Failed to save user message:', e)
+    }
   }
 
   // Build full messages array for API request
@@ -1580,7 +1650,7 @@ const sendMessage = async () => {
 
   // Start the streaming loop with tool call support
   sending.value = true
-  await streamWithToolCalls(currentConversation.value.id, buildRequestWithThinking({
+  await streamWithToolCalls(buildRequestWithThinking({
     model: selectedModel.value,
     messages: messagesForApi,
     stream: true,
@@ -1592,6 +1662,11 @@ const sendMessage = async () => {
 
 // Helper function to save assistant message to backend
 const saveAssistantMessage = async (conversationId: number, content: string, toolCalls?: ToolCallResult[]) => {
+  // Skip saving for temporary conversations
+  if (isTemporaryConversation.value || conversationId === TEMPORARY_CONVERSATION_ID) {
+    return
+  }
+
   try {
     let toolCallsStr = ''
     if (toolCalls && toolCalls.length > 0) {
@@ -1721,7 +1796,6 @@ const MAX_TOOL_ITERATIONS = 5
 
 // Streaming loop that handles tool calls recursively
 const streamWithToolCalls = async (
-  conversationId: number,
   requestData: ChatRequest,
   iteration: number = 0
 ) => {
@@ -1736,6 +1810,7 @@ const streamWithToolCalls = async (
   streamingRawContent.value = ''
   streamingContent.value = ''
   streamingThinkContent.value = ''
+  streamingHasExplicitReasoning.value = false
   throttledStreamingContent.value = ''
   throttledStreamingThink.value = ''
   streamingToolCallResults.value = []
@@ -1753,16 +1828,23 @@ const streamWithToolCalls = async (
 
   try {
     await new Promise<void>((resolve, reject) => {
-      conversationApi.sendMessageStream(
-        conversationId,
+      conversationApi.streamChat(
         requestData,
-        currentApiMode.value,
         (text) => {
-          streamingRawContent.value += text
-          const parsed = parseStreamingThinkContent(streamingRawContent.value)
-          streamingContent.value = parsed.text
-          streamingThinkContent.value = parsed.think
-          updateThrottledContent()  // Throttled update for rendering
+          // Only update rawContent if no explicit reasoning (to avoid mixing)
+          if (!streamingHasExplicitReasoning.value) {
+            streamingRawContent.value += text
+            const parsed = parseStreamingThinkContent(streamingRawContent.value)
+            streamingContent.value = parsed.text
+            if (parsed.think) {
+              streamingThinkContent.value = parsed.think
+            }
+          } else {
+            // With explicit reasoning, rawContent only stores content part (accumulate)
+            streamingContent.value += text
+            streamingRawContent.value += text
+          }
+          updateThrottledContent()
           throttledScrollToBottom()
         },
         () => {
@@ -1770,7 +1852,6 @@ const streamWithToolCalls = async (
           const { toolCalls: xmlToolCalls, cleanedContent } = parseXmlToolCalls(streamingRawContent.value)
 
           if (xmlToolCalls.length > 0) {
-            // Update streaming content to remove XML tool call tags
             streamingRawContent.value = cleanedContent
             const parsed = parseStreamingThinkContent(cleanedContent)
             streamingContent.value = parsed.text
@@ -1778,7 +1859,6 @@ const streamWithToolCalls = async (
             throttledStreamingContent.value = parsed.text
             throttledStreamingThink.value = parsed.think
 
-            // Process XML tool calls
             receivedToolCalls = xmlToolCalls
             streamingToolCallResults.value = xmlToolCalls.map(tc => ({
               id: tc.id,
@@ -1787,12 +1867,10 @@ const streamWithToolCalls = async (
               status: 'running'
             }))
           } else {
-            // No tool calls, update throttled content immediately
             throttledStreamingContent.value = streamingContent.value
             throttledStreamingThink.value = streamingThinkContent.value
           }
 
-          // Clear throttle timer
           if (throttleTimer) {
             clearTimeout(throttleTimer)
             throttleTimer = null
@@ -1801,10 +1879,9 @@ const streamWithToolCalls = async (
           resolve()
         },
         (error) => {
-          // Add error message bubble
           const errorMsg: ExtendedMessage = {
             id: -Date.now(),
-            conversation_id: conversationId,
+            conversation_id: currentConversation.value?.id || 0,
             role: 'assistant',
             content: '',
             error: error,
@@ -1816,6 +1893,7 @@ const streamWithToolCalls = async (
           streamingRawContent.value = ''
           streamingContent.value = ''
           streamingThinkContent.value = ''
+          streamingHasExplicitReasoning.value = false
           throttledStreamingContent.value = ''
           throttledStreamingThink.value = ''
           streamingToolCallResults.value = []
@@ -1825,8 +1903,14 @@ const streamWithToolCalls = async (
           }
           reject(new Error(error))
         },
+        (reasoning) => {
+          // Handle explicit reasoning field (from models like Gemma)
+          streamingHasExplicitReasoning.value = true
+          streamingThinkContent.value += reasoning
+          updateThrottledContent()
+          throttledScrollToBottom()
+        },
         async (toolCalls) => {
-          // Received tool calls - execute them
           receivedToolCalls = toolCalls
           streamingToolCallResults.value = toolCalls.map(tc => ({
             id: tc.id,
@@ -1835,31 +1919,28 @@ const streamWithToolCalls = async (
             status: 'running'
           }))
 
-          // Execute tools
           const results = await executeToolCallsAndContinue(
             toolCalls,
-            conversationId,
+            currentConversation.value?.id || 0,
             (updatedResults) => {
               streamingToolCallResults.value = updatedResults
             }
           )
 
-          // Check if user stopped during tool execution
           if (userStoppedStream) {
             resolve()
             return
           }
 
-          // Save current content BEFORE clearing streaming state
           const savedRawContent = streamingRawContent.value
           const savedContent = streamingContent.value
           const savedThinkContent = streamingThinkContent.value
           const savedHasThink = streamingThinkContent.value.length > 0
 
-          // Clear streaming state
           streamingRawContent.value = ''
           streamingContent.value = ''
           streamingThinkContent.value = ''
+          streamingHasExplicitReasoning.value = false
           throttledStreamingContent.value = ''
           throttledStreamingThink.value = ''
           streamingToolCallResults.value = []
@@ -1868,47 +1949,40 @@ const streamWithToolCalls = async (
             throttleTimer = null
           }
 
-          // Build tool results content for saving to database
           const toolResultsContent = results.map(r =>
             `Tool: ${r.toolName}\nResult: ${JSON.stringify(r.result ?? r.error)}`
           ).join('\n\n')
 
-          // Add assistant message to UI display FIRST
           const assistantMsg: ExtendedMessage = {
             id: -Date.now(),
-            conversation_id: conversationId,
+            conversation_id: currentConversation.value?.id || 0,
             role: 'assistant',
             content: savedContent,
             thinkContent: savedThinkContent,
             hasThink: savedHasThink,
-            toolCalls: results, // results already have status: 'success'
+            toolCalls: results,
             created_at: new Date().toISOString()
           }
           messages.value.push(assistantMsg)
 
           scrollToBottom()
 
-          // NOW build messages for next request using buildChatHistory
-          // buildChatHistory will automatically include the assistant message we just added
-          // and will add tool results for each toolCall with status: 'success'
           const messagesForApi = buildChatHistory()
 
-          // Save assistant message to database
-          await saveAssistantMessage(conversationId, savedRawContent, results)
-
-          // Save tool results as a tool message
-          try {
-            await conversationApi.addMessage(conversationId, {
-              role: 'tool',
-              content: toolResultsContent
-            })
-          } catch (e) {
-            console.error('Failed to save tool results message:', e)
+          // Save assistant message (if not temporary)
+          if (!isTemporaryConversation.value && currentConversation.value) {
+            await saveAssistantMessage(currentConversation.value.id, savedRawContent, results)
+            try {
+              await conversationApi.addMessage(currentConversation.value.id, {
+                role: 'tool',
+                content: toolResultsContent
+              })
+            } catch (e) {
+              console.error('Failed to save tool results message:', e)
+            }
           }
 
-          // Send tool results back to AI and continue streaming
           await streamWithToolCalls(
-            conversationId,
             buildRequestWithThinking({
               model: selectedModel.value,
               messages: messagesForApi,
@@ -1927,29 +2001,51 @@ const streamWithToolCalls = async (
 
     // Finalize the message if no tool calls and user didn't stop
     if (receivedToolCalls.length === 0 && !userStoppedStream) {
-      const finalRawContent = streamingRawContent.value
-      const parsed = parseStreamingThinkContent(finalRawContent)
+      // Handle explicit reasoning (from models like Gemma) vs thinking tags format
+      let finalContent: string
+      let finalThinkContent: string
+      let savedRawContent: string
+
+      if (streamingHasExplicitReasoning.value) {
+        // Explicit reasoning field - use streaming values directly
+        finalContent = streamingContent.value
+        finalThinkContent = streamingThinkContent.value
+        // Wrap think content with thinking tags for storage
+        savedRawContent = finalThinkContent.length > 0
+          ? `<think>${finalThinkContent}</think>\n${finalContent}`
+          : finalContent
+      } else {
+        // Thinking tags format - parse from raw content
+        const rawContent = streamingRawContent.value
+        const parsed = parseStreamingThinkContent(rawContent)
+        finalContent = parsed.text
+        finalThinkContent = parsed.think
+        savedRawContent = rawContent
+      }
 
       const assistantMsg: ExtendedMessage = {
         id: -Date.now(),
-        conversation_id: currentConversation.value!.id,
+        conversation_id: currentConversation.value?.id || 0,
         role: 'assistant',
-        content: parsed.text,
-        thinkContent: parsed.think,
-        hasThink: parsed.think.length > 0,
+        content: finalContent,
+        thinkContent: finalThinkContent,
+        hasThink: finalThinkContent.length > 0,
         toolCalls: streamingToolCallResults.value,
         created_at: new Date().toISOString()
       }
       messages.value.push(assistantMsg)
 
-      // Save final message to history
-      await saveAssistantMessage(conversationId, finalRawContent, streamingToolCallResults.value)
+      // Save final message to history (if not temporary)
+      if (!isTemporaryConversation.value && currentConversation.value) {
+        await saveAssistantMessage(currentConversation.value.id, savedRawContent, streamingToolCallResults.value)
+      }
 
       // Clear streaming state AFTER adding message
       await new Promise(resolve => setTimeout(resolve, 50))
       streamingRawContent.value = ''
       streamingContent.value = ''
       streamingThinkContent.value = ''
+      streamingHasExplicitReasoning.value = false
       throttledStreamingContent.value = ''
       throttledStreamingThink.value = ''
       if (throttleTimer) {
@@ -1963,10 +2059,9 @@ const streamWithToolCalls = async (
       }
 
       // Auto-generate title if this is the first user message
-      // Check: only 1 user message and title is still "New Chat"
       const userMessageCount = messages.value.filter(m => m.role === 'user').length
-      if (userMessageCount === 1 && currentConversation.value?.title === 'New Chat') {
-        generateTitleInBackground(conversationId)
+      if (userMessageCount === 1 && currentConversation.value?.title === 'New Chat' && !isTemporaryConversation.value && currentConversation.value) {
+        generateTitleInBackground(currentConversation.value.id)
       }
     }
 
@@ -1978,7 +2073,7 @@ const streamWithToolCalls = async (
       // Execute tools
       const results = await executeToolCallsAndContinue(
         xmlToolCalls,
-        conversationId,
+        currentConversation.value?.id || 0,
         (updatedResults) => {
           streamingToolCallResults.value = updatedResults
         }
@@ -1998,12 +2093,12 @@ const streamWithToolCalls = async (
       // Add assistant message to UI display FIRST
       const assistantMsg: ExtendedMessage = {
         id: -Date.now(),
-        conversation_id: conversationId,
+        conversation_id: currentConversation.value?.id || 0,
         role: 'assistant',
         content: savedContent,
         thinkContent: savedThinkContent,
         hasThink: savedHasThink,
-        toolCalls: results, // results already have status: 'success'
+        toolCalls: results,
         created_at: new Date().toISOString()
       }
       messages.value.push(assistantMsg)
@@ -2013,23 +2108,24 @@ const streamWithToolCalls = async (
       // NOW build messages for next request using buildChatHistory
       const messagesForApi = buildChatHistory()
 
-      // Save assistant message to history
-      await saveAssistantMessage(conversationId, savedRawContent, results)
-
-      // Save tool result message
-      try {
-        await conversationApi.addMessage(conversationId, {
-          role: 'tool',
-          content: toolResultsContent
-        })
-      } catch (e) {
-        console.error('Failed to save tool results message:', e)
+      // Save assistant message to history (if not temporary)
+      if (!isTemporaryConversation.value && currentConversation.value) {
+        await saveAssistantMessage(currentConversation.value.id, savedRawContent, results)
+        try {
+          await conversationApi.addMessage(currentConversation.value.id, {
+            role: 'tool',
+            content: toolResultsContent
+          })
+        } catch (e) {
+          console.error('Failed to save tool results message:', e)
+        }
       }
 
       // Clear streaming state
       streamingRawContent.value = ''
       streamingContent.value = ''
       streamingThinkContent.value = ''
+      streamingHasExplicitReasoning.value = false
       throttledStreamingContent.value = ''
       throttledStreamingThink.value = ''
       streamingToolCallResults.value = []
@@ -2042,7 +2138,6 @@ const streamWithToolCalls = async (
 
       // Send tool results back to AI and continue streaming
       await streamWithToolCalls(
-        conversationId,
         buildRequestWithThinking({
           model: selectedModel.value,
           messages: messagesForApi,
@@ -2281,6 +2376,14 @@ const expandedMessages = computed<ExpandedMessageBlock[]>(() => {
 const saveSettings = async () => {
   if (!currentConversation.value) return
 
+  // Skip API update for temporary conversations, just update local state
+  if (isTemporaryConversation.value) {
+    currentConversation.value.model = selectedModel.value
+    currentConversation.value.system_prompt = settingsForm.system_prompt
+    showSettingsDialog.value = false
+    return
+  }
+
   try {
     await conversationApi.update(currentConversation.value.id, {
       model: selectedModel.value,
@@ -2469,7 +2572,14 @@ onUnmounted(() => {
   padding: 12px;
 }
 
+.new-chat-buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .new-chat-btn {
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2483,12 +2593,54 @@ onUnmounted(() => {
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
-  margin-bottom: 12px;
 }
 
 .new-chat-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 12px 24px rgba(29, 78, 216, 0.22);
+}
+
+.temp-chat-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 12px;
+  background: linear-gradient(135deg, #f97316 0%, #fb923c 100%);
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.temp-chat-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(249, 115, 22, 0.22);
+}
+
+.temporary-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #c2410c;
+}
+
+.temporary-indicator .el-icon {
+  font-size: 14px;
+}
+
+.temp-hint {
+  font-size: 12px;
+  color: #9a3412;
 }
 
 .conversation-list {
@@ -2975,6 +3127,12 @@ onUnmounted(() => {
   }
 }
 
+.start-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
 .start-btn {
   display: flex;
   align-items: center;
@@ -2994,6 +3152,14 @@ onUnmounted(() => {
 .start-btn:hover {
   transform: translateY(-2px);
   box-shadow: 0 18px 32px rgba(29, 78, 216, 0.24);
+}
+
+.start-btn.temp {
+  background: linear-gradient(135deg, #f97316 0%, #fb923c 100%);
+}
+
+.start-btn.temp:hover {
+  box-shadow: 0 18px 32px rgba(249, 115, 22, 0.24);
 }
 
 .messages-container {

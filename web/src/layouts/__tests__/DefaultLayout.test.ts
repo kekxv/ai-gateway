@@ -36,7 +36,9 @@ const router = createRouter({
     { path: '/models', name: 'Models', component: { template: '<div>Models</div>' } },
     { path: '/keys', name: 'Keys', component: { template: '<div>Keys</div>' } },
     { path: '/logs', name: 'Logs', component: { template: '<div>Logs</div>' } },
-    { path: '/profile', name: 'Profile', component: { template: '<div>Profile</div>' } }
+    { path: '/profile', name: 'Profile', component: { template: '<div>Profile</div>' } },
+    { path: '/skills', name: 'Skills', component: { template: '<div>Skills</div>' } },
+    { path: '/tools', name: 'Tools', component: { template: '<div>Tools</div>' } }
   ]
 })
 

@@ -1,58 +1,45 @@
 import { api } from './index'
 import { ElMessage } from '@/plugins/element-plus-services'
-import type { Conversation, Message, CreateConversationRequest, UpdateConversationRequest, ChatRequest, ChatContentPart, ChatApiMode, ChatModelOption } from '@/types/conversation'
+import type { Conversation, Message, CreateConversationRequest, UpdateConversationRequest, ChatRequest, ChatContentPart, ChatModelOption } from '@/types/conversation'
 import type { ToolCall } from '@/types/tool'
 
 export const conversationApi = {
-  // List all conversations for current user
   list: () =>
     api.get<{ data: Conversation[] }>('/conversations'),
 
-  // Create a new conversation
   create: (data: CreateConversationRequest) =>
     api.post<{ data: Conversation }>('/conversations', data),
 
-  // Get a conversation by ID
   get: (id: number) =>
     api.get<{ data: Conversation }>(`/conversations/${id}`),
 
-  // Update a conversation
   update: (id: number, data: UpdateConversationRequest) =>
     api.put<{ data: Conversation }>(`/conversations/${id}`, data),
 
-  // Delete a conversation
   delete: (id: number) =>
     api.delete(`/conversations/${id}`),
 
-  // Get messages for a conversation
   getMessages: (id: number) =>
     api.get<{ data: Message[] }>(`/conversations/${id}/messages`),
 
-  // Add a message to a conversation
   addMessage: (id: number, data: { role: string; content: string; tool_calls?: string; tokens?: number }) =>
     api.post<{ data: Message }>(`/conversations/${id}/messages`, data),
 
-  // Delete all messages after a specific message ID
   deleteMessagesAfter: (id: number, messageId: number) =>
     api.delete(`/conversations/${id}/messages/after/${messageId}`),
 
-  // Generate title for conversation based on first user message
   generateTitle: (id: number) =>
     api.post<{ data: { title: string } }>(`/conversations/${id}/generate-title`),
 
-  // Update conversation title
   updateTitle: (id: number, title: string) =>
     api.put<{ message: string; title: string }>(`/conversations/${id}/title`, { title }),
 
-  // Send a message with streaming (OpenAI-compatible format)
-  // Frontend builds full request with model and messages
-  sendMessageStream: async (
-    id: number,
+  streamChat: async (
     data: ChatRequest,
-    apiMode: ChatApiMode,
     onContent: (content: string) => void,
     onDone: () => void,
     onError: (error: string) => void,
+    onReasoning?: (reasoning: string) => void,
     onToolCall?: (toolCalls: ToolCall[]) => Promise<void>,
     abortSignal?: AbortSignal
   ) => {
@@ -60,7 +47,7 @@ export const conversationApi = {
     const baseURL = api.defaults.baseURL || '/api'
 
     try {
-      const response = await fetch(`${baseURL}/conversations/${id}/chat`, {
+      const response = await fetch(`${baseURL}/chat/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -71,7 +58,6 @@ export const conversationApi = {
       })
 
       if (!response.ok) {
-        // Handle 401 - redirect to login with page reload
         if (response.status === 401) {
           localStorage.removeItem('token')
           localStorage.removeItem('user')
@@ -93,24 +79,14 @@ export const conversationApi = {
 
       const decoder = new TextDecoder()
       let buffer = ''
-      let inReasoning = false
       let toolCalls: ToolCall[] = []
-      let toolCallsByIndex: Map<number, ToolCall> = new Map()  // Track tool calls by index for accumulation
-      let responseEvent = ''
-      let responseToolCalls: ToolCall[] = []
-      const responseToolCallMap = new Map<string, ToolCall>()
+      let toolCallsByIndex: Map<number, ToolCall> = new Map()
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) {
-          // Close reasoning block if still open
-          if (inReasoning) {
-            onContent('</think>')
-          }
-          // If there are tool calls and we have a handler, execute them and continue
           if (toolCalls.length > 0 && onToolCall) {
             await onToolCall(toolCalls)
-            // Tool execution is handled, stream will continue with tool results
             return
           }
           onDone()
@@ -122,110 +98,34 @@ export const conversationApi = {
         buffer = lines.pop() || ''
 
         for (const line of lines) {
-          if (apiMode === 'responses' && line.startsWith('event: ')) {
-            responseEvent = line.slice(7).trim()
-            continue
-          }
-
           if (line.startsWith('data: ')) {
             const jsonData = line.slice(6)
             if (jsonData === '[DONE]') {
-              // Close reasoning block if still open
-              if (inReasoning) {
-                onContent('</think>')
-              }
-              // If there are tool calls and we have a handler, execute them and continue
-              const pendingToolCalls = apiMode === 'responses' ? responseToolCalls : toolCalls
-              if (pendingToolCalls.length > 0 && onToolCall) {
-                await onToolCall(pendingToolCalls)
+              if (toolCalls.length > 0 && onToolCall) {
+                await onToolCall(toolCalls)
                 return
               }
               onDone()
               break
             }
+
             try {
-              if (apiMode === 'responses') {
-                const event = JSON.parse(jsonData)
-
-                if (responseEvent === 'response.output_text.delta' && typeof event.delta === 'string') {
-                  onContent(event.delta)
-                  continue
-                }
-
-                if (responseEvent === 'response.output_item.done') {
-                  const item = event.item
-                  if (item?.type === 'function_call' && item.name) {
-                    const toolCallId = item.call_id || item.id || `${item.name}_${responseToolCalls.length}`
-                    if (!responseToolCallMap.has(toolCallId)) {
-                      const toolCall: ToolCall = {
-                        id: toolCallId,
-                        type: 'function',
-                        function: {
-                          name: item.name,
-                          arguments: item.arguments || '{}'
-                        }
-                      }
-                      responseToolCallMap.set(toolCallId, toolCall)
-                      responseToolCalls.push(toolCall)
-                    }
-                  }
-                  continue
-                }
-
-                if (responseEvent === 'response.failed' || responseEvent === 'response.error') {
-                  const errorMessage =
-                    event.response?.error?.message ||
-                    event.error?.message ||
-                    event.message ||
-                    'Request failed'
-                  onError(errorMessage)
-                  return
-                }
-
-                if (responseEvent === 'response.completed') {
-                  if (responseToolCalls.length > 0 && onToolCall) {
-                    await onToolCall(responseToolCalls)
-                    return
-                  }
-                  onDone()
-                  return
-                }
-
-                continue
-              }
-
               const chunk = JSON.parse(jsonData)
               if (chunk.choices && chunk.choices[0]?.delta) {
                 const delta = chunk.choices[0].delta
-                // Handle reasoning content
-                // Some models use 'reasoning', some 'reasoning_content'
-                const reasoning = delta.reasoning || delta.reasoning_content
 
-                if (reasoning && typeof reasoning === 'string') {
-                  // Open think tag on first reasoning chunk
-                  if (!inReasoning) {
-                    inReasoning = true
-                    onContent('<think>')
-                  }
-                  onContent(reasoning)
+                // Handle reasoning content - call separate callback for thinking
+                const reasoning = delta.reasoning || delta.reasoning_content
+                if (reasoning && typeof reasoning === 'string' && onReasoning) {
+                  onReasoning(reasoning)
                 }
 
                 // Handle regular content
-                // Check if content field exists (can be empty string)
-                if (delta.content !== undefined && delta.content !== null) {
-                  // If we were in reasoning mode, close the think tag first
-                  // This happens when the model starts sending content
-                  // We only close if the content is NOT empty, OR if reasoning is now empty/absent
-                  if (inReasoning && (delta.content !== "" || !reasoning)) {
-                    onContent('</think>')
-                    inReasoning = false
-                  }
-
-                  if (delta.content && typeof delta.content === 'string') {
-                    onContent(delta.content)
-                  }
+                if (delta.content && typeof delta.content === 'string') {
+                  onContent(delta.content)
                 }
-                // Handle tool calls - accumulate arguments by index
+
+                // Handle tool calls
                 if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
                   for (const tc of delta.tool_calls) {
                     const idx = tc.index ?? 0
@@ -233,13 +133,10 @@ export const conversationApi = {
                     const tcName = tc.function?.name || ''
                     const tcArgs = tc.function?.arguments || ''
 
-                    // Check if we already have a tool call at this index
                     const existing = toolCallsByIndex.get(idx)
                     if (existing) {
-                      // Accumulate arguments (they come in fragments)
                       existing.function.arguments += tcArgs
                     } else if (tcId || tcName) {
-                      // Create new tool call (first chunk has id and name)
                       const newToolCall: ToolCall = {
                         id: tcId || `tool_${Date.now()}_${idx}`,
                         type: 'function',
@@ -261,8 +158,6 @@ export const conversationApi = {
         }
       }
     } catch (err) {
-      // Don't report error if request was aborted - silently return
-      // The frontend's stopStreaming will handle saving partial content
       if (err instanceof Error && err.name === 'AbortError') {
         return
       }
@@ -272,28 +167,23 @@ export const conversationApi = {
 }
 
 export const modelApi = {
-  // Get available models for chat (only enabled models with routes)
   listForChat: () =>
     api.get<ChatModelOption[]>('/models/chat')
 }
 
-// Helper function to build user content from text and attached files
 export function buildUserContent(text: string, parts?: ChatContentPart[]): ChatContentPart[] | string {
   if (!parts || parts.length === 0) {
     return text
   }
-  // Add text content if provided
   const contentParts: ChatContentPart[] = []
   if (text) {
     contentParts.push({ type: 'text', text: text })
   }
-  // Add attached files
   for (const part of parts) {
     if (part.type === 'image_url' && part.image_url) {
       contentParts.push({ type: 'image_url', image_url: part.image_url })
     }
   }
-  // Return string if only text, otherwise return parts array
   if (contentParts.length === 1 && contentParts[0].type === 'text') {
     return contentParts[0].text || ''
   }
