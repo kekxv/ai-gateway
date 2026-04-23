@@ -516,7 +516,7 @@ func (c *ProtocolConverter) openAIToAnthropicResponse(resp *ChatResponse, modelN
 				})
 			}
 
-            // ... (rest of the logic)
+			// ... (rest of the logic)
 
 			// Add tool calls
 			for _, tc := range choice.Message.ToolCalls {

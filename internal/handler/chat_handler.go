@@ -25,6 +25,7 @@ type ChatHandler struct {
 	messageRepo      *repository.MessageRepository
 	userRepo         *repository.UserRepository
 	gatewayService   *service.GatewayService
+	responseService  *service.ResponseService
 	billingService   *service.BillingService
 }
 
@@ -34,6 +35,7 @@ func NewChatHandler(
 	messageRepo *repository.MessageRepository,
 	userRepo *repository.UserRepository,
 	gatewayService *service.GatewayService,
+	responseService *service.ResponseService,
 	billingService *service.BillingService,
 ) *ChatHandler {
 	return &ChatHandler{
@@ -41,6 +43,7 @@ func NewChatHandler(
 		messageRepo:      messageRepo,
 		userRepo:         userRepo,
 		gatewayService:   gatewayService,
+		responseService:  responseService,
 		billingService:   billingService,
 	}
 }
@@ -374,13 +377,13 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 
 	// Build service request
 	chatReq := &service.ChatRequest{
-		Model:            req.Model,
-		Messages:         chatMessages,
-		Stream:           req.Stream,
-		Temperature:      req.Temperature,
-		MaxTokens:        req.MaxTokens,
-		ReasoningEffort:  req.ReasoningEffort,
-		Think:            req.Think,
+		Model:           req.Model,
+		Messages:        chatMessages,
+		Stream:          req.Stream,
+		Temperature:     req.Temperature,
+		MaxTokens:       req.MaxTokens,
+		ReasoningEffort: req.ReasoningEffort,
+		Think:           req.Think,
 	}
 
 	// Parse advanced thinking configs if present
@@ -420,15 +423,79 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 	// Create virtual API key for user (bind to all channels)
 	userID := user.ID
 	virtualAPIKey := &models.GatewayAPIKey{
-		ID:               0, // Virtual key, no real ID
-		UserID:           &userID,
+		ID:                0, // Virtual key, no real ID
+		UserID:            &userID,
 		BindToAllChannels: true, // Allow access to all models
-		IsChatKey:        true,  // Enable logging for chat requests
-		LogDetails:       true,  // Enable detailed logging for chat
+		IsChatKey:         true, // Enable logging for chat requests
+		LogDetails:        true, // Enable detailed logging for chat
 	}
 
 	// Serialize chatReq for service consumption
 	rawBody, _ := json.Marshal(chatReq)
+
+	apiType := detectChatAPIType(req.Model)
+
+	if apiType == chatAPITypeResponses {
+		responseReq, err := convertChatRequestToResponseRequest(&req)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		result, err := h.responseService.CreateResponse(c.Request.Context(), virtualAPIKey, responseReq, c.Request.Header)
+		if err != nil {
+			switch err {
+			case service.ErrModelNotFound:
+				c.JSON(http.StatusNotFound, gin.H{"error": "Model not found"})
+			case service.ErrNoRouteAvailable:
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "No available route for this model"})
+			case service.ErrPermissionDenied:
+				c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied for this model"})
+			case service.ErrInsufficientBalance:
+				c.JSON(http.StatusForbidden, gin.H{"error": "Insufficient balance"})
+			default:
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			}
+			return
+		}
+
+		if req.Stream {
+			streamResp, ok := result.(*service.ResponseStreamingResponse)
+			if !ok {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid response"})
+				return
+			}
+			defer streamResp.Close()
+
+			c.Header("Content-Type", "text/event-stream")
+			c.Header("Cache-Control", "no-cache")
+			c.Header("Connection", "keep-alive")
+
+			c.Stream(func(w io.Writer) bool {
+				buf := make([]byte, 1024)
+				n, err := streamResp.Read(buf)
+				if n > 0 {
+					w.Write(buf[:n])
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+				}
+				return err == nil
+			})
+			return
+		}
+
+		responsePayload, ok := result.(*models.Response)
+		if !ok {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid response"})
+			return
+		}
+
+		conversation.UpdatedAt = time.Now()
+		h.conversationRepo.Update(c.Request.Context(), conversation)
+		c.JSON(http.StatusOK, responsePayload)
+		return
+	}
 
 	result, err := h.gatewayService.HandleChatCompletions(c.Request.Context(), virtualAPIKey, chatReq, rawBody, req.Stream, c.Request.Header, c.Request.URL.Path)
 	if err != nil {
@@ -577,7 +644,6 @@ func (h *ChatHandler) DeleteMessagesAfter(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Messages deleted"})
 }
 
-
 // Helper function to parse uint
 func parseUint(s string, v *uint) error {
 	var i int
@@ -613,7 +679,7 @@ func (h *ChatHandler) UploadFile(c *gin.Context) {
 
 	// Limit file size to 20MB
 	if file.Size > 20*1024*1024 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "File too large (max 20MB)"	})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File too large (max 20MB)"})
 		return
 	}
 
@@ -750,19 +816,19 @@ func (h *ChatHandler) GenerateTitle(c *gin.Context) {
 				Content: service.ChatMessageContent{StringContent: firstUserContent},
 			},
 		},
-		Stream:           false,
-		MaxTokens:        50, // Title should be short
-		Temperature:      0.7,
-		ReasoningEffort:  "none", // Disable thinking/reasoning for direct output
+		Stream:          false,
+		MaxTokens:       50, // Title should be short
+		Temperature:     0.7,
+		ReasoningEffort: "none", // Disable thinking/reasoning for direct output
 	}
 
 	// Create virtual API key for user
 	userID := user.ID
 	virtualAPIKey := &models.GatewayAPIKey{
-		UserID:           &userID,
+		UserID:            &userID,
 		BindToAllChannels: true,
-		IsChatKey:        true,
-		LogDetails:       false, // Don't log title generation
+		IsChatKey:         true,
+		LogDetails:        false, // Don't log title generation
 	}
 
 	// Call gateway service to generate title

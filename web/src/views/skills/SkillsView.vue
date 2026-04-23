@@ -204,7 +204,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessageBox } from 'element-plus'
+import { ElMessageBox } from '@/plugins/element-plus-services'
 import { Plus, Search, Loading } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { useSkillsStore } from '@/stores/skills'

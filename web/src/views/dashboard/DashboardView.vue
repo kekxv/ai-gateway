@@ -289,7 +289,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import * as echarts from 'echarts'
+import echarts, { type ECharts } from '@/utils/echarts'
 import { statsApi } from '@/api/stats'
 import type { Stats } from '@/types/stats'
 import { useAuthStore } from '@/stores/auth'
@@ -307,11 +307,11 @@ const monthlyChartRef = ref<HTMLElement | null>(null)
 const userTokenChartRef = ref<HTMLElement | null>(null)
 
 // Chart instances
-let dailyChart: echarts.ECharts | null = null
-let weeklyChart: echarts.ECharts | null = null
-let tokenChart: echarts.ECharts | null = null
-let monthlyChart: echarts.ECharts | null = null
-let userTokenChart: echarts.ECharts | null = null
+let dailyChart: ECharts | null = null
+let weeklyChart: ECharts | null = null
+let tokenChart: ECharts | null = null
+let monthlyChart: ECharts | null = null
+let userTokenChart: ECharts | null = null
 
 const stats = ref<Stats | null>(null)
 const providerCount = ref(0)
@@ -369,7 +369,7 @@ const fetchStats = async () => {
   }
 }
 
-const initChart = (ref: HTMLElement | null): echarts.ECharts | null => {
+const initChart = (ref: HTMLElement | null): ECharts | null => {
   if (!ref) return null
   return echarts.init(ref)
 }

@@ -33,7 +33,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from '@/plugins/element-plus-services'
 import { Download, CopyDocument, Loading } from '@element-plus/icons-vue'
 import { useCanvasStore } from '@/stores/canvas'
 

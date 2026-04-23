@@ -14,24 +14,24 @@ import (
 )
 
 type ProviderHandler struct {
-	providerRepo       *repository.ProviderRepository
-	providerTypeRepo   *repository.ProviderTypeRepository
-	modelRepo          *repository.ModelRepository
-	modelRouteRepo     *repository.ModelRouteRepository
-	modelAliasRepo     *repository.ModelAliasRepository
-	channelRepo        *repository.ChannelRepository
-	modelSyncService   *service.ModelSyncService
+	providerRepo     *repository.ProviderRepository
+	providerTypeRepo *repository.ProviderTypeRepository
+	modelRepo        *repository.ModelRepository
+	modelRouteRepo   *repository.ModelRouteRepository
+	modelAliasRepo   *repository.ModelAliasRepository
+	channelRepo      *repository.ChannelRepository
+	modelSyncService *service.ModelSyncService
 }
 
 func NewProviderHandler(providerRepo *repository.ProviderRepository, providerTypeRepo *repository.ProviderTypeRepository, modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository, modelAliasRepo *repository.ModelAliasRepository, channelRepo *repository.ChannelRepository, modelSyncService *service.ModelSyncService) *ProviderHandler {
 	return &ProviderHandler{
-		providerRepo:       providerRepo,
-		providerTypeRepo:   providerTypeRepo,
-		modelRepo:          modelRepo,
-		modelRouteRepo:     modelRouteRepo,
-		modelAliasRepo:     modelAliasRepo,
-		channelRepo:        channelRepo,
-		modelSyncService:   modelSyncService,
+		providerRepo:     providerRepo,
+		providerTypeRepo: providerTypeRepo,
+		modelRepo:        modelRepo,
+		modelRouteRepo:   modelRouteRepo,
+		modelAliasRepo:   modelAliasRepo,
+		channelRepo:      channelRepo,
+		modelSyncService: modelSyncService,
 	}
 }
 
@@ -61,21 +61,21 @@ func (h *ProviderHandler) ListProviders(c *gin.Context) {
 
 func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 	var req struct {
-		Name               string   `json:"name" binding:"required"`
-		BaseURL            string   `json:"baseURL"`
-		BaseURLSnake       string   `json:"base_url"`
-		APIKey             string   `json:"apiKey"`
-		APIKeySnake        string   `json:"api_key"`
-		Type               string   `json:"type"`
-		Types              string   `json:"types"`     // JSON array string
-		TypesList          []string `json:"typesList"` // Array format
-		ProviderTypes      []struct {
+		Name          string   `json:"name" binding:"required"`
+		BaseURL       string   `json:"baseURL"`
+		BaseURLSnake  string   `json:"base_url"`
+		APIKey        string   `json:"apiKey"`
+		APIKeySnake   string   `json:"api_key"`
+		Type          string   `json:"type"`
+		Types         string   `json:"types"`     // JSON array string
+		TypesList     []string `json:"typesList"` // Array format
+		ProviderTypes []struct {
 			Type    string `json:"type"`
 			BaseURL string `json:"baseURL"`
 		} `json:"providerTypes"` // Type-specific base URLs
-		AutoLoadModels     bool     `json:"autoLoadModels"`
-		AutoLoadModelsSnake bool    `json:"auto_load_models"`
-		Disabled           bool     `json:"disabled"`
+		AutoLoadModels      bool `json:"autoLoadModels"`
+		AutoLoadModelsSnake bool `json:"auto_load_models"`
+		Disabled            bool `json:"disabled"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -173,21 +173,21 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 	id := parseUintParam(c.Param("id"))
 
 	var req struct {
-		Name               string   `json:"name"`
-		BaseURL            string   `json:"baseURL"`
-		BaseURLSnake       string   `json:"base_url"`
-		APIKey             string   `json:"apiKey"`
-		APIKeySnake        string   `json:"api_key"`
-		Type               string   `json:"type"`
-		Types              string   `json:"types"`     // JSON array string
-		TypesList          []string `json:"typesList"` // Array format
-		ProviderTypes      []struct {
+		Name          string   `json:"name"`
+		BaseURL       string   `json:"baseURL"`
+		BaseURLSnake  string   `json:"base_url"`
+		APIKey        string   `json:"apiKey"`
+		APIKeySnake   string   `json:"api_key"`
+		Type          string   `json:"type"`
+		Types         string   `json:"types"`     // JSON array string
+		TypesList     []string `json:"typesList"` // Array format
+		ProviderTypes []struct {
 			Type    string `json:"type"`
 			BaseURL string `json:"baseURL"`
 		} `json:"providerTypes"` // Type-specific base URLs
-		AutoLoadModels     bool     `json:"autoLoadModels"`
-		AutoLoadModelsSnake bool    `json:"auto_load_models"`
-		Disabled           bool     `json:"disabled"`
+		AutoLoadModels      bool `json:"autoLoadModels"`
+		AutoLoadModelsSnake bool `json:"auto_load_models"`
+		Disabled            bool `json:"disabled"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -220,9 +220,9 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 		apiKey = req.APIKeySnake
 	}
 	// Only update APIKey if a new value is provided
-		if apiKey != "" {
-			provider.APIKey = apiKey
-		}
+	if apiKey != "" {
+		provider.APIKey = apiKey
+	}
 	// Handle Types array
 	if len(req.TypesList) > 0 {
 		provider.SetTypes(req.TypesList)
@@ -461,12 +461,12 @@ func (h *ProviderHandler) SyncModels(c *gin.Context) {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"message":        "模型同步成功",
-			"modelsCreated":  result.ModelsCreated,
-			"routesCreated":  result.RoutesCreated,
-			"modelsRemoved":  result.ModelsRemoved,
-			"routesRemoved":  result.RoutesRemoved,
-			"totalFetched":   result.TotalFetched,
+			"message":       "模型同步成功",
+			"modelsCreated": result.ModelsCreated,
+			"routesCreated": result.RoutesCreated,
+			"modelsRemoved": result.ModelsRemoved,
+			"routesRemoved": result.RoutesRemoved,
+			"totalFetched":  result.TotalFetched,
 		})
 		return
 	}
@@ -595,12 +595,12 @@ func (h *ProviderHandler) SyncModels(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":        "模型同步成功",
-		"modelsCreated":  modelsCreated,
-		"routesCreated":  routesCreated,
-		"modelsRemoved":  modelsRemoved,
-		"routesRemoved":  routesRemoved,
-		"totalFetched":   len(fetchedModels),
+		"message":       "模型同步成功",
+		"modelsCreated": modelsCreated,
+		"routesCreated": routesCreated,
+		"modelsRemoved": modelsRemoved,
+		"routesRemoved": routesRemoved,
+		"totalFetched":  len(fetchedModels),
 	})
 }
 
@@ -941,20 +941,20 @@ func (h *ChannelHandler) BindModels(c *gin.Context) {
 
 // ModelHandler
 type ModelHandler struct {
-	modelRepo       *repository.ModelRepository
-	modelRouteRepo  *repository.ModelRouteRepository
-	modelAliasRepo  *repository.ModelAliasRepository
-	channelRepo     *repository.ChannelRepository
-	providerRepo    *repository.ProviderRepository
+	modelRepo      *repository.ModelRepository
+	modelRouteRepo *repository.ModelRouteRepository
+	modelAliasRepo *repository.ModelAliasRepository
+	channelRepo    *repository.ChannelRepository
+	providerRepo   *repository.ProviderRepository
 }
 
 func NewModelHandler(modelRepo *repository.ModelRepository, modelRouteRepo *repository.ModelRouteRepository, modelAliasRepo *repository.ModelAliasRepository, channelRepo *repository.ChannelRepository, providerRepo *repository.ProviderRepository) *ModelHandler {
 	return &ModelHandler{
-		modelRepo:       modelRepo,
-		modelRouteRepo:  modelRouteRepo,
-		modelAliasRepo:  modelAliasRepo,
-		channelRepo:     channelRepo,
-		providerRepo:    providerRepo,
+		modelRepo:      modelRepo,
+		modelRouteRepo: modelRouteRepo,
+		modelAliasRepo: modelAliasRepo,
+		channelRepo:    channelRepo,
+		providerRepo:   providerRepo,
 	}
 }
 
@@ -1015,9 +1015,10 @@ func (h *ModelHandler) ListModelsForChat(c *gin.Context) {
 		}
 		if hasEnabledRoute {
 			availableModels = append(availableModels, map[string]interface{}{
-				"id":    m.ID,
-				"name":  m.Name,
-				"alias": m.Alias,
+				"id":       m.ID,
+				"name":     m.Name,
+				"alias":    m.Alias,
+				"api_mode": detectChatAPIType(m.Name),
 			})
 		}
 	}
@@ -1030,11 +1031,11 @@ func (h *ModelHandler) CreateModel(c *gin.Context) {
 		Name                  string   `json:"name" binding:"required"`
 		Aliases               []string `json:"aliases"`
 		Description           string   `json:"description"`
-		InputTokenPrice      int64  `json:"inputTokenPrice"`
-		InputTokenPriceSnake int64  `json:"input_price"`
-		OutputTokenPrice     int64  `json:"outputTokenPrice"`
-		OutputTokenPriceSnake int64  `json:"output_price"`
-		ChannelIDs           []uint `json:"channelIds"`
+		InputTokenPrice       int64    `json:"inputTokenPrice"`
+		InputTokenPriceSnake  int64    `json:"input_price"`
+		OutputTokenPrice      int64    `json:"outputTokenPrice"`
+		OutputTokenPriceSnake int64    `json:"output_price"`
+		ChannelIDs            []uint   `json:"channelIds"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1127,10 +1128,10 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 		Name                  string   `json:"name"`
 		Aliases               []string `json:"aliases"`
 		Description           string   `json:"description"`
-		InputTokenPrice      int64  `json:"inputTokenPrice"`
-		InputTokenPriceSnake int64  `json:"input_price"`
-		OutputTokenPrice     int64  `json:"outputTokenPrice"`
-		OutputTokenPriceSnake int64  `json:"output_price"`
+		InputTokenPrice       int64    `json:"inputTokenPrice"`
+		InputTokenPriceSnake  int64    `json:"input_price"`
+		OutputTokenPrice      int64    `json:"outputTokenPrice"`
+		OutputTokenPriceSnake int64    `json:"output_price"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1315,13 +1316,13 @@ func (h *APIKeyHandler) ListAPIKeys(c *gin.Context) {
 
 func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 	var req struct {
-		Name                string `json:"name" binding:"required"`
-		BindToAllChannels   bool   `json:"bindToAllChannels"`
-		BindToAllChannelsSnake bool `json:"bind_to_all"`
-		ChannelIDs          []uint `json:"channelIds"`
-		ChannelIDsSnake     []uint `json:"channels"`
-		LogDetails          bool   `json:"logDetails"`
-		LogDetailsSnake     bool   `json:"log_details"`
+		Name                   string `json:"name" binding:"required"`
+		BindToAllChannels      bool   `json:"bindToAllChannels"`
+		BindToAllChannelsSnake bool   `json:"bind_to_all"`
+		ChannelIDs             []uint `json:"channelIds"`
+		ChannelIDsSnake        []uint `json:"channels"`
+		LogDetails             bool   `json:"logDetails"`
+		LogDetailsSnake        bool   `json:"log_details"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1344,12 +1345,12 @@ func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 	}
 
 	apiKey := &models.GatewayAPIKey{
-		Key:              key,
-		Name:             req.Name,
-		Enabled:          true,
+		Key:               key,
+		Name:              req.Name,
+		Enabled:           true,
 		BindToAllChannels: bindToAll,
-		LogDetails:       logDetails,
-		CreatedAt:        time.Now(),
+		LogDetails:        logDetails,
+		CreatedAt:         time.Now(),
 	}
 
 	if err := h.apiKeyRepo.Create(c.Request.Context(), apiKey); err != nil {
@@ -1369,14 +1370,14 @@ func (h *APIKeyHandler) UpdateAPIKey(c *gin.Context) {
 	id := parseUintParam(c.Param("id"))
 
 	var req struct {
-		Name                string `json:"name"`
-		Enabled             bool   `json:"enabled"`
-		BindToAllChannels   bool   `json:"bindToAllChannels"`
-		BindToAllChannelsSnake bool `json:"bind_to_all"`
-		ChannelIDs          []uint `json:"channelIds"`
-		ChannelIDsSnake     []uint `json:"channels"`
-		LogDetails          bool   `json:"logDetails"`
-		LogDetailsSnake     bool   `json:"log_details"`
+		Name                   string `json:"name"`
+		Enabled                bool   `json:"enabled"`
+		BindToAllChannels      bool   `json:"bindToAllChannels"`
+		BindToAllChannelsSnake bool   `json:"bind_to_all"`
+		ChannelIDs             []uint `json:"channelIds"`
+		ChannelIDsSnake        []uint `json:"channels"`
+		LogDetails             bool   `json:"logDetails"`
+		LogDetailsSnake        bool   `json:"log_details"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {

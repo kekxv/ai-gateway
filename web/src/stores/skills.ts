@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { skillApi } from '@/api/skill'
 import type { Skill, SkillCatalogItem, CreateSkillRequest, UpdateSkillRequest } from '@/types/skill'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from '@/plugins/element-plus-services'
 
 export const useSkillsStore = defineStore('skills', () => {
   // Skills list

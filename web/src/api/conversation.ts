@@ -1,6 +1,6 @@
 import { api } from './index'
-import { ElMessage } from 'element-plus'
-import type { Conversation, Message, CreateConversationRequest, UpdateConversationRequest, ChatRequest, ChatContentPart } from '@/types/conversation'
+import { ElMessage } from '@/plugins/element-plus-services'
+import type { Conversation, Message, CreateConversationRequest, UpdateConversationRequest, ChatRequest, ChatContentPart, ChatApiMode, ChatModelOption } from '@/types/conversation'
 import type { ToolCall } from '@/types/tool'
 
 export const conversationApi = {
@@ -49,6 +49,7 @@ export const conversationApi = {
   sendMessageStream: async (
     id: number,
     data: ChatRequest,
+    apiMode: ChatApiMode,
     onContent: (content: string) => void,
     onDone: () => void,
     onError: (error: string) => void,
@@ -95,6 +96,9 @@ export const conversationApi = {
       let inReasoning = false
       let toolCalls: ToolCall[] = []
       let toolCallsByIndex: Map<number, ToolCall> = new Map()  // Track tool calls by index for accumulation
+      let responseEvent = ''
+      let responseToolCalls: ToolCall[] = []
+      const responseToolCallMap = new Map<string, ToolCall>()
 
       while (true) {
         const { done, value } = await reader.read()
@@ -118,6 +122,11 @@ export const conversationApi = {
         buffer = lines.pop() || ''
 
         for (const line of lines) {
+          if (apiMode === 'responses' && line.startsWith('event: ')) {
+            responseEvent = line.slice(7).trim()
+            continue
+          }
+
           if (line.startsWith('data: ')) {
             const jsonData = line.slice(6)
             if (jsonData === '[DONE]') {
@@ -126,14 +135,65 @@ export const conversationApi = {
                 onContent('</think>')
               }
               // If there are tool calls and we have a handler, execute them and continue
-              if (toolCalls.length > 0 && onToolCall) {
-                await onToolCall(toolCalls)
+              const pendingToolCalls = apiMode === 'responses' ? responseToolCalls : toolCalls
+              if (pendingToolCalls.length > 0 && onToolCall) {
+                await onToolCall(pendingToolCalls)
                 return
               }
               onDone()
               break
             }
             try {
+              if (apiMode === 'responses') {
+                const event = JSON.parse(jsonData)
+
+                if (responseEvent === 'response.output_text.delta' && typeof event.delta === 'string') {
+                  onContent(event.delta)
+                  continue
+                }
+
+                if (responseEvent === 'response.output_item.done') {
+                  const item = event.item
+                  if (item?.type === 'function_call' && item.name) {
+                    const toolCallId = item.call_id || item.id || `${item.name}_${responseToolCalls.length}`
+                    if (!responseToolCallMap.has(toolCallId)) {
+                      const toolCall: ToolCall = {
+                        id: toolCallId,
+                        type: 'function',
+                        function: {
+                          name: item.name,
+                          arguments: item.arguments || '{}'
+                        }
+                      }
+                      responseToolCallMap.set(toolCallId, toolCall)
+                      responseToolCalls.push(toolCall)
+                    }
+                  }
+                  continue
+                }
+
+                if (responseEvent === 'response.failed' || responseEvent === 'response.error') {
+                  const errorMessage =
+                    event.response?.error?.message ||
+                    event.error?.message ||
+                    event.message ||
+                    'Request failed'
+                  onError(errorMessage)
+                  return
+                }
+
+                if (responseEvent === 'response.completed') {
+                  if (responseToolCalls.length > 0 && onToolCall) {
+                    await onToolCall(responseToolCalls)
+                    return
+                  }
+                  onDone()
+                  return
+                }
+
+                continue
+              }
+
               const chunk = JSON.parse(jsonData)
               if (chunk.choices && chunk.choices[0]?.delta) {
                 const delta = chunk.choices[0].delta
@@ -214,7 +274,7 @@ export const conversationApi = {
 export const modelApi = {
   // Get available models for chat (only enabled models with routes)
   listForChat: () =>
-    api.get<{ id: number; name: string; alias?: string }[]>('/models/chat')
+    api.get<ChatModelOption[]>('/models/chat')
 }
 
 // Helper function to build user content from text and attached files

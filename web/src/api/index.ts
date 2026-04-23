@@ -1,5 +1,5 @@
 import axios, { type AxiosInstance, type AxiosError } from 'axios'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from '@/plugins/element-plus-services'
 import { useAuthStore } from '@/stores/auth'
 
 // 不需要处理401跳转的接口列表（认证相关接口）

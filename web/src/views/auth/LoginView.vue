@@ -135,7 +135,7 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from '@/plugins/element-plus-services'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()

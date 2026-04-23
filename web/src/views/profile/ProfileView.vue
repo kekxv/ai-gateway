@@ -242,10 +242,10 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, nextTick, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from '@/plugins/element-plus-services'
 import { Plus } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
-import * as echarts from 'echarts'
+import echarts, { type ECharts } from '@/utils/echarts'
 
 import { useAuthStore } from '@/stores/auth'
 import { authApi } from '@/api/auth'
@@ -285,7 +285,7 @@ const statsLoading = ref(false)
 
 // Chart
 const dailyChartRef = ref<HTMLElement | null>(null)
-let dailyChart: echarts.ECharts | null = null
+let dailyChart: ECharts | null = null
 
 const passwordFormRef = ref<FormInstance>()
 const totpVerifyFormRef = ref<FormInstance>()

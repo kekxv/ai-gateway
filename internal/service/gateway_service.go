@@ -1627,6 +1627,9 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		}
 
 		targetURL = fmt.Sprintf("%s/models/%s:%s", geminiBaseURL, upstreamModelName, action)
+		if stream {
+			targetURL += "?alt=sse"
+		}
 		forwardHeaders["x-goog-api-key"] = route.Provider.APIKey
 
 		// Convert OpenAI request to Gemini request
@@ -1660,6 +1663,20 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		latency := int(time.Since(startTime).Milliseconds())
 		updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
 		return nil, ErrUpstreamFailed
+	}
+
+	if providerType == "gemini" {
+		if geminiReq, ok := finalReq.(*models.GeminiGenerateContentRequest); ok && shouldRetryGeminiWithoutThinking(stream, resp, geminiReq) {
+			body, _ := s.readDecompressedBody(resp)
+			log.Printf("[HandleChatCompletions] Gemini request failed with thinking config, retrying without thinkingConfig. status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
+			resp, err = s.sendUpstreamRequest(ctx, targetURL, upstreamAPIKey, cloneGeminiRequestWithoutThinking(geminiReq), stream, forwardHeaders)
+			if err != nil {
+				log.Printf("[HandleChatCompletions] Gemini retry without thinkingConfig failed: %v, URL: %s", err, targetURL)
+				latency := int(time.Since(startTime).Milliseconds())
+				updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
+				return nil, ErrUpstreamFailed
+			}
+		}
 	}
 
 	// Handle error responses
@@ -1920,6 +1937,27 @@ func (s *GatewayService) sendUpstreamRequest(ctx context.Context, url, apiKey st
 
 	log.Printf("[sendUpstreamRequest] Sending request to: %s, stream: %v, model: %s", url, stream, modelName)
 	return s.httpClient.Do(httpReq)
+}
+
+func cloneGeminiRequestWithoutThinking(req *models.GeminiGenerateContentRequest) *models.GeminiGenerateContentRequest {
+	if req == nil {
+		return nil
+	}
+
+	cloned := *req
+	if req.GenerationConfig != nil {
+		gen := *req.GenerationConfig
+		gen.ThinkingConfig = nil
+		cloned.GenerationConfig = &gen
+	}
+	return &cloned
+}
+
+func shouldRetryGeminiWithoutThinking(stream bool, resp *http.Response, req *models.GeminiGenerateContentRequest) bool {
+	if stream || resp == nil || req == nil || req.GenerationConfig == nil || req.GenerationConfig.ThinkingConfig == nil {
+		return false
+	}
+	return resp.StatusCode >= 500
 }
 
 // readDecompressedBody reads response body and decompresses it if necessary
@@ -2429,6 +2467,9 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		}
 
 		targetURL := fmt.Sprintf("%s/models/%s:%s", geminiBaseURL, upstreamModelName, action)
+		if stream {
+			targetURL += "?alt=sse"
+		}
 		forwardHeaders["x-goog-api-key"] = route.Provider.APIKey
 
 		// Convert Anthropic request to Gemini request
@@ -2445,6 +2486,18 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			latency := int(time.Since(startTime).Milliseconds())
 			updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
 			return nil, ErrUpstreamFailed
+		}
+
+		if shouldRetryGeminiWithoutThinking(stream, resp, geminiReq.(*models.GeminiGenerateContentRequest)) {
+			body, _ := s.readDecompressedBody(resp)
+			log.Printf("[HandleAnthropicMessages] Gemini request failed with thinking config, retrying without thinkingConfig. status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
+			resp, err = s.sendUpstreamRequest(ctx, targetURL, "", cloneGeminiRequestWithoutThinking(geminiReq.(*models.GeminiGenerateContentRequest)), stream, forwardHeaders)
+			if err != nil {
+				log.Printf("[HandleAnthropicMessages] Gemini retry without thinkingConfig failed: %v, URL: %s", err, targetURL)
+				latency := int(time.Since(startTime).Milliseconds())
+				updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
+				return nil, ErrUpstreamFailed
+			}
 		}
 
 		if resp.StatusCode >= 400 {

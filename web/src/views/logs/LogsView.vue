@@ -412,7 +412,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from '@/plugins/element-plus-services'
 import { CopyDocument, Warning, Loading, Monitor, Document, ChatDotRound, DataLine, User, DocumentCopy, ArrowDown, ArrowUp, Check } from '@element-plus/icons-vue'
 import { logApi } from '@/api/log'
 import type { Log, LogDetail } from '@/types/log'
@@ -427,7 +427,10 @@ import SystemBlock from '@/components/chat/SystemBlock.vue'
 import SystemReminderBlock from '@/components/chat/SystemReminderBlock.vue'
 import dayjs from 'dayjs'
 import 'highlight.js/styles/github.css'
-import hljs from 'highlight.js'
+import hljs from 'highlight.js/lib/core'
+import json from 'highlight.js/lib/languages/json'
+
+hljs.registerLanguage('json', json)
 
 const { t } = useI18n()
 const loading = ref(false)

@@ -122,7 +122,7 @@ func main() {
 	statsHandler := handler.NewStatsHandler(logRepo, userRepo, modelRepo, providerRepo)
 	gatewayHandler := handler.NewGatewayHandler(gatewayService, responseService)
 	anthropicHandler := handler.NewAnthropicHandler(gatewayService)
-	chatHandler := handler.NewChatHandler(conversationRepo, messageRepo, userRepo, gatewayService, billingService)
+	chatHandler := handler.NewChatHandler(conversationRepo, messageRepo, userRepo, gatewayService, responseService, billingService)
 	toolsHandler := handler.NewToolsHandler(toolsService)
 	skillHandler := handler.NewSkillHandler(skillService)
 
@@ -155,7 +155,7 @@ func main() {
 		AnthropicHandler: anthropicHandler,
 		ChatHandler:      chatHandler,
 		ToolsHandler:     toolsHandler,
-			SkillHandler:     skillHandler,
+		SkillHandler:     skillHandler,
 		APIKeyRepo:       apiKeyRepo,
 	})
 
@@ -292,7 +292,7 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 
 	// Model management
 	admin.GET("/models", deps.ModelHandler.ListModels)
-		admin.GET("/models/chat", deps.ModelHandler.ListModelsForChat)
+	admin.GET("/models/chat", deps.ModelHandler.ListModelsForChat)
 	admin.POST("/models", deps.ModelHandler.CreateModel)
 	admin.GET("/models/:id", deps.ModelHandler.GetModel)
 	admin.PUT("/models/:id", deps.ModelHandler.UpdateModel)
@@ -372,7 +372,7 @@ func setupRoutes(r *gin.Engine, deps *Dependencies) {
 
 	// ========== Anthropic Messages API (API Key required) ==========
 	anthropic := r.Group("/api/anthropic/v1")
-		anthropic.Use(middleware.APIKeyAuth(deps.APIKeyRepo))
-		anthropic.POST("/messages", deps.AnthropicHandler.CreateMessages)
-		anthropic.POST("/messages/count_tokens", deps.AnthropicHandler.CountTokens)
+	anthropic.Use(middleware.APIKeyAuth(deps.APIKeyRepo))
+	anthropic.POST("/messages", deps.AnthropicHandler.CreateMessages)
+	anthropic.POST("/messages/count_tokens", deps.AnthropicHandler.CountTokens)
 }

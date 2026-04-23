@@ -1,12 +1,12 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
 import './styles/global.css'
 
 import App from './App.vue'
 import { router } from './router'
 import { createI18n } from 'vue-i18n'
+import { installElementPlus } from '@/plugins/element-plus'
 
 // Import locales
 import zhLocale from '@/../public/locales/zh/common.json'
@@ -29,7 +29,7 @@ const app = createApp(App)
 // Use plugins
 app.use(createPinia())
 app.use(router)
-app.use(ElementPlus)
+installElementPlus(app)
 app.use(i18n)
 
 // Mount app

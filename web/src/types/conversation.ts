@@ -10,6 +10,15 @@ export interface Conversation {
   updated_at: string
 }
 
+export type ChatApiMode = 'chat' | 'responses'
+
+export interface ChatModelOption {
+  id: number
+  name: string
+  alias?: string
+  api_mode?: ChatApiMode
+}
+
 export interface ConversationSettings {
   temperature?: number
   max_tokens?: number

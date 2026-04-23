@@ -35,7 +35,10 @@
             </div>
             <div class="conv-info">
               <div class="conv-title">{{ conv.title }}</div>
-              <div class="conv-meta">{{ conv.model }}</div>
+              <div class="conv-meta">
+                <span class="conv-model">{{ conv.model }}</span>
+                <span v-if="conv.model.toLowerCase().includes('codex')" class="conv-mode-tag">Responses</span>
+              </div>
             </div>
             <el-dropdown trigger="click" @command="handleConversationAction($event, conv)">
               <button class="conv-more" @click.stop>
@@ -73,24 +76,35 @@
             <el-icon><Menu /></el-icon>
           </button>
 
-          <!-- Model Selector -->
-          <div class="model-selector" v-if="currentConversation">
-            <el-select
-              v-model="selectedModel"
-              placeholder="选择模型"
-              size="default"
-              @change="updateModel"
-            >
-              <el-option
-                v-for="model in models"
-                :key="model.name"
-                :label="model.alias || model.name"
-                :value="model.name"
-              />
-            </el-select>
+          <div class="title-panel" v-if="currentConversation">
+            <div class="title-copy">
+              <div class="eyebrow">会话工作台</div>
+              <div class="conversation-name">{{ currentConversation.title }}</div>
+            </div>
+            <div class="selector-cluster">
+              <div class="mode-badge" :class="currentApiMode">
+                <span class="mode-dot"></span>
+                <span>{{ currentApiModeLabel }}</span>
+              </div>
+              <div class="model-selector">
+                <el-select
+                  v-model="selectedModel"
+                  placeholder="选择模型"
+                  size="default"
+                  @change="updateModel"
+                >
+                  <el-option
+                    v-for="model in models"
+                    :key="model.name"
+                    :label="model.alias || model.name"
+                    :value="model.name"
+                  />
+                </el-select>
+              </div>
+            </div>
           </div>
           <div class="model-selector" v-else>
-            <span class="placeholder-text">选择模型开始对话</span>
+            <span class="placeholder-text">选择模型后开始新的会话</span>
           </div>
         </div>
 
@@ -141,11 +155,16 @@
         <!-- Welcome Screen -->
         <div v-if="!currentConversation" class="welcome-screen">
           <div class="welcome-content">
-            <div class="welcome-icon">
-              <el-icon :size="48"><Promotion /></el-icon>
+            <div class="welcome-hero">
+              <div class="welcome-icon">
+                <el-icon :size="48"><Promotion /></el-icon>
+              </div>
+              <div class="hero-copy">
+                <span class="hero-kicker">AI Gateway Chat</span>
+                <h2>统一聊天入口，按模型自动切换协议</h2>
+                <p>普通模型继续走 Chat Completions，Codex 自动切到 Responses。你只需要选模型，然后开始对话。</p>
+              </div>
             </div>
-            <h2>AI 助手</h2>
-            <p>选择或创建一个对话开始聊天</p>
 
             <div class="quick-start">
               <div class="model-select-row">
@@ -158,6 +177,26 @@
                     :value="model.name"
                   />
                 </el-select>
+              </div>
+              <div class="welcome-model-meta">
+                <div class="welcome-model-card">
+                  <span class="meta-label">当前模型</span>
+                  <strong>{{ currentModelLabel }}</strong>
+                </div>
+                <div class="welcome-model-card">
+                  <span class="meta-label">接口模式</span>
+                  <strong>{{ currentApiModeLabel }}</strong>
+                </div>
+              </div>
+              <div class="feature-grid">
+                <div class="feature-card">
+                  <span class="feature-title">Codex / Responses</span>
+                  <span class="feature-desc">适合代码代理、多阶段输出与更现代的 OpenAI 响应格式。</span>
+                </div>
+                <div class="feature-card">
+                  <span class="feature-title">多模态输入</span>
+                  <span class="feature-desc">继续支持图片粘贴、文件上传、工具与技能联动。</span>
+                </div>
               </div>
               <button class="start-btn" @click="createNewConversation">
                 <el-icon><ChatLineRound /></el-icon>
@@ -331,6 +370,15 @@
       <!-- Input Area -->
       <div class="input-area">
         <div class="input-container">
+          <div class="input-mode-bar">
+            <div class="mode-badge compact" :class="currentApiMode">
+              <span class="mode-dot"></span>
+              <span>{{ currentApiModeLabel }}</span>
+            </div>
+            <span class="input-mode-text">
+              {{ isResponsesMode ? '当前模型会通过 Responses API 发送请求，适合 Codex 工作流。' : '当前模型使用 Chat Completions 流式返回内容。' }}
+            </span>
+          </div>
           <!-- Enabled Skills & Tools Display -->
           <div v-if="activeSkillName || toolsStore.enabledTools.length > 0" class="enabled-bar-container">
             <!-- Active Skill Display -->
@@ -578,14 +626,14 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from '@/plugins/element-plus-services'
 import {
   Plus, Setting, ChatLineRound, Monitor,
   Loading, Promotion, MoreFilled, Delete, MagicStick, Close, Menu, Paperclip, Operation,
   Edit, RefreshRight, DocumentCopy, Collection, Check, Cpu, WarningFilled
 } from '@element-plus/icons-vue'
 import { conversationApi, modelApi } from '@/api/conversation'
-import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart, ChatRequest, ChatMessage, OpenAIReasoningEffort, GeminiThinkingLevel } from '@/types/conversation'
+import type { Conversation, Message, ConversationSettings, PresetPrompt, ChatContentPart, ChatRequest, ChatMessage, OpenAIReasoningEffort, GeminiThinkingLevel, ChatApiMode, ChatModelOption } from '@/types/conversation'
 import { PRESET_PROMPTS } from '@/types/conversation'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import ThinkBlock from '@/components/chat/ThinkBlock.vue'
@@ -597,6 +645,7 @@ import { useToolsStore } from '@/stores/tools'
 import { useImageStore } from '@/stores/image'
 import { useSkillsStore } from '@/stores/skills'
 import type { ToolCallResult, ToolCall } from '@/types/tool'
+import { executeToolCall, setMessagesForToolExecution } from '@/utils/toolExecutor'
 
 // Tools store
 const toolsStore = useToolsStore()
@@ -729,7 +778,7 @@ const sidebarOpen = ref(false)
 const conversations = ref<Conversation[]>([])
 const currentConversation = ref<Conversation | null>(null)
 const messages = ref<ExtendedMessage[]>([])
-const models = ref<{ name: string; alias?: string }[]>([])
+const models = ref<ChatModelOption[]>([])
 const selectedModel = ref('')
 const inputContent = ref('')
 const sending = ref(false)
@@ -843,7 +892,6 @@ const executeToolCallsAndContinue = async (
   for (let i = 0; i < results.length; i++) {
     const toolCall = results[i]
     try {
-      const { executeToolCall, setMessagesForToolExecution } = await import('@/utils/toolExecutor')
       // 设置当前消息列表，供 yolo_draw 等工具使用
       setMessagesForToolExecution(messages.value.map(m => ({
         role: m.role,
@@ -876,6 +924,24 @@ const settingsForm = reactive<ConversationSettings & { system_prompt: string }>(
 // Thinking/reasoning effort mode
 type ThinkingMode = 'auto' | 'high' | 'medium' | 'low' | 'minimal' | 'none'
 const thinkingMode = ref<ThinkingMode>('auto')
+
+const selectedModelMeta = computed(() => {
+  return models.value.find(model => model.name === selectedModel.value) || null
+})
+
+const currentApiMode = computed<ChatApiMode>(() => {
+  return selectedModelMeta.value?.api_mode || 'chat'
+})
+
+const currentApiModeLabel = computed(() => {
+  return currentApiMode.value === 'responses' ? 'Responses' : 'Chat Completions'
+})
+
+const currentModelLabel = computed(() => {
+  return selectedModelMeta.value?.alias || selectedModelMeta.value?.name || '未选择模型'
+})
+
+const isResponsesMode = computed(() => currentApiMode.value === 'responses')
 
 const thinkingModeLabel = computed(() => {
   const labels: Record<ThinkingMode, string> = {
@@ -1690,6 +1756,7 @@ const streamWithToolCalls = async (
       conversationApi.sendMessageStream(
         conversationId,
         requestData,
+        currentApiMode.value,
         (text) => {
           streamingRawContent.value += text
           const parsed = parseStreamingThinkContent(streamingRawContent.value)
@@ -2314,7 +2381,10 @@ onUnmounted(() => {
 .chat-page {
   display: flex;
   height: calc(100vh - 56px - 56px);
-  background: #f0f2f5;
+  background:
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.18), transparent 30%),
+    radial-gradient(circle at top right, rgba(249, 115, 22, 0.14), transparent 26%),
+    linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
   position: relative;
 }
 
@@ -2335,12 +2405,14 @@ onUnmounted(() => {
 /* Sidebar */
 .sidebar {
   width: 280px;
-  background: #fff;
+  background: rgba(255, 255, 255, 0.84);
+  backdrop-filter: blur(18px);
   display: flex;
   flex-direction: column;
-  border-right: 1px solid #e5e7eb;
+  border-right: 1px solid rgba(148, 163, 184, 0.2);
   transition: transform 0.3s ease;
   flex-shrink: 0;
+  box-shadow: 18px 0 40px rgba(15, 23, 42, 0.06);
 }
 
 @media (max-width: 767px) {
@@ -2363,7 +2435,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
 }
 
 .sidebar-title {
@@ -2403,7 +2475,7 @@ onUnmounted(() => {
   justify-content: center;
   gap: 8px;
   padding: 12px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 55%, #0ea5e9 100%);
   color: white;
   border: none;
   border-radius: 12px;
@@ -2416,7 +2488,7 @@ onUnmounted(() => {
 
 .new-chat-btn:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  box-shadow: 0 12px 24px rgba(29, 78, 216, 0.22);
 }
 
 .conversation-list {
@@ -2436,11 +2508,12 @@ onUnmounted(() => {
 }
 
 .conversation-item:hover {
-  background: #f3f4f6;
+  background: rgba(255, 255, 255, 0.72);
 }
 
 .conversation-item.active {
-  background: #eef2ff;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(37, 99, 235, 0.14));
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.12);
 }
 
 .conv-icon {
@@ -2474,9 +2547,28 @@ onUnmounted(() => {
 }
 
 .conv-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   color: #9ca3af;
   margin-top: 2px;
+}
+
+.conv-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conv-mode-tag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .conv-more {
@@ -2523,7 +2615,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: #f0f2f5;
+  background: transparent;
 }
 
 /* Header */
@@ -2532,8 +2624,9 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  background: #fff;
-  border-bottom: 1px solid #e5e7eb;
+  background: rgba(255, 255, 255, 0.72);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  backdrop-filter: blur(14px);
 }
 
 .header-left {
@@ -2559,6 +2652,38 @@ onUnmounted(() => {
   background: #f3f4f6;
 }
 
+.title-panel {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.title-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.conversation-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.selector-cluster {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .model-selector :deep(.el-select) {
   width: 180px;
 }
@@ -2566,6 +2691,17 @@ onUnmounted(() => {
 @media (max-width: 767px) {
   .model-selector :deep(.el-select) {
     width: 140px;
+  }
+
+  .title-panel {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .selector-cluster {
+    width: 100%;
+    flex-wrap: wrap;
   }
 }
 
@@ -2577,6 +2713,40 @@ onUnmounted(() => {
 .placeholder-text {
   color: #9ca3af;
   font-size: 14px;
+}
+
+.mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255, 255, 255, 0.86);
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mode-badge.chat {
+  color: #0369a1;
+}
+
+.mode-badge.responses {
+  color: #1d4ed8;
+  background: linear-gradient(135deg, rgba(219, 234, 254, 0.92), rgba(239, 246, 255, 0.96));
+}
+
+.mode-badge.compact {
+  padding: 6px 10px;
+}
+
+.mode-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.12);
 }
 
 .header-right {
@@ -2612,7 +2782,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   padding: 8px 16px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 55%, #0ea5e9 100%);
   color: white;
   border: none;
   border-radius: 8px;
@@ -2624,7 +2794,7 @@ onUnmounted(() => {
 
 .primary-btn:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  box-shadow: 0 12px 24px rgba(29, 78, 216, 0.22);
 }
 
 @media (max-width: 767px) {
@@ -2637,7 +2807,7 @@ onUnmounted(() => {
 .messages-area {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: 20px 16px;
   min-height: 0;
 }
 
@@ -2649,33 +2819,57 @@ onUnmounted(() => {
 }
 
 .welcome-content {
-  text-align: center;
-  max-width: 400px;
+  width: min(760px, 100%);
   padding: 20px;
 }
 
+.welcome-hero {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 20px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.hero-copy {
+  text-align: left;
+}
+
+.hero-kicker {
+  display: inline-block;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .welcome-icon {
-  width: 72px;
-  height: 72px;
-  margin: 0 auto 20px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-radius: 20px;
+  width: 92px;
+  height: 92px;
+  margin: 0;
+  background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 55%, #0ea5e9 100%);
+  border-radius: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: white;
+  box-shadow: 0 20px 40px rgba(29, 78, 216, 0.24);
 }
 
 .welcome-content h2 {
-  font-size: 24px;
+  font-size: 34px;
   font-weight: 700;
-  color: #1f2937;
-  margin: 0 0 8px;
+  line-height: 1.08;
+  color: #0f172a;
+  margin: 0 0 10px;
 }
 
 .welcome-content p {
-  font-size: 14px;
-  color: #6b7280;
+  font-size: 15px;
+  color: #475569;
   margin: 0 0 24px;
 }
 
@@ -2683,6 +2877,11 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  padding: 20px;
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.08);
 }
 
 .model-select-row {
@@ -2698,7 +2897,82 @@ onUnmounted(() => {
 }
 
 .model-select-row :deep(.el-select) {
-  width: 200px;
+  width: 260px;
+}
+
+.welcome-model-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.welcome-model-card,
+.feature-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(241, 245, 249, 0.92));
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  color: #0f172a;
+}
+
+.meta-label,
+.feature-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.feature-desc {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #475569;
+}
+
+@media (max-width: 767px) {
+  .welcome-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-copy {
+    text-align: center;
+  }
+
+  .welcome-icon {
+    margin: 0 auto;
+  }
+
+  .welcome-content h2 {
+    font-size: 28px;
+  }
+
+  .model-select-row {
+    flex-direction: column;
+  }
+
+  .model-select-row :deep(.el-select) {
+    width: 100%;
+  }
+
+  .welcome-model-meta,
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .input-mode-bar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
 .start-btn {
@@ -2707,7 +2981,7 @@ onUnmounted(() => {
   justify-content: center;
   gap: 8px;
   padding: 14px 28px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 55%, #0ea5e9 100%);
   color: white;
   border: none;
   border-radius: 12px;
@@ -2719,11 +2993,11 @@ onUnmounted(() => {
 
 .start-btn:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+  box-shadow: 0 18px 32px rgba(29, 78, 216, 0.24);
 }
 
 .messages-container {
-  max-width: 800px;
+  max-width: 860px;
   margin: 0 auto;
 }
 
@@ -3113,13 +3387,30 @@ onUnmounted(() => {
 /* Input Area */
 .input-area {
   padding: 12px 16px 16px;
-  background: #fff;
-  border-top: 1px solid #e5e7eb;
+  background: rgba(255, 255, 255, 0.72);
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  backdrop-filter: blur(14px);
 }
 
 .input-container {
-  max-width: 800px;
+  max-width: 860px;
   margin: 0 auto;
+}
+
+.input-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(241, 245, 249, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.input-mode-text {
+  font-size: 12px;
+  color: #475569;
 }
 
 /* Enabled Bar Container */
@@ -3270,16 +3561,18 @@ onUnmounted(() => {
   display: flex;
   align-items: flex-end;
   gap: 10px;
-  background: #f3f4f6;
-  border-radius: 20px;
-  padding: 10px 14px;
+  background: rgba(248, 250, 252, 0.95);
+  border-radius: 24px;
+  padding: 12px 14px;
   transition: all 0.2s;
-  border: 2px solid transparent;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
 }
 
 .input-box:focus-within {
-  border-color: #667eea;
+  border-color: #2563eb;
   background: #fff;
+  box-shadow: 0 16px 32px rgba(37, 99, 235, 0.12);
 }
 
 .input-box.disabled {

@@ -136,15 +136,27 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 		return nil, err
 	}
 
-	// 5. Build upstream URL for Responses API
-	// Use type-specific base URL if available, fallback to default
-	baseURL := route.Provider.GetBaseURLForType("openai")
-	targetURL := fmt.Sprintf("%s/responses", strings.TrimSuffix(baseURL, "/"))
+	providerType := "openai"
+	if route.Provider.HasType("gemini") && !route.Provider.HasType("openai") {
+		providerType = "gemini"
+	}
 
-	// 6. Send upstream request with forwarded headers
-	resp, err := s.sendResponseUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req, req.Stream, forwardHeaders)
-	if err != nil {
-		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 502, err.Error())
+	var resp *http.Response
+	var reqErr error
+	baseURL := ""
+	if providerType == "gemini" {
+		resp, reqErr = s.sendGeminiResponseRequest(ctx, &route.Provider, model.Name, req, forwardHeaders)
+	} else {
+		// 5. Build upstream URL for Responses API
+		// Use type-specific base URL if available, fallback to default
+		baseURL = route.Provider.GetBaseURLForType("openai")
+		targetURL := fmt.Sprintf("%s/responses", strings.TrimSuffix(baseURL, "/"))
+
+		// 6. Send upstream request with forwarded headers
+		resp, reqErr = s.sendResponseUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req, req.Stream, forwardHeaders)
+	}
+	if reqErr != nil {
+		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 502, reqErr.Error())
 		return nil, ErrUpstreamFailed
 	}
 
@@ -174,6 +186,11 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 		streamResp.billingService = s.billingService
 		streamResp.cache = s.cache
 		streamResp.provider = &route.Provider
+		streamResp.providerType = providerType
+		streamResp.responseID = "resp_" + shortUUID()
+		if providerType == "gemini" {
+			streamResp.isGeminiStream = true
+		}
 		// Extract response headers
 		streamResp.responseHeaders = extractResponseHeaders(resp.Header)
 		return streamResp, nil
@@ -188,13 +205,22 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 	}
 
 	var response models.Response
-	if err := json.Unmarshal(body, &response); err != nil {
-		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 500, err.Error())
-		return nil, err
+	if providerType == "gemini" {
+		var geminiResp models.GeminiGenerateContentResponse
+		if err := json.Unmarshal(body, &geminiResp); err != nil {
+			s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 500, err.Error())
+			return nil, err
+		}
+		response = *convertGeminiResponseToOpenAIResponse(&geminiResp, model.Name)
+	} else {
+		if err := json.Unmarshal(body, &response); err != nil {
+			s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 500, err.Error())
+			return nil, err
+		}
 	}
 
 	// Cache response ID -> provider mapping for later operations
-	if response.ID != "" {
+	if providerType == "openai" && response.ID != "" {
 		s.cache.Set(response.ID, &route.Provider, baseURL)
 	}
 
@@ -483,6 +509,77 @@ func (s *ResponseService) sendResponseUpstreamRequest(ctx context.Context, url, 
 	return s.httpClient.Do(httpReq)
 }
 
+func (s *ResponseService) sendGeminiResponseRequest(ctx context.Context, provider *models.Provider, modelName string, req *models.ResponseRequest, forwardHeaders map[string]string) (*http.Response, error) {
+	chatReq := convertResponseRequestToChatRequest(req)
+	converter := NewProtocolConverter()
+	geminiReqRaw, err := converter.ConvertRequest(chatReq, ProtocolOpenAI, ProtocolGemini)
+	if err != nil {
+		return nil, err
+	}
+	geminiReq := geminiReqRaw.(*models.GeminiGenerateContentRequest)
+
+	baseURL := strings.TrimSuffix(provider.GetBaseURLForType("gemini"), "/")
+	if !strings.HasSuffix(baseURL, "/v1") && !strings.HasSuffix(baseURL, "/v1beta") {
+		baseURL += "/v1beta"
+	}
+
+	action := "generateContent"
+	if req.Stream {
+		action = "streamGenerateContent"
+	}
+
+	targetURL := fmt.Sprintf("%s/models/%s:%s", baseURL, modelName, action)
+	if req.Stream {
+		targetURL += "?alt=sse"
+	}
+
+	body, err := json.Marshal(geminiReq)
+	if err != nil {
+		return nil, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", provider.APIKey)
+	for key, value := range forwardHeaders {
+		httpReq.Header.Set(key, value)
+	}
+
+	resp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+
+	if shouldRetryGeminiWithoutThinking(req.Stream, resp, geminiReq) {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		httpReqRetryBody, err := json.Marshal(cloneGeminiRequestWithoutThinking(geminiReq))
+		if err != nil {
+			return nil, err
+		}
+
+		retryReq, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(httpReqRetryBody))
+		if err != nil {
+			return nil, err
+		}
+
+		retryReq.Header.Set("Content-Type", "application/json")
+		retryReq.Header.Set("x-goog-api-key", provider.APIKey)
+		for key, value := range forwardHeaders {
+			retryReq.Header.Set(key, value)
+		}
+
+		_ = respBody
+		return s.httpClient.Do(retryReq)
+	}
+
+	return resp, nil
+}
+
 // sendCompactUpstreamRequest sends compact request to upstream
 func (s *ResponseService) sendCompactUpstreamRequest(ctx context.Context, url, apiKey string, req *models.CompactRequest, forwardHeaders map[string]string) (*http.Response, error) {
 	body, err := json.Marshal(req)
@@ -743,12 +840,12 @@ func (s *ResponseService) updateLogAndCalculateCost(ctx context.Context, apiKey 
 	// Update log entry
 	updates := map[string]interface{}{
 		"latency":            latency,
-		"promptTokens":      promptTokens,
-		"completionTokens":  completionTokens,
-		"totalTokens":       totalTokens,
+		"promptTokens":       promptTokens,
+		"completionTokens":   completionTokens,
+		"totalTokens":        totalTokens,
 		"cost":               cost,
 		"status":             200,
-		"ownerChannelId":   ownerChannelID,
+		"ownerChannelId":     ownerChannelID,
 		"ownerChannelUserId": ownerChannelUserID,
 	}
 
@@ -775,8 +872,8 @@ func (s *ResponseService) updateLogError(ctx context.Context, logID uint, latenc
 	}
 
 	updates := map[string]interface{}{
-		"latency":       latency,
-		"status":        status,
+		"latency":      latency,
+		"status":       status,
 		"errorMessage": errMsg,
 	}
 
@@ -796,21 +893,27 @@ type ResponseStreamingResponse struct {
 	ResponseBody   *http.Response
 	capturedBuffer *bytes.Buffer
 	reader         *bufio.Reader
+	pipeBuffer     *bytes.Buffer
+	geminiScanner  *bufio.Scanner
 
 	// For logging after streaming is complete
-	ctx            context.Context // Store context to detect client disconnect
-	logID          uint            // ID of the initial log entry
-	apiKey         *models.GatewayAPIKey
-	model          *models.Model
-	providerName   string
-	provider       *models.Provider
-	request        *models.ResponseRequest
-	startTime      time.Time
-	logRepo        *repository.LogRepository
-	logDetailRepo  *repository.LogDetailRepository
-	billingService *BillingService
-	cache          *ResponseCache
+	ctx             context.Context // Store context to detect client disconnect
+	logID           uint            // ID of the initial log entry
+	apiKey          *models.GatewayAPIKey
+	model           *models.Model
+	providerName    string
+	provider        *models.Provider
+	request         *models.ResponseRequest
+	startTime       time.Time
+	logRepo         *repository.LogRepository
+	logDetailRepo   *repository.LogDetailRepository
+	billingService  *BillingService
+	cache           *ResponseCache
 	responseHeaders map[string]string // Response headers for logging
+	providerType    string
+	isGeminiStream  bool
+	responseID      string
+	streamState     *responseStreamState
 }
 
 // NewResponseStreamingResponse creates a new streaming response wrapper for Responses API
@@ -819,11 +922,54 @@ func NewResponseStreamingResponse(resp *http.Response) *ResponseStreamingRespons
 		ResponseBody:   resp,
 		capturedBuffer: &bytes.Buffer{},
 		reader:         bufio.NewReader(resp.Body),
+		pipeBuffer:     &bytes.Buffer{},
+		streamState:    &responseStreamState{},
 	}
 }
 
 // Read implements io.Reader for streaming
 func (s *ResponseStreamingResponse) Read(p []byte) (n int, err error) {
+	if s.isGeminiStream {
+		if s.geminiScanner == nil {
+			s.geminiScanner = bufio.NewScanner(s.ResponseBody.Body)
+			s.geminiScanner.Split(GeminiStreamSplitter)
+		}
+
+		if s.pipeBuffer.Len() > 0 {
+			return s.pipeBuffer.Read(p)
+		}
+
+		if s.geminiScanner.Scan() {
+			data := s.geminiScanner.Bytes()
+			if len(data) > 0 {
+				var chunk models.GeminiGenerateContentResponse
+				if err := json.Unmarshal(data, &chunk); err == nil {
+					converted := convertGeminiChunkToResponseSSE(&chunk, s.responseID, s.model.Name, s.streamState)
+					if converted != "" {
+						s.pipeBuffer.WriteString(converted)
+						s.capturedBuffer.WriteString(converted)
+						return s.pipeBuffer.Read(p)
+					}
+				}
+			}
+			return s.Read(p)
+		}
+
+		if err := s.geminiScanner.Err(); err != nil {
+			return 0, err
+		}
+
+		if !s.streamState.completed {
+			s.streamState.completed = true
+			completed := buildResponseCompletedSSE(s.responseID, s.model.Name, s.streamState.usage)
+			s.pipeBuffer.WriteString(completed)
+			s.capturedBuffer.WriteString(completed)
+			return s.pipeBuffer.Read(p)
+		}
+
+		return 0, io.EOF
+	}
+
 	n, err = s.reader.Read(p)
 	if n > 0 {
 		s.capturedBuffer.Write(p[:n])
@@ -927,7 +1073,7 @@ func (s *ResponseStreamingResponse) LogAfterComplete(ctx context.Context) {
 	latency := time.Since(s.startTime).Milliseconds()
 
 	// Cache response ID -> provider mapping
-	if responseID != "" && s.provider != nil && s.cache != nil {
+	if s.providerType == "openai" && responseID != "" && s.provider != nil && s.cache != nil {
 		s.cache.Set(responseID, s.provider, s.provider.GetBaseURLForType("openai"))
 	}
 
@@ -956,12 +1102,12 @@ func (s *ResponseStreamingResponse) LogAfterComplete(ctx context.Context) {
 
 	// Update log entry
 	updates := map[string]interface{}{
-		"latency":           int(latency),
+		"latency":          int(latency),
 		"promptTokens":     usage.InputTokens,
 		"completionTokens": completionTokens,
 		"totalTokens":      usage.InputTokens + completionTokens,
-		"cost":              cost,
-		"status":            status,
+		"cost":             cost,
+		"status":           status,
 	}
 	if errMsg != "" {
 		updates["errorMessage"] = errMsg
