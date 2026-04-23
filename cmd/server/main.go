@@ -139,6 +139,7 @@ func main() {
 
 	// Middleware
 	r.Use(middleware.CORS())
+	r.Use(middleware.DecompressMiddleware())
 
 	// ========== Routes ==========
 	setupRoutes(r, &Dependencies{

@@ -62,6 +62,14 @@ func InitDatabase(dbPath string) (*gorm.DB, error) {
 	if !columnExists(db, "Log", "responseHeaders") {
 		db.Exec("ALTER TABLE `Log` ADD COLUMN `responseHeaders` TEXT")
 	}
+	// Add prompt column to Log table
+	if !columnExists(db, "Log", "prompt") {
+		db.Exec("ALTER TABLE `Log` ADD COLUMN `prompt` TEXT")
+	}
+	// Add completion column to Log table
+	if !columnExists(db, "Log", "completion") {
+		db.Exec("ALTER TABLE `Log` ADD COLUMN `completion` TEXT")
+	}
 	// Add types column to Provider table
 	if !columnExists(db, "Provider", "types") {
 		db.Exec("ALTER TABLE `Provider` ADD COLUMN `types` TEXT")
@@ -226,6 +234,8 @@ func fixLogTableNullableAPIKeyID(db *gorm.DB) {
 			providerName TEXT,
 			ownerChannelId INTEGER,
 			ownerChannelUserId INTEGER,
+			prompt TEXT,
+			completion TEXT,
 			requestPath VARCHAR(255),
 			requestHeaders TEXT,
 			responseHeaders TEXT,
@@ -235,8 +245,8 @@ func fixLogTableNullableAPIKeyID(db *gorm.DB) {
 
 	// Copy data from old table
 	db.Exec(`
-		INSERT INTO Log_new (id, latency, promptTokens, completionTokens, totalTokens, cost, status, errorMessage, apiKeyId, modelName, providerName, ownerChannelId, ownerChannelUserId, requestHeaders, responseHeaders, createdAt)
-		SELECT id, latency, promptTokens, completionTokens, totalTokens, cost, status, errorMessage, apiKeyId, modelName, providerName, ownerChannelId, ownerChannelUserId, requestHeaders, responseHeaders, createdAt FROM Log
+		INSERT INTO Log_new (id, latency, promptTokens, completionTokens, totalTokens, cost, status, errorMessage, apiKeyId, modelName, providerName, ownerChannelId, ownerChannelUserId, prompt, completion, requestHeaders, responseHeaders, createdAt)
+		SELECT id, latency, promptTokens, completionTokens, totalTokens, cost, status, errorMessage, apiKeyId, modelName, providerName, ownerChannelId, ownerChannelUserId, prompt, completion, requestHeaders, responseHeaders, createdAt FROM Log
 	`)
 
 	// Drop old table

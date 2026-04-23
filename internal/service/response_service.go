@@ -98,6 +98,41 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 		return nil, ErrNoRouteAvailable
 	}
 
+	// Extract prompt for logging
+	prompt := ""
+	if req.Input.StringInput != "" {
+		prompt = req.Input.StringInput
+	} else if len(req.Input.Items) > 0 {
+		// Find last user message or first message
+		lastMsg := ""
+		for i := len(req.Input.Items) - 1; i >= 0; i-- {
+			item := req.Input.Items[i]
+			if item.Type == "message" && item.Role == "user" {
+				if item.Content.StringContent != "" {
+					lastMsg = item.Content.StringContent
+				} else if len(item.Content.Parts) > 0 {
+					for _, p := range item.Content.Parts {
+						if p.Type == "input_text" {
+							lastMsg = p.Text
+							break
+						}
+					}
+				}
+				if lastMsg != "" {
+					break
+				}
+			}
+		}
+		if lastMsg == "" && len(req.Input.Items) > 0 {
+			// Fallback to first item
+			item := req.Input.Items[0]
+			if item.Content.StringContent != "" {
+				lastMsg = item.Content.StringContent
+			}
+		}
+		prompt = lastMsg
+	}
+
 	// Create initial log entry at request start
 	// Skip logging for virtual API keys (ID=0)
 	logEntry := &models.Log{
@@ -106,6 +141,7 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 		ProviderName:   route.Provider.Name,
 		Status:         0, // pending
 		RequestHeaders: headersJSON,
+		Prompt:         prompt,
 	}
 	if apiKey.ID != 0 {
 		if err := s.logRepo.Create(ctx, logEntry); err != nil {
@@ -837,6 +873,20 @@ func (s *ResponseService) updateLogAndCalculateCost(ctx context.Context, apiKey 
 		s.billingService.DeductAndDistribute(ctx, apiKey.UserID, ownerChannelUserID, cost)
 	}
 
+	// Extract completion for logging
+	completion := ""
+	if len(resp.Output) > 0 {
+		output := resp.Output[len(resp.Output)-1]
+		if output.Type == "message" {
+			for _, content := range output.Content {
+				if content.Type == "output_text" {
+					completion = content.Text
+					break
+				}
+			}
+		}
+	}
+
 	// Update log entry
 	updates := map[string]interface{}{
 		"latency":            latency,
@@ -847,6 +897,7 @@ func (s *ResponseService) updateLogAndCalculateCost(ctx context.Context, apiKey 
 		"status":             200,
 		"ownerChannelId":     ownerChannelID,
 		"ownerChannelUserId": ownerChannelUserID,
+		"completion":         completion,
 	}
 
 	// Add response headers if available
@@ -1108,6 +1159,7 @@ func (s *ResponseStreamingResponse) LogAfterComplete(ctx context.Context) {
 		"totalTokens":      usage.InputTokens + completionTokens,
 		"cost":             cost,
 		"status":           status,
+		"completion":       content,
 	}
 	if errMsg != "" {
 		updates["errorMessage"] = errMsg
@@ -1158,10 +1210,8 @@ func (s *ResponseStreamingResponse) LogAfterComplete(ctx context.Context) {
 
 // Close closes the underlying response body and logs the request
 func (s *ResponseStreamingResponse) Close() error {
-	ctx := s.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	// Use background context for final logging to ensure it completes even if request is cancelled
+	ctx := context.Background()
 	s.LogAfterComplete(ctx)
 	return s.ResponseBody.Body.Close()
 }

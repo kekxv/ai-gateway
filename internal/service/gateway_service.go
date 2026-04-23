@@ -45,6 +45,7 @@ var excludedHeaders = []string{
 	"trailer",
 	"upgrade",
 	"accept-encoding",
+	"content-encoding",
 	"proxy-authorization",
 	"proxy-authenticate",
 	"proxy-connection",
@@ -1367,6 +1368,7 @@ func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 		"totalTokens":      promptTokens + completionTokens,
 		"cost":             cost,
 		"status":           status,
+		"completion":       content,
 	}
 	if errMsg != "" {
 		updates["errorMessage"] = errMsg
@@ -1411,17 +1413,15 @@ func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 
 // Close closes the underlying response body and logs the request
 func (s *StreamingResponse) Close() error {
-	ctx := s.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	// Use background context for final logging to ensure it completes even if request is cancelled
+	bgCtx := context.Background()
 
 	// 先关闭实时日志更新器，确保最后一次写入完成
 	if s.realtimeLogger != nil {
 		s.realtimeLogger.Close()
 	}
 
-	s.LogAfterComplete(ctx)
+	s.LogAfterComplete(bgCtx)
 	return s.ResponseBody.Body.Close()
 }
 
@@ -1514,6 +1514,27 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		return nil, err
 	}
 
+	// Extract prompt for logging
+	prompt := ""
+	if len(req.Messages) > 0 {
+		// Find last user message or first message
+		lastMsg := ""
+		for i := len(req.Messages) - 1; i >= 0; i-- {
+			msg := req.Messages[i]
+			if msg.Role == "user" {
+				lastMsg = msg.Content.GetText()
+				if lastMsg != "" {
+					break
+				}
+			}
+		}
+		if lastMsg == "" && len(req.Messages) > 0 {
+			// Fallback to first item
+			lastMsg = req.Messages[0].Content.GetText()
+		}
+		prompt = lastMsg
+	}
+
 	// Create initial log entry (status=0 means pending)
 	// Skip logging for virtual API keys (ID=0) unless IsChatKey is true
 	logEntry := &models.Log{
@@ -1523,6 +1544,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		Status:         0, // pending
 		RequestHeaders: headersJSON,
 		RequestPath:    requestPath,
+		Prompt:         prompt,
 	}
 	// Log for real API keys or chat keys (IsChatKey=true)
 	if apiKey.ID != 0 || apiKey.IsChatKey {
@@ -1543,10 +1565,29 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	}
 
 	// Helper to update log on completion
-	updateLog := func(latency int, promptTokens, completionTokens, totalTokens int, cost int64, status int, errMsg string, respHeaders map[string]string) {
+	updateLog := func(latency int, promptTokens, completionTokens, totalTokens int, cost int64, status int, errMsg string, respHeaders map[string]string, result interface{}) {
 		if logEntry.ID == 0 {
 			return
 		}
+
+		// Extract completion for logging
+		completion := ""
+		if result != nil {
+			// Handle OpenAI format
+			if chatResp, ok := result.(*ChatResponse); ok {
+				if len(chatResp.Choices) > 0 && chatResp.Choices[0].Message != nil {
+					completion = chatResp.Choices[0].Message.GetTextWithReasoning()
+				}
+			} else if anthropicResp, ok := result.(*models.AnthropicMessagesResponse); ok {
+				// Handle Anthropic format
+				for _, block := range anthropicResp.Content {
+					if block.Type == "text" {
+						completion += block.Text
+					}
+				}
+			}
+		}
+
 		updates := map[string]interface{}{
 			"latency":          latency,
 			"promptTokens":     promptTokens,
@@ -1554,6 +1595,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 			"totalTokens":      totalTokens,
 			"cost":             cost,
 			"status":           status,
+			"completion":       completion,
 		}
 		if errMsg != "" {
 			updates["errorMessage"] = errMsg
@@ -1661,7 +1703,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	if err != nil {
 		log.Printf("[HandleChatCompletions] Upstream request failed: %v, URL: %s, Model: %s", err, targetURL, model.Name)
 		latency := int(time.Since(startTime).Milliseconds())
-		updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
+		updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil, nil)
 		return nil, ErrUpstreamFailed
 	}
 
@@ -1673,7 +1715,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 			if err != nil {
 				log.Printf("[HandleChatCompletions] Gemini retry without thinkingConfig failed: %v, URL: %s", err, targetURL)
 				latency := int(time.Since(startTime).Milliseconds())
-				updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
+				updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil, nil)
 				return nil, ErrUpstreamFailed
 			}
 		}
@@ -1685,7 +1727,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		log.Printf("[HandleChatCompletions] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
 		latency := int(time.Since(startTime).Milliseconds())
 		s.handleUpstreamError(ctx, resp, route)
-		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
+		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil, nil)
 		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 	}
 
@@ -1731,7 +1773,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	if err != nil {
 		log.Printf("[HandleChatCompletions] Read response body failed: %v", err)
 		latency := int(time.Since(startTime).Milliseconds())
-		updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil)
+		updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil, nil)
 		return nil, err
 	}
 
@@ -1759,7 +1801,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	if err := json.Unmarshal(body, &chatResp); err != nil {
 		log.Printf("[HandleChatCompletions] Parse response failed: %v, body: %s", err, string(body))
 		latency := int(time.Since(startTime).Milliseconds())
-		updateLog(latency, 0, 0, 0, 0, 500, fmt.Sprintf("Parse error: %v, body: %s", err, string(body)), nil)
+		updateLog(latency, 0, 0, 0, 0, 500, fmt.Sprintf("Parse error: %v, body: %s", err, string(body)), nil, nil)
 		return nil, err
 	}
 
@@ -1968,10 +2010,19 @@ func (s *GatewayService) readDecompressedBody(resp *http.Response) ([]byte, erro
 		return nil, err
 	}
 
-	if resp.Header.Get("Content-Encoding") == "gzip" {
+	encoding := resp.Header.Get("Content-Encoding")
+	switch encoding {
+	case "gzip":
 		decompressed, err := utils.GzipDecompress(body)
 		if err != nil {
 			log.Printf("[readDecompressedBody] Gzip decompress failed: %v", err)
+			return body, nil // Return raw body if decompression fails
+		}
+		return decompressed, nil
+	case "zstd":
+		decompressed, err := utils.ZstdDecompress(body)
+		if err != nil {
+			log.Printf("[readDecompressedBody] Zstd decompress failed: %v", err)
 			return body, nil // Return raw body if decompression fails
 		}
 		return decompressed, nil
@@ -2118,6 +2169,15 @@ func (s *GatewayService) updateLogAndCalculateCost(ctx context.Context, apiKey *
 		s.billingService.DeductAndDistribute(ctx, apiKey.UserID, ownerChannelUserID, cost)
 	}
 
+	// Extract completion for logging
+	completion := ""
+	if resp != nil && len(resp.Choices) > 0 {
+		choice := resp.Choices[0]
+		if choice.Message != nil {
+			completion = choice.Message.GetTextWithReasoning()
+		}
+	}
+
 	// Update log entry
 	if logID > 0 {
 		updates := map[string]interface{}{
@@ -2129,6 +2189,7 @@ func (s *GatewayService) updateLogAndCalculateCost(ctx context.Context, apiKey *
 			"ownerChannelId":     ownerChannelID,
 			"ownerChannelUserId": ownerChannelUserID,
 			"status":             200,
+			"completion":         completion,
 		}
 		if len(respHeaders) > 0 {
 			respHeadersJSON, _ := json.Marshal(respHeaders)
@@ -2275,6 +2336,26 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	}
 
 	// Create initial log entry (status=0 means pending)
+	// Extract prompt for logging
+	prompt := ""
+	if len(req.Messages) > 0 {
+		// Find last user message
+		lastMsg := ""
+		for i := len(req.Messages) - 1; i >= 0; i-- {
+			msg := req.Messages[i]
+			if msg.Role == "user" {
+				lastMsg = msg.Content.GetText()
+				if lastMsg != "" {
+					break
+				}
+			}
+		}
+		if lastMsg == "" && len(req.Messages) > 0 {
+			lastMsg = req.Messages[0].Content.GetText()
+		}
+		prompt = lastMsg
+	}
+
 	logEntry := &models.Log{
 		APIKeyID:       getAPIKeyIDPtr(apiKey.ID),
 		ModelName:      model.Name,
@@ -2282,6 +2363,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		Status:         0, // pending
 		RequestHeaders: headersJSON,
 		RequestPath:    requestPath,
+		Prompt:         prompt,
 	}
 	if apiKey.ID != 0 || apiKey.IsChatKey {
 		if err := s.logRepo.Create(ctx, logEntry); err != nil {
@@ -2300,10 +2382,29 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	}
 
 	// Helper to update log on completion
-	updateLog := func(latency int, promptTokens, completionTokens, totalTokens int, cost int64, status int, errMsg string, respHeaders map[string]string) {
+	updateLog := func(latency int, promptTokens, completionTokens, totalTokens int, cost int64, status int, errMsg string, respHeaders map[string]string, result interface{}) {
 		if logEntry.ID == 0 {
 			return
 		}
+
+		// Extract completion for logging
+		completion := ""
+		if result != nil {
+			// Handle OpenAI format
+			if chatResp, ok := result.(*ChatResponse); ok {
+				if len(chatResp.Choices) > 0 && chatResp.Choices[0].Message != nil {
+					completion = chatResp.Choices[0].Message.GetTextWithReasoning()
+				}
+			} else if anthropicResp, ok := result.(*models.AnthropicMessagesResponse); ok {
+				// Handle Anthropic format
+				for _, block := range anthropicResp.Content {
+					if block.Type == "text" {
+						completion += block.Text
+					}
+				}
+			}
+		}
+
 		updates := map[string]interface{}{
 			"latency":          latency,
 			"promptTokens":     promptTokens,
@@ -2311,6 +2412,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			"totalTokens":      totalTokens,
 			"cost":             cost,
 			"status":           status,
+			"completion":       completion,
 		}
 		if errMsg != "" {
 			updates["errorMessage"] = errMsg
@@ -2378,7 +2480,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		if err != nil {
 			log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s, Request body: %s", err, targetURL, string(rawReqBodyModified))
 			latency := int(time.Since(startTime).Milliseconds())
-			updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
+			updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil, nil)
 			return nil, ErrUpstreamFailed
 		}
 
@@ -2387,7 +2489,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s, Request body: %s", resp.StatusCode, string(body), targetURL, string(rawReqBodyModified))
 			latency := int(time.Since(startTime).Milliseconds())
 			s.handleUpstreamError(ctx, resp, route)
-			updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
+			updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil, nil)
 			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
 
@@ -2430,7 +2532,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		if err != nil {
 			log.Printf("[HandleAnthropicMessages] Read response body failed: %v", err)
 			latency := int(time.Since(startTime).Milliseconds())
-			updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil)
+			updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil, nil)
 			return nil, err
 		}
 
@@ -2438,7 +2540,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		if err := json.Unmarshal(body, &anthropicResp); err != nil {
 			log.Printf("[HandleAnthropicMessages] Parse response failed: %v, body: %s", err, string(body))
 			latency := int(time.Since(startTime).Milliseconds())
-			updateLog(latency, 0, 0, 0, 0, 500, fmt.Sprintf("Parse error: %v", err), nil)
+			updateLog(latency, 0, 0, 0, 0, 500, fmt.Sprintf("Parse error: %v", err), nil, nil)
 			return nil, err
 		}
 
@@ -2484,7 +2586,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		if err != nil {
 			log.Printf("[HandleAnthropicMessages] Upstream Gemini request failed: %v, URL: %s", err, targetURL)
 			latency := int(time.Since(startTime).Milliseconds())
-			updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
+			updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil, nil)
 			return nil, ErrUpstreamFailed
 		}
 
@@ -2495,7 +2597,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			if err != nil {
 				log.Printf("[HandleAnthropicMessages] Gemini retry without thinkingConfig failed: %v, URL: %s", err, targetURL)
 				latency := int(time.Since(startTime).Milliseconds())
-				updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
+				updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil, nil)
 				return nil, ErrUpstreamFailed
 			}
 		}
@@ -2505,7 +2607,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			log.Printf("[HandleAnthropicMessages] Upstream Gemini error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
 			latency := int(time.Since(startTime).Milliseconds())
 			s.handleUpstreamError(ctx, resp, route)
-			updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
+			updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil, nil)
 			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
 
@@ -2545,7 +2647,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		if err != nil {
 			log.Printf("[HandleAnthropicMessages] Read Gemini response body failed: %v", err)
 			latency := int(time.Since(startTime).Milliseconds())
-			updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil)
+			updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil, nil)
 			return nil, err
 		}
 
@@ -2553,7 +2655,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		if err := json.Unmarshal(body, &geminiResp); err != nil {
 			log.Printf("[HandleAnthropicMessages] Parse Gemini response failed: %v, body: %s", err, string(body))
 			latency := int(time.Since(startTime).Milliseconds())
-			updateLog(latency, 0, 0, 0, 0, 500, fmt.Sprintf("Parse error: %v", err), nil)
+			updateLog(latency, 0, 0, 0, 0, 500, fmt.Sprintf("Parse error: %v", err), nil, nil)
 			return nil, err
 		}
 
@@ -2622,7 +2724,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	if err != nil {
 		log.Printf("[HandleAnthropicMessages] Upstream request failed: %v, URL: %s", err, targetURL)
 		latency := int(time.Since(startTime).Milliseconds())
-		updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil)
+		updateLog(latency, 0, 0, 0, 0, 502, err.Error(), nil, nil)
 		return nil, ErrUpstreamFailed
 	}
 
@@ -2631,7 +2733,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		log.Printf("[HandleAnthropicMessages] Upstream error: status=%d, body=%s, URL: %s", resp.StatusCode, string(body), targetURL)
 		latency := int(time.Since(startTime).Milliseconds())
 		s.handleUpstreamError(ctx, resp, route)
-		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil)
+		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil, nil)
 		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 	}
 
@@ -2669,7 +2771,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	if err != nil {
 		log.Printf("[HandleAnthropicMessages] Read response body failed: %v", err)
 		latency := int(time.Since(startTime).Milliseconds())
-		updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil)
+		updateLog(latency, 0, 0, 0, 0, 500, err.Error(), nil, nil)
 		return nil, err
 	}
 
@@ -2677,7 +2779,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	if err := json.Unmarshal(body, &chatResp); err != nil {
 		log.Printf("[HandleAnthropicMessages] Parse response failed: %v, body: %s", err, string(body))
 		latency := int(time.Since(startTime).Milliseconds())
-		updateLog(latency, 0, 0, 0, 0, 500, fmt.Sprintf("Parse error: %v", err), nil)
+		updateLog(latency, 0, 0, 0, 0, 500, fmt.Sprintf("Parse error: %v", err), nil, nil)
 		return nil, err
 	}
 
@@ -2851,6 +2953,16 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 		s.billingService.DeductAndDistribute(ctx, apiKey.UserID, ownerChannelUserID, cost)
 	}
 
+	// Extract completion for logging
+	completion := ""
+	if resp != nil {
+		for _, block := range resp.Content {
+			if block.Type == "text" {
+				completion += block.Text
+			}
+		}
+	}
+
 	// Update log entry
 	if logID > 0 {
 		updates := map[string]interface{}{
@@ -2864,6 +2976,7 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 			"ownerChannelId":     ownerChannelID,
 			"ownerChannelUserId": ownerChannelUserID,
 			"status":             200,
+			"completion":         completion,
 		}
 		if len(respHeaders) > 0 {
 			respHeadersJSON, _ := json.Marshal(respHeaders)

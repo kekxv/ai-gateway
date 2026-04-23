@@ -19,6 +19,8 @@ type Log struct {
 	APIKey           *GatewayAPIKey `gorm:"foreignKey:APIKeyID;constraint:OnDelete:SET NULL" json:"apiKey,omitempty"`
 	ModelName        string    `gorm:"column:modelName" json:"modelName"`
 	ProviderName     string    `gorm:"column:providerName" json:"providerName"`
+	Prompt           string    `gorm:"column:prompt;type:text" json:"prompt"`         // Summary of user message
+	Completion       string    `gorm:"column:completion;type:text" json:"completion"` // Summary of AI response
 	OwnerChannelID   *uint     `gorm:"column:ownerChannelId" json:"ownerChannelId"`
 	OwnerChannel     *Channel  `gorm:"foreignKey:OwnerChannelID" json:"ownerChannel,omitempty"`
 	OwnerChannelUserID *uint   `gorm:"column:ownerChannelUserId" json:"ownerChannelUserId"`

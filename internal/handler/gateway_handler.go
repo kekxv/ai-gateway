@@ -204,6 +204,7 @@ func (h *GatewayHandler) CreateResponse(c *gin.Context) {
 
 	var req models.ResponseRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("[CreateResponse] ShouldBindJSON error: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -212,6 +213,7 @@ func (h *GatewayHandler) CreateResponse(c *gin.Context) {
 
 	result, err := h.responseService.CreateResponse(c.Request.Context(), apiKey, &req, c.Request.Header)
 	if err != nil {
+		log.Printf("[CreateResponse] Error: %v, Model: %s, Stream: %v", err, req.Model, stream)
 		switch err {
 		case service.ErrModelNotFound:
 			c.JSON(http.StatusNotFound, gin.H{"error": "Model not found"})
