@@ -241,6 +241,13 @@ const handleAutoResize = () => {
   }
 }
 
+// Reset textarea height when content is cleared (after send)
+const resetHeight = () => {
+  if (textareaRef.value) {
+    textareaRef.value.style.height = 'auto'
+  }
+}
+
 const handlePaste = (e: ClipboardEvent) => {
   emit('paste', e)
 }
@@ -289,9 +296,14 @@ const focusTextarea = () => {
 // Expose for parent
 defineExpose({ focusTextarea, textareaRef, fileInputRef })
 
-// Watch inputContent to resize
-watch(inputContent, () => {
-  handleAutoResize()
+// Watch inputContent to resize or reset
+watch(inputContent, (newVal) => {
+  if (!newVal || newVal.trim() === '') {
+    // Content cleared (after send), reset height
+    resetHeight()
+  } else {
+    handleAutoResize()
+  }
 })
 </script>
 

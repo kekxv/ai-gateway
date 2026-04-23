@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/kekxv/ai-gateway/internal/middleware"
@@ -1034,8 +1035,10 @@ func (h *ChatHandler) GenerateTitle(c *gin.Context) {
 
 	// Clean up title - remove quotes and trim
 	title = trimQuotes(title)
-	if len(title) > 50 {
-		title = title[:50]
+	// Use rune-based truncation to properly handle Chinese characters
+	if utf8.RuneCountInString(title) > 50 {
+		runes := []rune(title)
+		title = string(runes[:50])
 	}
 
 	// Update conversation title

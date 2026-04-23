@@ -126,115 +126,120 @@ const renderedContent = computed(() => {
 
 <style scoped>
 .think-block {
-  margin: 8px 0 12px 0;
-  border: 1px solid #e0e7ff;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
-  overflow: hidden;
+	margin: 8px 0 12px 0;
+	border: 1px solid rgba(99, 102, 241, 0.2);
+	border-radius: 12px;
+	background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+	overflow: hidden;
+	box-shadow: 0 2px 8px rgba(99, 102, 241, 0.08);
 }
 
 .think-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  cursor: pointer;
-  user-select: none;
-  transition: background 0.2s;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 12px 14px;
+	cursor: pointer;
+	user-select: none;
+	transition: background 0.2s;
 }
 
 .think-header:hover {
-  background: rgba(99, 102, 241, 0.1);
+	background: rgba(99, 102, 241, 0.12);
 }
 
 .think-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+	width: 28px;
+	height: 28px;
+	border-radius: 50%;
+	background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+	color: white;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	box-shadow: 0 2px 6px rgba(99, 102, 241, 0.3);
 }
 
 .think-meta {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+	flex: 1;
+	display: flex;
+	align-items: center;
+	gap: 10px;
 }
 
 .think-label {
-  font-size: 13px;
-  font-weight: 500;
-  color: #4f46e5;
+	font-size: 13px;
+	font-weight: 600;
+	color: #4f46e5;
 }
 
 .think-tokens {
-  font-size: 11px;
-  color: #7c3aed;
-  background: rgba(124, 58, 237, 0.1);
-  padding: 2px 6px;
-  border-radius: 4px;
+	font-size: 11px;
+	color: #7c3aed;
+	background: rgba(124, 58, 237, 0.15);
+	padding: 3px 8px;
+	border-radius: 6px;
+	font-weight: 500;
 }
 
 .expand-icon {
-  color: #6366f1;
-  transition: transform 0.2s;
+	color: #6366f1;
+	transition: transform 0.2s;
 }
 
 .think-content {
-  padding: 12px 16px;
-  border-top: 1px solid #c7d2fe;
-  background: rgba(255, 255, 255, 0.5);
+	padding: 14px 16px;
+	border-top: 1px solid rgba(199, 210, 254, 0.5);
+	background: rgba(255, 255, 255, 0.6);
 }
 
 .think-markdown {
-  font-size: 13px;
-  line-height: 1.6;
-  color: #3730a3;
+	font-size: 13px;
+	line-height: 1.6;
+	color: #3730a3;
+	overflow-wrap: anywhere;
 }
 
 .think-markdown :deep(p) {
-  margin: 0.5em 0;
+	margin: 0.5em 0;
 }
 
 .think-markdown :deep(code) {
-  background: rgba(0, 0, 0, 0.06);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
-  font-size: 12px;
+	background: rgba(0, 0, 0, 0.06);
+	padding: 2px 6px;
+	border-radius: 4px;
+	font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+	font-size: 12px;
 }
 
 .think-markdown :deep(pre) {
-  background: #f6f8fa;
-  padding: 12px;
-  border-radius: 6px;
-  overflow-x: auto;
-  margin: 8px 0;
+	background: #f6f8fa;
+	padding: 12px;
+	border-radius: 8px;
+	overflow-x: auto;
+	margin: 8px 0;
+	border: 1px solid rgba(99, 102, 241, 0.1);
 }
 
 .think-markdown :deep(pre code) {
-  background: transparent;
-  padding: 0;
+	background: transparent;
+	padding: 0;
 }
 
 .think-markdown :deep(ul),
 .think-markdown :deep(ol) {
-  padding-left: 20px;
-  margin: 0.5em 0;
+	padding-left: 20px;
+	margin: 0.5em 0;
 }
 
 .think-markdown :deep(li) {
-  margin: 4px 0;
+	margin: 4px 0;
 }
 
 .think-markdown :deep(blockquote) {
-  border-left: 3px solid #c7d2fe;
-  padding-left: 12px;
-  margin: 8px 0;
-  color: #6b7280;
+	border-left: 3px solid #c7d2fe;
+	padding-left: 12px;
+	margin: 8px 0;
+	color: #6b7280;
 }
 </style>

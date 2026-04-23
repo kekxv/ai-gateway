@@ -105,101 +105,107 @@ const copyCode = async () => {
 
 <style scoped>
 .code-block-wrapper {
-  margin: 12px 0;
-  border-radius: 8px;
-  overflow: hidden;
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
-  width: 100%;
+	margin: 12px 0;
+	border-radius: 12px;
+	overflow: hidden;
+	background: #f8fafc;
+	border: 1px solid rgba(102, 126, 234, 0.2);
+	width: 100%;
+	box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
 }
 
 .code-header {
-  display: flex;
-  align-items: center;
-  padding: 8px 12px;
-  background: #f3f4f6;
-  color: #6b7280;
-  font-size: 12px;
-  cursor: pointer;
-  user-select: none;
-  transition: background 0.2s;
+	display: flex;
+	align-items: center;
+	padding: 10px 14px;
+	background: linear-gradient(90deg, #f3f4f6 0%, #e5e7eb 100%);
+	color: #6b7280;
+	font-size: 12px;
+	cursor: pointer;
+	user-select: none;
+	transition: background 0.2s;
 }
 
 .code-header:hover {
-  background: #e5e7eb;
+	background: linear-gradient(90deg, #e5e7eb 0%, #d1d5db 100%);
 }
 
 .collapse-icon {
-  margin-right: 6px;
-  color: #6b7280;
+	margin-right: 8px;
+	color: #6b7280;
+	transition: transform 0.2s;
 }
 
 .code-lang {
-  font-weight: 500;
-  color: #374151;
+	font-weight: 600;
+	color: #374151;
+	letter-spacing: 0.02em;
 }
 
 .code-meta {
-  margin-left: 8px;
-  color: #9ca3af;
-  font-size: 11px;
+	margin-left: 10px;
+	color: #9ca3af;
+	font-size: 11px;
 }
 
 .copy-btn {
-  margin-left: auto;
-  padding: 4px 8px;
-  background: #e5e7eb;
-  color: #374151;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.2s;
+	margin-left: auto;
+	padding: 6px 10px;
+	background: rgba(102, 126, 234, 0.1);
+	color: #667eea;
+	border: none;
+	border-radius: 6px;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: all 0.2s;
 }
 
 .copy-btn:hover {
-  background: #d1d5db;
+	background: rgba(102, 126, 234, 0.2);
+	color: #5a67d8;
 }
 
 .code-content {
-  max-height: 500px;
-  overflow-y: auto;
-  transition: max-height 0.3s ease;
+	max-height: 500px;
+	overflow-y: auto;
+	transition: max-height 0.3s ease;
 }
 
 /* 折叠时用 max-height 控制，保持宽度 */
 .is-collapsed .code-content {
-  max-height: 0;
-  overflow: hidden;
+	max-height: 0;
+	overflow: hidden;
 }
 
 .code-content pre {
-  margin: 0;
-  padding: 16px;
-  overflow-x: auto;
+	margin: 0;
+	padding: 16px;
+	overflow-x: auto;
 }
 
 .code-content code {
-  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
-  font-size: 14px;
-  line-height: 1.5;
+	font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+	font-size: 14px;
+	line-height: 1.6;
 }
 
 /* Highlight.js theme - light theme */
 .code-content .hljs {
-  background: transparent;
-  color: #374151;
+	background: transparent;
+	color: #374151;
 }
 
 .code-content .hljs-keyword { color: #d73a49; }
 .code-content .hljs-string { color: #032f62; }
 .code-content .hljs-number { color: #005cc5; }
 .code-content .hljs-function { color: #6f42c1; }
-.code-content .hljs-comment { color: #6a737d; }
+.code-content .hljs-comment { color: #6a737d; font-style: italic; }
 .code-content .hljs-variable { color: #e36209; }
 .code-content .hljs-title { color: #6f42c1; }
 .code-content .hljs-params { color: #24292e; }
 .code-content .hljs-built_in { color: #005cc5; }
+.code-content .hljs-class { color: #d73a49; }
+.code-content .hljs-property { color: #005cc5; }
 </style>

@@ -40,6 +40,7 @@
         :expanded-messages="expandedMessages"
         :messages="messages"
         :sending="sending"
+        :is-loading="isLoading || isLoadingMessages"
         :streaming-content="throttledStreamingContent"
         :streaming-think="throttledStreamingThink"
         :streaming-tool-calls="streamingToolCallResults"
@@ -138,6 +139,9 @@ const models = ref<ChatModelOption[]>([])
 const selectedModel = ref('')
 const inputContent = ref('')
 const showSettingsDialog = ref(false)
+
+// Loading state
+const isLoading = ref(true)
 
 // LocalStorage key
 const LAST_USED_MODEL_KEY = 'ai-gateway-last-used-model'
@@ -263,7 +267,7 @@ const messagesComposable = useChatMessages(
 const { thinkingMode, thinkingModeLabel, presets, setThinkingMode, applyPreset } = settingsComposable
 const settingsForm = settingsComposable.settingsForm
 const { attachedFiles, triggerUpload, handleFileUpload: handleFileUploadEvent, handlePaste: handlePasteEvent, removeFile } = filesComposable
-const { conversations, currentConversation, messages, isTemporaryConversation, loadConversations, createNewConversation, selectConversation, handleConversationAction } = conversationComposable
+const { conversations, currentConversation, messages, isTemporaryConversation, isLoadingMessages, loadConversations, createNewConversation, selectConversation, handleConversationAction } = conversationComposable
 const { activeSkillName, activateSkill, deactivateSkill } = toolsComposable
 const { sending, streamingToolCallResults, throttledStreamingContent, throttledStreamingThink, isAnyToolRunning, stopStreaming } = streamingComposable
 const { expandedMessages, editingBlockId, editingContent, startEditBlock, cancelEdit, handleEditKeydown, confirmEditBlock, deleteMessage, copyMessage, regenerateFromUser, retryLastMessage, sendMessage } = messagesComposable
@@ -347,11 +351,19 @@ const handlePaste = async (event: ClipboardEvent) => {
 }
 
 // Lifecycle
-onMounted(() => {
+onMounted(async () => {
   checkMobile()
-  loadConversations()
-  loadModels()
   window.addEventListener('resize', checkMobile)
+
+  // Load data with loading state
+  try {
+    await Promise.all([
+      loadConversations(),
+      loadModels()
+    ])
+  } finally {
+    isLoading.value = false
+  }
 
   // Handle skill activation from query parameter
   if (route.query.activateSkill) {

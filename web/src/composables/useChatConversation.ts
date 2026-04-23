@@ -32,6 +32,7 @@ export function useChatConversation(
   const currentConversation = ref<Conversation | null>(null)
   const messages = ref<ExtendedMessage[]>([])
   const isTemporaryConversation = ref(false)
+  const isLoadingMessages = ref(false)
 
   // Load conversations list
   const loadConversations = async () => {
@@ -114,18 +115,26 @@ export function useChatConversation(
       initSettings(conv)
     }
 
+    // Show loading state
+    isLoadingMessages.value = true
+    messages.value = []
+
     // Load messages using handler or default
-    if (loadMessagesHandler) {
-      messages.value = await loadMessagesHandler(conv.id)
-    } else {
-      try {
-        const response = await conversationApi.getMessages(conv.id)
-        const rawMessages = response.data.data || []
-        messages.value = processRawMessages(rawMessages)
-      } catch (error) {
-        console.error('Failed to load messages:', error)
-        messages.value = []
+    try {
+      if (loadMessagesHandler) {
+        messages.value = await loadMessagesHandler(conv.id)
+      } else {
+        try {
+          const response = await conversationApi.getMessages(conv.id)
+          const rawMessages = response.data.data || []
+          messages.value = processRawMessages(rawMessages)
+        } catch (error) {
+          console.error('Failed to load messages:', error)
+          messages.value = []
+        }
       }
+    } finally {
+      isLoadingMessages.value = false
     }
 
     // Scroll to bottom
@@ -268,6 +277,7 @@ export function useChatConversation(
     currentConversation,
     messages,
     isTemporaryConversation,
+    isLoadingMessages,
     TEMPORARY_CONVERSATION_ID,
     loadConversations,
     generateTitleInBackground,

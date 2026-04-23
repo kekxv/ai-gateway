@@ -340,6 +340,7 @@ watch(() => props.streaming, (newVal) => {
 <style>
 .markdown-content {
   line-height: 1.7;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
@@ -390,6 +391,7 @@ watch(() => props.streaming, (newVal) => {
 
 .markdown-content table {
   width: 100%;
+  table-layout: fixed;
   margin: 12px 0;
   border-collapse: collapse;
   font-size: 14px;
@@ -400,6 +402,7 @@ watch(() => props.streaming, (newVal) => {
   border: 1px solid #e5e7eb;
   padding: 8px 12px;
   text-align: left;
+  overflow-wrap: anywhere;
 }
 
 .markdown-content th {
@@ -429,6 +432,7 @@ watch(() => props.streaming, (newVal) => {
 /* Incomplete text style during streaming */
 .incomplete-text {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 </style>
