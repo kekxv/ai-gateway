@@ -178,6 +178,9 @@ async function executeBuiltinTool(
         args.showConfidence as boolean | undefined
       )
 
+    case 'output_document_info':
+      return args
+
     default:
       throw new Error(`Unknown tool: ${toolName}`)
   }

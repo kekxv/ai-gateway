@@ -347,4 +347,65 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
       required: ['boxes']
     }
   },
+  {
+    id: 'output_document_info',
+    name: 'output_document_info',
+    description: '输出证件识别信息，用于结构化展示证件中的关键信息。',
+    type: 'builtin',
+    parameters: {
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          description: '证件类型英文标识，如 id_card, driver_license, passport, business_license'
+        },
+        description: {
+          type: 'string',
+          description: '证件类型中文描述，如 身份证, 驾驶证, 护照, 营业执照'
+        },
+        name: {
+          type: 'string',
+          description: '证件所有人的姓名'
+        },
+        gender: {
+          type: 'string',
+          description: '性别，如 男, 女'
+        },
+        ethnicity: {
+          type: 'string',
+          description: '民族，如 汉, 满, 回'
+        },
+        id_number: {
+          type: 'string',
+          description: '证件号码'
+        },
+        expiry_date: {
+          type: 'string',
+          description: '证件有效期'
+        },
+        address: {
+          type: 'string',
+          description: '证件地址'
+        },
+        info: {
+          type: 'string',
+          description: '证件说明或备注信息'
+        },
+        items: {
+          type: 'array',
+          description: '扩展参数，用于输出未在上述字段中定义的其他证件信息',
+          items: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', description: '字段标识' },
+              desc: { type: 'string', description: '字段描述' },
+              value: { type: 'string', description: '字段内容' }
+            },
+            required: ['type', 'value', 'desc']
+          }
+        }
+      },
+      required: ['type', 'description']
+    }
+  },
 ]

@@ -159,7 +159,8 @@ const getToolDisplayName = (toolName: string) => {
     'Edit': '编辑文件',
     'edit_file': '编辑文件',
     'Read': '读取文件',
-    'read_file': '读取文件'
+    'read_file': '读取文件',
+    'output_document_info': '输出证件信息'
   }
   return nameMap[toolName] || toolName
 }
@@ -594,6 +595,8 @@ const renderResult = (toolCall: ToolCallResult) => {
     case 'Read':
     case 'read_file':
       return renderReadResult(result)
+    case 'output_document_info':
+      return renderDocumentInfoResult(result)
     default:
       // For string results, preserve line breaks
       if (typeof result === 'string') {
@@ -601,6 +604,55 @@ const renderResult = (toolCall: ToolCallResult) => {
       }
       return h('pre', { class: 'detail-code' }, formatJson(result))
   }
+}
+
+// 渲染证件信息结果
+const renderDocumentInfoResult = (result: unknown) => {
+  if (!result) return h('div', { class: 'tool-result-empty' }, '无结果')
+
+  const data = result as {
+    type?: string
+    description?: string
+    name?: string
+    gender?: string
+    ethnicity?: string
+    id_number?: string
+    expiry_date?: string
+    address?: string
+    info?: string
+    items?: Array<{ type: string; desc: string; value: string }>
+  }
+
+  const rows = [
+    { label: '证件类型', value: data.description || data.type },
+    { label: '姓名', value: data.name },
+    { label: '性别', value: data.gender },
+    { label: '民族', value: data.ethnicity },
+    { label: '证件号码', value: data.id_number },
+    { label: '有效期', value: data.expiry_date },
+    { label: '地址', value: data.address },
+    { label: '备注', value: data.info }
+  ].filter(row => row.value)
+
+  // 扩展字段
+  const extraItems = data.items || []
+
+  return h('div', { class: 'document-info-card' }, [
+    h('div', { class: 'doc-header' }, [
+      h('el-icon', { class: 'doc-icon' }, [h(Document)]),
+      h('span', { class: 'doc-title' }, data.description || '证件信息')
+    ]),
+    h('div', { class: 'doc-body' }, [
+      ...rows.map(row => h('div', { class: 'doc-row' }, [
+        h('span', { class: 'doc-label' }, row.label + '：'),
+        h('span', { class: 'doc-value' }, row.value)
+      ])),
+      ...extraItems.map(item => h('div', { class: 'doc-row extra' }, [
+        h('span', { class: 'doc-label' }, (item.desc || item.type) + '：'),
+        h('span', { class: 'doc-value' }, item.value)
+      ]))
+    ])
+  ])
 }
 
 // 渲染网页获取结果
@@ -1615,5 +1667,76 @@ const formatJson = (obj: unknown) => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* 证件信息卡片样式 */
+.document-info-card {
+  background: #ffffff;
+  border: 1px solid #e0e7ff;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  max-width: 450px;
+}
+
+.doc-header {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #ffffff;
+}
+
+.doc-icon {
+  font-size: 20px;
+}
+
+.doc-title {
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.5px;
+}
+
+.doc-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.doc-row {
+  display: flex;
+  align-items: flex-start;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.doc-label {
+  color: #6b7280;
+  width: 80px;
+  flex-shrink: 0;
+  font-weight: 500;
+}
+
+.doc-value {
+  color: #1f2937;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.doc-row.extra {
+  padding-top: 8px;
+  border-top: 1px dashed #f3f4f6;
+}
+
+.doc-row.extra .doc-label {
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.doc-row.extra .doc-value {
+  color: #4b5563;
+  font-weight: 500;
 }
 </style>

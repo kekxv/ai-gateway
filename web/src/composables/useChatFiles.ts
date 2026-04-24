@@ -101,11 +101,25 @@ export function useChatFiles(
     const items = e.clipboardData?.items
     if (!items) return
 
-    for (const item of Array.from(items)) {
-      if (item.kind === 'file') {
-        const file = item.getAsFile()
-        if (file) {
-          await addFile(file)
+    let hasFile = false
+    const itemsArray = Array.from(items)
+    
+    // Check if there are any files first
+    if (itemsArray.some(item => item.kind === 'file')) {
+      hasFile = true
+    }
+
+    if (hasFile) {
+      // If there are files, we handle them and prevent default text pasting
+      // (which often includes the filename)
+      e.preventDefault()
+      
+      for (const item of itemsArray) {
+        if (item.kind === 'file') {
+          const file = item.getAsFile()
+          if (file) {
+            await addFile(file)
+          }
         }
       }
     }

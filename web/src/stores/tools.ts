@@ -9,7 +9,8 @@ const DEFAULT_ENABLED_TOOLS = [
   'execute_javascript',
   'web_search',
   'fetch_webpage',
-  'web_canvas'
+  'web_canvas',
+  'output_document_info'
 ]
 
 export const useToolsStore = defineStore('tools', () => {

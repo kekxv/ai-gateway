@@ -393,7 +393,8 @@ const importSkill = async (skill: Skill) => {
 const addExampleSkill = async () => {
   addingExample.value = true
   try {
-    const exampleSkill: CreateSkillRequest = {
+    // 示例1: 代码审查
+    const codeReviewSkill: CreateSkillRequest = {
       name: 'code-review',
       display_name: '代码审查',
       description: '帮助审查代码质量、发现潜在问题、提供改进建议。当用户需要审查代码或讨论代码质量时使用此技能。',
@@ -452,7 +453,58 @@ const addExampleSkill = async () => {
       source: 'database',
       enabled: true
     }
-    await skillsStore.createSkill(exampleSkill)
+
+    // 示例2: 证件识别
+    const docRecogSkill: CreateSkillRequest = {
+      name: 'document-recognition',
+      display_name: '证件识别',
+      description: '精准识别各类证件（身份证、驾驶证、护照等）中的关键信息，并使用 output_document_info 工具进行结构化输出。',
+      instructions: `# 证件识别与结构化输出技能
+
+## 核心任务
+你的任务是识别用户提供的证件图片或证件描述信息，提取其中的关键字段，并调用 \`output_document_info\` 工具进行结构化输出。
+
+## 工作流程
+1. **识别证件类型**：首先判断证件是身份证、驾驶证、护照、营业执照还是其他类型。
+2. **提取关键信息，必须考虑内容是否换行，例如长地址**：
+   - **姓名** (\`name\`)
+   - **证件号码** (\`id_number\`)
+   - **性别** (\`gender\`)
+   - **民族** (\`ethnicity\`)
+   - **有效期** (\`expiry_date\`)
+   - **地址** (\`address\`)
+3. **处理扩展字段**：对于证件上存在但上述字段未涵盖的信息（如：出生日期、发证机关、准驾车型等），请放入 \`items\` 数组中，内容必须完整，必须包含字段：\`type\`、\`desc\`、\`value\`。
+4. **调用工具**：使用提取的数据调用 \`output_document_info\` 工具。
+
+## 注意事项
+- **准确性第一**：必须严格按照证件上的文字进行提取，不得伪造或推测信息。
+- **完整性**：尽可能提取证件上所有可见的有效信息。
+- **格式规范**：日期格式尽量统一（如 YYYY-MM-DD 或 证件原样输出）。
+
+## 工具调用示例
+\`\`\`json
+{
+  "type": "id_card",
+  "description": "中国居民身份证",
+  "name": "张三",
+  "gender": "男",
+  "ethnicity": "汉",
+  "id_number": "110101199001011234",
+  "address": "北京市东城区某某路某某号",
+  "expiry_date": "2010.01.01-2030.01.01",
+  "items": [
+    { "type": "authority", "desc": "签发机关", "value": "北京市公安局东城分局" }
+  ]
+}
+\`\`\`
+`,
+      license: 'MIT',
+      source: 'database',
+      enabled: true
+    }
+
+    await skillsStore.createSkill(codeReviewSkill)
+    await skillsStore.createSkill(docRecogSkill)
     await skillsStore.loadCatalog()
   } finally {
     addingExample.value = false

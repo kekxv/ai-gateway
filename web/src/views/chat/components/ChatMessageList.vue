@@ -479,6 +479,7 @@ defineExpose({ scrollToBottom, messagesAreaRef, editTextareaRef })
 	display: flex;
 	gap: 12px;
 	max-width: 85%;
+	min-width: 65%;
 }
 
 .assistant-avatar {
