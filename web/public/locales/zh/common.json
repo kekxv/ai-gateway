@@ -99,7 +99,9 @@
     "routes": "路由配置",
     "weight": "权重",
     "createTitle": "创建模型",
-    "editTitle": "编辑模型"
+    "editTitle": "编辑模型",
+    "searchPlaceholder": "搜索模型...",
+    "providerFilter": "选择供应商"
   },
   "apiKey": {
     "title": "API Key管理",

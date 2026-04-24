@@ -19,6 +19,7 @@ import { ElSwitch } from 'element-plus/es/components/switch/index.mjs'
 import { ElTabPane, ElTabs } from 'element-plus/es/components/tabs/index.mjs'
 import { ElTag } from 'element-plus/es/components/tag/index.mjs'
 import { ElTooltip } from 'element-plus/es/components/tooltip/index.mjs'
+import { ElLoading } from 'element-plus/es/components/loading/index.mjs'
 
 const components = [
   ElAlert,
@@ -53,4 +54,6 @@ export function installElementPlus(app: App) {
   components.forEach(component => {
     app.use(component)
   })
+  // Register v-loading directive
+  app.use(ElLoading)
 }

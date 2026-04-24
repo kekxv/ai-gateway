@@ -8,11 +8,11 @@
       </el-button>
     </div>
 
-    <!-- Search -->
+    <!-- Search and Filter -->
     <div class="flex gap-4">
       <el-input
         v-model="searchTerm"
-        placeholder="Search models..."
+        :placeholder="t('model.searchPlaceholder')"
         clearable
         class="max-w-xs"
         @input="filterModels"
@@ -21,6 +21,21 @@
           <el-icon><Search /></el-icon>
         </template>
       </el-input>
+      <el-select
+        v-model="selectedProvider"
+        :placeholder="t('model.providerFilter')"
+        clearable
+        class="w-48"
+        @change="filterModels"
+      >
+        <el-option label="All Providers" value="" />
+        <el-option
+          v-for="provider in providers"
+          :key="provider.id"
+          :label="provider.name"
+          :value="provider.id"
+        />
+      </el-select>
     </div>
 
     <!-- Cards Grid -->
@@ -276,6 +291,7 @@ const isEdit = ref(false)
 const selectedModel = ref<Model | null>(null)
 const formRef = ref<FormInstance>()
 const searchTerm = ref('')
+const selectedProvider = ref<number | string>('')
 
 const pagination = reactive({
   page: 1,
@@ -303,6 +319,13 @@ const rules: FormRules = {
 
 const filteredModels = computed(() => {
   let result = models.value
+  // Filter by provider
+  if (selectedProvider.value) {
+    result = result.filter(m =>
+      m.modelRoutes?.some(r => r.providerId === selectedProvider.value || r.provider?.id === selectedProvider.value)
+    )
+  }
+  // Filter by search term
   if (searchTerm.value) {
     const term = searchTerm.value.toLowerCase()
     result = result.filter(m =>

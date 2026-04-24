@@ -99,7 +99,9 @@
     "routes": "Routes",
     "weight": "Weight",
     "createTitle": "Create Model",
-    "editTitle": "Edit Model"
+    "editTitle": "Edit Model",
+    "searchPlaceholder": "Search models...",
+    "providerFilter": "Filter by Provider"
   },
   "apiKey": {
     "title": "API Key Management",
