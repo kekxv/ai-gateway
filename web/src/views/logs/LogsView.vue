@@ -200,6 +200,31 @@
           </div>
         </div>
 
+        <!-- Available Tools (Collapsible) -->
+        <div v-if="availableTools && availableTools.length > 0" class="headers-card !bg-amber-50 !border-amber-200 mt-2">
+          <div class="headers-header cursor-pointer select-none" @click="toolsCollapsed = !toolsCollapsed">
+            <div class="flex items-center gap-2">
+              <el-icon class="text-amber-500"><Tools /></el-icon>
+              <span class="font-medium">可用工具</span>
+              <span class="text-xs text-gray-400">({{ availableTools.length }} 项)</span>
+            </div>
+            <el-icon :class="{ 'rotate-180': !toolsCollapsed }" class="transition-transform"><ArrowDown /></el-icon>
+          </div>
+          <div v-show="!toolsCollapsed" class="p-3 space-y-3 bg-white/50">
+            <div v-for="(tool, idx) in availableTools" :key="idx" class="border rounded-lg p-2 bg-white text-xs shadow-sm">
+              <div class="flex items-center justify-between mb-1">
+                <el-tag size="small" :type="tool.type === 'function' ? 'warning' : 'info'">{{ tool.type }}</el-tag>
+                <span class="font-mono font-bold text-amber-700">{{ tool.name || '未命名工具' }}</span>
+              </div>
+              <div v-if="tool.description" class="text-gray-600 mb-2 whitespace-pre-wrap leading-relaxed">{{ tool.description }}</div>
+              <div v-if="tool.parameters" class="mt-1">
+                <div class="text-gray-400 mb-1 font-medium">参数架构 (Schema):</div>
+                <pre class="bg-gray-50 p-2 rounded overflow-auto max-h-48 text-[10px] border border-gray-100 leading-tight">{{ JSON.stringify(tool.parameters, null, 2) }}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Error Message (show if exists) - always show -->
         <div v-if="logDetail.errorMessage || logDetail.error_message" class="error-card">
           <div class="flex items-start gap-3">
@@ -413,7 +438,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from '@/plugins/element-plus-services'
-import { CopyDocument, Warning, Loading, Monitor, Document, ChatDotRound, DataLine, User, DocumentCopy, ArrowDown, ArrowUp, Check } from '@element-plus/icons-vue'
+import { CopyDocument, Warning, Loading, Monitor, Document, ChatDotRound, DataLine, User, DocumentCopy, ArrowDown, ArrowUp, Check, Tools } from '@element-plus/icons-vue'
 import { logApi } from '@/api/log'
 import type { Log, LogDetail } from '@/types/log'
 import type { ToolCallResult } from '@/types/tool'
@@ -461,9 +486,43 @@ const requestMessages = computed(() => {
   return []
 })
 
+// 可用工具列表
+const availableTools = computed(() => {
+  if (!logDetail.value?.detail?.requestBody) return []
+  try {
+    const request = logDetail.value.detail.requestBody
+    const reqObj = typeof request === 'string' ? JSON.parse(request) : request
+    const tools = reqObj.tools || []
+    if (!Array.isArray(tools)) return []
+
+    return tools.map((tool: any) => {
+      // Standard OpenAI format: { type: 'function', function: { name, description, parameters } }
+      if (tool.type === 'function' && tool.function) {
+        return {
+          type: 'function',
+          name: tool.function.name,
+          description: tool.function.description,
+          parameters: tool.function.parameters
+        }
+      }
+      // Claude format: { name, description, input_schema }
+      // Or Flat format: { type, name, description, parameters }
+      return {
+        type: tool.type || (tool.input_schema ? 'anthropic_tool' : 'function'),
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters || tool.input_schema
+      }
+    })
+  } catch {
+    return []
+  }
+})
+
 // 折叠状态
 const requestHeadersCollapsed = ref(true)
 const responseHeadersCollapsed = ref(true)
+const toolsCollapsed = ref(true)
 const expandedToolResults = ref<Set<string>>(new Set())
 const expandedBubbles = ref<Set<string>>(new Set())
 
@@ -644,9 +703,10 @@ const extractContentText = (content: string | object | undefined): string => {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
     // Handle [{type: "text", text: "..."}] format (Anthropic/OpenAI multimodal)
+    // Also handle Responses API format: [{type: "input_text", text: "..."}]
     return content
       .map((item: { type?: string; text?: string; thinking?: string }) => {
-        if (item.type === 'text' && item.text) return item.text
+        if ((item.type === 'text' || item.type === 'input_text' || item.type === 'output_text') && item.text) return item.text
         if (item.type === 'thinking' && item.thinking) return `[思考] ${item.thinking}`
         // image_url type is handled separately via extractImageParts
         // tool_use and tool_result are handled separately via toolCalls array
@@ -672,14 +732,16 @@ const extractImageParts = (content: string | object | undefined): ChatContentPar
   if (typeof content === 'string') return []
   if (Array.isArray(content)) {
     return content
-      .flatMap((item: { type?: string; image_url?: { url?: string; detail?: string }; source?: { type?: string; media_type?: string; data?: string } }) => {
+      .flatMap((item: { type?: string; image_url?: any; source?: { type?: string; media_type?: string; data?: string } }) => {
         // OpenAI-style: { type: "image_url", image_url: { url, detail } }
-        if (item.type === 'image_url' && item.image_url?.url) {
+        if ((item.type === 'image_url' || item.type === 'input_image') && (item.image_url?.url || typeof item.image_url === 'string')) {
+          const url = typeof item.image_url === 'string' ? item.image_url : item.image_url.url
+          const detail = typeof item.image_url === 'string' ? undefined : item.image_url.detail
           return {
             type: 'image_url' as const,
             image_url: {
-              url: item.image_url.url,
-              detail: item.image_url?.detail || undefined
+              url: url,
+              detail: detail || undefined
             }
           }
         }
@@ -875,17 +937,48 @@ const chatMessages = computed(() => {
         if (typeof reqObj.input === 'string') {
           messages.push({ role: 'user', content: reqObj.input })
         } else if (Array.isArray(reqObj.input)) {
-          reqObj.input.forEach((item: { type?: string; role?: string; content?: string | object; tool_calls?: unknown }) => {
-            if (item.role === 'tool' || item.role === 'system') return
+          reqObj.input.forEach((item: { type?: string; role?: string; content?: string | object; tool_calls?: unknown; name?: string; arguments?: string; output?: string; call_id?: string }) => {
+            // Determine role if not explicitly provided
+            let role = item.role
+            if (!role) {
+              if (item.type === 'message') role = 'user'
+              else if (item.type === 'function_call') role = 'assistant'
+              else if (item.type === 'function_call_output') role = 'tool'
+            }
 
-            if (item.type === 'message' || item.role) {
+            if (role === 'system') {
+              messages.push({ role: 'system', content: extractContentText(item.content) })
+            } else if (role === 'tool') {
+              // We'll store tool results to be matched with assistant messages
+              const content = item.output || extractContentText(item.content)
+              const toolCallId = item.call_id
+              if (toolCallId) {
+                toolResultsMap.set(toolCallId, { result: content })
+              }
+            } else if (item.type === 'function_call' || (role === 'assistant' && (item.name || item.arguments))) {
+              // Extract tool call
+              const tc = {
+                id: item.call_id || `call_${Math.random().toString(36).substring(2, 11)}`,
+                type: 'function',
+                function: {
+                  name: item.name || 'unknown',
+                  arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments || {})
+                }
+              }
+              const toolCalls = parseToolCalls([tc], toolResultsMap)
+              messages.push({ role: 'assistant', content: '', toolCalls })
+            } else {
               const contentText = extractContentText(item.content)
+              const imageParts = extractImageParts(item.content)
               const parsed = parseMessageContent(contentText)
               const msg: ParsedChatMessage = {
-                role: item.role || 'user',
+                role: role || 'user',
                 content: parsed.textContent,
                 thinkContent: parsed.thinkContent || undefined,
                 hasThink: parsed.hasThink
+              }
+              if (imageParts.length > 0) {
+                msg.imageParts = imageParts
               }
               if (item.tool_calls) {
                 const toolCalls = parseToolCalls(item.tool_calls, toolResultsMap)
@@ -1034,31 +1127,45 @@ const chatMessages = computed(() => {
 
       // Handle Responses API format (output field)
       if (respObj.output && Array.isArray(respObj.output)) {
-        respObj.output.forEach((item: { type?: string; role?: string; content?: object[]; output_text?: string; tool_calls?: unknown; name?: string; arguments?: string; id?: string }) => {
-          if (item.type === 'function_call_output') return
+        respObj.output.forEach((item: { type?: string; role?: string; content?: object[]; output_text?: string; tool_calls?: unknown; name?: string; arguments?: string; id?: string; call_id?: string; output?: string }) => {
+          if (item.type === 'function_call_output' || item.role === 'tool') {
+            const content = item.output || (Array.isArray(item.content) ? JSON.stringify(item.content) : '')
+            const toolCallId = item.call_id || item.id
+            if (toolCallId) {
+              toolResultsMap.set(toolCallId, { result: content })
+            }
+            return
+          }
 
-          if (item.type === 'function_call') {
-            const toolCalls = parseToolCalls([{
-              id: item.id || '',
+          if (item.type === 'function_call' || (item.role === 'assistant' && (item.name || item.arguments))) {
+            const tc = {
+              id: item.call_id || item.id || `call_${Math.random().toString(36).substring(2, 11)}`,
               type: 'function',
-              function: { name: item.name || 'unknown', arguments: item.arguments || '{}' }
-            }], toolResultsMap)
+              function: {
+                name: item.name || 'unknown',
+                arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments || {})
+              }
+            }
+            const toolCalls = parseToolCalls([tc], toolResultsMap)
             if (toolCalls.length > 0) {
               messages.push({ role: 'assistant', content: '', toolCalls })
             }
             return
           }
 
-          if (item.type === 'message' && (item.content || item.tool_calls)) {
-            const text = item.content
-              ? item.content.filter((c: { type?: string; text?: string }) => c.type === 'output_text' && c.text).map((c: { text?: string }) => c.text).join('')
-              : ''
+          if ((item.type === 'message' || item.role === 'assistant') && (item.content || item.tool_calls)) {
+            const text = extractContentText(item.content as any)
+            const imageParts = extractImageParts(item.content as any)
+
             const parsed = parseMessageContent(text)
-            const msg: { role: string; content: string; thinkContent?: string; hasThink?: boolean; toolCalls?: ToolCallResult[] } = {
+            const msg: ParsedChatMessage = {
               role: item.role || 'assistant',
               content: parsed.textContent,
               thinkContent: parsed.thinkContent || undefined,
               hasThink: parsed.hasThink
+            }
+            if (imageParts.length > 0) {
+              msg.imageParts = imageParts
             }
             if (item.tool_calls) {
               const toolCalls = parseToolCalls(item.tool_calls, toolResultsMap)
