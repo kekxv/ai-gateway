@@ -168,19 +168,6 @@ const focusTextarea = () => {
   inputAreaRef.value?.focusTextarea()
 }
 
-// Use composables
-const settingsComposable = useChatSettings(
-  ref(null) as any, // Will be updated after conversation is set
-  ref(false),
-  selectedModel
-)
-
-const filesComposable = useChatFiles(
-  fileInputRef as any,
-  ref(null) as any,
-  ref(false)
-)
-
 const conversationComposable = useChatConversation(
   models,
   selectedModel,
@@ -194,6 +181,14 @@ const conversationComposable = useChatConversation(
     return conversationComposable.processRawMessages(response.data.data || [])
   },
   scrollToBottom
+)
+
+// Use composables
+const settingsComposable = useChatSettings(
+  conversationComposable.currentConversation,
+  conversationComposable.isTemporaryConversation,
+  selectedModel,
+  conversationComposable.updateConversation
 )
 
 const toolsComposable = useChatTools(
@@ -243,6 +238,12 @@ const streamingComposable = useChatStreaming(
   conversationComposable.generateTitleInBackground
 )
 
+const filesComposable = useChatFiles(
+  fileInputRef as any,
+  conversationComposable.currentConversation,
+  streamingComposable.sending
+)
+
 const messagesComposable = useChatMessages(
   conversationComposable.currentConversation,
   conversationComposable.messages,
@@ -275,6 +276,7 @@ const { expandedMessages, editingBlockId, editingContent, startEditBlock, cancel
 // Computed
 const activeSkillDisplayName = computed(() => {
   if (!activeSkillName.value) return ''
+  if (activeSkillName.value === 'auto') return '自动选择'
   const skill = skillsStore.getSkillByName(activeSkillName.value)
   return skill?.display_name || skill?.name || activeSkillName.value
 })

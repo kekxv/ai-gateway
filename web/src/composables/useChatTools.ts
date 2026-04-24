@@ -56,6 +56,13 @@ export function useChatTools(
       return
     }
 
+    if (skillName === 'auto') {
+      activeSkillName.value = 'auto'
+      activeSkillInstructions.value = null
+      ElMessage.success('已开启自动技能选择')
+      return
+    }
+
     const skill = skillsStore.getSkillByName(skillName)
     if (skill) {
       activeSkillName.value = skill.name

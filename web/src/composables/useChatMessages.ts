@@ -122,37 +122,33 @@ export function useChatMessages(
   // Build chat history for API request
   const buildChatHistory = (): ChatMessage[] => {
     const history: ChatMessage[] = []
+    let combinedSystemContent = ''
 
-    // Add system prompt if exists
+    // 1. Add base system prompt
     if (settingsForm.value.system_prompt) {
-      let systemContent = settingsForm.value.system_prompt
+      combinedSystemContent = settingsForm.value.system_prompt
+    }
 
-      // Add skills catalog
+    // 2. Add skills catalog if auto-selection is enabled
+    if (activeSkillName.value === 'auto') {
       const skillsXML = skillsStore.getSkillsForModel()
       if (skillsXML) {
-        systemContent += '\n\n' + skillsXML
-      }
-
-      history.push({
-        role: 'system',
-        content: systemContent
-      })
-    } else {
-      // If no system prompt but skills exist
-      const skillsXML = skillsStore.getSkillsForModel()
-      if (skillsXML) {
-        history.push({
-          role: 'system',
-          content: `You have access to the following skills:\n\n${skillsXML}\n\nWhen a task matches a skill's description, consider using its instructions to guide your response.`
-        })
+        if (combinedSystemContent) combinedSystemContent += '\n\n'
+        combinedSystemContent += `You have access to the following skills:\n\n${skillsXML}\n\nWhen a task matches a skill's description, consider using its instructions to guide your response.`
       }
     }
 
-    // Add active skill instructions
+    // 3. Add active skill instructions if a specific skill is selected
     if (activeSkillInstructions.value) {
+      if (combinedSystemContent) combinedSystemContent += '\n\n'
+      combinedSystemContent += `[Active Skill: ${activeSkillName.value}]\n\n${activeSkillInstructions.value}`
+    }
+
+    // Push the combined system message if there is any content
+    if (combinedSystemContent) {
       history.push({
         role: 'system',
-        content: `[Active Skill: ${activeSkillName.value}]\n\n${activeSkillInstructions.value}`
+        content: combinedSystemContent
       })
     }
 

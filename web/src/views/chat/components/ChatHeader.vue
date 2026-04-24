@@ -48,13 +48,19 @@
           </button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item v-if="activeSkillName" command="">
+              <el-dropdown-item command="auto" :class="{ 'is-active': activeSkillName === 'auto' }">
+                <div class="skill-option">
+                  <span class="skill-name">自动选择技能</span>
+                  <span class="skill-desc">根据对话内容自动使用合适的技能库</span>
+                </div>
+              </el-dropdown-item>
+              <el-dropdown-item v-if="activeSkillName && activeSkillName !== 'auto'" command="">
                 <div class="skill-option">
                   <span class="skill-name text-warning">取消当前技能</span>
                 </div>
               </el-dropdown-item>
               <el-dropdown-item divided v-for="skill in enabledSkills" :key="skill.id"
-                                :command="skill.name">
+                                :command="skill.name" :class="{ 'is-active': activeSkillName === skill.name }">
                 <div class="skill-option">
                   <span class="skill-name">{{ skill.display_name || skill.name }}</span>
                   <span class="skill-desc">{{ skill.description }}</span>
@@ -90,8 +96,10 @@
     <el-dialog
       v-model="showToolSelector"
       title="选择工具"
-      width="400px"
+      :width="isMobile ? '90%' : '400px'"
       class="tool-selector-dialog"
+      append-to-body
+      align-center
     >
       <div class="tool-selector-content">
         <div class="tool-selector-header">
