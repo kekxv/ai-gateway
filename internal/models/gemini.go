@@ -56,8 +56,24 @@ type GeminiFunctionResponse struct {
 
 // GeminiTool represents a Gemini tool object
 type GeminiTool struct {
-	FunctionDeclarations []GeminiFunctionDeclaration `json:"functionDeclarations,omitempty"`
+	FunctionDeclarations  []GeminiFunctionDeclaration `json:"functionDeclarations,omitempty"`
+	GoogleSearchRetrieval *GoogleSearchRetrieval      `json:"googleSearchRetrieval,omitempty"`
+	CodeInterpreter       *CodeInterpreter            `json:"codeInterpreter,omitempty"`
 }
+
+// GoogleSearchRetrieval represents a Gemini googleSearchRetrieval tool
+type GoogleSearchRetrieval struct {
+	DynamicRetrievalConfig *DynamicRetrievalConfig `json:"dynamicRetrievalConfig,omitempty"`
+}
+
+// DynamicRetrievalConfig represents a Gemini dynamicRetrievalConfig object
+type DynamicRetrievalConfig struct {
+	Mode             string   `json:"mode,omitempty"` // "unspecified", "dynamic"
+	DynamicThreshold *float64 `json:"dynamicThreshold,omitempty"`
+}
+
+// CodeInterpreter represents a Gemini codeInterpreter tool
+type CodeInterpreter struct{}
 
 // GeminiFunctionDeclaration represents a Gemini functionDeclaration object
 type GeminiFunctionDeclaration struct {

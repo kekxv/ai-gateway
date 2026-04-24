@@ -39,17 +39,25 @@ func convertResponseRequestToChatRequest(req *models.ResponseRequest) *ChatReque
 	if len(req.Tools) > 0 {
 		chatReq.Tools = make([]ToolDefinition, 0, len(req.Tools))
 		for _, tool := range req.Tools {
-			if tool.Function == nil {
-				continue
+			if tool.Type == "function" && tool.Function != nil {
+				chatReq.Tools = append(chatReq.Tools, ToolDefinition{
+					Type: tool.Type,
+					Function: ToolFunctionSpec{
+						Name:        tool.Function.Name,
+						Description: tool.Function.Description,
+						Parameters:  tool.Function.Parameters,
+					},
+				})
+			} else {
+				// For non-function tools, we might need to handle them specially or pass as extra
+				// For now, let's at least capture the type so we don't drop them completely
+				if chatReq.Extra == nil {
+					chatReq.Extra = make(map[string]interface{})
+				}
+				extraTools, _ := chatReq.Extra["tools"].([]interface{})
+				extraTools = append(extraTools, tool)
+				chatReq.Extra["tools"] = extraTools
 			}
-			chatReq.Tools = append(chatReq.Tools, ToolDefinition{
-				Type: tool.Type,
-				Function: ToolFunctionSpec{
-					Name:        tool.Function.Name,
-					Description: tool.Function.Description,
-					Parameters:  tool.Function.Parameters,
-				},
-			})
 		}
 	}
 

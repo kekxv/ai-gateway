@@ -1181,16 +1181,79 @@ func (c *ProtocolConverter) openAIToGeminiRequest(req *ChatRequest) (*models.Gem
 	}
 
 	// 2. Tools
-	if len(req.Tools) > 0 {
+	if len(req.Tools) > 0 || (req.Extra != nil && req.Extra["tools"] != nil) {
 		declarations := make([]models.GeminiFunctionDeclaration, 0)
+		var googleSearch *models.GoogleSearchRetrieval
+		var codeInterpreter *models.CodeInterpreter
+
+		// Handle standard tools
 		for _, t := range req.Tools {
-			declarations = append(declarations, models.GeminiFunctionDeclaration{
-				Name:        t.Function.Name,
-				Description: t.Function.Description,
-				Parameters:  cleanSchemaForGemini(t.Function.Parameters),
-			})
+			if t.Type == "function" {
+				declarations = append(declarations, models.GeminiFunctionDeclaration{
+					Name:        t.Function.Name,
+					Description: t.Function.Description,
+					Parameters:  cleanSchemaForGemini(t.Function.Parameters),
+				})
+			}
 		}
-		geminiReq.Tools = []models.GeminiTool{{FunctionDeclarations: declarations}}
+
+		// Handle extra tools (from Response API or other sources)
+		if req.Extra != nil && req.Extra["tools"] != nil {
+			if tools, ok := req.Extra["tools"].([]interface{}); ok {
+				for _, toolAny := range tools {
+					if toolMap, ok := toolAny.(map[string]interface{}); ok {
+						toolType, _ := toolMap["type"].(string)
+						switch toolType {
+						case "function":
+							if fn, ok := toolMap["function"].(map[string]interface{}); ok {
+								name, _ := fn["name"].(string)
+								desc, _ := fn["description"].(string)
+								params, _ := fn["parameters"].(map[string]interface{})
+								declarations = append(declarations, models.GeminiFunctionDeclaration{
+									Name:        name,
+									Description: desc,
+									Parameters:  cleanSchemaForGemini(params),
+								})
+							}
+						case "web_search", "web_search_preview", "google_search":
+							googleSearch = &models.GoogleSearchRetrieval{}
+						case "code_interpreter":
+							codeInterpreter = &models.CodeInterpreter{}
+						}
+					} else if tool, ok := toolAny.(models.ResponseTool); ok {
+						switch tool.Type {
+						case "function":
+							if tool.Function != nil {
+								declarations = append(declarations, models.GeminiFunctionDeclaration{
+									Name:        tool.Function.Name,
+									Description: tool.Function.Description,
+									Parameters:  cleanSchemaForGemini(tool.Function.Parameters),
+								})
+							}
+						case "web_search", "web_search_preview", "google_search":
+							googleSearch = &models.GoogleSearchRetrieval{}
+						case "code_interpreter":
+							codeInterpreter = &models.CodeInterpreter{}
+						}
+					}
+				}
+			}
+		}
+
+		geminiTools := make([]models.GeminiTool, 0)
+		if len(declarations) > 0 {
+			geminiTools = append(geminiTools, models.GeminiTool{FunctionDeclarations: declarations})
+		}
+		if googleSearch != nil {
+			geminiTools = append(geminiTools, models.GeminiTool{GoogleSearchRetrieval: googleSearch})
+		}
+		if codeInterpreter != nil {
+			geminiTools = append(geminiTools, models.GeminiTool{CodeInterpreter: codeInterpreter})
+		}
+
+		if len(geminiTools) > 0 {
+			geminiReq.Tools = geminiTools
+		}
 	}
 
 	// 3. Generation Config

@@ -80,7 +80,7 @@ func NewResponseService(
 // CreateResponse handles POST /responses
 // For streaming, returns (*ResponseStreamingResponse, error)
 // For non-streaming, returns (*models.Response, error)
-func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.GatewayAPIKey, req *models.ResponseRequest, requestHeaders http.Header) (interface{}, error) {
+func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.GatewayAPIKey, req *models.ResponseRequest, rawBody []byte, requestHeaders http.Header) (interface{}, error) {
 	startTime := time.Now()
 
 	// Extract headers for logging and forwarding
@@ -147,9 +147,8 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 		if err := s.logRepo.Create(ctx, logEntry); err != nil {
 			logEntry.ID = 0 // Continue without log if creation fails
 		} else if apiKey.LogDetails {
-			// Store request body immediately at request start
-			reqBody, _ := json.Marshal(req)
-			reqGz, _ := utils.GzipCompress(reqBody)
+			// Store original request body immediately at request start
+			reqGz, _ := utils.GzipCompress(rawBody)
 			detail := &models.LogDetail{
 				LogID:       logEntry.ID,
 				RequestBody: reqGz,
@@ -189,7 +188,19 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 		targetURL := fmt.Sprintf("%s/responses", strings.TrimSuffix(baseURL, "/"))
 
 		// 6. Send upstream request with forwarded headers
-		resp, reqErr = s.sendResponseUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req, req.Stream, forwardHeaders)
+		// Use direct passthrough with model name replacement
+		upstreamModelName := route.Model.Name
+		finalRawBody := rawBody
+		if upstreamModelName != req.Model {
+			// Replace model name in JSON string directly
+			finalRawBody = []byte(strings.Replace(string(rawBody), `"model":"`+req.Model+`"`, `"model":"`+upstreamModelName+`"`, 1))
+			if string(finalRawBody) == string(rawBody) {
+				// Try with space after colon
+				finalRawBody = []byte(strings.Replace(string(rawBody), `"model": "`+req.Model+`"`, `"model":"`+upstreamModelName+`"`, 1))
+			}
+		}
+
+		resp, reqErr = s.sendResponseUpstreamRequest(ctx, targetURL, route.Provider.APIKey, finalRawBody, req.Stream, forwardHeaders)
 	}
 	if reqErr != nil {
 		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 502, reqErr.Error())
@@ -523,10 +534,17 @@ func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *model
 }
 
 // sendResponseUpstreamRequest sends request to upstream Responses API
-func (s *ResponseService) sendResponseUpstreamRequest(ctx context.Context, url, apiKey string, req *models.ResponseRequest, stream bool, forwardHeaders map[string]string) (*http.Response, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
+func (s *ResponseService) sendResponseUpstreamRequest(ctx context.Context, url, apiKey string, req interface{}, stream bool, forwardHeaders map[string]string) (*http.Response, error) {
+	var body []byte
+	var err error
+
+	if b, ok := req.([]byte); ok {
+		body = b
+	} else {
+		body, err = json.Marshal(req)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))

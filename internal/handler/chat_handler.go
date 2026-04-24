@@ -443,7 +443,7 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 			return
 		}
 
-		result, err := h.responseService.CreateResponse(c.Request.Context(), virtualAPIKey, responseReq, c.Request.Header)
+		result, err := h.responseService.CreateResponse(c.Request.Context(), virtualAPIKey, responseReq, rawBody, c.Request.Header)
 		if err != nil {
 			switch err {
 			case service.ErrModelNotFound:

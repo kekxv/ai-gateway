@@ -202,16 +202,23 @@ func (h *GatewayHandler) CreateResponse(c *gin.Context) {
 		return
 	}
 
+	// Read raw body for transparent forwarding
+	rawBody, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read request body"})
+		return
+	}
+
 	var req models.ResponseRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Printf("[CreateResponse] ShouldBindJSON error: %v", err)
+	if err := json.Unmarshal(rawBody, &req); err != nil {
+		log.Printf("[CreateResponse] Unmarshal error: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	stream := req.Stream
 
-	result, err := h.responseService.CreateResponse(c.Request.Context(), apiKey, &req, c.Request.Header)
+	result, err := h.responseService.CreateResponse(c.Request.Context(), apiKey, &req, rawBody, c.Request.Header)
 	if err != nil {
 		log.Printf("[CreateResponse] Error: %v, Model: %s, Stream: %v", err, req.Model, stream)
 		switch err {
