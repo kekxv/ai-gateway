@@ -136,9 +136,55 @@ type ThinkingConfig struct {
 	BudgetTokens int    `json:"budget_tokens,omitempty"` // Token budget for thinking
 }
 
+// UnmarshalJSON handles bool, string, object, and null for thinking config.
+// Accepts: true, false, "enabled", "disabled", {"type":"enabled","budget_tokens":1024}, null
+func (tc *ThinkingConfig) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+	// Try bool first (OpenAI SDK sends thinking: true/false)
+	var b bool
+	if err := json.Unmarshal(data, &b); err == nil {
+		if b {
+			tc.Type = "enabled"
+		} else {
+			tc.Type = "disabled"
+		}
+		return nil
+	}
+	// Try string ("enabled"/"disabled")
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		tc.Type = s
+		return nil
+	}
+	// Try object (standard Anthropic/Gemini format)
+	type Alias ThinkingConfig
+	var aux Alias
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*tc = ThinkingConfig(aux)
+	return nil
+}
+
 // GenerationConfig for Gemini-style generation config (including thinkingLevel)
 type GenerationConfig struct {
 	ThinkingConfig *GeminiThinkingConfig `json:"thinkingConfig,omitempty"`
+}
+
+// UnmarshalJSON handles object and null for generation config.
+func (gc *GenerationConfig) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+	type Alias GenerationConfig
+	var aux Alias
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*gc = GenerationConfig(aux)
+	return nil
 }
 
 // GeminiThinkingConfig for Gemini thinking level control
@@ -177,6 +223,20 @@ func (r ChatRequest) MarshalJSON() ([]byte, error) {
 // StreamOptions for OpenAI streaming API to get usage data
 type StreamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
+}
+
+// UnmarshalJSON handles object and null for stream options.
+func (so *StreamOptions) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+	type Alias StreamOptions
+	var aux Alias
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*so = StreamOptions(aux)
+	return nil
 }
 
 // ToolDefinition represents a tool for function calling
