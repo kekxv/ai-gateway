@@ -419,11 +419,18 @@
           <div v-if="logDetail.detail?.responseBody" class="meta-card">
             <div class="meta-header">
               <span class="font-medium">响应体</span>
-              <el-button size="small" text @click="copyToClipboard(logDetail.detail.responseBody)">
-                <el-icon><CopyDocument /></el-icon>
-              </el-button>
+              <div class="flex items-center gap-2">
+                <el-button-group size="small" v-if="isStreamResponseBody">
+                  <el-button :type="responseViewMode === 'merged' ? 'primary' : 'default'" @click="responseViewMode = 'merged'">合并JSON</el-button>
+                  <el-button :type="responseViewMode === 'stream' ? 'primary' : 'default'" @click="responseViewMode = 'stream'">流模式</el-button>
+                </el-button-group>
+                <el-button size="small" text @click="copyResponseContent()">
+                  <el-icon><CopyDocument /></el-icon>
+                </el-button>
+              </div>
             </div>
-            <pre class="meta-body" v-html="highlightJson(logDetail.detail.responseBody)"></pre>
+            <pre v-if="responseViewMode === 'merged'" class="meta-body" v-html="highlightJson(mergedResponseJson)"></pre>
+            <pre v-else class="meta-body">{{ logDetail.detail.responseBody }}</pre>
           </div>
         </template>
       </div>
@@ -466,6 +473,9 @@ const isMobile = ref(false)
 
 // 显示模式：'chat' 对话模式, 'meta' 元数据模式
 const viewMode = ref<'chat' | 'meta'>('chat')
+
+// 响应体查看模式：'merged' 合并JSON（默认）, 'stream' 原始流
+const responseViewMode = ref<'merged' | 'stream'>('merged')
 
 // 从 requestBody 中提取原始请求消息（用于 YOLO 等工具重新绘制）
 const requestMessages = computed(() => {
@@ -584,6 +594,164 @@ const highlightJson = (json: string | object | null | undefined): string => {
   } catch {
     return String(json)
   }
+}
+
+// 检测是否为 SSE 流格式
+const isStreamResponseBody = computed(() => {
+  const body = logDetail.value?.detail?.responseBody
+  if (!body || typeof body !== 'string') return false
+  return body.includes('data:') && body.includes('\n')
+})
+
+// 解析 SSE 并合并为完整 JSON（默认显示）
+const mergedResponseJson = computed(() => {
+  const body = logDetail.value?.detail?.responseBody
+  if (!body || typeof body !== 'string') return ''
+  if (!isStreamResponseBody.value) return body
+  return mergeSSEToJson(body)
+})
+
+// SSE 解析函数：合并流数据为完整 JSON 对象
+const mergeSSEToJson = (sseBody: string): string => {
+  const lines = sseBody.split('\n')
+  const allChunks: any[] = []
+  let lastUsage: any = null
+  let detectedFormat: 'openai' | 'anthropic' | 'responses' | null = null
+
+  for (const line of lines) {
+    if (line.startsWith('event:')) continue
+    if (!line.startsWith('data:')) continue
+    const dataStr = line.slice(5).trim()
+    if (dataStr === '[DONE]') continue
+
+    try {
+      const chunk = JSON.parse(dataStr)
+      allChunks.push(chunk)
+      if (chunk.usage) lastUsage = chunk.usage
+
+      if (chunk.choices) detectedFormat = 'openai'
+      else if (chunk.type === 'message' || chunk.type?.startsWith('message_') || chunk.type?.startsWith('content_block_')) detectedFormat = 'anthropic'
+      else if (chunk.type?.startsWith('response.') || chunk.type === 'function_call' || chunk.type === 'function_call_output') detectedFormat = 'responses'
+    } catch { /* skip */ }
+  }
+
+  if (detectedFormat === 'openai') {
+    let content = '', reasoning = '', id = '', model = '', finishReason = ''
+    const toolCalls: any[] = []
+    for (const chunk of allChunks) {
+      if (chunk.id) id = chunk.id
+      if (chunk.model) model = chunk.model
+      for (const choice of chunk.choices || []) {
+        if (choice.delta?.content) content += choice.delta.content
+        if (choice.delta?.reasoning || choice.delta?.reasoning_content)
+          reasoning += (choice.delta.reasoning || choice.delta.reasoning_content)
+        if (choice.delta?.tool_calls) {
+          for (const tc of choice.delta.tool_calls) {
+            const idx = tc.index ?? 0
+            if (!toolCalls[idx]) toolCalls[idx] = { id: '', type: 'function', function: { name: '', arguments: '' } }
+            if (tc.id) toolCalls[idx].id = tc.id
+            if (tc.function?.name) toolCalls[idx].function.name = tc.function.name
+            if (tc.function?.arguments) toolCalls[idx].function.arguments += tc.function.arguments
+          }
+        }
+        if (choice.finish_reason) finishReason = choice.finish_reason
+      }
+    }
+    const msg: any = { role: 'assistant', content }
+    if (reasoning) msg.reasoning = reasoning
+    if (toolCalls.length > 0) msg.tool_calls = toolCalls
+    const result: any = { id, object: 'chat.completion', created: Date.now(), model, choices: [{ index: 0, message: msg, finish_reason: finishReason || 'stop' }] }
+    if (lastUsage) result.usage = lastUsage
+    return JSON.stringify(result, null, 2)
+  }
+
+  if (detectedFormat === 'anthropic') {
+    let textContent = '', thinkContent = '', id = '', model = '', stopReason = ''
+    const toolCalls: any[] = []
+    let inputTokens = 0, outputTokens = 0
+
+    for (const chunk of allChunks) {
+      if (chunk.type === 'message_start') {
+        id = chunk.message?.id || ''
+        model = chunk.message?.model || ''
+        inputTokens = chunk.message?.usage?.input_tokens || 0
+      } else if (chunk.type === 'content_block_start') {
+        if (chunk.content_block?.type === 'tool_use') {
+          toolCalls.push({ id: chunk.content_block.id, type: 'tool_use', name: chunk.content_block.name, input: '' })
+        }
+      } else if (chunk.type === 'content_block_delta') {
+        if (chunk.delta?.type === 'text_delta') textContent += chunk.delta.text
+        else if (chunk.delta?.type === 'thinking_delta') thinkContent += chunk.delta.thinking
+        else if (chunk.delta?.type === 'input_json_delta' && toolCalls.length > 0) {
+          toolCalls[toolCalls.length - 1].input += chunk.delta.partial_json
+        }
+      } else if (chunk.type === 'message_delta') {
+        stopReason = chunk.delta?.stop_reason || ''
+        outputTokens = chunk.usage?.output_tokens || 0
+      }
+    }
+    const contentArr: any[] = []
+    if (thinkContent) contentArr.push({ type: 'thinking', thinking: thinkContent })
+    contentArr.push({ type: 'text', text: textContent })
+    for (const tc of toolCalls) contentArr.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.input })
+    const result: any = { id, type: 'message', role: 'assistant', model, content: contentArr, stop_reason: stopReason, usage: { input_tokens: inputTokens, output_tokens: outputTokens } }
+    return JSON.stringify(result, null, 2)
+  }
+
+  if (detectedFormat === 'responses') {
+    const output: any[] = []
+    let responseId = '', model = '', status = 'completed'
+    let inputTokens = 0, outputTokens = 0, totalTokens = 0
+    let currentItem: any = null
+
+    for (const chunk of allChunks) {
+      if (chunk.type === 'response.created' || chunk.type === 'response.in_progress') {
+        if (chunk.response?.id) responseId = chunk.response.id
+        if (chunk.response?.model) model = chunk.response.model
+      } else if (chunk.type === 'response.output_item.added' && chunk.output_item) {
+        currentItem = { ...chunk.output_item }
+      } else if (chunk.type === 'response.output_text.delta' && currentItem) {
+        if (!currentItem.content) currentItem.content = []
+        currentItem.content.push({ type: 'output_text', text: chunk.delta })
+      } else if (chunk.type === 'response.output_item.done' && chunk.output_item) {
+        output.push(chunk.output_item)
+        currentItem = null
+      } else if (chunk.type === 'response.completed' && chunk.response) {
+        if (chunk.response.usage) {
+          inputTokens = chunk.response.usage.input_tokens || 0
+          outputTokens = chunk.response.usage.output_tokens || 0
+          totalTokens = chunk.response.usage.total_tokens || 0
+        }
+      }
+      // Collect standalone function_call / function_call_output items
+      else if (chunk.type === 'function_call' && chunk.call_id) {
+        output.push({
+          type: 'function_call',
+          call_id: chunk.call_id,
+          name: chunk.name || 'unknown',
+          arguments: chunk.arguments || '{}'
+        })
+      } else if (chunk.type === 'function_call_output' && chunk.call_id) {
+        output.push({
+          type: 'function_call_output',
+          call_id: chunk.call_id,
+          output: chunk.output || ''
+        })
+      }
+    }
+    const result: any = { id: responseId, object: 'response', model, status, output }
+    if (inputTokens || outputTokens) result.usage = { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: totalTokens }
+    return JSON.stringify(result, null, 2)
+  }
+
+  // 无法识别格式，返回原始内容
+  return sseBody
+}
+
+// 复制响应内容（根据当前模式）
+const copyResponseContent = () => {
+  const content = responseViewMode.value === 'merged' ? mergedResponseJson.value : logDetail.value?.detail?.responseBody
+  copyToClipboard(content)
 }
 
 const checkMobile = () => {
@@ -937,8 +1105,18 @@ const chatMessages = computed(() => {
         if (typeof reqObj.input === 'string') {
           messages.push({ role: 'user', content: reqObj.input })
         } else if (Array.isArray(reqObj.input)) {
+          // 第一遍：先收集所有 function_call_output
           reqObj.input.forEach((item: { type?: string; role?: string; content?: string | object; tool_calls?: unknown; name?: string; arguments?: string; output?: string; call_id?: string }) => {
-            // Determine role if not explicitly provided
+            if (item.type === 'function_call_output' || item.role === 'tool') {
+              const content = item.output || extractContentText(item.content)
+              const toolCallId = item.call_id
+              if (toolCallId) {
+                toolResultsMap.set(toolCallId, { result: content })
+              }
+            }
+          })
+          // 第二遍：构建消息
+          reqObj.input.forEach((item: { type?: string; role?: string; content?: string | object; tool_calls?: unknown; name?: string; arguments?: string; output?: string; call_id?: string }) => {
             let role = item.role
             if (!role) {
               if (item.type === 'message') role = 'user'
@@ -949,14 +1127,8 @@ const chatMessages = computed(() => {
             if (role === 'system') {
               messages.push({ role: 'system', content: extractContentText(item.content) })
             } else if (role === 'tool') {
-              // We'll store tool results to be matched with assistant messages
-              const content = item.output || extractContentText(item.content)
-              const toolCallId = item.call_id
-              if (toolCallId) {
-                toolResultsMap.set(toolCallId, { result: content })
-              }
+              // 结果已在第一遍收集
             } else if (item.type === 'function_call' || (role === 'assistant' && (item.name || item.arguments))) {
-              // Extract tool call
               const tc = {
                 id: item.call_id || `call_${Math.random().toString(36).substring(2, 11)}`,
                 type: 'function',
@@ -987,6 +1159,30 @@ const chatMessages = computed(() => {
               messages.push(msg)
             }
           })
+        }
+      }
+      // Handle raw array of function_call / function_call_output (Responses API raw request body)
+      else if (Array.isArray(reqObj) && reqObj.length > 0 && reqObj[0]?.type === 'function_call') {
+        // 第一遍：收集所有 function_call_output
+        const functionCalls: Array<{ id: string; name: string; arguments: string }> = []
+        reqObj.forEach((item: { type?: string; name?: string; arguments?: string; call_id?: string; output?: string }) => {
+          if (item.type === 'function_call_output' && item.call_id) {
+            toolResultsMap.set(item.call_id, { result: item.output || '' })
+          } else if (item.type === 'function_call') {
+            functionCalls.push({
+              id: item.call_id || `call_${Math.random().toString(36).substring(2, 11)}`,
+              name: item.name || 'unknown',
+              arguments: item.arguments || '{}'
+            })
+          }
+        })
+        // 第二遍：构建 assistant 消息
+        for (const fc of functionCalls) {
+          const tc = { id: fc.id, type: 'function', function: { name: fc.name, arguments: fc.arguments } }
+          const toolCalls = parseToolCalls([tc], toolResultsMap)
+          if (toolCalls.length > 0) {
+            messages.push({ role: 'assistant', content: '', toolCalls })
+          }
         }
       }
       // Handle Chat Completions API format (messages field)
@@ -1123,10 +1319,19 @@ const chatMessages = computed(() => {
   try {
     const response = logDetail.value.detail.responseBody
     if (response) {
-      const respObj = typeof response === 'string' ? JSON.parse(response) : response
+      // SSE 格式检测：如果是流数据，先解析再处理
+      let respObj: any
+      if (typeof response === 'string' && response.includes('data:') && response.includes('\n')) {
+        // 解析 SSE 为合并 JSON
+        const mergedJson = mergeSSEToJson(response)
+        respObj = JSON.parse(mergedJson)
+      } else {
+        respObj = typeof response === 'string' ? JSON.parse(response) : response
+      }
 
       // Handle Responses API format (output field)
       if (respObj.output && Array.isArray(respObj.output)) {
+        // 第一遍：先收集所有 function_call_output 结果
         respObj.output.forEach((item: { type?: string; role?: string; content?: object[]; output_text?: string; tool_calls?: unknown; name?: string; arguments?: string; id?: string; call_id?: string; output?: string }) => {
           if (item.type === 'function_call_output' || item.role === 'tool') {
             const content = item.output || (Array.isArray(item.content) ? JSON.stringify(item.content) : '')
@@ -1134,8 +1339,11 @@ const chatMessages = computed(() => {
             if (toolCallId) {
               toolResultsMap.set(toolCallId, { result: content })
             }
-            return
           }
+        })
+        // 第二遍：构建 assistant 消息（此时 toolResultsMap 已填充）
+        respObj.output.forEach((item: { type?: string; role?: string; content?: object[]; output_text?: string; tool_calls?: unknown; name?: string; arguments?: string; id?: string; call_id?: string; output?: string }) => {
+          if (item.type === 'function_call_output' || item.role === 'tool') return
 
           if (item.type === 'function_call' || (item.role === 'assistant' && (item.name || item.arguments))) {
             const tc = {
@@ -1177,6 +1385,31 @@ const chatMessages = computed(() => {
         if (respObj.output_text && messages.filter(m => m.role === 'assistant').length === 0) {
           const parsed = parseMessageContent(respObj.output_text)
           messages.push({ role: 'assistant', content: parsed.textContent, thinkContent: parsed.thinkContent || undefined, hasThink: parsed.hasThink })
+        }
+      }
+      // Handle raw array of function_call / function_call_output items
+      else if (Array.isArray(respObj) && respObj.length > 0 && respObj[0]?.type === 'function_call') {
+        // 第一遍：收集所有 function_call_output
+        const functionCalls: Array<{ type: string; name: string; arguments: string; call_id: string }> = []
+        respObj.forEach((item: { type?: string; name?: string; arguments?: string; call_id?: string; output?: string }) => {
+          if (item.type === 'function_call_output' && item.call_id) {
+            toolResultsMap.set(item.call_id, { result: item.output || '' })
+          } else if (item.type === 'function_call') {
+            functionCalls.push({
+              type: 'function',
+              name: item.name || 'unknown',
+              arguments: item.arguments || '{}',
+              call_id: item.call_id || `call_${Math.random().toString(36).substring(2, 11)}`
+            })
+          }
+        })
+        // 第二遍：用已填充的 toolResultsMap 构建 function_call 消息
+        for (const fc of functionCalls) {
+          const tc = { id: fc.call_id, type: fc.type, function: { name: fc.name, arguments: fc.arguments } }
+          const toolCalls = parseToolCalls([tc], toolResultsMap)
+          if (toolCalls.length > 0) {
+            messages.push({ role: 'assistant', content: '', toolCalls })
+          }
         }
       }
       // Handle Chat Completions API format (choices field)
@@ -1381,6 +1614,7 @@ const viewDetail = async (log: Log) => {
       detail: data.detail || undefined
     }
     detailDialogVisible.value = true
+    responseViewMode.value = 'merged'
     initBubbleCollapse()
   } catch (error) {
     ElMessage.error(t('common.error'))

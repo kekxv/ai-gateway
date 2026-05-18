@@ -82,6 +82,7 @@ import { Tools, Check, Close, Loading, ArrowDown, ArrowUp, Clock, Document, Pict
 import type { ToolCallResult } from '@/types/tool'
 import CanvasDisplay from './CanvasDisplay.vue'
 import YoloRedrawDisplay from './YoloRedrawDisplay.vue'
+import CodeBlock from './CodeBlock.vue'
 import { useCanvasStore } from '@/stores/canvas'
 import * as Diff from 'diff'
 
@@ -158,6 +159,9 @@ const getToolDisplayName = (toolName: string) => {
     'save_note': '保存笔记',
     'Edit': '编辑文件',
     'edit_file': '编辑文件',
+    'Write': '写入文件',
+    'write_file': '写入文件',
+    'exec_command': '执行命令',
     'Read': '读取文件',
     'read_file': '读取文件',
     'output_document_info': '输出证件信息'
@@ -286,6 +290,11 @@ const renderArguments = (toolCall: ToolCallResult) => {
     case 'Edit':
     case 'edit_file':
       return renderEditArgs(args)
+    case 'Write':
+    case 'write_file':
+      return renderWriteArgs(args)
+    case 'exec_command':
+      return renderExecCommandArgs(args)
     case 'web_search':
       return h('div', { class: 'tool-args-simple' }, [
         h('span', { class: 'arg-label' }, '搜索：'),
@@ -541,6 +550,11 @@ const renderResult = (toolCall: ToolCallResult) => {
     case 'Edit':
     case 'edit_file':
       return renderEditResult(result)
+    case 'Write':
+    case 'write_file':
+      return renderWriteResult(result)
+    case 'exec_command':
+      return renderExecCommandResult(result)
     case 'web_search':
       return renderWebSearchResult(result)
     case 'fetch_webpage':
@@ -857,6 +871,73 @@ const renderReadResult = (result: unknown) => {
   return h('pre', { class: 'detail-code' }, formatJson(resultData))
 }
 
+// 文件扩展名到高亮语言的映射
+const extToLanguage: Record<string, string> = {
+  ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+  go: 'go', py: 'python', pyw: 'python', rs: 'rust',
+  java: 'java', kt: 'java', scala: 'java',
+  php: 'php', rb: 'plaintext',
+  css: 'css', scss: 'css', less: 'css',
+  html: 'html', htm: 'html', xml: 'xml', vue: 'vue', svg: 'xml',
+  json: 'json', jsonc: 'json',
+  yaml: 'yaml', yml: 'yaml',
+  md: 'markdown', mdx: 'markdown',
+  sql: 'sql',
+  sh: 'bash', bash: 'bash', zsh: 'bash',
+  toml: 'plaintext', ini: 'plaintext', txt: 'plaintext',
+  dockerfile: 'bash', Makefile: 'bash',
+}
+
+const getLanguageByPath = (filePath: string): string => {
+  if (!filePath) return 'plaintext'
+  const ext = filePath.split('.').pop()?.toLowerCase() || ''
+  return extToLanguage[ext] || 'plaintext'
+}
+
+// 渲染 exec_command 参数
+const renderExecCommandArgs = (args: Record<string, unknown>) => {
+  const cmd = String(args.cmd || args.command || '未知命令')
+  const workdir = String(args.workdir || args.cwd || '')
+  const timeout = args.timeout || args.timeout_ms
+
+  const children: Array<ReturnType<typeof h>> = [
+    h('div', { class: 'exec-cmd-line' }, [
+      h('span', { class: 'arg-label' }, '命令：'),
+      h('code', { class: 'exec-cmd-value' }, cmd)
+    ])
+  ]
+  if (workdir) {
+    children.push(h('div', { class: 'exec-option' }, [
+      h('span', { class: 'arg-label' }, '目录：'),
+      h('span', { class: 'arg-value' }, workdir)
+    ]))
+  }
+  if (timeout) {
+    children.push(h('div', { class: 'exec-option' }, [
+      h('span', { class: 'arg-label' }, '超时：'),
+      h('span', { class: 'arg-value' }, `${timeout}ms`)
+    ]))
+  }
+
+  return h('div', { class: 'tool-args-exec' }, children)
+}
+
+// 渲染 Write 参数
+const renderWriteArgs = (args: Record<string, unknown>) => {
+  const filePath = String(args.file_path || args.path || '未知文件')
+  const content = String(args.content || '')
+  const language = getLanguageByPath(filePath)
+
+  return h('div', { class: 'tool-args-write' }, [
+    h('div', { class: 'write-file-path' }, [
+      h('span', { class: 'arg-label' }, '文件：'),
+      h('span', { class: 'arg-value' }, filePath),
+      h('span', { class: 'write-lang-tag' }, language)
+    ]),
+    content ? h(CodeBlock, { code: content, language, defaultCollapsed: true }) : null
+  ])
+}
+
 // 渲染 Edit 结果
 const renderEditResult = (result: unknown) => {
   if (!result) {
@@ -885,6 +966,75 @@ const renderEditResult = (result: unknown) => {
   return h('div', { class: 'tool-result-edit' }, [
     h('el-icon', { class: 'edit-success-icon' }, [h(Check)]),
     h('span', {}, resultData.message || '文件已成功更新')
+  ])
+}
+
+// 渲染 exec_command 结果
+const renderExecCommandResult = (result: unknown) => {
+  if (!result) {
+    return h('div', { class: 'tool-result-empty' }, '无结果')
+  }
+
+  let outputText = typeof result === 'string' ? result : ''
+
+  // 如果结果是对象，尝试从各种字段获取输出
+  if (typeof result === 'object') {
+    const data = result as Record<string, unknown>
+    outputText = String(data.output || data.stdout || data.result || data.message || '')
+  }
+
+  // 解析终端输出格式：
+  // Chunk ID: xxx
+  // Wall time: xxx
+  // Process exited with code N
+  // Output: ...
+  const exitCodeMatch = outputText.match(/Process exited with code (\d+)/)
+  const exitCode = exitCodeMatch ? parseInt(exitCodeMatch[1], 10) : -1
+  const outputIdx = outputText.indexOf('Output:\n')
+  const cleanOutput = outputIdx >= 0 ? outputText.slice(outputIdx + 8) : outputText
+
+  const exitStatus = exitCode === 0 ? 'success' : 'error'
+
+  return h('div', { class: 'tool-result-exec' }, [
+    h('div', { class: 'exec-output' }, [
+      h('div', { class: 'exec-output-header' }, [
+        h('span', { class: `exec-exit-code ${exitStatus === 'success' ? 'exit-success' : 'exit-error'}` },
+          `退出码 ${exitCode}`
+        )
+      ]),
+      h('pre', { class: `exec-output-content ${exitStatus === 'error' ? 'exec-error-output' : ''}` }, cleanOutput)
+    ])
+  ])
+}
+
+// 渲染 Write 结果
+const renderWriteResult = (result: unknown) => {
+  if (!result) {
+    return h('div', { class: 'tool-result-empty' }, '无结果')
+  }
+
+  // Handle string result
+  let resultData: { success?: boolean; message?: string; file_path?: string; error?: string }
+  if (typeof result === 'string') {
+    try {
+      resultData = JSON.parse(result)
+    } catch {
+      resultData = { message: result, success: true }
+    }
+  } else {
+    resultData = result as { success?: boolean; message?: string; file_path?: string; error?: string }
+  }
+
+  if (resultData.error) {
+    return h('div', { class: 'tool-result-error' }, [
+      h('el-icon', { class: 'error-icon' }, [h(Close)]),
+      h('span', {}, resultData.error)
+    ])
+  }
+
+  return h('div', { class: 'tool-result-write' }, [
+    h('el-icon', { class: 'write-success-icon' }, [h(Check)]),
+    h('span', {}, resultData.message || '文件已写入')
   ])
 }
 
@@ -1580,6 +1730,140 @@ const formatJson = (obj: unknown) => {
 
 .edit-diff-line.diff-neutral .edit-line-text {
   color: #374151;
+}
+
+.edit-diff-line.diff-neutral .edit-line-text {
+  color: #374151;
+}
+
+/* Write 工具参数样式 */
+.tool-args-write {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.write-file-path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.write-lang-tag {
+  padding: 2px 6px;
+  background: #e0e7ff;
+  color: #3730a3;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: 'SF Mono', 'Monaco', monospace;
+  text-transform: lowercase;
+}
+
+/* exec_command 工具参数样式 */
+.tool-args-exec {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.exec-cmd-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.exec-cmd-value {
+  color: #374151;
+  font-family: 'SF Mono', 'Monaco', monospace;
+  background: #f8fafc;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.exec-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+/* exec_command 工具结果样式 */
+.tool-result-exec {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.exec-output {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+}
+
+.exec-output-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #f3f4f6;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 12px;
+}
+
+.exec-exit-code {
+  font-weight: 600;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.exec-exit-code.exit-success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.exec-exit-code.exit-error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.exec-output-content {
+  margin: 0;
+  padding: 12px;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-family: 'SF Mono', 'Monaco', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.exec-error-output {
+  background: #2d1b1b;
+  color: #fca5a5;
+}
+
+/* Write 工具结果样式 */
+.tool-result-write {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+  border-radius: 8px;
+}
+
+.write-success-icon {
+  font-size: 18px;
+  color: #16a34a;
 }
 
 /* Edit 工具结果样式 */
