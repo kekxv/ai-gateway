@@ -96,6 +96,7 @@
         <el-form-item :label="t('provider.type')" prop="typesList">
           <el-select v-model="form.typesList" multiple class="w-full" placeholder="Select provider types" @change="handleTypesChange">
             <el-option label="OpenAI" value="openai" />
+            <el-option label="Responses" value="responses" />
             <el-option label="Anthropic/Claude" value="anthropic" />
             <el-option label="Gemini" value="gemini" />
             <el-option label="Custom" value="custom" />
@@ -301,6 +302,7 @@ const resetForm = () => {
 const getDefaultBaseURL = (typeName: string): string => {
   const defaults: Record<string, string> = {
     openai: 'https://api.openai.com/v1',
+    responses: 'https://api.openai.com/v1',
     anthropic: 'https://api.anthropic.com/v1',
     gemini: 'https://generativelanguage.googleapis.com/v1beta',
     custom: ''

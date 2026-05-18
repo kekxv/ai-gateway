@@ -587,6 +587,11 @@ func (s *ResponseService) sendChatCompletionsResponseRequest(ctx context.Context
 		chatReq.MaxTokens = 16384
 	}
 
+	// For streaming, request usage info from upstream
+	if req.Stream {
+		chatReq.Extra["stream_options"] = map[string]interface{}{"include_usage": true}
+	}
+
 	baseURL := strings.TrimSuffix(provider.GetBaseURLForType("openai"), "/")
 	targetURL := fmt.Sprintf("%s/chat/completions", baseURL)
 
@@ -1227,15 +1232,16 @@ func (s *ResponseStreamingResponse) convertChatChunkToResponseSSE(chunk *StreamC
 	var result strings.Builder
 	state := s.chatStreamState
 
-	if len(chunk.Choices) == 0 {
-		// Handle usage-only chunk
-		if chunk.Usage != nil {
-			state.usage = &models.ResponseUsage{
-				InputTokens:  chunk.Usage.PromptTokens,
-				OutputTokens: chunk.Usage.CompletionTokens,
-				TotalTokens:  chunk.Usage.TotalTokens,
-			}
+	// Extract usage from any chunk (some providers send it in usage-only chunk, others in final chunk)
+	if chunk.Usage != nil && state.usage == nil {
+		state.usage = &models.ResponseUsage{
+			InputTokens:  chunk.Usage.PromptTokens,
+			OutputTokens: chunk.Usage.CompletionTokens,
+			TotalTokens:  chunk.Usage.TotalTokens,
 		}
+	}
+
+	if len(chunk.Choices) == 0 {
 		return ""
 	}
 
