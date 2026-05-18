@@ -444,7 +444,7 @@ func (s *ResponseService) getDefaultProvider(ctx context.Context) (*models.Provi
 }
 
 // CompactConversation handles POST /responses/compact
-func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *models.GatewayAPIKey, req *models.CompactRequest, requestHeaders http.Header) (*models.Response, error) {
+func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *models.GatewayAPIKey, req *models.CompactRequest, rawBody []byte, requestHeaders http.Header) (*models.Response, error) {
 	startTime := time.Now()
 
 	// Extract headers for logging and forwarding
@@ -480,9 +480,8 @@ func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *model
 		if err := s.logRepo.Create(ctx, logEntry); err != nil {
 			logEntry.ID = 0 // Continue without log if creation fails
 		} else if apiKey.LogDetails {
-			// Store request body immediately at request start
-			reqBody, _ := json.Marshal(req)
-			reqGz, _ := utils.GzipCompress(reqBody)
+			// Store original request body immediately at request start
+			reqGz, _ := utils.GzipCompress(rawBody)
 			detail := &models.LogDetail{
 				LogID:       logEntry.ID,
 				RequestBody: reqGz,
@@ -1552,7 +1551,7 @@ func (s *ResponseStreamingResponse) LogAfterComplete(ctx context.Context) {
 		}
 	}
 
-	responseID, content, usage, outputItems, _ := s.GetCapturedData()
+	responseID, content, usage, _, _ := s.GetCapturedData()
 	latency := time.Since(s.startTime).Milliseconds()
 
 	// Cache response ID -> provider mapping
@@ -1604,68 +1603,9 @@ func (s *ResponseStreamingResponse) LogAfterComplete(ctx context.Context) {
 	s.logRepo.UpdateByID(ctx, s.logID, updates)
 
 	if s.apiKey.LogDetails {
-		// Build response object for logging using captured output items
-		output := make([]map[string]interface{}, 0, len(outputItems))
-		for _, item := range outputItems {
-			itemMap := map[string]interface{}{
-				"type":   item.Type,
-				"id":     item.ID,
-				"status": item.Status,
-			}
-			if item.Role != "" {
-				itemMap["role"] = item.Role
-			}
-			if item.CallID != "" {
-				itemMap["call_id"] = item.CallID
-			}
-			if item.Name != "" {
-				itemMap["name"] = item.Name
-			}
-			if item.Arguments != "" {
-				itemMap["arguments"] = item.Arguments
-			}
-			if len(item.Content) > 0 {
-				contentArr := make([]map[string]interface{}, len(item.Content))
-				for j, c := range item.Content {
-					contentArr[j] = map[string]interface{}{
-						"type": c.Type,
-						"text": c.Text,
-					}
-				}
-				itemMap["content"] = contentArr
-			}
-			output = append(output, itemMap)
-		}
-
-		// Fallback to message-only if no items captured
-		if len(output) == 0 && content != "" {
-			output = []map[string]interface{}{
-				{
-					"type":   "message",
-					"status": "completed",
-					"role":   "assistant",
-					"content": []map[string]interface{}{
-						{"type": "output_text", "text": content},
-					},
-				},
-			}
-		}
-
-		respObj := map[string]interface{}{
-			"id":      responseID,
-			"object":  "response",
-			"created": time.Now().Unix(),
-			"model":   s.model.Name,
-			"status":  "completed",
-			"output":  output,
-			"usage": map[string]int{
-				"input_tokens":  usage.InputTokens,
-				"output_tokens": completionTokens,
-				"total_tokens":  usage.InputTokens + completionTokens,
-			},
-		}
-		respBody, _ := json.Marshal(respObj)
-		respGz, _ := utils.GzipCompress(respBody)
+		// Store raw captured streaming data (actual SSE sent to client)
+		rawData := s.capturedBuffer.Bytes()
+		respGz, _ := utils.GzipCompress(rawData)
 
 		// Update existing LogDetail with response body
 		s.logDetailRepo.UpdateResponseBody(ctx, s.logID, respGz)

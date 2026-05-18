@@ -353,13 +353,20 @@ func (h *GatewayHandler) CompactConversation(c *gin.Context) {
 		return
 	}
 
+	// Read raw body for logging
+	rawBody, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read request body"})
+		return
+	}
+
 	var req models.CompactRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := json.Unmarshal(rawBody, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	response, err := h.responseService.CompactConversation(c.Request.Context(), apiKey, &req, c.Request.Header)
+	response, err := h.responseService.CompactConversation(c.Request.Context(), apiKey, &req, rawBody, c.Request.Header)
 	if err != nil {
 		switch err {
 		case service.ErrModelNotFound:

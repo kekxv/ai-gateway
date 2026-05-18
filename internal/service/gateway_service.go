@@ -741,7 +741,6 @@ func (u *RealtimeLogUpdater) flushToDatabase() {
 	reasoning := u.reasoning.String()
 	toolCalls := u.toolCalls
 	usage := u.usage
-	role := u.role
 	u.contentMu.Unlock()
 
 	// 计算 completion tokens
@@ -765,54 +764,7 @@ func (u *RealtimeLogUpdater) flushToDatabase() {
 	}
 	u.logRepo.UpdateByID(u.ctx, u.logID, updates)
 
-	// 更新 LogDetail 表（完整响应体）
-	if u.apiKey != nil && u.apiKey.LogDetails && u.logDetailRepo != nil && u.model != nil {
-		// 构建消息对象
-		message := map[string]interface{}{
-			"role":    role,
-			"content": content,
-		}
-		if reasoning != "" {
-			message["reasoning"] = reasoning
-		}
-		if len(toolCalls) > 0 {
-			// 过滤掉空的 tool calls
-			validToolCalls := make([]ToolCall, 0)
-			for _, tc := range toolCalls {
-				if tc.ID != "" || tc.Function.Name != "" {
-					validToolCalls = append(validToolCalls, tc)
-				}
-			}
-			if len(validToolCalls) > 0 {
-				message["tool_calls"] = validToolCalls
-			}
-		}
-
-		respObj := map[string]interface{}{
-			"id":      "",
-			"object":  "chat.completion",
-			"created": time.Now().Unix(),
-			"model":   u.model.Name,
-			"choices": []map[string]interface{}{
-				{
-					"index":         0,
-					"message":       message,
-					"finish_reason": nil,
-				},
-			},
-		}
-		if usage.PromptTokens > 0 || completionTokens > 0 {
-			respObj["usage"] = map[string]int{
-				"prompt_tokens":     usage.PromptTokens,
-				"completion_tokens": completionTokens,
-				"total_tokens":      usage.PromptTokens + completionTokens,
-			}
-		}
-
-		respBody, _ := json.Marshal(respObj)
-		respGz, _ := utils.GzipCompress(respBody)
-		u.logDetailRepo.UpdateResponseBody(u.ctx, u.logID, respGz)
-	}
+	// Note: ResponseBody is no longer updated here. LogAfterComplete will write the raw captured SSE data.
 }
 
 // Close 关闭更新器，确保最后一次写入完成
@@ -1441,30 +1393,9 @@ func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 	s.logRepo.UpdateByID(ctx, s.logID, updates)
 
 	if s.apiKey.LogDetails {
-		// Build response object for logging
-		respObj := map[string]interface{}{
-			"id":      "",
-			"object":  "chat.completion",
-			"created": time.Now().Unix(),
-			"model":   s.model.Name,
-			"choices": []map[string]interface{}{
-				{
-					"index": 0,
-					"message": map[string]interface{}{
-						"role":    "assistant",
-						"content": content,
-					},
-					"finish_reason": "stop",
-				},
-			},
-			"usage": map[string]int{
-				"promptTokens":     usage.PromptTokens,
-				"completionTokens": completionTokens,
-				"totalTokens":      usage.PromptTokens + completionTokens,
-			},
-		}
-		respBody, _ := json.Marshal(respObj)
-		respGz, _ := utils.GzipCompress(respBody)
+		// Store raw captured streaming data (actual SSE sent to client)
+		rawData := s.capturedBuffer.Bytes()
+		respGz, _ := utils.GzipCompress(rawData)
 
 		// Update existing LogDetail with response body
 		s.logDetailRepo.UpdateResponseBody(ctx, s.logID, respGz)
@@ -1611,9 +1542,8 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		if err := s.logRepo.Create(ctx, logEntry); err != nil {
 			logEntry.ID = 0 // Continue without log if creation fails
 		} else if apiKey.LogDetails {
-			// Store request body immediately at request start
-			reqBody, _ := json.Marshal(req)
-			reqGz, _ := utils.GzipCompress(reqBody)
+			// Store original request body immediately at request start
+			reqGz, _ := utils.GzipCompress(rawBody)
 			detail := &models.LogDetail{
 				LogID:       logEntry.ID,
 				RequestBody: reqGz,
