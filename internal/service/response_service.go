@@ -1412,7 +1412,7 @@ func (s *ResponseStreamingResponse) buildChatCompletionsCompletedSSE() string {
 }
 
 // GetCapturedData returns the captured streaming data and parses it for Responses API format
-func (s *ResponseStreamingResponse) GetCapturedData() (responseID string, content string, usage *models.ResponseUsage, rawData string) {
+func (s *ResponseStreamingResponse) GetCapturedData() (responseID string, content string, usage *models.ResponseUsage, items []models.ResponseOutput, rawData string) {
 	rawData = s.capturedBuffer.String()
 
 	// Parse Responses API SSE format: "event: xxx\ndata: {...}"
@@ -1421,6 +1421,9 @@ func (s *ResponseStreamingResponse) GetCapturedData() (responseID string, conten
 	usage = &models.ResponseUsage{}
 
 	var eventType string
+	var outputItems []models.ResponseOutput
+	var textOutputID string
+	var textOutput *models.ResponseOutput
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -1450,17 +1453,65 @@ func (s *ResponseStreamingResponse) GetCapturedData() (responseID string, conten
 		// Parse based on event type
 		switch eventType {
 		case models.EventResponseCreated, models.EventResponseInProgress:
-			// These events contain the response object with ID
 			var event models.ResponseStreamEvent
 			if err := json.Unmarshal([]byte(data), &event); err == nil && event.Response != nil {
 				if event.Response.ID != "" {
 					responseID = event.Response.ID
 				}
 			}
+		case models.EventResponseOutputItemAdded:
+			var event models.ResponseStreamEvent
+			if err := json.Unmarshal([]byte(data), &event); err == nil && event.Item != nil {
+				outputItems = append(outputItems, *event.Item)
+				if event.Item.Type == "message" {
+					textOutputID = event.Item.ID
+					textOutput = &models.ResponseOutput{}
+					*textOutput = outputItems[len(outputItems)-1]
+				}
+			}
 		case models.EventResponseOutputTextDelta:
 			var event models.ResponseStreamEvent
 			if err := json.Unmarshal([]byte(data), &event); err == nil {
 				contentBuilder.WriteString(event.Delta)
+			}
+		case models.EventResponseOutputTextDone:
+			var event models.ResponseStreamEvent
+			if err := json.Unmarshal([]byte(data), &event); err == nil && event.Part != nil {
+				// Update text output item with final content
+				if textOutput != nil && textOutputID != "" {
+					textOutput.Content = []models.OutputContent{
+						{Type: "output_text", Text: event.Part.Text},
+					}
+					// Update in outputItems
+					for i, item := range outputItems {
+						if item.Type == "message" && item.ID == textOutputID {
+							outputItems[i] = *textOutput
+							break
+						}
+					}
+				}
+			}
+		case "response.function_call_arguments.delta":
+			var event models.ResponseStreamEvent
+			if err := json.Unmarshal([]byte(data), &event); err == nil {
+				// Update function_call item with accumulated arguments
+				for i, item := range outputItems {
+					if item.Type == "function_call" && item.CallID == event.ItemID {
+						outputItems[i].Arguments += event.Delta
+						break
+					}
+				}
+			}
+		case "response.function_call_arguments.done":
+			var event models.ResponseStreamEvent
+			if err := json.Unmarshal([]byte(data), &event); err == nil {
+				// Update function_call item with final arguments
+				for i, item := range outputItems {
+					if item.Type == "function_call" && item.CallID == event.ItemID {
+						outputItems[i].Arguments = event.Delta
+						break
+					}
+				}
 			}
 		case models.EventResponseCompleted:
 			var event models.ResponseStreamEvent
@@ -1471,18 +1522,16 @@ func (s *ResponseStreamingResponse) GetCapturedData() (responseID string, conten
 				if event.Response.Usage != nil {
 					usage = event.Response.Usage
 				}
-			}
-		case models.EventResponseOutputTextDone:
-			// Final text content - can be used to verify accumulated content
-			var event models.ResponseStreamEvent
-			if err := json.Unmarshal([]byte(data), &event); err == nil && event.Part != nil {
-				// Part.Text contains the complete text for this part
+				// If the completed response has output items, use those
+				if len(event.Response.Output) > 0 {
+					outputItems = event.Response.Output
+				}
 			}
 		}
 	}
 
 	content = contentBuilder.String()
-	return
+	return responseID, content, usage, outputItems, rawData
 }
 
 // LogAfterComplete updates the log entry after streaming is complete
@@ -1503,7 +1552,7 @@ func (s *ResponseStreamingResponse) LogAfterComplete(ctx context.Context) {
 		}
 	}
 
-	responseID, content, usage, _ := s.GetCapturedData()
+	responseID, content, usage, outputItems, _ := s.GetCapturedData()
 	latency := time.Since(s.startTime).Milliseconds()
 
 	// Cache response ID -> provider mapping
@@ -1555,28 +1604,60 @@ func (s *ResponseStreamingResponse) LogAfterComplete(ctx context.Context) {
 	s.logRepo.UpdateByID(ctx, s.logID, updates)
 
 	if s.apiKey.LogDetails {
-		// Build response object for logging
+		// Build response object for logging using captured output items
+		output := make([]map[string]interface{}, 0, len(outputItems))
+		for _, item := range outputItems {
+			itemMap := map[string]interface{}{
+				"type":   item.Type,
+				"id":     item.ID,
+				"status": item.Status,
+			}
+			if item.Role != "" {
+				itemMap["role"] = item.Role
+			}
+			if item.CallID != "" {
+				itemMap["call_id"] = item.CallID
+			}
+			if item.Name != "" {
+				itemMap["name"] = item.Name
+			}
+			if item.Arguments != "" {
+				itemMap["arguments"] = item.Arguments
+			}
+			if len(item.Content) > 0 {
+				contentArr := make([]map[string]interface{}, len(item.Content))
+				for j, c := range item.Content {
+					contentArr[j] = map[string]interface{}{
+						"type": c.Type,
+						"text": c.Text,
+					}
+				}
+				itemMap["content"] = contentArr
+			}
+			output = append(output, itemMap)
+		}
+
+		// Fallback to message-only if no items captured
+		if len(output) == 0 && content != "" {
+			output = []map[string]interface{}{
+				{
+					"type":   "message",
+					"status": "completed",
+					"role":   "assistant",
+					"content": []map[string]interface{}{
+						{"type": "output_text", "text": content},
+					},
+				},
+			}
+		}
+
 		respObj := map[string]interface{}{
 			"id":      responseID,
 			"object":  "response",
 			"created": time.Now().Unix(),
 			"model":   s.model.Name,
 			"status":  "completed",
-			"output": []map[string]interface{}{
-				{
-					"type":   "message",
-					"id":     "",
-					"status": "completed",
-					"role":   "assistant",
-					"content": []map[string]interface{}{
-						{
-							"type":        "output_text",
-							"text":        content,
-							"annotations": []interface{}{},
-						},
-					},
-				},
-			},
+			"output":  output,
 			"usage": map[string]int{
 				"input_tokens":  usage.InputTokens,
 				"output_tokens": completionTokens,
