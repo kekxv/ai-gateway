@@ -136,6 +136,13 @@ type ContentPart struct {
 type ResponseTool struct {
 	Type     string       `json:"type"`              // "function", "code_interpreter", "file_search", "web_search_preview", "mcp"
 	Function *FunctionDef `json:"function,omitempty"`
+
+	// Flat format fields (Responses API sends name/description/parameters at top level)
+	// e.g. {"type":"function","name":"exec_command","description":"...","parameters":{...}}
+	Name        string                 `json:"name,omitempty"`
+	Description string                 `json:"description,omitempty"`
+	Parameters  map[string]interface{} `json:"parameters,omitempty"`
+	Strict      bool                   `json:"strict,omitempty"`
 }
 
 // FunctionDef for function tool

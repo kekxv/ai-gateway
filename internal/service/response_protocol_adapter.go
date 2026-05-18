@@ -11,6 +11,31 @@ import (
 	"github.com/kekxv/ai-gateway/internal/models"
 )
 
+// extractToolFunction handles both Responses API flat format and Chat Completions nested format.
+// Responses API sends: {"type":"function","name":"x","description":"y","parameters":{...}}
+// Chat Completions expects: {"type":"function","function":{"name":"x","description":"y","parameters":{...}}}
+func extractToolFunction(tool models.ResponseTool) *ToolFunctionSpec {
+	// First try the standard nested format (function field present)
+	if tool.Function != nil && tool.Function.Name != "" {
+		return &ToolFunctionSpec{
+			Name:        tool.Function.Name,
+			Description: tool.Function.Description,
+			Parameters:  tool.Function.Parameters,
+		}
+	}
+
+	// Try Responses API flat format (name at top level)
+	if tool.Name != "" {
+		return &ToolFunctionSpec{
+			Name:        tool.Name,
+			Description: tool.Description,
+			Parameters:  tool.Parameters,
+		}
+	}
+
+	return nil
+}
+
 func convertResponseRequestToChatRequest(req *models.ResponseRequest) *ChatRequest {
 	chatReq := &ChatRequest{
 		Model:           req.Model,
@@ -39,26 +64,28 @@ func convertResponseRequestToChatRequest(req *models.ResponseRequest) *ChatReque
 	if len(req.Tools) > 0 {
 		chatReq.Tools = make([]ToolDefinition, 0, len(req.Tools))
 		for _, tool := range req.Tools {
-			if tool.Type == "function" && tool.Function != nil {
+			fn := extractToolFunction(tool)
+			if fn != nil {
 				chatReq.Tools = append(chatReq.Tools, ToolDefinition{
-					Type: tool.Type,
-					Function: ToolFunctionSpec{
-						Name:        tool.Function.Name,
-						Description: tool.Function.Description,
-						Parameters:  tool.Function.Parameters,
-					},
+					Type:     "function",
+					Function: *fn,
 				})
-			} else {
-				// For non-function tools, we might need to handle them specially or pass as extra
-				// For now, let's at least capture the type so we don't drop them completely
-				if chatReq.Extra == nil {
-					chatReq.Extra = make(map[string]interface{})
-				}
-				extraTools, _ := chatReq.Extra["tools"].([]interface{})
-				extraTools = append(extraTools, tool)
-				chatReq.Extra["tools"] = extraTools
 			}
 		}
+	}
+
+	// Forward tool_choice (like codex-bridge)
+	if req.ToolChoice != nil {
+		if chatReq.Extra == nil {
+			chatReq.Extra = make(map[string]interface{})
+		}
+		chatReq.Extra["tool_choice"] = req.ToolChoice
+	}
+	if req.ParallelToolCalls != nil {
+		if chatReq.Extra == nil {
+			chatReq.Extra = make(map[string]interface{})
+		}
+		chatReq.Extra["parallel_tool_calls"] = *req.ParallelToolCalls
 	}
 
 	if req.Input.StringInput != "" {

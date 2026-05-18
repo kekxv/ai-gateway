@@ -40,6 +40,7 @@ web/.DS_Store
 
 /claude-code-router
 /gemini-claude-code
+/codex-bridge
 # TypeScript
 *.tsbuildinfo
 dist/

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -174,28 +175,28 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 	providerType := "openai"
 	if route.Provider.HasType("gemini") && !route.Provider.HasType("openai") {
 		providerType = "gemini"
+	} else if route.Provider.HasType("openai") && !route.Provider.HasType("responses") {
+		providerType = "chat_completions"
 	}
 
 	var resp *http.Response
 	var reqErr error
 	baseURL := ""
-	if providerType == "gemini" {
+	switch providerType {
+	case "gemini":
 		resp, reqErr = s.sendGeminiResponseRequest(ctx, &route.Provider, model.Name, req, forwardHeaders)
-	} else {
-		// 5. Build upstream URL for Responses API
-		// Use type-specific base URL if available, fallback to default
+	case "chat_completions":
+		baseURL = route.Provider.GetBaseURLForType("openai")
+		resp, reqErr = s.sendChatCompletionsResponseRequest(ctx, &route.Provider, model.Name, req, forwardHeaders)
+	default: // "openai" - native Responses API passthrough
 		baseURL = route.Provider.GetBaseURLForType("openai")
 		targetURL := fmt.Sprintf("%s/responses", strings.TrimSuffix(baseURL, "/"))
 
-		// 6. Send upstream request with forwarded headers
-		// Use direct passthrough with model name replacement
 		upstreamModelName := route.Model.Name
 		finalRawBody := rawBody
 		if upstreamModelName != req.Model {
-			// Replace model name in JSON string directly
 			finalRawBody = []byte(strings.Replace(string(rawBody), `"model":"`+req.Model+`"`, `"model":"`+upstreamModelName+`"`, 1))
 			if string(finalRawBody) == string(rawBody) {
-				// Try with space after colon
 				finalRawBody = []byte(strings.Replace(string(rawBody), `"model": "`+req.Model+`"`, `"model":"`+upstreamModelName+`"`, 1))
 			}
 		}
@@ -203,6 +204,7 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 		resp, reqErr = s.sendResponseUpstreamRequest(ctx, targetURL, route.Provider.APIKey, finalRawBody, req.Stream, forwardHeaders)
 	}
 	if reqErr != nil {
+		log.Printf("[ResponseService] Upstream request failed: providerType=%s, baseURL=%s, err=%v", providerType, baseURL, reqErr)
 		s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 502, reqErr.Error())
 		return nil, ErrUpstreamFailed
 	}
@@ -210,11 +212,12 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 	// Handle error responses
 	if resp.StatusCode >= 400 {
 		latency := time.Since(startTime).Milliseconds()
-		s.handleUpstreamError(ctx, resp, route)
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		log.Printf("[ResponseService] Upstream HTTP error: providerType=%s, status=%d, body=%s", providerType, resp.StatusCode, string(body))
+		s.handleUpstreamError(ctx, resp, route)
 		s.updateLogError(ctx, logEntry.ID, int(latency), resp.StatusCode, string(body))
-		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+		return nil, fmt.Errorf("upstream error: %d - %s", resp.StatusCode, string(body))
 	}
 
 	// Handle streaming response
@@ -237,6 +240,8 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 		streamResp.responseID = "resp_" + shortUUID()
 		if providerType == "gemini" {
 			streamResp.isGeminiStream = true
+		} else if providerType == "chat_completions" {
+			streamResp.isChatCompletionsStream = true
 		}
 		// Extract response headers
 		streamResp.responseHeaders = extractResponseHeaders(resp.Header)
@@ -259,6 +264,13 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 			return nil, err
 		}
 		response = *convertGeminiResponseToOpenAIResponse(&geminiResp, model.Name)
+	} else if providerType == "chat_completions" {
+		var chatResp ChatResponse
+		if err := json.Unmarshal(body, &chatResp); err != nil {
+			s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 500, err.Error())
+			return nil, err
+		}
+		response = *convertChatResponseToResponse(&chatResp, model.Name, req.PreviousResponseID, req.Metadata)
 	} else {
 		if err := json.Unmarshal(body, &response); err != nil {
 			s.updateLogError(ctx, logEntry.ID, int(time.Since(startTime).Milliseconds()), 500, err.Error())
@@ -556,6 +568,56 @@ func (s *ResponseService) sendResponseUpstreamRequest(ctx context.Context, url, 
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// Forward additional headers
+	for key, value := range forwardHeaders {
+		httpReq.Header.Set(key, value)
+	}
+
+	return s.httpClient.Do(httpReq)
+}
+
+// sendChatCompletionsResponseRequest sends a Responses API request via Chat Completions translation
+func (s *ResponseService) sendChatCompletionsResponseRequest(ctx context.Context, provider *models.Provider, modelName string, req *models.ResponseRequest, forwardHeaders map[string]string) (*http.Response, error) {
+	chatReq := convertResponseRequestToChatRequest(req)
+
+	// Replace alias with actual upstream model name
+	chatReq.Model = modelName
+
+	// Set default max_tokens
+	if chatReq.MaxTokens == 0 {
+		chatReq.MaxTokens = 16384
+	}
+
+	baseURL := strings.TrimSuffix(provider.GetBaseURLForType("openai"), "/")
+	targetURL := fmt.Sprintf("%s/chat/completions", baseURL)
+
+	body, err := json.Marshal(chatReq)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build tool summary for debugging
+	toolSummary := make([]string, len(chatReq.Tools))
+	for i, t := range chatReq.Tools {
+		toolSummary[i] = fmt.Sprintf("%s(%s)", t.Function.Name, t.Type)
+	}
+
+	// Build truncated body summary for logging (avoid megabyte-sized log entries)
+	bodyLog := string(body)
+	if len(bodyLog) > 500 {
+		// Replace message content with placeholders for logging
+		truncated := fmt.Sprintf("body=%s, tools=[%s], model=%s, messages=%d", bodyLog[:100], strings.Join(toolSummary, ", "), chatReq.Model, len(chatReq.Messages))
+		log.Printf("[ResponseService] chat_completions upstream: url=%s, %s", targetURL, truncated)
+	} else {
+		log.Printf("[ResponseService] chat_completions upstream: url=%s, model=%s, messages=%d, tools=[%s], tool_choice=%v, body=%s", targetURL, chatReq.Model, len(chatReq.Messages), strings.Join(toolSummary, ", "), chatReq.Extra["tool_choice"], string(body))
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+provider.APIKey)
 	for key, value := range forwardHeaders {
 		httpReq.Header.Set(key, value)
 	}
@@ -979,10 +1041,12 @@ type ResponseStreamingResponse struct {
 	billingService  *BillingService
 	cache           *ResponseCache
 	responseHeaders map[string]string // Response headers for logging
-	providerType    string
-	isGeminiStream  bool
-	responseID      string
-	streamState     *responseStreamState
+	providerType              string
+	isGeminiStream            bool
+	isChatCompletionsStream   bool
+	responseID                string
+	streamState               *responseStreamState
+	chatStreamState           *chatToResponseStreamState
 }
 
 // NewResponseStreamingResponse creates a new streaming response wrapper for Responses API
@@ -1039,11 +1103,306 @@ func (s *ResponseStreamingResponse) Read(p []byte) (n int, err error) {
 		return 0, io.EOF
 	}
 
+	if s.isChatCompletionsStream {
+		return s.readChatCompletionsStream(p)
+	}
+
 	n, err = s.reader.Read(p)
 	if n > 0 {
 		s.capturedBuffer.Write(p[:n])
 	}
 	return
+}
+
+// readChatCompletionsStream parses upstream Chat Completions SSE and emits Responses API SSE events
+func (s *ResponseStreamingResponse) readChatCompletionsStream(p []byte) (n int, err error) {
+	if s.pipeBuffer.Len() > 0 {
+		return s.pipeBuffer.Read(p)
+	}
+
+	if s.chatStreamState == nil {
+		s.chatStreamState = &chatToResponseStreamState{
+			toolCalls:     make(map[int]*streamingToolCall),
+			completedSent: false,
+		}
+	}
+
+	line, readErr := s.reader.ReadString('\n')
+	if readErr != nil && line == "" {
+		if readErr == io.EOF {
+			if !s.chatStreamState.completedSent {
+				s.chatStreamState.completed = true
+				s.chatStreamState.completedSent = true
+				completed := s.buildChatCompletionsCompletedSSE()
+				if completed != "" {
+					s.pipeBuffer.WriteString(completed)
+					s.capturedBuffer.WriteString(completed)
+					return s.pipeBuffer.Read(p)
+				}
+			}
+			return 0, io.EOF
+		}
+		return 0, readErr
+	}
+
+	line = strings.TrimSpace(line)
+	if line == "" {
+		if readErr != nil && readErr != io.EOF {
+			return 0, readErr
+		}
+		return s.readChatCompletionsStream(p)
+	}
+
+	if !strings.HasPrefix(line, "data: ") {
+		if readErr == io.EOF && !s.chatStreamState.completedSent {
+			s.chatStreamState.completed = true
+			s.chatStreamState.completedSent = true
+			completed := s.buildChatCompletionsCompletedSSE()
+			if completed != "" {
+				s.pipeBuffer.WriteString(completed)
+				s.capturedBuffer.WriteString(completed)
+				return s.pipeBuffer.Read(p)
+			}
+			return 0, io.EOF
+		}
+		if readErr != nil {
+			return 0, readErr
+		}
+		return s.readChatCompletionsStream(p)
+	}
+
+	data := strings.TrimPrefix(line, "data: ")
+	if data == "[DONE]" {
+		if !s.chatStreamState.completedSent {
+			s.chatStreamState.completed = true
+			s.chatStreamState.completedSent = true
+			completed := s.buildChatCompletionsCompletedSSE()
+			if completed != "" {
+				s.pipeBuffer.WriteString(completed)
+				s.capturedBuffer.WriteString(completed)
+				return s.pipeBuffer.Read(p)
+			}
+		}
+		return 0, io.EOF
+	}
+
+	var chunk StreamChunk
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return s.readChatCompletionsStream(p)
+	}
+
+	events := s.convertChatChunkToResponseSSE(&chunk)
+	if events == "" {
+		return s.readChatCompletionsStream(p)
+	}
+
+	s.pipeBuffer.WriteString(events)
+	s.capturedBuffer.WriteString(events)
+	return s.pipeBuffer.Read(p)
+}
+
+// chatToResponseStreamState tracks state during Chat Completions -> Responses API stream conversion
+type chatToResponseStreamState struct {
+	createdSent      bool
+	completedSent    bool // tracks whether response.completed SSE was sent
+	textStarted      bool
+	textOutputID     string
+	fullText         strings.Builder
+	reasoningBuf     strings.Builder
+	toolCalls        map[int]*streamingToolCall // chunk delta index -> tool call state
+	nextOutputIndex  int    // running counter for output_index in SSE events
+	usage            *models.ResponseUsage
+	completed        bool // tracks if finish_reason has been received
+	finishReason     string
+}
+
+type streamingToolCall struct {
+	callID    string
+	outputID  string
+	name      string
+	arguments strings.Builder
+}
+
+func (s *ResponseStreamingResponse) convertChatChunkToResponseSSE(chunk *StreamChunk) string {
+	var result strings.Builder
+	state := s.chatStreamState
+
+	if len(chunk.Choices) == 0 {
+		// Handle usage-only chunk
+		if chunk.Usage != nil {
+			state.usage = &models.ResponseUsage{
+				InputTokens:  chunk.Usage.PromptTokens,
+				OutputTokens: chunk.Usage.CompletionTokens,
+				TotalTokens:  chunk.Usage.TotalTokens,
+			}
+		}
+		return ""
+	}
+
+	delta := chunk.Choices[0].Delta
+	finishReason := chunk.Choices[0].FinishReason
+
+	// Send response.created on first chunk
+	if !state.createdSent {
+		state.createdSent = true
+		result.WriteString(formatResponseSSE(models.EventResponseCreated, models.ResponseStreamEvent{
+			Type: models.EventResponseCreated,
+			Response: &models.Response{
+				ID: s.responseID, Object: "response", CreatedAt: time.Now().Unix(),
+				Status: "in_progress", Model: s.model.Name,
+			},
+		}))
+		result.WriteString(formatResponseSSE(models.EventResponseInProgress, models.ResponseStreamEvent{
+			Type: models.EventResponseInProgress,
+			Response: &models.Response{
+				ID: s.responseID, Object: "response", CreatedAt: time.Now().Unix(),
+				Status: "in_progress", Model: s.model.Name,
+			},
+		}))
+	}
+
+	// Handle tool calls — use running output_index counter
+	for _, tc := range delta.ToolCalls {
+		existing, exists := state.toolCalls[tc.Index]
+		if !exists {
+			// New tool call
+			outputID := "fc_" + shortUUID()[:16]
+			callID := tc.ID
+			state.toolCalls[tc.Index] = &streamingToolCall{
+				callID:   callID,
+				outputID: outputID,
+				name:     tc.Function.Name,
+			}
+			idx := state.nextOutputIndex
+			state.nextOutputIndex++
+			result.WriteString(formatResponseSSE(models.EventResponseOutputItemAdded, models.ResponseStreamEvent{
+				Type: models.EventResponseOutputItemAdded, ItemID: s.responseID, OutputIndex: idx,
+				Item: &models.ResponseOutput{Type: "function_call", ID: outputID, CallID: callID, Name: tc.Function.Name, Arguments: tc.Function.Arguments, Status: "in_progress"},
+			}))
+			if tc.Function.Arguments != "" {
+				result.WriteString(formatResponseSSE("response.function_call_arguments.delta", models.ResponseStreamEvent{
+					Type: "response.function_call_arguments.delta", ItemID: s.responseID, OutputIndex: idx, Delta: tc.Function.Arguments,
+				}))
+			}
+		} else {
+			// Existing tool call — accumulate arguments
+			if tc.Function.Arguments != "" {
+				existing.arguments.WriteString(tc.Function.Arguments)
+				result.WriteString(formatResponseSSE("response.function_call_arguments.delta", models.ResponseStreamEvent{
+					Type: "response.function_call_arguments.delta", ItemID: s.responseID, Delta: tc.Function.Arguments,
+				}))
+			}
+		}
+	}
+
+	// Handle reasoning (capture but don't forward)
+	reasoning := delta.Reasoning
+	if reasoning == "" {
+		reasoning = delta.ReasoningContent
+	}
+	if reasoning != "" {
+		state.reasoningBuf.WriteString(reasoning)
+	}
+
+	// Handle text content
+	if delta.Content != "" {
+		if !state.textStarted {
+			state.textStarted = true
+			state.textOutputID = "msg_" + shortUUID()[:16]
+			idx := state.nextOutputIndex
+			state.nextOutputIndex++
+			result.WriteString(formatResponseSSE(models.EventResponseOutputItemAdded, models.ResponseStreamEvent{
+				Type: models.EventResponseOutputItemAdded, ItemID: s.responseID, OutputIndex: idx,
+				Item: &models.ResponseOutput{Type: "message", ID: state.textOutputID, Status: "in_progress", Role: "assistant"},
+			}))
+			result.WriteString(formatResponseSSE(models.EventResponseContentPartAdded, models.ResponseStreamEvent{
+				Type: models.EventResponseContentPartAdded, ItemID: s.responseID, OutputIndex: idx, ContentIndex: 0,
+				Part: &models.OutputContent{Type: "output_text"},
+			}))
+		}
+		state.fullText.WriteString(delta.Content)
+		result.WriteString(formatResponseSSE(models.EventResponseOutputTextDelta, models.ResponseStreamEvent{
+			Type: models.EventResponseOutputTextDelta, ItemID: s.responseID, Delta: delta.Content,
+		}))
+	}
+
+	// Handle finish reason — mark state, but DON'T emit done events here.
+	// Done events + response.completed are emitted by buildChatCompletionsCompletedSSE on [DONE]/EOF.
+	if finishReason != nil && *finishReason != "" && !state.completed {
+		state.completed = true
+		state.finishReason = *finishReason
+	}
+
+	return result.String()
+}
+
+func (s *ResponseStreamingResponse) buildChatCompletionsCompletedSSE() string {
+	state := s.chatStreamState
+
+	var result strings.Builder
+
+	// Close text item if started
+	text := state.fullText.String()
+	text = thinkTagRegex.ReplaceAllString(text, "")
+	if state.textStarted {
+		result.WriteString(formatResponseSSE(models.EventResponseOutputTextDone, models.ResponseStreamEvent{
+			Type: models.EventResponseOutputTextDone, ItemID: s.responseID,
+			Part: &models.OutputContent{Type: "output_text", Text: text},
+		}))
+		result.WriteString(formatResponseSSE(models.EventResponseContentPartDone, models.ResponseStreamEvent{
+			Type: models.EventResponseContentPartDone, ItemID: s.responseID, ContentIndex: 0,
+			Part: &models.OutputContent{Type: "output_text", Text: text},
+		}))
+		result.WriteString(formatResponseSSE(models.EventResponseOutputItemDone, models.ResponseStreamEvent{
+			Type: models.EventResponseOutputItemDone, ItemID: s.responseID,
+			Item: &models.ResponseOutput{Type: "message", ID: state.textOutputID, Status: "completed", Role: "assistant",
+				Content: []models.OutputContent{{Type: "output_text", Text: text}}},
+		}))
+	}
+
+	// Close function call items
+	for _, tc := range state.toolCalls {
+		args := tc.arguments.String()
+		result.WriteString(formatResponseSSE("response.function_call_arguments.done", models.ResponseStreamEvent{
+			Type: "response.function_call_arguments.done", ItemID: s.responseID, Delta: args,
+		}))
+		result.WriteString(formatResponseSSE(models.EventResponseOutputItemDone, models.ResponseStreamEvent{
+			Type: models.EventResponseOutputItemDone, ItemID: s.responseID,
+			Item: &models.ResponseOutput{Type: "function_call", ID: tc.outputID, CallID: tc.callID, Name: tc.name, Arguments: args, Status: "completed"},
+		}))
+	}
+
+	// Build output items for response.completed
+	output := make([]models.ResponseOutput, 0)
+	if text != "" {
+		output = append(output, models.ResponseOutput{
+			Type: "message", ID: state.textOutputID, Status: "completed", Role: "assistant",
+			Content: []models.OutputContent{{Type: "output_text", Text: text}},
+		})
+	}
+	for _, tc := range state.toolCalls {
+		output = append(output, models.ResponseOutput{
+			Type: "function_call", ID: tc.outputID, CallID: tc.callID, Name: tc.name,
+			Arguments: tc.arguments.String(), Status: "completed",
+		})
+	}
+
+	// Map finish reason
+	status := "completed"
+	if state.finishReason == "length" {
+		status = "incomplete"
+	}
+
+	completedAt := time.Now().Unix()
+	resp := &models.Response{
+		ID: s.responseID, Object: "response", CreatedAt: completedAt, CompletedAt: &completedAt,
+		Status: status, Model: s.model.Name, Output: output, Usage: state.usage,
+	}
+
+	result.WriteString(formatResponseSSE(models.EventResponseCompleted, models.ResponseStreamEvent{
+		Type: models.EventResponseCompleted, Response: resp,
+	}))
+	return result.String()
 }
 
 // GetCapturedData returns the captured streaming data and parses it for Responses API format
