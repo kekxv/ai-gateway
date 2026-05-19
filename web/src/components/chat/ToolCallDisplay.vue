@@ -326,6 +326,14 @@ const renderArguments = (toolCall: ToolCallResult) => {
         h('div', { class: 'note-title' }, String(args.title || '无标题')),
         h('div', { class: 'note-preview' }, String(args.content || '').slice(0, 100) + (String(args.content || '').length > 100 ? '...' : ''))
       ])
+    case 'TaskUpdate':
+      return renderTaskUpdateArgs(args)
+    case 'Bash':
+      return renderBashArgs(args)
+    case 'AskUserQuestion':
+      return renderAskUserQuestionArgs(args)
+    case 'TaskCreate':
+      return renderTaskCreateArgs(args)
     default:
       // For unknown tools, show JSON format
       if (Object.keys(args).length === 0) {
@@ -611,6 +619,13 @@ const renderResult = (toolCall: ToolCallResult) => {
       return renderReadResult(result)
     case 'output_document_info':
       return renderDocumentInfoResult(result)
+    case 'Bash':
+      return renderBashResult(result, toolCall)
+    case 'AskUserQuestion':
+      return renderAskUserQuestionResult(result)
+    case 'TaskCreate':
+    case 'TaskUpdate':
+      return renderTaskResult(result)
     default:
       // For string results, preserve line breaks
       if (typeof result === 'string') {
@@ -1036,6 +1051,208 @@ const renderWriteResult = (result: unknown) => {
     h('el-icon', { class: 'write-success-icon' }, [h(Check)]),
     h('span', {}, resultData.message || '文件已写入')
   ])
+}
+
+// Bash 参数渲染
+const renderBashArgs = (args: Record<string, unknown>) => {
+  const command = String(args.command || '')
+  const description = String(args.description || '')
+
+  const children: Array<ReturnType<typeof h>> = []
+  if (description) {
+    children.push(h('div', { class: 'bash-description' }, [
+      h('span', { class: 'arg-label' }, '描述：'),
+      h('span', { class: 'arg-value' }, description)
+    ]))
+  }
+  if (command) {
+    children.push(h('pre', { class: 'bash-command' }, command))
+  }
+  if (args.timeout) {
+    children.push(h('div', { class: 'bash-option' }, [
+      h('span', { class: 'arg-label' }, '超时：'),
+      h('span', { class: 'arg-value' }, `${args.timeout}ms`)
+    ]))
+  }
+  if (args.run_in_background === true) {
+    children.push(h('div', { class: 'bash-option' }, [
+      h('span', { class: 'arg-label' }, '后台运行：'),
+      h('el-tag', { size: 'small', type: 'info' }, '是')
+    ]))
+  }
+
+  return h('div', { class: 'tool-args-bash' }, children)
+}
+
+// Bash 结果渲染
+const renderBashResult = (result: unknown, toolCall: ToolCallResult) => {
+  if (!result) {
+    return h('div', { class: 'tool-result-empty' }, '执行完成')
+  }
+
+  let outputText = typeof result === 'string' ? result : ''
+  if (typeof result === 'object') {
+    const data = result as Record<string, unknown>
+    outputText = String(data.output || data.content || data.stdout || data.message || '')
+  }
+
+  // 检测并分离 system-reminder 内容
+  const systemReminderRegex = /<system-reminder>[\s\S]*?<\/system-reminder>/gi
+  const hasReminders = systemReminderRegex.test(outputText)
+  systemReminderRegex.lastIndex = 0 // reset regex state
+  const cleanOutput = outputText.replace(systemReminderRegex, '').trim()
+
+  const isSuccess = toolCall.status === 'success'
+  const exitStatus = isSuccess ? 'success' : 'error'
+
+  const children: Array<ReturnType<typeof h>> = [
+    h('div', { class: 'exec-output' }, [
+      h('div', { class: 'exec-output-header' }, [
+        h('span', { class: `exec-exit-code ${exitStatus === 'success' ? 'exit-success' : 'exit-error'}` },
+          exitStatus === 'success' ? '执行成功' : '执行失败'
+        )
+      ]),
+      h('pre', { class: `exec-output-content ${exitStatus === 'error' ? 'exec-error-output' : ''}` },
+        cleanOutput || '(无输出)'
+      )
+    ])
+  ]
+
+  if (hasReminders) {
+    children.push(h('div', { class: 'bash-reminder-note' }, '（已过滤 system-reminder）'))
+  }
+
+  return h('div', { class: 'tool-result-bash' }, children)
+}
+
+// AskUserQuestion 参数渲染
+const renderAskUserQuestionArgs = (args: Record<string, unknown>) => {
+  const questions = args.questions as Array<{
+    question?: string
+    header?: string
+    multiSelect?: boolean
+    options?: Array<{ label?: string; description?: string; preview?: string }>
+  }> | undefined
+
+  if (!questions || questions.length === 0) {
+    return h('div', { class: 'tool-args-simple' }, '无问题')
+  }
+
+  const children: Array<ReturnType<typeof h>> = []
+
+  questions.forEach((q) => {
+    children.push(h('div', { class: 'ask-question' }, [
+      h('div', { class: 'ask-question-text' }, q.question || ''),
+      q.multiSelect ? h('el-tag', { size: 'small', type: 'info', class: 'ask-multiselect' }, '多选') : null
+    ]))
+
+    if (q.options) {
+      q.options.forEach((opt, oIdx) => {
+        children.push(h('div', { class: 'ask-option' }, [
+          h('span', { class: 'ask-option-index' }, String.fromCharCode(65 + oIdx) + '.'),
+          h('span', { class: 'ask-option-label' }, opt.label || ''),
+          opt.description ? h('div', { class: 'ask-option-desc' }, opt.description) : null
+        ]))
+      })
+    }
+  })
+
+  return h('div', { class: 'tool-args-ask' }, children)
+}
+
+// AskUserQuestion 结果渲染
+const renderAskUserQuestionResult = (result: unknown) => {
+  if (!result) {
+    return h('div', { class: 'tool-result-empty' }, '无回答')
+  }
+
+  let resultText = typeof result === 'string' ? result : ''
+  if (typeof result === 'object') {
+    const data = result as Record<string, unknown>
+    resultText = String(data.content || data.answer || data.message || '')
+  }
+
+  // 尝试解析 "User has answered your questions: \"...\"=\"回答\"" 格式
+  const match = resultText.match(/User has answered your questions: "([^"]*)"="([^"]*)"/)
+  if (match) {
+    const answer = match[2]
+    return h('div', { class: 'tool-result-ask' }, [
+      h('div', { class: 'ask-answer-header' }, '用户回答：'),
+      h('div', { class: 'ask-answer-value' }, answer)
+    ])
+  }
+
+  return h('pre', { class: 'detail-code' }, resultText)
+}
+
+// TaskCreate 参数渲染
+const renderTaskCreateArgs = (args: Record<string, unknown>) => {
+  const subject = String(args.subject || '')
+  const description = String(args.description || '')
+  const activeForm = String(args.activeForm || '')
+
+  const children: Array<ReturnType<typeof h>> = [
+    h('div', { class: 'task-subject' }, subject)
+  ]
+
+  if (description) {
+    children.push(h('div', { class: 'task-description' }, description))
+  }
+  if (activeForm) {
+    children.push(h('div', { class: 'task-active-form' }, [
+      h('span', { class: 'arg-label' }, '状态文本：'),
+      h('span', { class: 'arg-value' }, activeForm)
+    ]))
+  }
+
+  return h('div', { class: 'tool-args-task' }, children)
+}
+
+// TaskUpdate 参数渲染
+const renderTaskUpdateArgs = (args: Record<string, unknown>) => {
+  const taskId = String(args.taskId || '')
+  const status = String(args.status || '')
+  const children: Array<ReturnType<typeof h>> = [
+    h('div', { class: 'task-update-row' }, [
+      h('span', { class: 'arg-label' }, '任务：'),
+      h('span', { class: 'arg-value' }, `#${taskId}`)
+    ])
+  ]
+
+  if (status) {
+    const statusType = status === 'completed' ? 'success' : status === 'in_progress' ? 'warning' : status === 'deleted' ? 'danger' : 'info'
+    children.push(h('div', { class: 'task-update-row' }, [
+      h('span', { class: 'arg-label' }, '状态：'),
+      h('el-tag', { size: 'small', type: statusType as any }, status)
+    ]))
+  }
+
+  if (args.subject) {
+    children.push(h('div', { class: 'task-update-row' }, [
+      h('span', { class: 'arg-label' }, '标题：'),
+      h('span', { class: 'arg-value' }, String(args.subject))
+    ]))
+  }
+
+  return h('div', { class: 'tool-args-task' }, children)
+}
+
+// TaskCreate/TaskUpdate 结果渲染
+const renderTaskResult = (result: unknown) => {
+  if (!result) {
+    return h('div', { class: 'tool-result-empty' }, '执行完成')
+  }
+
+  let resultText = typeof result === 'string' ? result : ''
+  if (typeof result === 'object') {
+    const data = result as Record<string, unknown>
+    resultText = String(data.message || data.result || '')
+    if (resultText || !data.id) {
+      return h('pre', { class: 'detail-code' }, resultText || formatJson(result))
+    }
+  }
+
+  return h('pre', { class: 'detail-code' }, resultText)
 }
 
 const formatJson = (obj: unknown) => {
@@ -2022,5 +2239,158 @@ const formatJson = (obj: unknown) => {
 .doc-row.extra .doc-value {
   color: #4b5563;
   font-weight: 500;
+}
+
+/* Bash 工具参数样式 */
+.tool-args-bash {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bash-description {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.bash-command {
+  margin: 0;
+  padding: 8px 12px;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-family: 'SF Mono', 'Monaco', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.bash-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* Bash 工具结果样式 */
+.tool-result-bash {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.bash-reminder-note {
+  font-size: 11px;
+  color: #9ca3af;
+  padding: 4px 12px;
+  text-align: right;
+  font-style: italic;
+}
+
+/* AskUserQuestion 工具参数样式 */
+.tool-args-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ask-question {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: #1f2937;
+}
+
+.ask-multiselect {
+  flex-shrink: 0;
+}
+
+.ask-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #f8fafc;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  font-size: 12px;
+}
+
+.ask-option-index {
+  font-weight: 600;
+  color: #6b7280;
+  min-width: 16px;
+}
+
+.ask-option-label {
+  font-weight: 500;
+  color: #374151;
+}
+
+.ask-option-desc {
+  color: #6b7280;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+/* AskUserQuestion 工具结果样式 */
+.tool-result-ask {
+  padding: 10px 12px;
+  background: #f0f9ff;
+  border-radius: 6px;
+  border-left: 3px solid #0ea5e9;
+}
+
+.ask-answer-header {
+  font-size: 11px;
+  color: #6b7280;
+  margin-bottom: 4px;
+}
+
+.ask-answer-value {
+  font-size: 13px;
+  color: #1f2937;
+  font-weight: 500;
+}
+
+/* Task 工具参数样式 */
+.tool-args-task {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.task-subject {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.task-description {
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+.task-active-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.task-update-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
 }
 </style>
