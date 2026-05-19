@@ -378,6 +378,9 @@ type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	CacheReadTokens  int `json:"cache_read_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
+	CacheEphemTokens int `json:"cache_ephem_tokens"`
 }
 
 // StreamChunk represents a streaming response chunk
@@ -597,14 +600,28 @@ func (u *RealtimeLogUpdater) parseAndUpdateContent(data []byte) {
 				var event struct {
 					Message struct {
 						Usage struct {
-							InputTokens  int `json:"input_tokens"`
-							OutputTokens int `json:"output_tokens"`
+							InputTokens              int `json:"input_tokens"`
+							OutputTokens             int `json:"output_tokens"`
+							CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+							CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+							CacheCreation            struct {
+								Ephemeral5mInputTokens int `json:"ephemeral_5m_input_tokens"`
+							} `json:"cache_creation"`
 						} `json:"usage"`
 					} `json:"message"`
 				}
 				if err := json.Unmarshal([]byte(dataStr), &event); err == nil {
 					u.usage.PromptTokens = event.Message.Usage.InputTokens
 					u.usage.CompletionTokens = event.Message.Usage.OutputTokens
+					if event.Message.Usage.CacheReadInputTokens > 0 {
+						u.usage.CacheReadTokens = event.Message.Usage.CacheReadInputTokens
+					}
+					if event.Message.Usage.CacheCreationInputTokens > 0 {
+						u.usage.CacheWriteTokens = event.Message.Usage.CacheCreationInputTokens
+					}
+					if event.Message.Usage.CacheCreation.Ephemeral5mInputTokens > 0 {
+						u.usage.CacheEphemTokens = event.Message.Usage.CacheCreation.Ephemeral5mInputTokens
+					}
 				}
 			case "content_block_start":
 				var event struct {
@@ -651,13 +668,27 @@ func (u *RealtimeLogUpdater) parseAndUpdateContent(data []byte) {
 						StopReason string `json:"stop_reason"`
 					} `json:"delta"`
 					Usage struct {
-						OutputTokens int `json:"output_tokens"`
+						OutputTokens             int `json:"output_tokens"`
+						CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+						CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+						CacheCreation            struct {
+							Ephemeral5mInputTokens int `json:"ephemeral_5m_input_tokens"`
+						} `json:"cache_creation"`
 					} `json:"usage"`
 				}
 				if err := json.Unmarshal([]byte(dataStr), &event); err == nil {
 					u.finishReason = event.Delta.StopReason
 					if event.Usage.OutputTokens > 0 {
 						u.usage.CompletionTokens = event.Usage.OutputTokens
+					}
+					if event.Usage.CacheReadInputTokens > 0 {
+						u.usage.CacheReadTokens = event.Usage.CacheReadInputTokens
+					}
+					if event.Usage.CacheCreationInputTokens > 0 {
+						u.usage.CacheWriteTokens = event.Usage.CacheCreationInputTokens
+					}
+					if event.Usage.CacheCreation.Ephemeral5mInputTokens > 0 {
+						u.usage.CacheEphemTokens = event.Usage.CacheCreation.Ephemeral5mInputTokens
 					}
 				}
 			}
@@ -761,6 +792,15 @@ func (u *RealtimeLogUpdater) flushToDatabase() {
 	}
 	if usage.PromptTokens > 0 {
 		updates["promptTokens"] = usage.PromptTokens
+	}
+	if usage.CacheReadTokens > 0 {
+		updates["cacheReadTokens"] = usage.CacheReadTokens
+	}
+	if usage.CacheWriteTokens > 0 {
+		updates["cacheWriteTokens"] = usage.CacheWriteTokens
+	}
+	if usage.CacheEphemTokens > 0 {
+		updates["cacheEphemeralTokens"] = usage.CacheEphemTokens
 	}
 	u.logRepo.UpdateByID(u.ctx, u.logID, updates)
 
@@ -1117,6 +1157,9 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 	var blockTypes = make(map[int]string)           // track type per content block
 	var inputTokens int = 0
 	var outputTokens int = 0
+	var cacheReadTokens int = 0
+	var cacheWriteTokens int = 0
+	var cacheEphemTokens int = 0
 
 	// Debug: capture first few lines for troubleshooting
 	lineCount := 0
@@ -1173,14 +1216,22 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 			var event struct {
 				Message struct {
 					Usage struct {
-						InputTokens  int `json:"input_tokens"`
-						OutputTokens int `json:"output_tokens"`
+						InputTokens              int `json:"input_tokens"`
+						OutputTokens             int `json:"output_tokens"`
+						CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+						CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+						CacheCreation            struct {
+							Ephemeral5mInputTokens int `json:"ephemeral_5m_input_tokens"`
+						} `json:"cache_creation"`
 					} `json:"usage"`
 				} `json:"message"`
 			}
 			if err := json.Unmarshal([]byte(eventData), &event); err == nil {
 				inputTokens = event.Message.Usage.InputTokens
 				outputTokens = event.Message.Usage.OutputTokens
+				cacheReadTokens = event.Message.Usage.CacheReadInputTokens
+				cacheWriteTokens = event.Message.Usage.CacheCreationInputTokens
+				cacheEphemTokens = event.Message.Usage.CacheCreation.Ephemeral5mInputTokens
 			}
 
 		case "content_block_start":
@@ -1244,12 +1295,26 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 		case "message_delta":
 			var event struct {
 				Usage struct {
-					OutputTokens int `json:"output_tokens"`
+					OutputTokens             int `json:"output_tokens"`
+					CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+					CacheCreation            struct {
+						Ephemeral5mInputTokens int `json:"ephemeral_5m_input_tokens"`
+					} `json:"cache_creation"`
 				} `json:"usage"`
 			}
 			if err := json.Unmarshal([]byte(eventData), &event); err == nil {
 				if event.Usage.OutputTokens > 0 {
 					outputTokens = event.Usage.OutputTokens
+				}
+				if event.Usage.CacheReadInputTokens > 0 {
+					cacheReadTokens = event.Usage.CacheReadInputTokens
+				}
+				if event.Usage.CacheCreationInputTokens > 0 {
+					cacheWriteTokens = event.Usage.CacheCreationInputTokens
+				}
+				if event.Usage.CacheCreation.Ephemeral5mInputTokens > 0 {
+					cacheEphemTokens = event.Usage.CacheCreation.Ephemeral5mInputTokens
 				}
 			}
 		}
@@ -1271,6 +1336,9 @@ func (s *StreamingResponse) getAnthropicCapturedData(rawData string) (content st
 	usage.PromptTokens = inputTokens
 	usage.CompletionTokens = outputTokens
 	usage.TotalTokens = inputTokens + outputTokens
+	usage.CacheReadTokens = cacheReadTokens
+	usage.CacheWriteTokens = cacheWriteTokens
+	usage.CacheEphemTokens = cacheEphemTokens
 
 	if usage.CompletionTokens == 0 && content != "" {
 		usage.CompletionTokens = len(content) / 4
@@ -1381,6 +1449,15 @@ func (s *StreamingResponse) LogAfterComplete(ctx context.Context) {
 		"cost":             cost,
 		"status":           status,
 		"completion":       content,
+	}
+	if usage.CacheReadTokens > 0 {
+		updates["cacheReadTokens"] = usage.CacheReadTokens
+	}
+	if usage.CacheWriteTokens > 0 {
+		updates["cacheWriteTokens"] = usage.CacheWriteTokens
+	}
+	if usage.CacheEphemTokens > 0 {
+		updates["cacheEphemeralTokens"] = usage.CacheEphemTokens
 	}
 	if errMsg != "" {
 		updates["errorMessage"] = errMsg
@@ -2864,7 +2941,7 @@ func (s *GatewayService) sendRawUpstreamRequest(ctx context.Context, url, apiKey
 
 // updateAnthropicLogAndCalculateCost updates log and calculates cost for Anthropic format responses
 func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context, apiKey *models.GatewayAPIKey, model *models.Model, providerName string, req *models.AnthropicMessagesRequest, resp *models.AnthropicMessagesResponse, latency int, logID uint, respHeaders map[string]string) {
-	var promptTokens, completionTokens, totalTokens, cacheReadTokens, cacheWriteTokens int
+	var promptTokens, completionTokens, totalTokens, cacheReadTokens, cacheWriteTokens, cacheEphemTokens int
 
 	// Try standard Anthropic usage format first
 	if resp.Usage != nil {
@@ -2872,6 +2949,10 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 		completionTokens = resp.Usage.OutputTokens
 		cacheReadTokens = resp.Usage.CacheReadInputTokens
 		cacheWriteTokens = resp.Usage.CacheCreationInputTokens
+		// Extract ephemeral tokens from cache_creation if available
+		if resp.Usage.CacheCreation != nil {
+			cacheEphemTokens = resp.Usage.CacheCreation.Ephemeral5mInputTokens
+		}
 	}
 
 	// Fallback 1: Try alternative field names (some providers use different naming)
@@ -2976,6 +3057,7 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 			"totalTokens":        totalTokens,
 			"cacheReadTokens":    cacheReadTokens,
 			"cacheWriteTokens":   cacheWriteTokens,
+			"cacheEphemeralTokens": cacheEphemTokens,
 			"cost":               cost,
 			"ownerChannelId":     ownerChannelID,
 			"ownerChannelUserId": ownerChannelUserID,

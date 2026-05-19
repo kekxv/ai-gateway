@@ -11,6 +11,7 @@ type Log struct {
 	CompletionTokens int       `gorm:"column:completionTokens;default:0;not null" json:"completionTokens"`
 	CacheReadTokens  int       `gorm:"column:cacheReadTokens;default:0" json:"cacheReadTokens"`
 	CacheWriteTokens int       `gorm:"column:cacheWriteTokens;default:0" json:"cacheWriteTokens"`
+	CacheEphemTokens int       `gorm:"column:cacheEphemeralTokens;default:0" json:"cacheEphemeralTokens"`
 	TotalTokens      int       `gorm:"column:totalTokens;default:0;not null" json:"totalTokens"`
 	Cost             int64     `gorm:"column:cost;default:0;not null" json:"cost"`
 	Status           int       `gorm:"column:status;default:200;not null" json:"status"`

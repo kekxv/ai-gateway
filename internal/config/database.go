@@ -108,6 +108,11 @@ func InitDatabase(dbPath string) (*gorm.DB, error) {
 		db.Exec("ALTER TABLE `Log` ADD COLUMN `cacheWriteTokens` INTEGER DEFAULT 0")
 	}
 
+	// Add cacheEphemeralTokens column to Log table if not exists
+	if !columnExists(db, "Log", "cacheEphemeralTokens") {
+		db.Exec("ALTER TABLE `Log` ADD COLUMN `cacheEphemeralTokens` INTEGER DEFAULT 0")
+	}
+
 	// Add supportsAllModels column to Channel table if not exists
 	if !columnExists(db, "Channel", "supportsAllModels") {
 		db.Exec("ALTER TABLE `Channel` ADD COLUMN `supportsAllModels` INTEGER DEFAULT 0 NOT NULL")
@@ -225,6 +230,7 @@ func fixLogTableNullableAPIKeyID(db *gorm.DB) {
 			completionTokens INTEGER NOT NULL DEFAULT 0,
 			cacheReadTokens INTEGER DEFAULT 0,
 			cacheWriteTokens INTEGER DEFAULT 0,
+			cacheEphemeralTokens INTEGER DEFAULT 0,
 			totalTokens INTEGER NOT NULL DEFAULT 0,
 			cost INTEGER NOT NULL DEFAULT 0,
 			status INTEGER NOT NULL DEFAULT 200,

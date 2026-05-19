@@ -123,6 +123,21 @@
             <div class="stat-value">{{ formatCost(logDetail.cost) }}</div>
           </div>
         </div>
+        <!-- Cache Tokens (shown only when cache data exists) -->
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-3" v-if="logDetail.cacheReadTokens || logDetail.cacheWriteTokens || logDetail.cacheEphemeralTokens">
+          <div class="stat-card stat-card-cyan">
+            <div class="stat-label">缓存读取</div>
+            <div class="stat-value">{{ formatNumber(logDetail.cacheReadTokens || 0) }}</div>
+          </div>
+          <div class="stat-card stat-card-teal">
+            <div class="stat-label">缓存写入</div>
+            <div class="stat-value">{{ formatNumber(logDetail.cacheWriteTokens || 0) }}</div>
+          </div>
+          <div class="stat-card stat-card-orange">
+            <div class="stat-label">Ephemeral 缓存</div>
+            <div class="stat-value">{{ formatNumber(logDetail.cacheEphemeralTokens || 0) }}</div>
+          </div>
+        </div>
 
         <!-- Info Grid -->
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
@@ -1638,6 +1653,9 @@ const viewDetail = async (log: Log) => {
 .stat-card-green { background: linear-gradient(135deg, #ecfdf5 0%, #dcfce7 100%); }
 .stat-card-purple { background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%); }
 .stat-card-amber { background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); }
+.stat-card-cyan { background: linear-gradient(135deg, #ecfeff 0%, #cffafe 100%); }
+.stat-card-teal { background: linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%); }
+.stat-card-orange { background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%); }
 .stat-label {
   font-size: 12px;
   font-weight: 500;
@@ -1647,6 +1665,9 @@ const viewDetail = async (log: Log) => {
 .stat-card-green .stat-label { color: #22c55e; }
 .stat-card-purple .stat-label { color: #a855f7; }
 .stat-card-amber .stat-label { color: #f59e0b; }
+.stat-card-cyan .stat-label { color: #0891b2; }
+.stat-card-teal .stat-label { color: #0d9488; }
+.stat-card-orange .stat-label { color: #ea580c; }
 .stat-value {
   font-size: 24px;
   font-weight: 700;
@@ -1655,6 +1676,9 @@ const viewDetail = async (log: Log) => {
 .stat-card-green .stat-value { color: #16a34a; }
 .stat-card-purple .stat-value { color: #9333ea; }
 .stat-card-amber .stat-value { color: #d97706; }
+.stat-card-cyan .stat-value { color: #0e7490; }
+.stat-card-teal .stat-value { color: #0f766e; }
+.stat-card-orange .stat-value { color: #c2410c; }
 
 /* Info cards */
 .info-card {
