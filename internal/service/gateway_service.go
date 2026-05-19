@@ -1615,6 +1615,9 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 	}
 
 	if providerType == "openai" {
+		// Map special headers to OpenAI protocol format
+		MapHeaders(forwardHeaders, providerType)
+
 		// Get base URL
 		baseURL := route.Provider.GetBaseURLForType(providerType)
 
@@ -1645,6 +1648,9 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 
 		targetURL = fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(baseURL, "/"))
 	} else if providerType == "gemini" {
+		// Map special headers to Gemini protocol format
+		MapHeaders(forwardHeaders, providerType)
+
 		// For Gemini protocol, convert OpenAI request to Gemini format
 		baseURL := route.Provider.GetBaseURLForType("gemini")
 		action := "generateContent"
@@ -2423,6 +2429,9 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	upstreamModelName := route.Model.Name
 
 	if providerSupportsAnthropic {
+		// Map special headers to Anthropic protocol format
+		MapHeaders(forwardHeaders, "anthropic")
+
 		// Direct forwarding - provider supports anthropic
 		baseURL := route.Provider.GetBaseURLForType("anthropic")
 		targetURL := fmt.Sprintf("%s/messages", strings.TrimSuffix(baseURL, "/"))
@@ -2543,6 +2552,9 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	}
 
 	if providerSupportsGemini {
+		// Map special headers to Gemini protocol format
+		MapHeaders(forwardHeaders, "gemini")
+
 		// Native Gemini protocol support
 		baseURL := route.Provider.GetBaseURLForType("gemini")
 		// Gemini URL format: https://generativelanguage.googleapis.com/v1beta/models/{model}:{generateContent|streamGenerateContent}
@@ -2666,6 +2678,8 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 	}
 
 	// Convert to OpenAI format - provider doesn't support anthropic or gemini
+	MapHeaders(forwardHeaders, "openai")
+
 	openAIReq, err := converter.ConvertRequest(req, ProtocolAnthropic, ProtocolOpenAI)
 	if err != nil {
 		log.Printf("[HandleAnthropicMessages] Convert request failed: %v", err)
@@ -3027,6 +3041,9 @@ func (s *GatewayService) HandleAnthropicCountTokens(ctx context.Context, apiKey 
 	providerSupportsAnthropic := route.Provider.HasType("anthropic")
 
 	if providerSupportsAnthropic {
+		// Map special headers to Anthropic protocol format
+		MapHeaders(forwardHeaders, "anthropic")
+
 		// Direct forwarding to Anthropic endpoint
 		baseURL := route.Provider.GetBaseURLForType("anthropic")
 		targetURL := fmt.Sprintf("%s/messages/count_tokens", strings.TrimSuffix(baseURL, "/"))

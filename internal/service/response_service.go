@@ -179,6 +179,13 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 		providerType = "chat_completions"
 	}
 
+	// Map special headers based on protocol type
+	headerProtocol := providerType
+	if headerProtocol == "chat_completions" {
+		headerProtocol = "openai"
+	}
+	MapHeaders(forwardHeaders, headerProtocol)
+
 	var resp *http.Response
 	var reqErr error
 	baseURL := ""
@@ -508,6 +515,9 @@ func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *model
 	// Use type-specific base URL if available, fallback to default
 	baseURL := route.Provider.GetBaseURLForType("openai")
 	targetURL := fmt.Sprintf("%s/responses/compact", strings.TrimSuffix(baseURL, "/"))
+
+	// Map special headers to OpenAI protocol format
+	MapHeaders(forwardHeaders, "openai")
 
 	// 6. Send upstream request with forwarded headers
 	resp, err := s.sendCompactUpstreamRequest(ctx, targetURL, route.Provider.APIKey, req, forwardHeaders)
