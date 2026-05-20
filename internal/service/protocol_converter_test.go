@@ -1307,23 +1307,23 @@ func TestConvertRequest_AnthropicToOpenAI_MultipleToolResults(t *testing.T) {
 
 	openAIReq := result.(*ChatRequest)
 
-	// Should have assistant (tool_use) + user (text) + tool (result 1) + tool (result 2)
+	// Should have assistant (tool_use) + tool (result 1) + tool (result 2) + user (text)
 	if len(openAIReq.Messages) != 4 {
 		t.Fatalf("Messages count = %d, want 4", len(openAIReq.Messages))
 	}
 
-	if openAIReq.Messages[1].Role != "user" {
-		t.Errorf("Message 1 role = %s, want user", openAIReq.Messages[1].Role)
+	if openAIReq.Messages[1].Role != "tool" || openAIReq.Messages[1].ToolCallID != "tool_1" {
+		t.Errorf("Message 1 should be tool result for tool_1")
 	}
-	if openAIReq.Messages[1].Content.StringContent != "Here are the results:" {
-		t.Errorf("Message 1 content = %s, want 'Here are the results:'", openAIReq.Messages[1].Content.StringContent)
+	if openAIReq.Messages[2].Role != "tool" || openAIReq.Messages[2].ToolCallID != "tool_2" {
+		t.Errorf("Message 2 should be tool result for tool_2")
 	}
 
-	if openAIReq.Messages[2].Role != "tool" || openAIReq.Messages[2].ToolCallID != "tool_1" {
-		t.Errorf("Message 2 should be tool result for tool_1")
+	if openAIReq.Messages[3].Role != "user" {
+		t.Errorf("Message 3 role = %s, want user", openAIReq.Messages[3].Role)
 	}
-	if openAIReq.Messages[3].Role != "tool" || openAIReq.Messages[3].ToolCallID != "tool_2" {
-		t.Errorf("Message 3 should be tool result for tool_2")
+	if openAIReq.Messages[3].Content.StringContent != "Here are the results:" {
+		t.Errorf("Message 3 content = %s, want 'Here are the results:'", openAIReq.Messages[3].Content.StringContent)
 	}
 }
 
@@ -1814,5 +1814,92 @@ func TestConvertRequest_AnthropicToGemini_WithImage(t *testing.T) {
 		if geminiReq.Contents[0].Parts[1].InlineData.Data != "/9j/4AAQSkZJRgABAQAA" {
 			t.Errorf("InlineData Data = %s, want /9j/4AAQSkZJRgABAQAA", geminiReq.Contents[0].Parts[1].InlineData.Data)
 		}
+	}
+}
+
+func TestConvertRequest_OpenAIToGemini_ConsecutiveUserMessagesMerged(t *testing.T) {
+	converter := NewProtocolConverter()
+	openAIReq := &ChatRequest{
+		Model: "gemini-2.0-flash",
+		Messages: []ChatMessage{
+			{Role: "user", Content: ChatMessageContent{StringContent: "Hello"}},
+			{Role: "user", Content: ChatMessageContent{StringContent: "World"}},
+			{Role: "assistant", Content: ChatMessageContent{StringContent: "Hi there"}},
+			{Role: "tool", ToolCallID: "call_1", Content: ChatMessageContent{StringContent: `{"ok":true}`}},
+			{Role: "tool", ToolCallID: "call_2", Content: ChatMessageContent{StringContent: `{"status":"success"}`}},
+		},
+	}
+
+	result, err := converter.ConvertRequest(openAIReq, ProtocolOpenAI, ProtocolGemini)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	geminiReq := result.(*models.GeminiGenerateContentRequest)
+	// Output should have alternating roles.
+	// Message 1 & 2 are user -> merged into one user block with parts.
+	// Message 3 is assistant -> model block.
+	// Message 4 & 5 are tool results -> merged into one user block with parts.
+	// So total Contents length should be 3: user, model, user.
+	if len(geminiReq.Contents) != 3 {
+		t.Fatalf("Expected 3 contents blocks, got %d", len(geminiReq.Contents))
+	}
+
+	if geminiReq.Contents[0].Role != "user" || len(geminiReq.Contents[0].Parts) != 2 {
+		t.Errorf("First block should be user with 2 parts, got role %s, parts %d", geminiReq.Contents[0].Role, len(geminiReq.Contents[0].Parts))
+	}
+	if geminiReq.Contents[1].Role != "model" || len(geminiReq.Contents[1].Parts) != 1 {
+		t.Errorf("Second block should be model, got role %s", geminiReq.Contents[1].Role)
+	}
+	if geminiReq.Contents[2].Role != "user" || len(geminiReq.Contents[2].Parts) != 4 {
+		t.Errorf("Third block should be user with 4 parts, got role %s, parts %d", geminiReq.Contents[2].Role, len(geminiReq.Contents[2].Parts))
+	}
+}
+
+func TestConvertRequest_OpenAIToAnthropic_MultipleSystemMessagesMerged(t *testing.T) {
+	converter := NewProtocolConverter()
+	openAIReq := &ChatRequest{
+		Model: "claude-3",
+		Messages: []ChatMessage{
+			{Role: "system", Content: ChatMessageContent{StringContent: "System 1"}},
+			{Role: "system", Content: ChatMessageContent{StringContent: "System 2"}},
+			{Role: "user", Content: ChatMessageContent{StringContent: "Hello"}},
+		},
+	}
+
+	result, err := converter.ConvertRequest(openAIReq, ProtocolOpenAI, ProtocolAnthropic)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	anthropicReq := result.(*models.AnthropicMessagesRequest)
+	expectedSystem := "System 1\nSystem 2"
+	if anthropicReq.System.StringContent != expectedSystem {
+		t.Errorf("Expected system instruction %q, got %q", expectedSystem, anthropicReq.System.StringContent)
+	}
+}
+
+func TestConvertRequest_OpenAIToAnthropic_ThinkingBudgetAdjustMaxTokens(t *testing.T) {
+	converter := NewProtocolConverter()
+	openAIReq := &ChatRequest{
+		Model: "claude-3-7-sonnet",
+		MaxTokens: 2048,
+		Thinking: &ThinkingConfig{
+			Type: "enabled",
+			BudgetTokens: 2048,
+		},
+		Messages: []ChatMessage{
+			{Role: "user", Content: ChatMessageContent{StringContent: "Hello"}},
+		},
+	}
+
+	result, err := converter.ConvertRequest(openAIReq, ProtocolOpenAI, ProtocolAnthropic)
+	if err != nil {
+		t.Fatalf("ConvertRequest failed: %v", err)
+	}
+
+	anthropicReq := result.(*models.AnthropicMessagesRequest)
+	if anthropicReq.MaxTokens <= 2048 {
+		t.Errorf("Expected max_tokens to be bumped above thinking budget, got %d", anthropicReq.MaxTokens)
 	}
 }

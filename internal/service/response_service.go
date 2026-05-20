@@ -52,14 +52,20 @@ func NewResponseService(
 	billingService *BillingService,
 	proxyConfig *ProxyConfig,
 ) *ResponseService {
-	// Create custom transport with proxy bypass support
-	transport := &http.Transport{
-		Proxy: func(req *http.Request) (*url.URL, error) {
-			if utils.ShouldBypassProxy(req.URL.String(), proxyConfig.NoProxy) {
-				return nil, nil // Bypass proxy for matched URLs
-			}
-			return http.ProxyFromEnvironment(req)
-		},
+	// Clone default transport to retain connection pooling, keep-alives and other optimizations
+	var transport *http.Transport
+	if defaultTrans, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = defaultTrans.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+
+	// Set custom proxy bypass support
+	transport.Proxy = func(req *http.Request) (*url.URL, error) {
+		if utils.ShouldBypassProxy(req.URL.String(), proxyConfig.NoProxy) {
+			return nil, nil // Bypass proxy for matched URLs
+		}
+		return http.ProxyFromEnvironment(req)
 	}
 
 	return &ResponseService{
@@ -72,7 +78,7 @@ func NewResponseService(
 		logRepo:        logRepo,
 		logDetailRepo:  logDetailRepo,
 		billingService: billingService,
-		httpClient:     &http.Client{Timeout: 240 * time.Second, Transport: transport},
+		httpClient:     &http.Client{Timeout: 0, Transport: transport}, // Disable hard request timeout for long LLM connections
 		proxyConfig:    proxyConfig,
 		cache:          NewResponseCache(24 * time.Hour), // 1 day TTL
 	}
@@ -1076,6 +1082,17 @@ func NewResponseStreamingResponse(resp *http.Response) *ResponseStreamingRespons
 
 // Read implements io.Reader for streaming
 func (s *ResponseStreamingResponse) Read(p []byte) (n int, err error) {
+	// Check if context is cancelled (client disconnected)
+	if s.ctx != nil {
+		select {
+		case <-s.ctx.Done():
+			// Context cancelled, close response body and return error
+			s.ResponseBody.Body.Close()
+			return 0, s.ctx.Err()
+		default:
+		}
+	}
+
 	if s.isGeminiStream {
 		if s.geminiScanner == nil {
 			s.geminiScanner = bufio.NewScanner(s.ResponseBody.Body)

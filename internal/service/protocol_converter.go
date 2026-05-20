@@ -124,6 +124,11 @@ func (c *ProtocolConverter) openAIToAnthropicRequest(req *ChatRequest) (*models.
 			Type:         req.Thinking.Type,
 			BudgetTokens: req.Thinking.BudgetTokens,
 		}
+		if req.Thinking.Type == "enabled" {
+			if anthropicReq.MaxTokens <= req.Thinking.BudgetTokens {
+				anthropicReq.MaxTokens = req.Thinking.BudgetTokens + 1024
+			}
+		}
 	}
 
 	// Handle extra fields
@@ -142,9 +147,10 @@ func (c *ProtocolConverter) openAIToAnthropicRequest(req *ChatRequest) (*models.
 
 	// Convert messages - extract system message separately
 	var messages []models.AnthropicMessage
+	var systemMessages []string
 	for _, msg := range req.Messages {
 		if msg.Role == "system" {
-			anthropicReq.System = models.AnthropicSystem{StringContent: msg.Content.GetText()}
+			systemMessages = append(systemMessages, msg.Content.GetText())
 		} else {
 			// Convert content - handle multimodal
 			var content models.AnthropicContent
@@ -179,6 +185,9 @@ func (c *ProtocolConverter) openAIToAnthropicRequest(req *ChatRequest) (*models.
 		}
 	}
 	anthropicReq.Messages = messages
+	if len(systemMessages) > 0 {
+		anthropicReq.System = models.AnthropicSystem{StringContent: strings.Join(systemMessages, "\n")}
+	}
 
 	return anthropicReq, nil
 }
@@ -378,18 +387,18 @@ func (c *ProtocolConverter) anthropicToOpenAIRequest(req *models.AnthropicMessag
 			content = ChatMessageContent{StringContent: msg.Content.StringContent}
 		}
 
-		// If we have content or tool calls, add the message
+		// Add any tool result messages FIRST (OpenAI requires tool results to follow the assistant message immediately)
+		if len(toolResultMessages) > 0 {
+			messages = append(messages, toolResultMessages...)
+		}
+
+		// If we have content or tool calls, add the message SECOND
 		if content.StringContent != "" || len(content.Parts) > 0 || len(toolCalls) > 0 {
 			messages = append(messages, ChatMessage{
 				Role:      msg.Role,
 				Content:   content,
 				ToolCalls: toolCalls,
 			})
-		}
-
-		// Add any tool result messages
-		if len(toolResultMessages) > 0 {
-			messages = append(messages, toolResultMessages...)
 		}
 	}
 	openAIReq.Messages = messages
@@ -965,10 +974,15 @@ func (c *ProtocolConverter) anthropicToGeminiRequest(req *models.AnthropicMessag
 		}
 
 		if len(parts) > 0 {
-			geminiReq.Contents = append(geminiReq.Contents, models.GeminiContent{
-				Role:  role,
-				Parts: parts,
-			})
+			n := len(geminiReq.Contents)
+			if n > 0 && geminiReq.Contents[n-1].Role == role {
+				geminiReq.Contents[n-1].Parts = append(geminiReq.Contents[n-1].Parts, parts...)
+			} else {
+				geminiReq.Contents = append(geminiReq.Contents, models.GeminiContent{
+					Role:  role,
+					Parts: parts,
+				})
+			}
 		}
 	}
 
@@ -1075,14 +1089,10 @@ func (c *ProtocolConverter) openAIToGeminiRequest(req *ChatRequest) (*models.Gem
 	}
 
 	// 1. System Instruction & Messages
+	var systemMessages []string
 	for _, msg := range req.Messages {
 		if msg.Role == "system" {
-			geminiReq.SystemInstruction = &models.GeminiContent{
-				Role: "system",
-				Parts: []models.GeminiPart{
-					{Text: msg.Content.GetText()},
-				},
-			}
+			systemMessages = append(systemMessages, msg.Content.GetText())
 			continue
 		}
 
@@ -1173,10 +1183,24 @@ func (c *ProtocolConverter) openAIToGeminiRequest(req *ChatRequest) (*models.Gem
 		}
 
 		if len(parts) > 0 {
-			geminiReq.Contents = append(geminiReq.Contents, models.GeminiContent{
-				Role:  role,
-				Parts: parts,
-			})
+			n := len(geminiReq.Contents)
+			if n > 0 && geminiReq.Contents[n-1].Role == role {
+				geminiReq.Contents[n-1].Parts = append(geminiReq.Contents[n-1].Parts, parts...)
+			} else {
+				geminiReq.Contents = append(geminiReq.Contents, models.GeminiContent{
+					Role:  role,
+					Parts: parts,
+				})
+			}
+		}
+	}
+
+	if len(systemMessages) > 0 {
+		geminiReq.SystemInstruction = &models.GeminiContent{
+			Role: "system",
+			Parts: []models.GeminiPart{
+				{Text: strings.Join(systemMessages, "\n")},
+			},
 		}
 	}
 
@@ -1426,11 +1450,13 @@ func (c *ProtocolConverter) geminiToOpenAIResponse(resp *models.GeminiGenerateCo
 	}
 
 	var contentBuilder strings.Builder
+	var reasoningBuilder strings.Builder
 	for _, part := range candidate.Content.Parts {
 		if part.Thought {
 			contentBuilder.WriteString("<think>")
 			contentBuilder.WriteString(part.Text)
 			contentBuilder.WriteString("</think>")
+			reasoningBuilder.WriteString(part.Text)
 		} else if part.Text != "" {
 			contentBuilder.WriteString(part.Text)
 		}
@@ -1446,6 +1472,10 @@ func (c *ProtocolConverter) geminiToOpenAIResponse(resp *models.GeminiGenerateCo
 		}
 	}
 	message.Content = ChatMessageContent{StringContent: contentBuilder.String()}
+	if reasoningBuilder.Len() > 0 {
+		message.Reasoning = reasoningBuilder.String()
+		message.ReasoningContent = reasoningBuilder.String()
+	}
 
 	openAIResp.Choices = []Choice{
 		{

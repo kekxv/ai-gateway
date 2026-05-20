@@ -337,11 +337,12 @@ func (c ChatMessageContent) HasImage() bool {
 }
 
 type ChatMessage struct {
-	Role       string             `json:"role"`
-	Content    ChatMessageContent `json:"content"`
-	Reasoning  string             `json:"reasoning,omitempty"` // Some models (Ollama/Gemma) put thinking in this field
-	ToolCalls  []ToolCall         `json:"tool_calls,omitempty"`
-	ToolCallID string             `json:"tool_call_id,omitempty"` // For tool messages - must match tool_calls.id
+	Role             string             `json:"role"`
+	Content          ChatMessageContent `json:"content"`
+	Reasoning        string             `json:"reasoning,omitempty"`         // Some models (Ollama/Gemma) put thinking in this field
+	ReasoningContent string             `json:"reasoning_content,omitempty"` // For standard OpenAI compatibility
+	ToolCalls        []ToolCall         `json:"tool_calls,omitempty"`
+	ToolCallID       string             `json:"tool_call_id,omitempty"` // For tool messages - must match tool_calls.id
 }
 
 // ToolCall represents a tool/function call
@@ -1523,14 +1524,20 @@ func NewGatewayService(
 	billingService *BillingService,
 	proxyConfig *ProxyConfig,
 ) *GatewayService {
-	// Create custom transport with proxy bypass support
-	transport := &http.Transport{
-		Proxy: func(req *http.Request) (*url.URL, error) {
-			if utils.ShouldBypassProxy(req.URL.String(), proxyConfig.NoProxy) {
-				return nil, nil // Bypass proxy for matched URLs
-			}
-			return http.ProxyFromEnvironment(req)
-		},
+	// Clone default transport to retain connection pooling, keep-alives and other optimizations
+	var transport *http.Transport
+	if defaultTrans, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = defaultTrans.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+
+	// Set custom proxy bypass support
+	transport.Proxy = func(req *http.Request) (*url.URL, error) {
+		if utils.ShouldBypassProxy(req.URL.String(), proxyConfig.NoProxy) {
+			return nil, nil // Bypass proxy for matched URLs
+		}
+		return http.ProxyFromEnvironment(req)
 	}
 
 	return &GatewayService{
@@ -1542,7 +1549,7 @@ func NewGatewayService(
 		logRepo:        logRepo,
 		logDetailRepo:  logDetailRepo,
 		billingService: billingService,
-		httpClient:     &http.Client{Timeout: 240 * time.Second, Transport: transport},
+		httpClient:     &http.Client{Timeout: 0, Transport: transport}, // Disable hard request timeout for long LLM connections
 		proxyConfig:    proxyConfig,
 	}
 }
