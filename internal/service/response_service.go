@@ -230,7 +230,7 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 		log.Printf("[ResponseService] Upstream HTTP error: providerType=%s, status=%d, body=%s", providerType, resp.StatusCode, string(body))
 		s.handleUpstreamError(ctx, resp, route)
 		s.updateLogError(ctx, logEntry.ID, int(latency), resp.StatusCode, string(body))
-		return nil, fmt.Errorf("upstream error: %d - %s", resp.StatusCode, string(body))
+		return nil, &UpstreamError{StatusCode: resp.StatusCode, Body: body}
 	}
 
 	// Handle streaming response
@@ -347,7 +347,7 @@ func (s *ResponseService) GetResponse(ctx context.Context, apiKey *models.Gatewa
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("upstream error: %d - %s", resp.StatusCode, string(body))
+		return nil, &UpstreamError{StatusCode: resp.StatusCode, Body: body}
 	}
 
 	var response models.Response
@@ -386,7 +386,7 @@ func (s *ResponseService) DeleteResponse(ctx context.Context, apiKey *models.Gat
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("upstream error: %d - %s", resp.StatusCode, string(body))
+		return nil, &UpstreamError{StatusCode: resp.StatusCode, Body: body}
 	}
 
 	// Remove from cache on successful delete
@@ -429,7 +429,7 @@ func (s *ResponseService) CancelResponse(ctx context.Context, apiKey *models.Gat
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("upstream error: %d - %s", resp.StatusCode, string(body))
+		return nil, &UpstreamError{StatusCode: resp.StatusCode, Body: body}
 	}
 
 	var response models.CancelResponse
@@ -537,7 +537,7 @@ func (s *ResponseService) CompactConversation(ctx context.Context, apiKey *model
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		s.updateLogError(ctx, logEntry.ID, int(latency), resp.StatusCode, string(body))
-		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+		return nil, &UpstreamError{StatusCode: resp.StatusCode, Body: body}
 	}
 
 	body, err := io.ReadAll(resp.Body)

@@ -64,7 +64,15 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		case service.ErrUpstreamFailed:
 			c.JSON(http.StatusBadGateway, gin.H{"error": "Upstream request failed"})
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			if upstreamErr, ok := err.(*service.UpstreamError); ok {
+				if body := service.ConvertUpstreamErrorToOpenAI(upstreamErr.Body); len(body) > 0 {
+					c.Data(upstreamErr.StatusCode, "application/json", body)
+				} else {
+					c.JSON(upstreamErr.StatusCode, gin.H{"error": string(upstreamErr.Body)})
+				}
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			}
 		}
 		return
 	}
@@ -380,7 +388,15 @@ func (h *GatewayHandler) CompactConversation(c *gin.Context) {
 		case service.ErrUpstreamFailed:
 			c.JSON(http.StatusBadGateway, gin.H{"error": "Upstream request failed"})
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			if upstreamErr, ok := err.(*service.UpstreamError); ok {
+				if body := service.ConvertUpstreamErrorToOpenAI(upstreamErr.Body); len(body) > 0 {
+					c.Data(upstreamErr.StatusCode, "application/json", body)
+				} else {
+					c.JSON(upstreamErr.StatusCode, gin.H{"error": string(upstreamErr.Body)})
+				}
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			}
 		}
 		return
 	}

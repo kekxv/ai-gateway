@@ -30,6 +30,16 @@ var (
 	ErrUpstreamFailed      = errors.New("upstream request failed")
 )
 
+// UpstreamError carries the upstream HTTP status code and raw error body to the handler layer.
+type UpstreamError struct {
+	StatusCode int
+	Body       []byte
+}
+
+func (e *UpstreamError) Error() string {
+	return fmt.Sprintf("upstream error: %d", e.StatusCode)
+}
+
 // Headers that should NOT be forwarded to upstream
 var excludedHeaders = []string{
 	"authorization",
@@ -1808,7 +1818,7 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		latency := int(time.Since(startTime).Milliseconds())
 		s.handleUpstreamError(ctx, resp, route)
 		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil, nil)
-		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+		return nil, &UpstreamError{StatusCode: resp.StatusCode, Body: body}
 	}
 
 	// Handle streaming response
@@ -2573,7 +2583,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			latency := int(time.Since(startTime).Milliseconds())
 			s.handleUpstreamError(ctx, resp, route)
 			updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil, nil)
-			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+			return nil, &UpstreamError{StatusCode: resp.StatusCode, Body: body}
 		}
 
 		// Handle streaming response (direct Anthropic format)
@@ -2694,7 +2704,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 			latency := int(time.Since(startTime).Milliseconds())
 			s.handleUpstreamError(ctx, resp, route)
 			updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil, nil)
-			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+			return nil, &UpstreamError{StatusCode: resp.StatusCode, Body: body}
 		}
 
 		// Handle streaming response (Gemini format -> Anthropic SSE)
@@ -2822,7 +2832,7 @@ func (s *GatewayService) HandleAnthropicMessages(ctx context.Context, apiKey *mo
 		latency := int(time.Since(startTime).Milliseconds())
 		s.handleUpstreamError(ctx, resp, route)
 		updateLog(latency, 0, 0, 0, 0, resp.StatusCode, fmt.Sprintf("Upstream error: %d, body: %s", resp.StatusCode, string(body)), nil, nil)
-		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+		return nil, &UpstreamError{StatusCode: resp.StatusCode, Body: body}
 	}
 
 	// Handle streaming response (need to convert back to Anthropic format)

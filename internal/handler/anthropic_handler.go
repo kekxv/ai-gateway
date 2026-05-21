@@ -290,6 +290,17 @@ func (h *AnthropicHandler) convertStreamData(data []byte, messageID string, cont
 
 // handleErrorResponse maps errors to Anthropic error format
 func (h *AnthropicHandler) handleErrorResponse(c *gin.Context, err error) {
+	// Handle UpstreamError with protocol-specific conversion
+	if upstreamErr, ok := err.(*service.UpstreamError); ok {
+		if body := service.ConvertUpstreamErrorToAnthropic(upstreamErr.StatusCode, upstreamErr.Body); len(body) > 0 {
+			c.Data(upstreamErr.StatusCode, "application/json", body)
+		} else {
+			c.JSON(upstreamErr.StatusCode, models.NewAnthropicError(
+				models.AnthropicErrorAPI, string(upstreamErr.Body)))
+		}
+		return
+	}
+
 	errMsg := err.Error()
 
 	switch {

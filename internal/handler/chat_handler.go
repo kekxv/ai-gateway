@@ -455,7 +455,15 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 			case service.ErrInsufficientBalance:
 				c.JSON(http.StatusForbidden, gin.H{"error": "Insufficient balance"})
 			default:
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				if upstreamErr, ok := err.(*service.UpstreamError); ok {
+					if body := service.ConvertUpstreamErrorToOpenAI(upstreamErr.Body); len(body) > 0 {
+						c.Data(upstreamErr.StatusCode, "application/json", body)
+					} else {
+						c.JSON(upstreamErr.StatusCode, gin.H{"error": string(upstreamErr.Body)})
+					}
+				} else {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				}
 			}
 			return
 		}
@@ -510,7 +518,15 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 		case service.ErrInsufficientBalance:
 			c.JSON(http.StatusForbidden, gin.H{"error": "Insufficient balance"})
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			if upstreamErr, ok := err.(*service.UpstreamError); ok {
+				if body := service.ConvertUpstreamErrorToOpenAI(upstreamErr.Body); len(body) > 0 {
+					c.Data(upstreamErr.StatusCode, "application/json", body)
+				} else {
+					c.JSON(upstreamErr.StatusCode, gin.H{"error": string(upstreamErr.Body)})
+				}
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			}
 		}
 		return
 	}
@@ -667,7 +683,15 @@ func (h *ChatHandler) StreamChat(c *gin.Context) {
 		case service.ErrInsufficientBalance:
 			c.JSON(http.StatusForbidden, gin.H{"error": "Insufficient balance"})
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			if upstreamErr, ok := err.(*service.UpstreamError); ok {
+				if body := service.ConvertUpstreamErrorToOpenAI(upstreamErr.Body); len(body) > 0 {
+					c.Data(upstreamErr.StatusCode, "application/json", body)
+				} else {
+					c.JSON(upstreamErr.StatusCode, gin.H{"error": string(upstreamErr.Body)})
+				}
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			}
 		}
 		return
 	}
