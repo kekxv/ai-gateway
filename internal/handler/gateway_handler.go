@@ -130,12 +130,25 @@ func (h *GatewayHandler) ListGatewayModels(c *gin.Context) {
 		return
 	}
 
-	data := make([]gin.H, 0, len(modelsList))
+	// Collect unique model identifiers (name + each alias)
+	seen := make(map[string]int64)
 	for _, m := range modelsList {
+		if _, ok := seen[m.Name]; !ok {
+			seen[m.Name] = m.CreatedAt.Unix()
+		}
+		for _, alias := range m.Aliases {
+			if _, ok := seen[alias]; !ok {
+				seen[alias] = m.CreatedAt.Unix()
+			}
+		}
+	}
+
+	data := make([]gin.H, 0, len(seen))
+	for name, created := range seen {
 		data = append(data, gin.H{
-			"id":       m.Name,
+			"id":       name,
 			"object":   "model",
-			"created":  m.CreatedAt.Unix(),
+			"created":  created,
 			"owned_by": "library",
 		})
 	}
