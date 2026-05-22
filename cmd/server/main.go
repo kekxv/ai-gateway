@@ -120,7 +120,7 @@ func main() {
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyRepo, authService)
 	logHandler := handler.NewLogHandler(logRepo, logDetailRepo)
 	statsHandler := handler.NewStatsHandler(logRepo, userRepo, modelRepo, providerRepo)
-	gatewayHandler := handler.NewGatewayHandler(gatewayService, responseService)
+	gatewayHandler := handler.NewGatewayHandler(gatewayService, responseService, modelRepo)
 	anthropicHandler := handler.NewAnthropicHandler(gatewayService)
 	chatHandler := handler.NewChatHandler(conversationRepo, messageRepo, userRepo, gatewayService, responseService, billingService)
 	toolsHandler := handler.NewToolsHandler(toolsService)

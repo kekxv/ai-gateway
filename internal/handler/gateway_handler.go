@@ -10,18 +10,21 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/kekxv/ai-gateway/internal/middleware"
 	"github.com/kekxv/ai-gateway/internal/models"
+	"github.com/kekxv/ai-gateway/internal/repository"
 	"github.com/kekxv/ai-gateway/internal/service"
 )
 
 type GatewayHandler struct {
 	gatewayService  *service.GatewayService
 	responseService *service.ResponseService
+	modelRepo       *repository.ModelRepository
 }
 
-func NewGatewayHandler(gatewayService *service.GatewayService, responseService *service.ResponseService) *GatewayHandler {
+func NewGatewayHandler(gatewayService *service.GatewayService, responseService *service.ResponseService, modelRepo *repository.ModelRepository) *GatewayHandler {
 	return &GatewayHandler{
 		gatewayService:  gatewayService,
 		responseService: responseService,
+		modelRepo:       modelRepo,
 	}
 }
 
@@ -115,12 +118,31 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 
 // ListGatewayModels lists models available through the gateway
 func (h *GatewayHandler) ListGatewayModels(c *gin.Context) {
-	// Return OpenAI-compatible model list format
+	apiKey := middleware.GetAPIKey(c)
+	if apiKey == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	modelsList, err := h.modelRepo.List(c.Request.Context(), apiKey.UserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	data := make([]gin.H, 0, len(modelsList))
+	for _, m := range modelsList {
+		data = append(data, gin.H{
+			"id":       m.Name,
+			"object":   "model",
+			"created":  m.CreatedAt.Unix(),
+			"owned_by": "library",
+		})
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",
-		"data": []gin.H{
-			// TODO: Get actual models from database
-		},
+		"data":   data,
 	})
 }
 
