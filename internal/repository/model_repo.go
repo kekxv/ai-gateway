@@ -70,7 +70,7 @@ func (r *ModelRepository) List(ctx context.Context, userID *uint) ([]models.Mode
 	var modelsList []models.Model
 	query := r.db.WithContext(ctx)
 	if userID != nil {
-		query = query.Where("userId = ?", *userID)
+		query = query.Where("userId = ? OR userId IS NULL", *userID)
 	}
 	err := query.Find(&modelsList).Error
 	if err == nil {
