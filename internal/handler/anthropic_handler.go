@@ -5,11 +5,13 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/kekxv/ai-gateway/internal/middleware"
 	"github.com/kekxv/ai-gateway/internal/models"
+	"github.com/kekxv/ai-gateway/internal/repository"
 	"github.com/kekxv/ai-gateway/internal/service"
 )
 
@@ -17,13 +19,15 @@ import (
 type AnthropicHandler struct {
 	gatewayService *service.GatewayService
 	converter      *service.ProtocolConverter
+	modelRepo      *repository.ModelRepository
 }
 
 // NewAnthropicHandler creates a new Anthropic handler
-func NewAnthropicHandler(gatewayService *service.GatewayService) *AnthropicHandler {
+func NewAnthropicHandler(gatewayService *service.GatewayService, modelRepo *repository.ModelRepository) *AnthropicHandler {
 	return &AnthropicHandler{
 		gatewayService: gatewayService,
 		converter:      service.NewProtocolConverter(),
+		modelRepo:      modelRepo,
 	}
 }
 
@@ -362,4 +366,61 @@ func (h *AnthropicHandler) CountTokens(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+// ListModels handles GET /v1/models - returns available models in Anthropic format
+func (h *AnthropicHandler) ListModels(c *gin.Context) {
+	apiKey := middleware.GetAPIKey(c)
+	if apiKey == nil {
+		c.JSON(http.StatusUnauthorized, models.NewAnthropicError(
+			models.AnthropicErrorAuthentication,
+			"Missing API key",
+		))
+		return
+	}
+
+	modelsList, err := h.modelRepo.List(c.Request.Context(), apiKey.UserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.NewAnthropicError(
+			models.AnthropicErrorAPI,
+			"Failed to list models: "+err.Error(),
+		))
+		return
+	}
+
+	// Collect unique model identifiers (name + each alias)
+	seen := make(map[string]int64)
+	for _, m := range modelsList {
+		if _, ok := seen[m.Name]; !ok {
+			seen[m.Name] = m.CreatedAt.Unix()
+		}
+		for _, alias := range m.Aliases {
+			if _, ok := seen[alias]; !ok {
+				seen[alias] = m.CreatedAt.Unix()
+			}
+		}
+	}
+
+	data := make([]models.AnthropicModelInfo, 0, len(seen))
+	for name, created := range seen {
+		data = append(data, models.AnthropicModelInfo{
+			ID:          name,
+			Type:        "model",
+			DisplayName: name,
+			CreatedAt:   time.Unix(created, 0).UTC().Format(time.RFC3339),
+		})
+	}
+
+	var firstID, lastID string
+	if len(data) > 0 {
+		firstID = data[0].ID
+		lastID = data[len(data)-1].ID
+	}
+
+	c.JSON(http.StatusOK, models.AnthropicModelsListResponse{
+		Data:    data,
+		HasMore: false,
+		FirstID: firstID,
+		LastID:  lastID,
+	})
 }

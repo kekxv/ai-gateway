@@ -104,6 +104,56 @@ func TestLogRepository_List(t *testing.T) {
 	}
 }
 
+func TestLogRepository_ListWithFilter(t *testing.T) {
+	db := test.SetupTestDB(t)
+	defer test.CleanupTestDB(db)
+
+	repo := NewLogRepository(db)
+	user := test.CreateTestUser(db)
+	apiKey := test.CreateTestAPIKey(db, &user.ID)
+	now := time.Now()
+
+	test.CreateTestLog(db, apiKey.ID, func(l *models.Log) {
+		l.ModelName = "gpt-4"
+		l.ProviderName = "openai"
+		l.Status = 200
+		l.CreatedAt = now
+	})
+	test.CreateTestLog(db, apiKey.ID, func(l *models.Log) {
+		l.ModelName = "gpt-4"
+		l.ProviderName = "anthropic"
+		l.Status = 500
+		l.CreatedAt = now
+	})
+	test.CreateTestLog(db, apiKey.ID, func(l *models.Log) {
+		l.ModelName = "claude"
+		l.ProviderName = "anthropic"
+		l.Status = 0
+		l.CreatedAt = now.AddDate(0, 0, -2)
+	})
+
+	start := now.AddDate(0, 0, -1)
+	end := now
+	logs, total, err := repo.ListWithFilter(context.Background(), LogListFilter{
+		Model:     "gpt-4",
+		Provider:  "anthropic",
+		Status:    "error",
+		StartDate: &start,
+		EndDate:   &end,
+		Page:      1,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("ListWithFilter failed: %v", err)
+	}
+	if total != 1 || len(logs) != 1 {
+		t.Fatalf("expected one filtered log, total=%d len=%d", total, len(logs))
+	}
+	if logs[0].ProviderName != "anthropic" || logs[0].Status != 500 {
+		t.Fatalf("unexpected filtered log: %+v", logs[0])
+	}
+}
+
 func TestLogRepository_GetStatsByProvider(t *testing.T) {
 	db := test.SetupTestDB(t)
 	defer test.CleanupTestDB(db)

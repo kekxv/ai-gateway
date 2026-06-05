@@ -13,6 +13,17 @@ type LogRepository struct {
 	db *gorm.DB
 }
 
+type LogListFilter struct {
+	APIKeyID  *uint
+	Model     string
+	Provider  string
+	Status    string
+	StartDate *time.Time
+	EndDate   *time.Time
+	Page      int
+	Limit     int
+}
+
 func NewLogRepository(db *gorm.DB) *LogRepository {
 	return &LogRepository{db: db}
 }
@@ -27,19 +38,51 @@ func (r *LogRepository) UpdateByID(ctx context.Context, id uint, updates map[str
 }
 
 func (r *LogRepository) List(ctx context.Context, apiKeyID *uint, model string, page, limit int) ([]models.Log, int64, error) {
+	return r.ListWithFilter(ctx, LogListFilter{
+		APIKeyID: apiKeyID,
+		Model:    model,
+		Page:     page,
+		Limit:    limit,
+	})
+}
+
+func (r *LogRepository) ListWithFilter(ctx context.Context, filter LogListFilter) ([]models.Log, int64, error) {
 	var logs []models.Log
 	var total int64
 
 	query := r.db.WithContext(ctx).Model(&models.Log{})
-	if apiKeyID != nil {
-		query = query.Where("apiKeyId = ?", *apiKeyID)
+	if filter.APIKeyID != nil {
+		query = query.Where("apiKeyId = ?", *filter.APIKeyID)
 	}
-	if model != "" {
-		query = query.Where("modelName = ?", model)
+	if filter.Model != "" {
+		query = query.Where("modelName = ?", filter.Model)
+	}
+	if filter.Provider != "" {
+		query = query.Where("providerName = ?", filter.Provider)
+	}
+	switch filter.Status {
+	case "success":
+		query = query.Where("status >= ? AND status < ?", 200, 300)
+	case "error":
+		query = query.Where("status < ? OR status >= ?", 200, 300)
+	}
+	if filter.StartDate != nil {
+		query = query.Where("createdAt >= ?", *filter.StartDate)
+	}
+	if filter.EndDate != nil {
+		query = query.Where("createdAt < ?", filter.EndDate.AddDate(0, 0, 1))
 	}
 
 	query.Count(&total)
 
+	page := filter.Page
+	if page < 1 {
+		page = 1
+	}
+	limit := filter.Limit
+	if limit < 1 {
+		limit = 20
+	}
 	offset := (page - 1) * limit
 	err := query.
 		Preload("APIKey.User").

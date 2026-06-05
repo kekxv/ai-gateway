@@ -34,6 +34,7 @@ export interface Log {
   completion_tokens?: number
   cacheReadTokens?: number
   cacheWriteTokens?: number
+  cacheEphemTokens?: number
   cacheEphemeralTokens?: number
   totalTokens?: number
   total_tokens?: number

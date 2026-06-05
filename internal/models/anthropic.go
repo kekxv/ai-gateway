@@ -325,3 +325,21 @@ func NewAnthropicError(errorType, message string) AnthropicError {
 		},
 	}
 }
+
+// ================================== Anthropic Models List Types ==================================
+
+// AnthropicModelInfo represents a single model in the models list response
+type AnthropicModelInfo struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	DisplayName string `json:"display_name"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// AnthropicModelsListResponse represents the response from GET /v1/models
+type AnthropicModelsListResponse struct {
+	Data    []AnthropicModelInfo `json:"data"`
+	HasMore bool                 `json:"has_more"`
+	FirstID string               `json:"first_id"`
+	LastID  string               `json:"last_id"`
+}

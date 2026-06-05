@@ -227,7 +227,7 @@ func (h *GatewayHandler) BillingUsage(c *gin.Context) {
 			"totalTokens":      0,
 			"totalCost":        0,
 		},
-		"dailyUsage":  gin.H{},
+		"dailyUsage":   gin.H{},
 		"usageByModel": []gin.H{},
 	})
 }
@@ -254,9 +254,14 @@ func (h *GatewayHandler) CreateResponse(c *gin.Context) {
 
 	var req models.ResponseRequest
 	if err := json.Unmarshal(rawBody, &req); err != nil {
-		log.Printf("[CreateResponse] Unmarshal error: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+		model, modelErr := service.ExtractRawStringField(rawBody, "model")
+		if modelErr != nil {
+			log.Printf("[CreateResponse] Unmarshal error: %v", err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		req.Model = model
+		req.Stream = service.ExtractRawBoolField(rawBody, "stream")
 	}
 
 	stream := req.Stream

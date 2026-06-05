@@ -1534,6 +1534,10 @@ func NewGatewayService(
 	billingService *BillingService,
 	proxyConfig *ProxyConfig,
 ) *GatewayService {
+	if proxyConfig == nil {
+		proxyConfig = &ProxyConfig{}
+	}
+
 	// Clone default transport to retain connection pooling, keep-alives and other optimizations
 	var transport *http.Transport
 	if defaultTrans, ok := http.DefaultTransport.(*http.Transport); ok {
@@ -1715,15 +1719,13 @@ func (s *GatewayService) HandleChatCompletions(ctx context.Context, apiKey *mode
 		// Get base URL
 		baseURL := route.Provider.GetBaseURLForType(providerType)
 
-		// ULTRA TRANSPARENT MODE: Forward raw body with only model name replaced
-		// Use string replacement to preserve exact JSON format (直传模式)
+		// Schema-light passthrough: preserve unknown fields and only rewrite top-level model.
 		finalRawBody := rawBody
 		if upstreamModelName != req.Model {
-			// Replace model name in JSON string directly
-			finalRawBody = []byte(strings.Replace(string(rawBody), `"model":"`+req.Model+`"`, `"model":"`+upstreamModelName+`"`, 1))
-			if string(finalRawBody) == string(rawBody) {
-				// Try with space after colon
-				finalRawBody = []byte(strings.Replace(string(rawBody), `"model": "`+req.Model+`"`, `"model":"`+upstreamModelName+`"`, 1))
+			finalRawBody, err = replaceRawModel(rawBody, upstreamModelName)
+			if err != nil {
+				log.Printf("[HandleChatCompletions] Replace raw model failed: %v", err)
+				return nil, err
 			}
 		}
 
@@ -3068,18 +3070,18 @@ func (s *GatewayService) updateAnthropicLogAndCalculateCost(ctx context.Context,
 	// Update log entry
 	if logID > 0 {
 		updates := map[string]interface{}{
-			"latency":            latency,
-			"promptTokens":       promptTokens,
-			"completionTokens":   completionTokens,
-			"totalTokens":        totalTokens,
-			"cacheReadTokens":    cacheReadTokens,
-			"cacheWriteTokens":   cacheWriteTokens,
+			"latency":              latency,
+			"promptTokens":         promptTokens,
+			"completionTokens":     completionTokens,
+			"totalTokens":          totalTokens,
+			"cacheReadTokens":      cacheReadTokens,
+			"cacheWriteTokens":     cacheWriteTokens,
 			"cacheEphemeralTokens": cacheEphemTokens,
-			"cost":               cost,
-			"ownerChannelId":     ownerChannelID,
-			"ownerChannelUserId": ownerChannelUserID,
-			"status":             200,
-			"completion":         completion,
+			"cost":                 cost,
+			"ownerChannelId":       ownerChannelID,
+			"ownerChannelUserId":   ownerChannelUserID,
+			"status":               200,
+			"completion":           completion,
 		}
 		if len(respHeaders) > 0 {
 			respHeadersJSON, _ := json.Marshal(respHeaders)

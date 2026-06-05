@@ -26,7 +26,7 @@
         class="!w-44 sm:!w-48"
         size="small"
       />
-      <el-button type="primary" size="small" @click="fetchLogs">搜索</el-button>
+      <el-button type="primary" size="small" @click="searchLogs">搜索</el-button>
       <el-button size="small" @click="resetFilters">重置</el-button>
     </div>
 
@@ -50,7 +50,7 @@
             <el-tag type="info" size="small" class="font-mono">{{ log.modelName || log.model || '-' }}</el-tag>
           </div>
           <el-tag :type="getStatusType(log.status)" size="small" class="shrink-0">
-            {{ log.status === 200 || log.status === 'success' ? '成功' : '错误' }}
+            {{ getStatusLabel(log.status) }}
           </el-tag>
         </div>
 
@@ -124,7 +124,7 @@
           </div>
         </div>
         <!-- Cache Tokens (shown only when cache data exists) -->
-        <div class="grid grid-cols-2 sm:grid-cols-3 gap-3" v-if="logDetail.cacheReadTokens || logDetail.cacheWriteTokens || logDetail.cacheEphemeralTokens">
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-3" v-if="logDetail.cacheReadTokens || logDetail.cacheWriteTokens || logDetail.cacheEphemeralTokens || logDetail.cacheEphemTokens">
           <div class="stat-card stat-card-cyan">
             <div class="stat-label">缓存读取</div>
             <div class="stat-value">{{ formatNumber(logDetail.cacheReadTokens || 0) }}</div>
@@ -135,7 +135,7 @@
           </div>
           <div class="stat-card stat-card-orange">
             <div class="stat-label">Ephemeral 缓存</div>
-            <div class="stat-value">{{ formatNumber(logDetail.cacheEphemeralTokens || 0) }}</div>
+            <div class="stat-value">{{ formatNumber(logDetail.cacheEphemeralTokens || logDetail.cacheEphemTokens || 0) }}</div>
           </div>
         </div>
 
@@ -838,9 +838,25 @@ const getLatencyType = (latency: number | undefined) => {
   return 'danger'
 }
 
+const getStatusCode = (status: number | string): number | null => {
+  if (typeof status === 'number') return status
+  if (status === 'success') return 200
+  const parsed = Number(status)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 const getStatusType = (status: number | string) => {
-  if (status === 200 || status === 'success') return 'success'
+  const code = getStatusCode(status)
+  if (code !== null && code >= 200 && code < 300) return 'success'
+  if (code === 0) return 'warning'
   return 'danger'
+}
+
+const getStatusLabel = (status: number | string) => {
+  const code = getStatusCode(status)
+  if (code !== null && code >= 200 && code < 300) return '成功'
+  if (code === 0) return '处理中'
+  return '错误'
 }
 
 const copyToClipboard = async (text: string | object | null | undefined) => {
@@ -1578,7 +1594,9 @@ const chatMessages = computed(() => {
       }
     }
   } catch {
-    // Ignore parse errors
+    if (logDetail.value.detail.responseBody) {
+      messages.push({ role: 'assistant', content: String(logDetail.value.detail.responseBody) })
+    }
   }
 
   return messages
@@ -1601,13 +1619,18 @@ const fetchLogs = async () => {
     }
 
     const response = await logApi.list(params)
-    logs.value = response.data.logs || response.data
+    logs.value = response.data.logs || []
     pagination.total = response.data.total || logs.value.length
   } catch (error) {
     ElMessage.error(t('common.error'))
   } finally {
     loading.value = false
   }
+}
+
+const searchLogs = () => {
+  pagination.page = 1
+  fetchLogs()
 }
 
 const resetFilters = () => {

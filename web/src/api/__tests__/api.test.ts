@@ -289,9 +289,23 @@ describe('Log API', () => {
     const mockResponse = { data: { logs: [], total: 0 } }
     vi.mocked(axios.get).mockResolvedValue(mockResponse)
 
-    const result = await logApi.list({ page: 1 })
+    const result = await logApi.list({
+      page: 1,
+      provider: 'openai',
+      status: 'success',
+      start_date: '2026-05-01',
+      end_date: '2026-05-31'
+    })
 
-    expect(axios.get).toHaveBeenCalledWith('/logs', { params: { page: 1 } })
+    expect(axios.get).toHaveBeenCalledWith('/logs', {
+      params: {
+        page: 1,
+        provider: 'openai',
+        status: 'success',
+        start_date: '2026-05-01',
+        end_date: '2026-05-31'
+      }
+    })
     expect(result).toEqual(mockResponse)
   })
 

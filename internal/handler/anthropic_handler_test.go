@@ -41,7 +41,7 @@ func TestAnthropicHandler_CreateMessages_MissingFields(t *testing.T) {
 		modelRepo, modelRouteRepo, apiKeyRepo, channelRepo,
 		userRepo, logRepo, logDetailRepo, billingService, nil,
 	)
-	anthropicHandler := NewAnthropicHandler(gatewayService)
+	anthropicHandler := NewAnthropicHandler(gatewayService, modelRepo)
 
 	router := gin.New()
 	router.POST("/v1/messages", middleware.APIKeyAuth(apiKeyRepo), anthropicHandler.CreateMessages)
@@ -123,7 +123,7 @@ func TestAnthropicHandler_CreateMessages_InvalidJSON(t *testing.T) {
 		modelRepo, modelRouteRepo, apiKeyRepo, channelRepo,
 		userRepo, logRepo, logDetailRepo, billingService, nil,
 	)
-	anthropicHandler := NewAnthropicHandler(gatewayService)
+	anthropicHandler := NewAnthropicHandler(gatewayService, modelRepo)
 
 	router := gin.New()
 	router.POST("/v1/messages", middleware.APIKeyAuth(apiKeyRepo), anthropicHandler.CreateMessages)
@@ -162,7 +162,7 @@ func TestAnthropicHandler_CreateMessages_XAPIKeyAuth(t *testing.T) {
 		modelRepo, modelRouteRepo, apiKeyRepo, channelRepo,
 		userRepo, logRepo, logDetailRepo, billingService, nil,
 	)
-	anthropicHandler := NewAnthropicHandler(gatewayService)
+	anthropicHandler := NewAnthropicHandler(gatewayService, modelRepo)
 
 	router := gin.New()
 	router.POST("/v1/messages", middleware.APIKeyAuth(apiKeyRepo), anthropicHandler.CreateMessages)
@@ -212,7 +212,7 @@ func TestAnthropicHandler_CreateMessages_BearerAuth(t *testing.T) {
 		modelRepo, modelRouteRepo, apiKeyRepo, channelRepo,
 		userRepo, logRepo, logDetailRepo, billingService, nil,
 	)
-	anthropicHandler := NewAnthropicHandler(gatewayService)
+	anthropicHandler := NewAnthropicHandler(gatewayService, modelRepo)
 
 	router := gin.New()
 	router.POST("/v1/messages", middleware.APIKeyAuth(apiKeyRepo), anthropicHandler.CreateMessages)
@@ -262,7 +262,7 @@ func TestAnthropicHandler_ErrorFormat(t *testing.T) {
 		modelRepo, modelRouteRepo, apiKeyRepo, channelRepo,
 		userRepo, logRepo, logDetailRepo, billingService, nil,
 	)
-	anthropicHandler := NewAnthropicHandler(gatewayService)
+	anthropicHandler := NewAnthropicHandler(gatewayService, modelRepo)
 
 	router := gin.New()
 	router.POST("/v1/messages", middleware.APIKeyAuth(apiKeyRepo), anthropicHandler.CreateMessages)

@@ -52,6 +52,10 @@ func NewResponseService(
 	billingService *BillingService,
 	proxyConfig *ProxyConfig,
 ) *ResponseService {
+	if proxyConfig == nil {
+		proxyConfig = &ProxyConfig{}
+	}
+
 	// Clone default transport to retain connection pooling, keep-alives and other optimizations
 	var transport *http.Transport
 	if defaultTrans, ok := http.DefaultTransport.(*http.Transport); ok {
@@ -208,9 +212,10 @@ func (s *ResponseService) CreateResponse(ctx context.Context, apiKey *models.Gat
 		upstreamModelName := route.Model.Name
 		finalRawBody := rawBody
 		if upstreamModelName != req.Model {
-			finalRawBody = []byte(strings.Replace(string(rawBody), `"model":"`+req.Model+`"`, `"model":"`+upstreamModelName+`"`, 1))
-			if string(finalRawBody) == string(rawBody) {
-				finalRawBody = []byte(strings.Replace(string(rawBody), `"model": "`+req.Model+`"`, `"model":"`+upstreamModelName+`"`, 1))
+			finalRawBody, reqErr = replaceRawModel(rawBody, upstreamModelName)
+			if reqErr != nil {
+				log.Printf("[ResponseService] Replace raw model failed: %v", reqErr)
+				return nil, reqErr
 			}
 		}
 
@@ -1048,25 +1053,25 @@ type ResponseStreamingResponse struct {
 	geminiScanner  *bufio.Scanner
 
 	// For logging after streaming is complete
-	ctx             context.Context // Store context to detect client disconnect
-	logID           uint            // ID of the initial log entry
-	apiKey          *models.GatewayAPIKey
-	model           *models.Model
-	providerName    string
-	provider        *models.Provider
-	request         *models.ResponseRequest
-	startTime       time.Time
-	logRepo         *repository.LogRepository
-	logDetailRepo   *repository.LogDetailRepository
-	billingService  *BillingService
-	cache           *ResponseCache
-	responseHeaders map[string]string // Response headers for logging
-	providerType              string
-	isGeminiStream            bool
-	isChatCompletionsStream   bool
-	responseID                string
-	streamState               *responseStreamState
-	chatStreamState           *chatToResponseStreamState
+	ctx                     context.Context // Store context to detect client disconnect
+	logID                   uint            // ID of the initial log entry
+	apiKey                  *models.GatewayAPIKey
+	model                   *models.Model
+	providerName            string
+	provider                *models.Provider
+	request                 *models.ResponseRequest
+	startTime               time.Time
+	logRepo                 *repository.LogRepository
+	logDetailRepo           *repository.LogDetailRepository
+	billingService          *BillingService
+	cache                   *ResponseCache
+	responseHeaders         map[string]string // Response headers for logging
+	providerType            string
+	isGeminiStream          bool
+	isChatCompletionsStream bool
+	responseID              string
+	streamState             *responseStreamState
+	chatStreamState         *chatToResponseStreamState
 }
 
 // NewResponseStreamingResponse creates a new streaming response wrapper for Responses API
@@ -1234,17 +1239,17 @@ func (s *ResponseStreamingResponse) readChatCompletionsStream(p []byte) (n int, 
 
 // chatToResponseStreamState tracks state during Chat Completions -> Responses API stream conversion
 type chatToResponseStreamState struct {
-	createdSent      bool
-	completedSent    bool // tracks whether response.completed SSE was sent
-	textStarted      bool
-	textOutputID     string
-	fullText         strings.Builder
-	reasoningBuf     strings.Builder
-	toolCalls        map[int]*streamingToolCall // chunk delta index -> tool call state
-	nextOutputIndex  int    // running counter for output_index in SSE events
-	usage            *models.ResponseUsage
-	completed        bool // tracks if finish_reason has been received
-	finishReason     string
+	createdSent     bool
+	completedSent   bool // tracks whether response.completed SSE was sent
+	textStarted     bool
+	textOutputID    string
+	fullText        strings.Builder
+	reasoningBuf    strings.Builder
+	toolCalls       map[int]*streamingToolCall // chunk delta index -> tool call state
+	nextOutputIndex int                        // running counter for output_index in SSE events
+	usage           *models.ResponseUsage
+	completed       bool // tracks if finish_reason has been received
+	finishReason    string
 }
 
 type streamingToolCall struct {

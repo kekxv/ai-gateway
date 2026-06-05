@@ -23,6 +23,8 @@ func (h *LogHandler) ListLogs(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	model := c.Query("model")
+	provider := c.Query("provider")
+	status := c.Query("status")
 
 	if page < 1 {
 		page = 1
@@ -31,15 +33,37 @@ func (h *LogHandler) ListLogs(c *gin.Context) {
 		pageSize = 20
 	}
 
-	logs, total, err := h.logRepo.List(c.Request.Context(), nil, model, page, pageSize)
+	var startDate, endDate *time.Time
+	if value := c.Query("start_date"); value != "" {
+		if parsed, err := time.Parse("2006-01-02", value); err == nil {
+			startDate = &parsed
+		}
+	}
+	if value := c.Query("end_date"); value != "" {
+		if parsed, err := time.Parse("2006-01-02", value); err == nil {
+			endDate = &parsed
+		}
+	}
+
+	logs, total, err := h.logRepo.ListWithFilter(c.Request.Context(), repository.LogListFilter{
+		Model:     model,
+		Provider:  provider,
+		Status:    status,
+		StartDate: startDate,
+		EndDate:   endDate,
+		Page:      page,
+		Limit:     pageSize,
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"logs": logs,
+		"logs":  logs,
 		"total": total,
+		"page":  page,
+		"limit": pageSize,
 	})
 }
 
@@ -90,8 +114,12 @@ func (h *LogHandler) GetLogDetail(c *gin.Context) {
 }
 
 func (h *LogHandler) CleanupLogDetails(c *gin.Context) {
-	// Delete log details older than 30 days
-	before := time.Now().AddDate(0, 0, -30)
+	days, _ := strconv.Atoi(c.DefaultQuery("days", "30"))
+	if days < 1 {
+		days = 30
+	}
+
+	before := time.Now().AddDate(0, 0, -days)
 
 	if err := h.logDetailRepo.Cleanup(c.Request.Context(), before); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -243,7 +271,7 @@ func (h *StatsHandler) GetStats(c *gin.Context) {
 	totalRequests, totalTokens, totalCost, totalPromptTokens, totalCompletionTokens, _ := h.logRepo.GetTotalStats(ctx, totalStartDate, now)
 
 	// Calculate stats days (from startDate to endDate)
-	statsDays := int(endDate.Sub(startDate).Hours() / 24) + 1
+	statsDays := int(endDate.Sub(startDate).Hours()/24) + 1
 
 	// Get provider and model counts from database
 	providerCount, _ := h.providerRepo.Count(ctx)
