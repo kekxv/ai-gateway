@@ -10,16 +10,17 @@ import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from starlette.requests import ClientDisconnect
 
 from ai_gateway.audit.service import RequestContext, RequestFailure, RequestResult
 from ai_gateway.billing.service import BillingService
 from ai_gateway.core.config import Settings
-from ai_gateway.core.enums import LedgerKind, Protocol, UsageSource
+from ai_gateway.core.enums import LedgerKind, Protocol, RouteRuntimeState, UsageSource
 from ai_gateway.db.models import Account, LedgerEntry, Model, User
-from ai_gateway.gateway.service import GatewayService
+from ai_gateway.gateway.service import GatewayService, GatewayStreamOutput, _StreamLifecycle
 from ai_gateway.protocols.registry import get_adapter
 from ai_gateway.routing.types import RouteCandidate
-from ai_gateway.transport.sse import GatewayContext
+from ai_gateway.transport.sse import GatewayContext, stream_gateway_response
 
 
 class DisconnectStream(httpx.AsyncByteStream):
@@ -42,6 +43,8 @@ class DisconnectStream(httpx.AsyncByteStream):
 class RecordingAudit:
     completed: RequestResult | None = None
     failed: RequestFailure | None = None
+    complete_calls: int = 0
+    fail_calls: int = 0
 
     async def start_request(
         self,
@@ -53,9 +56,11 @@ class RecordingAudit:
         return request_id or uuid4()
 
     async def complete_request(self, _: UUID, result: RequestResult) -> None:
+        self.complete_calls += 1
         self.completed = result
 
     async def fail_request(self, _: UUID, failure: RequestFailure) -> None:
+        self.fail_calls += 1
         self.failed = failure
 
 
@@ -63,13 +68,18 @@ class RecordingAudit:
 class RecordingRouter:
     successes: list[int] = field(default_factory=list)
     failures: list[int] = field(default_factory=list)
+    consecutive_failures: int = 2
+    runtime_state: RouteRuntimeState = RouteRuntimeState.HALF_OPEN
 
     async def record_success(self, route_id: int) -> bool:
         self.successes.append(route_id)
+        self.consecutive_failures = 0
+        self.runtime_state = RouteRuntimeState.CLOSED
         return True
 
     async def record_failure(self, route_id: int, _: object) -> bool:
         self.failures.append(route_id)
+        self.consecutive_failures += 1
         return True
 
 
@@ -78,7 +88,16 @@ class UnusedHttpClients:
         raise AssertionError("direct stream lifecycle test must not send a request")
 
 
-@pytest.mark.parametrize("termination", ("disconnect", "read_error"))
+@pytest.mark.parametrize(
+    "termination",
+    (
+        "unstarted_iterator",
+        "response_start_failure",
+        "immediate_disconnect",
+        "disconnect",
+        "read_error",
+    ),
+)
 async def test_mysql_stream_termination_closes_upstream_and_settles_reservation(
     test_engine: AsyncEngine,
     termination: str,
@@ -158,9 +177,14 @@ async def test_mysql_stream_termination_closes_upstream_and_settles_reservation(
             Protocol.OPENAI,
             initial_input_tokens=2,
         )
-        body = service._stream_body(
+        source = stream_gateway_response(context, upstream)
+        prefetched = await anext(source)
+        lifecycle = _StreamLifecycle(
+            service=service,
             context=context,
             upstream=upstream,
+            source=source,
+            prefetched_frame=prefetched,
             request=canonical_request,
             reservation=reservation,
             billing_key=f"stream:{suffix}",
@@ -171,11 +195,46 @@ async def test_mysql_stream_termination_closes_upstream_and_settles_reservation(
             priced_model=model,
             started_at=context.started_at,
         )
+        body = lifecycle.iterator()
 
-        assert await anext(body) == first
-        if termination == "disconnect":
+        if termination == "unstarted_iterator":
+            await body.aclose()
+        elif termination in {"response_start_failure", "immediate_disconnect"}:
+            response = GatewayStreamOutput(lifecycle, 200).response()
+
+            async def receive() -> dict[str, str]:
+                return {"type": "http.disconnect"}
+
+            async def send(_: object) -> None:
+                if termination == "immediate_disconnect":
+                    raise ClientDisconnect
+                raise RuntimeError("response start failed")
+
+            expected = ClientDisconnect if termination == "immediate_disconnect" else RuntimeError
+            with pytest.raises(expected):
+                await response(
+                    {
+                        "type": "http",
+                        "asgi": {"version": "3.0", "spec_version": "2.4"},
+                        "http_version": "1.1",
+                        "method": "POST",
+                        "scheme": "http",
+                        "path": "/v1/chat/completions",
+                        "raw_path": b"/v1/chat/completions",
+                        "query_string": b"",
+                        "root_path": "",
+                        "headers": [],
+                        "client": ("127.0.0.1", 1),
+                        "server": ("test", 80),
+                    },
+                    receive,
+                    send,
+                )
+        elif termination == "disconnect":
+            assert await anext(body) == first
             await body.aclose()
         else:
+            assert await anext(body) == first
             with pytest.raises(httpx.ReadError, match="stream failed"):
                 await anext(body)
 
@@ -194,9 +253,16 @@ async def test_mysql_stream_termination_closes_upstream_and_settles_reservation(
     }
     assert audit.completed is None
     assert audit.failed is not None
-    assert audit.failed.client_disconnected is (termination == "disconnect")
+    assert audit.complete_calls == 0
+    assert audit.fail_calls == 1
+    assert audit.failed.client_disconnected == (
+        termination in {"unstarted_iterator", "immediate_disconnect", "disconnect"}
+    )
     assert audit.failed.usage_source is UsageSource.ESTIMATED
     assert audit.failed.prompt_tokens == 2
     assert audit.failed.completion_tokens > 0
-    assert router.successes == ([route.route_id] if termination == "disconnect" else [])
+    assert router.successes == []
     assert router.failures == ([route.route_id] if termination == "read_error" else [])
+    if termination != "read_error":
+        assert router.consecutive_failures == 2
+        assert router.runtime_state is RouteRuntimeState.HALF_OPEN

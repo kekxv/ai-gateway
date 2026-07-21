@@ -1,25 +1,186 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
+from dataclasses import dataclass
+from decimal import Decimal
+from hashlib import sha256
+from typing import Any
+from uuid import UUID, uuid4
 
 import httpx
 import orjson
 import pytest
+from cryptography.fernet import Fernet
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai_gateway.core.enums import Protocol
+from ai_gateway.audit.service import RequestContext, RequestFailure, RequestResult
+from ai_gateway.auth.api_key import ApiKeyPrincipal
+from ai_gateway.billing.service import BalanceReservation, SettlementResult
+from ai_gateway.core.config import Settings
+from ai_gateway.core.enums import ApiKeyScope, Protocol
+from ai_gateway.core.security import encrypt_secret
+from ai_gateway.db.models import ApiKey, Model, ModelAlias, User
+from ai_gateway.gateway.claude import router as claude_router
+from ai_gateway.gateway.dependencies import get_gateway_service
+from ai_gateway.gateway.gemini import router as gemini_router
+from ai_gateway.gateway.openai import router as openai_router
+from ai_gateway.gateway.service import GatewayService
 from ai_gateway.protocols.base import decode_sse
 from ai_gateway.protocols.registry import get_adapter
 from ai_gateway.protocols.types import CanonicalUsage, StreamEvent
+from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate
 from ai_gateway.transport.sse import GatewayContext, SSEDecoder, stream_gateway_response
+
+RAW_KEY = "sk-gw-stream-key-123456789"
+
+
+@dataclass
+class FakeBilling:
+    reservation: BalanceReservation = BalanceReservation(
+        1,
+        1,
+        1,
+        "request",
+        "key",
+        Decimal("1"),
+        Decimal("9"),
+    )
+    settlements: int = 0
+
+    async def reserve_balance(self, **_: Any) -> BalanceReservation:
+        return self.reservation
+
+    async def settle_request(self, **kwargs: Any) -> SettlementResult:
+        self.settlements += 1
+        cost = kwargs.get("cost", Decimal("0"))
+        return SettlementResult(1, "request", Decimal("1"), cost, cost, Decimal("9"), cost, False)
+
+
+@dataclass
+class FakeAudit:
+    completed: RequestResult | None = None
+    failed: RequestFailure | None = None
+
+    async def start_request(
+        self,
+        _: RequestContext,
+        __: bytes,
+        *,
+        request_id: UUID | None = None,
+    ) -> UUID:
+        return request_id or uuid4()
+
+    async def complete_request(self, _: UUID, result: RequestResult) -> None:
+        self.completed = result
+
+    async def fail_request(self, _: UUID, failure: RequestFailure) -> None:
+        self.failed = failure
+
+
+class FakeRouter:
+    def __init__(self, routes: list[RouteCandidate]) -> None:
+        self.routes = routes
+        self.successes: list[int] = []
+        self.failures: list[int] = []
+
+    async def select_route(
+        self,
+        _: int,
+        __: ApiKeyPrincipal,
+        required_protocol: Protocol | str | None = None,
+        *,
+        requested_model: str | None = None,
+        excluded_route_ids: frozenset[int] | set[int] = frozenset(),
+    ) -> RouteCandidate:
+        del required_protocol, requested_model
+        for route in self.routes:
+            if route.route_id not in excluded_route_ids:
+                return route
+        raise NoRouteAvailable("stream-alias")
+
+    async def record_success(self, route_id: int) -> bool:
+        self.successes.append(route_id)
+        return True
+
+    async def record_failure(self, route_id: int, _: object) -> bool:
+        self.failures.append(route_id)
+        return True
+
+
+class FakeHttpClients:
+    def __init__(self, client: httpx.AsyncClient) -> None:
+        self.client = client
+
+    async def client_for(self, _: str | httpx.URL) -> httpx.AsyncClient:
+        return self.client
+
+
+def _settings() -> Settings:
+    return Settings(
+        _env_file=None,
+        environment="test",
+        jwt_secret="gateway-stream-jwt-secret",
+        encryption_key=Fernet.generate_key().decode(),
+    )
+
+
+async def _catalog(session: AsyncSession) -> Model:
+    user = User(email=f"stream-{uuid4()}@example.com", password_hash="unused")
+    user.api_keys.append(
+        ApiKey(
+            name="stream",
+            key_prefix=RAW_KEY[:12],
+            key_hash=sha256(RAW_KEY.encode()).digest(),
+            scope=ApiKeyScope.ALL,
+        )
+    )
+    model = Model(
+        canonical_name=f"canonical-{uuid4()}",
+        display_name="Streaming Contract",
+        input_price_per_million=Decimal("0.1"),
+        output_price_per_million=Decimal("0.2"),
+    )
+    model.aliases.append(ModelAlias(alias=f"alias-{uuid4()}"))
+    session.add_all((user, model))
+    await session.flush()
+    return model
+
+
+def _request(protocol: Protocol, model: str) -> tuple[str, dict[str, Any]]:
+    if protocol is Protocol.OPENAI:
+        return "/v1/chat/completions", {
+            "model": model,
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 8,
+        }
+    return "/v1/messages", {
+        "model": model,
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 8,
+    }
+
+
+def _app(service: GatewayService) -> FastAPI:
+    app = FastAPI()
+    app.include_router(openai_router)
+    app.include_router(claude_router)
+    app.include_router(gemini_router)
+    app.dependency_overrides[get_gateway_service] = lambda: service
+    return app
 
 
 class ChunkStream(httpx.AsyncByteStream):
-    def __init__(self, chunks: Iterable[bytes]) -> None:
+    def __init__(self, chunks: Iterable[bytes], *, fail_at: int | None = None) -> None:
         self.chunks = tuple(chunks)
+        self.fail_at = fail_at
         self.closed = False
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
-        for chunk in self.chunks:
+        for index, chunk in enumerate(self.chunks):
+            if index == self.fail_at:
+                raise httpx.ReadError("failed during stream read")
             yield chunk
 
     async def aclose(self) -> None:
@@ -286,3 +447,216 @@ async def test_same_protocol_forwards_opaque_heartbeat_and_vendor_frames_exactly
 
     assert context.audit_preview == heartbeat + opaque
     assert stream.closed
+
+
+async def test_openai_bom_is_normalized_only_for_cross_protocol_decoder() -> None:
+    native = b"\xef\xbb\xbf" + _source_frames(Protocol.OPENAI)[1]
+    response = httpx.Response(200, stream=ChunkStream(_odd_chunks(native)))
+    context = GatewayContext(Protocol.OPENAI, Protocol.GEMINI, initial_input_tokens=2)
+
+    output = b"".join([chunk async for chunk in stream_gateway_response(context, response)])
+    events = _decode_output(Protocol.GEMINI, output)
+
+    assert "".join(event.text or "" for event in events) == "Hi"
+
+
+async def test_openai_to_claude_estimates_terminal_usage_when_provider_omits_it() -> None:
+    frames = _source_frames(Protocol.OPENAI)
+    native = b"".join((*frames[:-2], frames[-1]))
+    response = httpx.Response(200, stream=ChunkStream(_odd_chunks(native)))
+    context = GatewayContext(Protocol.OPENAI, Protocol.CLAUDE, initial_input_tokens=2)
+
+    output = b"".join([chunk async for chunk in stream_gateway_response(context, response)])
+    bodies = [decode_sse(event.raw)[1] for event in SSEDecoder().feed(output)]
+
+    terminal = next(body for body in bodies if body["type"] == "message_delta")
+    assert terminal["delta"]["stop_reason"] == "tool_use"
+    assert terminal["usage"]["output_tokens"] > 0
+    assert bodies[-1]["type"] == "message_stop"
+
+
+async def test_large_stream_retains_only_bounded_preview_and_incremental_count() -> None:
+    frame = _sse({"model": "m", "choices": [{"index": 0, "delta": {"content": "abcdefgh"}}]})
+    response = httpx.Response(200, stream=ChunkStream((frame,) * 10_000))
+    context = GatewayContext(
+        Protocol.OPENAI,
+        Protocol.OPENAI,
+        initial_input_tokens=2,
+        audit_body_limit_bytes=64,
+    )
+
+    async for _ in stream_gateway_response(context, response):
+        pass
+
+    assert len(context.audit_preview) == 64
+    assert context.estimated_output_tokens > 0
+    assert not hasattr(context, "_response_content")
+
+
+def _route(model_id: int, route_id: int, host: str, settings: object) -> object:
+    from ai_gateway.routing.types import RouteCandidate
+
+    return RouteCandidate(
+        route_id=route_id,
+        model_id=model_id,
+        provider_id=route_id + 100,
+        provider_protocol_id=route_id + 200,
+        protocol=Protocol.OPENAI,
+        base_url=f"https://{host}.example/v1",
+        websocket_url=None,
+        upstream_model=f"native-{route_id}",
+        weight=100,
+        provider_credential_encrypted=encrypt_secret(
+            orjson.dumps({"api_key": "provider-secret"}).decode(),
+            settings=settings,  # type: ignore[arg-type]
+        ),
+    )
+
+
+async def test_first_read_network_error_fails_over_before_response_start(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    alias = model.aliases[0].alias
+    routes = [
+        _route(model.id, 71, "first-read-fails", settings),
+        _route(model.id, 72, "second-read-works", settings),
+    ]
+    streams: list[ChunkStream] = []
+    seen: list[str] = []
+    seen_payloads: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.host or "")
+        seen_payloads.append(orjson.loads(request.content))
+        if request.url.host == "first-read-fails.example":
+            stream = ChunkStream((), fail_at=0)
+        else:
+            stream = ChunkStream(_source_frames(Protocol.OPENAI))
+        streams.append(stream)
+        return httpx.Response(200, stream=stream, headers={"content-type": "text/event-stream"})
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    audit = FakeAudit()
+    router = FakeRouter(routes)  # type: ignore[arg-type]
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: router,
+    )
+    path, body = _request(Protocol.OPENAI, alias)
+    body["stream"] = True
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200
+    assert seen == ["first-read-fails.example", "second-read-works.example"]
+    assert all(payload["stream_options"] == {"include_usage": True} for payload in seen_payloads)
+    assert streams[0].closed and streams[1].closed
+    assert router.failures == [71]
+    assert router.successes == [72]
+    assert audit.completed is not None
+    assert [attempt["outcome"] for attempt in audit.completed.metadata["attempts"]] == [
+        "failure",
+        "success",
+    ]
+
+
+async def test_malformed_first_sse_returns_native_error_before_200_start(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    alias = model.aliases[0].alias
+    route = _route(model.id, 81, "malformed", settings)
+    stream = ChunkStream((b"data: not-json\n\n",))
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=stream)
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    audit = FakeAudit()
+    billing = FakeBilling()
+    router = FakeRouter([route])  # type: ignore[list-item]
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=billing,  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: router,
+    )
+    path, body = _request(Protocol.CLAUDE, alias)
+    body["stream"] = True
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"x-api-key": RAW_KEY},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 502
+    assert response.json()["type"] == "error"
+    assert stream.closed
+    assert router.failures == [81]
+    assert router.successes == []
+    assert audit.failed is not None
+    assert billing.settlements == 1
+
+
+async def test_read_error_after_prefetch_never_retries_another_route(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    alias = model.aliases[0].alias
+    routes = [
+        _route(model.id, 91, "committed", settings),
+        _route(model.id, 92, "must-not-run", settings),
+    ]
+    first_frame = _source_frames(Protocol.OPENAI)[0]
+    stream = ChunkStream((first_frame, b"unused"), fail_at=1)
+    seen: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.host or "")
+        return httpx.Response(200, stream=stream)
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    audit = FakeAudit()
+    router = FakeRouter(routes)  # type: ignore[arg-type]
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: router,
+    )
+    path, body = _request(Protocol.OPENAI, alias)
+    body["stream"] = True
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service), raise_app_exceptions=False),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200
+    assert response.content == first_frame
+    assert seen == ["committed.example"]
+    assert stream.closed
+    assert router.failures == [91]
+    assert router.successes == []
+    assert audit.failed is not None

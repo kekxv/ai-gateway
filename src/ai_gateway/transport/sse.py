@@ -7,6 +7,7 @@ from time import monotonic
 import httpx
 import orjson
 
+from ai_gateway.billing.usage import estimate_text_tokens
 from ai_gateway.core.enums import Protocol
 from ai_gateway.protocols.registry import get_adapter
 from ai_gateway.protocols.types import CanonicalUsage, StreamEvent
@@ -25,6 +26,10 @@ class SSEEvent:
     @property
     def is_heartbeat(self) -> bool:
         return self.comment is not None and not self.data and self.event is None
+
+    @property
+    def decoder_frame(self) -> bytes:
+        return self.raw[3:] if self.raw.startswith(b"\xef\xbb\xbf") else self.raw
 
 
 class SSEDecoder:
@@ -122,35 +127,31 @@ class GatewayContext:
     audit_body_limit_bytes: int = 1_048_576
     started_at: float = field(default_factory=monotonic)
     observed_usage: CanonicalUsage | None = None
+    provider_usage_complete: bool = False
+    estimated_output_tokens: int = 0
     first_token_ms: int | None = None
     emitted_any: bool = False
     error_observed: bool = False
     gemini_eof_decodes: int = 0
     _audit_preview: bytearray = field(default_factory=bytearray, init=False, repr=False)
-    _response_content: list[str] = field(default_factory=list, init=False, repr=False)
 
     @property
     def audit_preview(self) -> bytes:
         return bytes(self._audit_preview)
-
-    @property
-    def response_content(self) -> str:
-        return "".join(self._response_content)
 
     def observe(self, event: StreamEvent) -> None:
         if event.type == "error":
             self.error_observed = True
         if event.usage is not None:
             self.observed_usage = event.usage
+            if event.type == "usage":
+                self.provider_usage_complete = True
         content = ""
         if event.type == "content_delta" and event.text:
             content = event.text
         elif event.type == "tool_call_delta":
             content = event.arguments_delta or event.tool_name or event.tool_call_id or ""
-        if content:
-            self._response_content.append(content)
-            if self.first_token_ms is None:
-                self.first_token_ms = max(0, round((monotonic() - self.started_at) * 1000))
+        self._observe_content(content)
 
     def observe_passthrough(self, event: SSEEvent) -> None:
         """Collect metrics without making exact same-protocol forwarding depend on adapters."""
@@ -174,6 +175,7 @@ class GatewayContext:
                 output_tokens = native_usage.get("completion_tokens")
                 if isinstance(input_tokens, int) and isinstance(output_tokens, int):
                     usage = CanonicalUsage(input_tokens, output_tokens)
+                    self.provider_usage_complete = True
             choices = payload.get("choices")
             if isinstance(choices, list):
                 for choice in choices:
@@ -207,6 +209,7 @@ class GatewayContext:
                         self.observed_usage.input_tokens if self.observed_usage is not None else 0
                     )
                     usage = CanonicalUsage(input_tokens, output_tokens)
+                    self.provider_usage_complete = True
             delta = payload.get("delta")
             if isinstance(delta, dict):
                 for key in ("text", "partial_json"):
@@ -224,6 +227,7 @@ class GatewayContext:
                 output_tokens = native_usage.get("candidatesTokenCount")
                 if isinstance(input_tokens, int) and isinstance(output_tokens, int):
                     usage = CanonicalUsage(input_tokens, output_tokens)
+                    self.provider_usage_complete = True
             candidates = payload.get("candidates")
             if isinstance(candidates, list):
                 for candidate in candidates:
@@ -248,10 +252,22 @@ class GatewayContext:
                                 content += orjson.dumps(call["args"]).decode()
         if usage is not None:
             self.observed_usage = usage
-        if content:
-            self._response_content.append(content)
-            if self.first_token_ms is None:
-                self.first_token_ms = max(0, round((monotonic() - self.started_at) * 1000))
+        self._observe_content(content)
+
+    def estimated_usage(self) -> CanonicalUsage:
+        input_tokens = (
+            self.observed_usage.input_tokens
+            if self.observed_usage is not None
+            else (self.initial_input_tokens or 0)
+        )
+        return CanonicalUsage(input_tokens, self.estimated_output_tokens)
+
+    def _observe_content(self, content: str) -> None:
+        if not content:
+            return
+        self.estimated_output_tokens += estimate_text_tokens(content)
+        if self.first_token_ms is None:
+            self.first_token_ms = max(0, round((monotonic() - self.started_at) * 1000))
 
     def record_output(self, chunk: bytes) -> None:
         if not chunk:
@@ -273,19 +289,31 @@ async def stream_gateway_response(
     stream_decoder = source_adapter.create_stream_decoder()
     stream_encoder = target_adapter.create_stream_encoder()
     parser = SSEDecoder()
+    pending_done: StreamEvent | None = None
     if context.target_protocol is Protocol.CLAUDE and context.initial_input_tokens is not None:
         stream_encoder.set_initial_usage(context.initial_input_tokens)
 
     async def decode_native(event: SSEEvent) -> tuple[StreamEvent, ...]:
         if event.is_heartbeat:
             return (StreamEvent(type="heartbeat"),)
-        return stream_decoder.decode(event.raw)
+        return stream_decoder.decode(event.decoder_frame)
+
+    def encode_canonical(event: StreamEvent) -> tuple[bytes, ...]:
+        nonlocal pending_done
+        context.observe(event)
+        if (
+            event.type == "done"
+            and context.target_protocol is Protocol.CLAUDE
+            and not context.provider_usage_complete
+        ):
+            pending_done = event
+            return ()
+        return tuple(frame for frame in stream_encoder.encode(event) if frame)
 
     async def convert_native(event: SSEEvent) -> tuple[bytes, ...]:
         frames: list[bytes] = []
         for canonical_event in await decode_native(event):
-            context.observe(canonical_event)
-            frames.extend(frame for frame in stream_encoder.encode(canonical_event) if frame)
+            frames.extend(encode_canonical(canonical_event))
         return tuple(frames)
 
     try:
@@ -311,12 +339,17 @@ async def stream_gateway_response(
         if context.source_protocol is Protocol.GEMINI:
             context.gemini_eof_decodes += 1
             for canonical_event in stream_decoder.decode(b""):
-                context.observe(canonical_event)
                 if context.source_protocol is context.target_protocol:
+                    context.observe(canonical_event)
                     continue
-                for frame in stream_encoder.encode(canonical_event):
-                    if frame:
-                        terminal_frames.append(frame)
+                terminal_frames.extend(encode_canonical(canonical_event))
+        if pending_done is not None:
+            if not context.provider_usage_complete:
+                estimated_usage = context.estimated_usage()
+                terminal_frames.extend(
+                    stream_encoder.encode(StreamEvent(type="usage", usage=estimated_usage))
+                )
+            terminal_frames.extend(stream_encoder.encode(pending_done))
         for frame in terminal_frames:
             context.record_output(frame)
             yield frame
