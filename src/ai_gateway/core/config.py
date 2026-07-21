@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     jwt_access_minutes: int = 15
     jwt_refresh_days: int = 30
     encryption_key: SecretStr
-    http_proxy: str | None = None
-    https_proxy: str | None = None
+    http_proxy: str | None = Field(default=None, repr=False)
+    https_proxy: str | None = Field(default=None, repr=False)
     no_proxy: str = "127.0.0.1,localhost"
     route_failure_threshold: int = 3
     route_cooldown_seconds: int = 60

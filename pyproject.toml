@@ -9,7 +9,7 @@ dependencies = [
     "asyncmy",
     "cryptography",
     "fastapi",
-    "httpx[socks]",
+    "httpx[http2,socks]",
     "orjson",
     "pydantic-settings",
     "pyjwt[crypto]",
