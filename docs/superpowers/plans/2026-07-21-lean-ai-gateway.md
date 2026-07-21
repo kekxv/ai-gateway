@@ -13,6 +13,7 @@
 - 数据库固定使用 MySQL 8.4；金额和单价全部使用 `DECIMAL`/`Decimal`，禁止使用浮点数。
 - Python 固定为 3.12，依赖和命令统一通过 `uv` 管理。
 - 提供商凭据使用应用主密钥加密后入库；API Key 只保存前缀和 SHA-256 哈希，不保存明文。
+- TOTP 初次注册和重新注册使用独立的待确认加密密钥；新密钥确认成功前保留当前有效密钥和启用状态，已启用 TOTP 的用户开始重新注册前必须验证当前 TOTP。
 - OpenAI、Claude、Gemini 的 HTTP 非流式和流式聊天接口支持任意入口协议到任意上游协议的转换；同协议保留原始 JSON 和 SSE 事件，仅重写必要字段。
 - 模型别名只用于入口解析和模型列表展示，绝不能发送给上游；完成选路后，HTTP、SSE 和 WebSocket 请求中的模型名必须统一改写为 `ModelRoute.upstream_model`，即该渠道实际接受的原始模型名。
 - WebSocket 支持 OpenAI Realtime 和 Gemini Live 的透明中继；Claude 当前没有对应的官方 WebSocket 协议，路由到 Claude 时返回明确的 `unsupported_transport` 错误。
@@ -274,6 +275,8 @@ git commit -m "feat: add gateway database schema"
 - Create: `src/ai_gateway/auth/service.py`
 - Create: `src/ai_gateway/auth/dependencies.py`
 - Create: `src/ai_gateway/auth/router.py`
+- Create: `migrations/versions/0002_pending_totp_secret.py`
+- Modify: `src/ai_gateway/db/models/identity.py`
 - Modify: `src/ai_gateway/main.py`
 - Test: `tests/unit/auth/test_security.py`
 - Test: `tests/integration/auth/test_login_totp.py`
@@ -326,7 +329,7 @@ access token on /auth/refresh       -> 401 code=invalid_token_type
 
 - [ ] **Step 5: Implement login and two-step TOTP enrollment**
 
-`/auth/totp/setup` creates a random secret, stores it encrypted with `totp_enabled=false`, and returns an `otpauth://` URI. `/auth/totp/confirm` verifies one code before setting `totp_enabled=true`. Never return the secret after confirmation.
+Add nullable `users.pending_totp_secret_encrypted LONGBLOB` in migration `0002`. `/auth/totp/setup` creates a random secret and stores it only in the encrypted pending field; it does not overwrite `totp_secret_encrypted` or change `totp_enabled`. When TOTP is already enabled, setup requires and verifies `current_totp_code` against the active secret before issuing a new pending secret. `/auth/totp/confirm` verifies the new code against the pending secret, then atomically moves pending ciphertext to `totp_secret_encrypted`, clears the pending field, and sets `totp_enabled=true`. Never return the secret after confirmation.
 
 - [ ] **Step 6: Run auth tests**
 
@@ -675,7 +678,7 @@ Mock OpenAI `GET /models`, Claude `GET /v1/models`, and Gemini `GET /v1beta/mode
 
 - [ ] **Step 3: Implement idempotent synchronization**
 
-For every discovered upstream name, create the canonical model only when absent and create/update its `ModelRoute`. Never delete local models or aliases. Mark routes missing from a successful discovery as `enabled=false` only when they were previously created by auto-discovery; add `source=manual|discovered` to `model_routes` in a new migration `0002_route_source.py`.
+For every discovered upstream name, create the canonical model only when absent and create/update its `ModelRoute`. Never delete local models or aliases. Mark routes missing from a successful discovery as `enabled=false` only when they were previously created by auto-discovery; add `source=manual|discovered` to `model_routes` in a new migration `0003_route_source.py` with `down_revision = "0002"`.
 
 - [ ] **Step 4: Implement scheduled auto-load**
 
