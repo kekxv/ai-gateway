@@ -164,6 +164,34 @@ async def test_hostname_resolving_into_host_prefix_network_returns_direct_client
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("no_proxy", "ip_url"),
+    [
+        ("10.23.45.67", "http://10.23.45.67/v1"),
+        ("2001:db8::7", "http://[2001:db8::7]/v1"),
+    ],
+)
+async def test_plain_ip_no_proxy_rule_does_not_resolve_unrelated_hostname(
+    monkeypatch: pytest.MonkeyPatch,
+    no_proxy: str,
+    ip_url: str,
+) -> None:
+    def unexpected_getaddrinfo(*args: object, **kwargs: object) -> object:
+        pytest.fail("plain IP NO_PROXY entries must not resolve unrelated hostnames")
+
+    monkeypatch.setattr(socket, "getaddrinfo", unexpected_getaddrinfo)
+    factory = HttpClientFactory(
+        proxy_settings(
+            http_proxy="http://proxy.internal:8080",
+            no_proxy=no_proxy,
+        )
+    )
+
+    assert await factory.client_for("http://provider.example/v1") is FakeAsyncClient.created[1]
+    assert await factory.client_for(ip_url) is FakeAsyncClient.created[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("url", "no_proxy"),
     [
         ("http://provider.example/v1", "provider.example:80"),

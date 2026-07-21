@@ -26,6 +26,7 @@ class _HostRule:
 class _NetworkRule:
     network: IPNetwork
     port: int | None
+    is_explicit_cidr: bool
 
     def matches(self, address: IPAddress, port: int | None) -> bool:
         return (self.port is None or self.port == port) and address in self.network
@@ -66,7 +67,13 @@ class NoProxyMatcher:
             except ValueError:
                 host_rules.append(_HostRule(host=normalized_host, port=port, is_suffix=is_suffix))
             else:
-                network_rules.append(_NetworkRule(network=network, port=port))
+                network_rules.append(
+                    _NetworkRule(
+                        network=network,
+                        port=port,
+                        is_explicit_cidr="/" in normalized_host,
+                    )
+                )
 
         return cls(
             _host_rules=tuple(host_rules),
@@ -78,7 +85,7 @@ class NoProxyMatcher:
     def needs_dns_resolution(self) -> bool:
         """Whether a hostname may match only after resolving a CIDR rule."""
 
-        return bool(self._network_rules)
+        return any(rule.is_explicit_cidr for rule in self._network_rules)
 
     def matches(self, host: str, resolved_ips: Iterable[str | IPAddress]) -> bool:
         normalized_host, port = _normalized_host_and_port(host)

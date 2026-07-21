@@ -79,3 +79,10 @@ def test_host_prefix_network_rules_still_require_hostname_resolution(value: str)
     matcher = NoProxyMatcher.from_string(value)
 
     assert matcher.needs_dns_resolution
+
+
+@pytest.mark.parametrize("value", ["10.23.45.67", "2001:db8::7"])
+def test_plain_ip_rules_do_not_require_hostname_resolution(value: str) -> None:
+    matcher = NoProxyMatcher.from_string(value)
+
+    assert not matcher.needs_dns_resolution
