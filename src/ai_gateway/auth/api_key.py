@@ -82,16 +82,14 @@ async def authenticate_api_key(raw_key: str, session: AsyncSession) -> ApiKeyPri
 
 def extract_api_key(request: Request) -> str:
     credentials: list[str] = []
-    authorization = request.headers.get("authorization")
-    if authorization is not None:
+    for authorization in request.headers.getlist("authorization"):
         scheme, separator, value = authorization.partition(" ")
         if not separator or scheme.lower() != "bearer" or not value.strip():
             _raise_invalid_api_key()
         credentials.append(value.strip())
 
     for header_name in ("x-api-key", "x-goog-api-key"):
-        header_value = request.headers.get(header_name)
-        if header_value is not None:
+        for header_value in request.headers.getlist(header_name):
             if not header_value.strip():
                 _raise_invalid_api_key()
             credentials.append(header_value.strip())

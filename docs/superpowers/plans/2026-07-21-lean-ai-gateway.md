@@ -678,7 +678,7 @@ Mock OpenAI `GET /models`, Claude `GET /v1/models`, and Gemini `GET /v1beta/mode
 
 - [ ] **Step 3: Implement idempotent synchronization**
 
-For every discovered upstream name, create the canonical model only when absent and create/update its `ModelRoute`. Never delete local models or aliases. Mark routes missing from a successful discovery as `enabled=false` only when they were previously created by auto-discovery; add `source=manual|discovered` to `model_routes` in a new migration `0003_route_source.py` with `down_revision = "0002"`.
+For every discovered upstream name, create the canonical model only when absent and create/update its `ModelRoute`. Never delete local models or aliases. Mark routes missing from a successful discovery as `enabled=false` only when they were previously created by auto-discovery; add `source=manual|discovered` to `model_routes` in a new migration `0004_route_source.py` with `down_revision = "0003"`.
 
 - [ ] **Step 4: Implement scheduled auto-load**
 

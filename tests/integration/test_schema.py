@@ -194,6 +194,12 @@ def test_required_unique_constraints_and_indexes_are_declared() -> None:
     }
     assert ("model_id", "enabled", "runtime_state") in route_indexes
 
+    api_key_indexes = {
+        tuple(column.name for column in index.columns)
+        for index in Base.metadata.tables["api_keys"].indexes
+    }
+    assert ("key_prefix",) in api_key_indexes
+
     request_log_indexes = {
         tuple(column.name for column in index.columns)
         for index in Base.metadata.tables["request_logs"].indexes

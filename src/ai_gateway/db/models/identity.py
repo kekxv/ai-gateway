@@ -59,7 +59,7 @@ class ApiKey(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     name: Mapped[str] = mapped_column(String(255))
-    key_prefix: Mapped[str] = mapped_column(String(12))
+    key_prefix: Mapped[str] = mapped_column(String(12), index=True)
     key_hash: Mapped[bytes] = mapped_column(BINARY(32), unique=True)
     scope: Mapped[ApiKeyScope] = mapped_column(
         Enum(ApiKeyScope, name="api_key_scope", values_callable=enum_values),

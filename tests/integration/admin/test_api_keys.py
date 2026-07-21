@@ -172,18 +172,7 @@ async def test_native_headers_accept_matching_credentials_and_reject_ambiguity(
 ) -> None:
     created = await create_key(admin_client, user_id=regular_user_record.id)
     raw_key = str(created["key"])
-    app = FastAPI()
-
-    async def override_session():  # type: ignore[no-untyped-def]
-        yield session
-
-    app.dependency_overrides[get_session] = override_session
-
-    @app.get("/protected")
-    async def protected(
-        principal: ApiKeyPrincipal = Depends(get_api_key_principal),
-    ) -> dict[str, int]:
-        return {"api_key_id": principal.api_key_id}
+    app = _protected_app(session)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         for headers in (
@@ -202,6 +191,122 @@ async def test_native_headers_accept_matching_credentials_and_reject_ambiguity(
 
     assert ambiguous.status_code == 400
     assert ambiguous.json()["detail"]["code"] == "ambiguous_credentials"
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [("x-api-key", "{key}"), ("x-api-key", "{key}")],
+        [("x-goog-api-key", "{key}"), ("x-goog-api-key", "{key}")],
+        [
+            ("Authorization", "Bearer {key}"),
+            ("Authorization", "Bearer {key}"),
+        ],
+    ],
+)
+async def test_duplicate_same_name_credentials_accept_identical_values(
+    headers: list[tuple[str, str]],
+    admin_client: AsyncClient,
+    regular_user_record: User,
+    session: AsyncSession,
+) -> None:
+    created = await create_key(admin_client, user_id=regular_user_record.id)
+    raw_key = str(created["key"])
+    app = _protected_app(session)
+    repeated_headers = [(name, value.format(key=raw_key)) for name, value in headers]
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/protected", headers=repeated_headers)
+
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [("x-api-key", "{key}"), ("x-api-key", "sk-gw-different")],
+        [("x-goog-api-key", "{key}"), ("x-goog-api-key", "sk-gw-different")],
+        [
+            ("Authorization", "Bearer {key}"),
+            ("Authorization", "Bearer sk-gw-different"),
+        ],
+    ],
+)
+async def test_duplicate_same_name_credentials_reject_differing_values(
+    headers: list[tuple[str, str]],
+    admin_client: AsyncClient,
+    regular_user_record: User,
+    session: AsyncSession,
+) -> None:
+    created = await create_key(admin_client, user_id=regular_user_record.id)
+    raw_key = str(created["key"])
+    app = _protected_app(session)
+    repeated_headers = [(name, value.format(key=raw_key)) for name, value in headers]
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/protected", headers=repeated_headers)
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "ambiguous_credentials"
+
+
+async def test_successful_authentication_persists_last_used_at(
+    admin_client: AsyncClient,
+    regular_user_record: User,
+    session: AsyncSession,
+) -> None:
+    created = await create_key(admin_client, user_id=regular_user_record.id)
+    stored = await session.get(ApiKey, created["id"])
+    assert stored is not None
+    assert stored.last_used_at is None
+
+    await authenticate_api_key(str(created["key"]), session)
+    await session.refresh(stored)
+
+    assert stored.last_used_at is not None
+
+
+@pytest.mark.parametrize(
+    "relations",
+    [
+        {"provider_ids": [999_999]},
+        {"model_ids": [999_999]},
+    ],
+)
+async def test_api_key_rejects_invalid_scope_relation_ids(
+    relations: dict[str, list[int]],
+    admin_client: AsyncClient,
+    regular_user_record: User,
+) -> None:
+    response = await admin_client.post(
+        "/admin/api-keys",
+        json={
+            "user_id": regular_user_record.id,
+            "name": "invalid-scope",
+            "scope": "all",
+            **relations,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_scope_reference"
+
+
+async def test_deleted_api_key_is_removed_and_cannot_authenticate(
+    admin_client: AsyncClient,
+    regular_user_record: User,
+    session: AsyncSession,
+) -> None:
+    created = await create_key(admin_client, user_id=regular_user_record.id)
+
+    deleted = await admin_client.delete(f"/admin/api-keys/{created['id']}")
+    detail = await admin_client.get(f"/admin/api-keys/{created['id']}")
+
+    assert deleted.status_code == 204
+    assert detail.status_code == 404
+    with pytest.raises(HTTPException) as error:
+        await authenticate_api_key(str(created["key"]), session)
+    assert getattr(error.value, "detail", {})["code"] == "invalid_api_key"
 
 
 @pytest.mark.parametrize("state", ["inactive", "expired", "inactive_user"])
@@ -235,8 +340,46 @@ async def test_inactive_expired_or_disabled_owner_fails_authentication(
     assert getattr(error.value, "detail", {})["code"] == expected
 
 
-async def test_non_admin_cannot_manage_api_keys(non_admin_client: AsyncClient) -> None:
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("POST", "/admin/api-keys", {"user_id": 1, "name": "blocked"}),
+        ("PATCH", "/admin/api-keys/1", {"name": "blocked"}),
+        ("DELETE", "/admin/api-keys/1", None),
+        ("POST", "/admin/api-keys/1/rotate", None),
+    ],
+)
+async def test_non_admin_cannot_mutate_api_keys(
+    method: str,
+    path: str,
+    payload: dict[str, object] | None,
+    non_admin_client: AsyncClient,
+) -> None:
+    response = await non_admin_client.request(method, path, json=payload)
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "admin_required"
+
+
+async def test_non_admin_cannot_list_api_keys(non_admin_client: AsyncClient) -> None:
     response = await non_admin_client.get("/admin/api-keys")
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "admin_required"
+
+
+def _protected_app(session: AsyncSession) -> FastAPI:
+    app = FastAPI()
+
+    async def override_session():  # type: ignore[no-untyped-def]
+        yield session
+
+    app.dependency_overrides[get_session] = override_session
+
+    @app.get("/protected")
+    async def protected(
+        principal: ApiKeyPrincipal = Depends(get_api_key_principal),
+    ) -> dict[str, int]:
+        return {"api_key_id": principal.api_key_id}
+
+    return app

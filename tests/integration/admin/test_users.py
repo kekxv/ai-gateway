@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,7 +78,36 @@ async def test_admin_can_list_get_update_and_delete_users(
     assert missing.status_code == 404
 
 
-async def test_non_admin_cannot_manage_users(non_admin_client: AsyncClient) -> None:
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        (
+            "POST",
+            "/admin/users",
+            {
+                "email": "blocked@example.com",
+                "password": "blocked-password",
+                "role": "user",
+                "initial_balance": "0",
+            },
+        ),
+        ("PATCH", "/admin/users/1", {"is_active": False}),
+        ("DELETE", "/admin/users/1", None),
+    ],
+)
+async def test_non_admin_cannot_mutate_users(
+    method: str,
+    path: str,
+    payload: dict[str, object] | None,
+    non_admin_client: AsyncClient,
+) -> None:
+    response = await non_admin_client.request(method, path, json=payload)
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "admin_required"
+
+
+async def test_non_admin_cannot_list_users(non_admin_client: AsyncClient) -> None:
     response = await non_admin_client.get("/admin/users")
 
     assert response.status_code == 403
