@@ -14,6 +14,7 @@
 - Python 固定为 3.12，依赖和命令统一通过 `uv` 管理。
 - 提供商凭据使用应用主密钥加密后入库；API Key 只保存前缀和 SHA-256 哈希，不保存明文。
 - OpenAI、Claude、Gemini 的 HTTP 非流式和流式聊天接口支持任意入口协议到任意上游协议的转换；同协议保留原始 JSON 和 SSE 事件，仅重写必要字段。
+- 模型别名只用于入口解析和模型列表展示，绝不能发送给上游；完成选路后，HTTP、SSE 和 WebSocket 请求中的模型名必须统一改写为 `ModelRoute.upstream_model`，即该渠道实际接受的原始模型名。
 - WebSocket 支持 OpenAI Realtime 和 Gemini Live 的透明中继；Claude 当前没有对应的官方 WebSocket 协议，路由到 Claude 时返回明确的 `unsupported_transport` 错误。
 - 自动禁用只改变路由运行状态，不改变管理员配置的 `enabled`；冷却到期后允许半开探测。
 - 请求详情默认 GZIP 后存入 MySQL `LONGBLOB`，敏感请求头、认证字段和提供商密钥必须在压缩前脱敏。
@@ -529,7 +530,7 @@ Parametrize all nine pairs `(openai|claude|gemini) -> (openai|claude|gemini)`. A
 
 - [ ] **Step 4: Implement same-protocol passthrough helpers**
 
-`rewrite_passthrough_request(protocol, raw_body, upstream_model)` parses one JSON object, changes only the protocol's model field, and preserves every other field. `rewrite_passthrough_sse` forwards event bytes unchanged. Unit tests compare JSON dictionaries and exact SSE byte sequences.
+`rewrite_passthrough_request(protocol, raw_body, upstream_model)` parses one JSON object, changes only the protocol's model field to `ModelRoute.upstream_model`, and preserves every other field. An inbound alias must never remain in the rewritten body. `rewrite_passthrough_sse` forwards event bytes unchanged. Unit tests compare JSON dictionaries and exact SSE byte sequences.
 
 - [ ] **Step 5: Implement the three adapters**
 
@@ -820,7 +821,7 @@ git commit -m "feat: add token billing and balance ledger"
 
 - [ ] **Step 1: Write the nine-pair endpoint contract tests**
 
-For every inbound protocol and configured outbound protocol, send a native request to the corresponding endpoint, assert the mock upstream receives the correct native body/auth, and assert the client receives its inbound protocol's native response shape. Include alias resolution and verify the upstream sees `upstream_model`, not alias or canonical model.
+For every inbound protocol and configured outbound protocol, send a native request to the corresponding endpoint, assert the mock upstream receives the correct native body/auth, and assert the client receives its inbound protocol's native response shape. Include alias resolution and verify the upstream sees `ModelRoute.upstream_model`, never the alias; when `canonical_name` differs from `upstream_model`, verify the route value wins.
 
 - [ ] **Step 2: Write same-protocol passthrough tests**
 
@@ -951,7 +952,7 @@ Use a local fake WebSocket server. Assert text and binary frames pass in both di
 
 - [ ] **Step 2: Write capability and scope tests**
 
-The model is supplied through query string or the protocol's initial session message. Filter routes by API Key scope and protocol capability. Claude-only candidates close with application code `4400` and JSON code `unsupported_transport`; invalid keys close with `4401`; insufficient balance closes with `4402` before upstream connect.
+The model is supplied through query string or the protocol's initial session message. Resolve aliases before route selection and rewrite the upstream query/initial session frame to `ModelRoute.upstream_model`; never forward the alias. Filter routes by API Key scope and protocol capability. Claude-only candidates close with application code `4400` and JSON code `unsupported_transport`; invalid keys close with `4401`; insufficient balance closes with `4402` before upstream connect.
 
 - [ ] **Step 3: Implement bidirectional structured concurrency**
 
@@ -1107,6 +1108,7 @@ git commit -m "docs: add deployment and complete regression suite"
 | 提供商多协议、自动加载模型开关 | 5, 9 |
 | 模型与渠道关系表、权重、启用状态 | 2, 5, 7 |
 | 模型别名、价格、策略、models 返回别名 | 5, 11, 14 |
+| 别名请求转换为渠道原始模型名 | 5, 6, 12, 13, 15 |
 | 独立 API Key 与渠道/模型范围 | 4, 7, 14 |
 | 用户、API Key 关联、消费金额 | 2, 4, 11 |
 | MySQL、Python、uv、Docker | 1, 2, 17 |
