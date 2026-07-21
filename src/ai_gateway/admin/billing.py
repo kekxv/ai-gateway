@@ -25,7 +25,7 @@ Billing = Annotated[BillingService, Depends(get_billing_service)]
 class BalanceAdjustmentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    amount: Decimal = Field(decimal_places=8)
+    amount: Decimal = Field(max_digits=20, decimal_places=8)
     reason: str = Field(min_length=1, max_length=500)
     idempotency_key: str = Field(min_length=1, max_length=255)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from decimal import Decimal
 from uuid import uuid4
@@ -11,7 +12,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+import ai_gateway.billing.service as billing_module
 from ai_gateway.billing.service import (
+    BalanceReservation,
     BillingService,
     IdempotencyConflict,
     InsufficientBalance,
@@ -297,6 +300,96 @@ async def test_reservation_replay_rejects_changed_payload_and_completed_reservat
         )
 
 
+async def test_reservation_replay_without_request_id_reuses_generated_request_id(
+    billing_service: BillingService,
+    committed_identity: BillingIdentity,
+    priced_model: Model,
+) -> None:
+    key = f"generated-request-id-{uuid4().hex}"
+    first = await billing_service.reserve_balance(
+        user_id=committed_identity.user_id,
+        model=priced_model,
+        estimated_input_tokens=1,
+        max_output_tokens=1,
+        idempotency_key=key,
+    )
+    replay = await billing_service.reserve_balance(
+        user_id=committed_identity.user_id,
+        model=priced_model,
+        estimated_input_tokens=1,
+        max_output_tokens=1,
+        idempotency_key=key,
+    )
+
+    assert replay == first
+    with pytest.raises(IdempotencyConflict):
+        await billing_service.reserve_balance(
+            user_id=committed_identity.user_id,
+            model=priced_model,
+            estimated_input_tokens=2,
+            max_output_tokens=1,
+            idempotency_key=key,
+        )
+
+
+async def test_reservation_replay_and_settlement_share_account_first_lock_order(
+    monkeypatch: pytest.MonkeyPatch,
+    billing_service: BillingService,
+    committed_identity: BillingIdentity,
+    priced_model: Model,
+) -> None:
+    key = f"lock-order-reservation-{uuid4().hex}"
+    reservation = await billing_service.reserve_balance(
+        user_id=committed_identity.user_id,
+        model=priced_model,
+        estimated_input_tokens=1,
+        max_output_tokens=1,
+        request_id=str(uuid4()),
+        idempotency_key=key,
+    )
+    account_locked = asyncio.Event()
+    settlement_reached_account_lock = asyncio.Event()
+    original_user_lock = billing_module._locked_account_for_user
+    original_account_lock = billing_module._locked_account
+
+    async def gated_user_lock(session: AsyncSession, user_id: int) -> Account:
+        account = await original_user_lock(session, user_id)
+        account_locked.set()
+        await asyncio.wait_for(settlement_reached_account_lock.wait(), timeout=2)
+        return account
+
+    async def gated_account_lock(session: AsyncSession, account_id: int) -> Account:
+        settlement_reached_account_lock.set()
+        await asyncio.wait_for(account_locked.wait(), timeout=2)
+        return await original_account_lock(session, account_id)
+
+    monkeypatch.setattr(billing_module, "_locked_account_for_user", gated_user_lock)
+    monkeypatch.setattr(billing_module, "_locked_account", gated_account_lock)
+
+    replay_result, settlement_result = await asyncio.wait_for(
+        asyncio.gather(
+            billing_service.reserve_balance(
+                user_id=committed_identity.user_id,
+                model=priced_model,
+                estimated_input_tokens=1,
+                max_output_tokens=1,
+                request_id=reservation.request_id,
+                idempotency_key=key,
+            ),
+            billing_service.settle_request(
+                reservation_id=reservation.ledger_entry_id,
+                model=priced_model,
+                usage=CanonicalUsage(1, 1),
+                idempotency_key=f"lock-order-settlement-{uuid4().hex}",
+            ),
+        ),
+        timeout=5,
+    )
+
+    assert isinstance(replay_result, BalanceReservation)
+    assert settlement_result.balance == Decimal("0.80000000")
+
+
 async def test_settlement_replay_rejects_changed_key_or_payload(
     billing_service: BillingService,
     committed_identity: BillingIdentity,
@@ -376,6 +469,19 @@ async def test_adjustment_replay_returns_current_coherent_account_snapshot(
     assert replay.total_spent == Decimal("0.20000000")
 
 
+async def test_adjustment_rejects_values_outside_numeric_20_8(
+    billing_service: BillingService,
+    committed_identity: BillingIdentity,
+) -> None:
+    with pytest.raises(ValueError, match="20 total digits"):
+        await billing_service.adjust_balance(
+            user_id=committed_identity.user_id,
+            amount=Decimal("1000000000000.00000000"),
+            reason="too large",
+            idempotency_key=f"too-large-{uuid4().hex}",
+        )
+
+
 async def test_app_scoped_billing_service_and_whitespace_validation(
     test_engine: AsyncEngine,
 ) -> None:
@@ -423,6 +529,17 @@ async def test_app_scoped_billing_service_and_whitespace_validation(
                 )
                 assert response.status_code == 422
                 assert "   " not in response.text
+
+            too_large = await client.post(
+                f"/admin/users/{member_id}/balance-adjustments",
+                json={
+                    "amount": "1000000000000.00000000",
+                    "reason": "too large",
+                    "idempotency_key": "too-large-api",
+                },
+            )
+            assert too_large.status_code == 422
+            assert "1000000000000.00000000" not in too_large.text
 
             accepted = await client.post(
                 f"/admin/users/{member_id}/balance-adjustments",

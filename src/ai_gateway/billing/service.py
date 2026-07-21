@@ -21,6 +21,7 @@ from ai_gateway.protocols.types import CanonicalUsage
 from ai_gateway.routing.sessions import mutation_session_factory_for
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
+MAX_MONEY_MAGNITUDE = Decimal("1000000000000")
 SessionFactory = Callable[[], AsyncSession]
 
 
@@ -128,7 +129,6 @@ class BillingService:
         if selected_max_output < 0:
             raise ValueError("max_output_tokens must be nonnegative")
         normalized_key = _normalize_idempotency_key(idempotency_key)
-        normalized_request_id = str(request_id or uuid4())
         reserved_amount = calculate_cost(
             model,
             CanonicalUsage(estimated_input_tokens, selected_max_output),
@@ -138,6 +138,34 @@ class BillingService:
             async with self._session_factory() as session:
                 async with session.begin():
                     account = await _locked_account_for_user(session, user_id)
+                    existing = await session.scalar(
+                        select(LedgerEntry)
+                        .where(LedgerEntry.idempotency_key == normalized_key)
+                        .with_for_update()
+                    )
+                    if existing is not None:
+                        effective_request_id = (
+                            existing.request_id if request_id is None else str(request_id)
+                        )
+                        if effective_request_id is None:
+                            raise IdempotencyConflict
+                        fingerprint = _reservation_fingerprint(
+                            account_id=account.id,
+                            user_id=user_id,
+                            request_id=effective_request_id,
+                            model=model,
+                            estimated_input_tokens=estimated_input_tokens,
+                            max_output_tokens=selected_max_output,
+                            reserved_amount=reserved_amount,
+                        )
+                        await _validate_reservation_replay(
+                            session,
+                            entry=existing,
+                            account_id=account.id,
+                            fingerprint=fingerprint,
+                        )
+                        return _reservation_from_entry(existing, user_id=user_id)
+                    normalized_request_id = str(request_id or uuid4())
                     fingerprint = _reservation_fingerprint(
                         account_id=account.id,
                         user_id=user_id,
@@ -147,19 +175,6 @@ class BillingService:
                         max_output_tokens=selected_max_output,
                         reserved_amount=reserved_amount,
                     )
-                    existing = await session.scalar(
-                        select(LedgerEntry)
-                        .where(LedgerEntry.idempotency_key == normalized_key)
-                        .with_for_update()
-                    )
-                    if existing is not None:
-                        await _validate_reservation_replay(
-                            session,
-                            entry=existing,
-                            account_id=account.id,
-                            fingerprint=fingerprint,
-                        )
-                        return _reservation_from_entry(existing, user_id=user_id)
                     existing_request = await session.scalar(
                         select(LedgerEntry)
                         .where(
@@ -234,6 +249,15 @@ class BillingService:
         try:
             async with self._session_factory() as session:
                 async with session.begin():
+                    account_id = await session.scalar(
+                        select(LedgerEntry.account_id).where(
+                            LedgerEntry.id == reservation_id,
+                            LedgerEntry.kind == LedgerKind.RESERVATION,
+                        )
+                    )
+                    if account_id is None:
+                        raise ReservationNotFound
+                    account = await _locked_account(session, account_id)
                     reservation = await session.scalar(
                         select(LedgerEntry)
                         .where(
@@ -242,11 +266,10 @@ class BillingService:
                         )
                         .with_for_update()
                     )
-                    if reservation is None:
+                    if reservation is None or reservation.account_id != account_id:
                         raise ReservationNotFound
                     if reservation.request_id is None:
                         raise RuntimeError("reservation is missing its request ID")
-                    account = await _locked_account(session, reservation.account_id)
                     release, usage_entry = await _settlement_entries(
                         session,
                         account_id=account.id,
@@ -354,6 +377,7 @@ class BillingService:
         reason: str,
         idempotency_key: str,
     ) -> AdjustmentResult:
+        _validate_money_magnitude(amount)
         normalized_amount = _money(amount)
         if amount != normalized_amount:
             raise ValueError("adjustment amount has more than eight decimal places")
@@ -701,6 +725,11 @@ def _normalize_idempotency_key(value: str, *, suffix_length: int = 0) -> str:
     if len(normalized) + suffix_length > 255:
         raise ValueError("idempotency_key is too long")
     return normalized
+
+
+def _validate_money_magnitude(value: Decimal) -> None:
+    if not value.is_finite() or abs(value) >= MAX_MONEY_MAGNITUDE:
+        raise ValueError("adjustment amount must have at most 20 total digits")
 
 
 def _money(value: Decimal) -> Decimal:
