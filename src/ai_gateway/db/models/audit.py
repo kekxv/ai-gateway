@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import Decimal
+
+from sqlalchemy import (
+    CHAR,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    func,
+    text,
+)
+from sqlalchemy.dialects.mysql import LONGBLOB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from ai_gateway.core.enums import Protocol, RequestStatus, UsageSource, enum_values
+from ai_gateway.db.base import Base
+
+
+class RequestLog(Base):
+    __tablename__ = "request_logs"
+    __table_args__ = (
+        Index("ix_request_logs_user_created_at", "user_id", "created_at"),
+        Index("ix_request_logs_api_key_created_at", "api_key_id", "created_at"),
+        Index("ix_request_logs_provider_created_at", "provider_id", "created_at"),
+        Index("ix_request_logs_status_created_at", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(CHAR(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    api_key_id: Mapped[int | None] = mapped_column(ForeignKey("api_keys.id"), nullable=True)
+    model_id: Mapped[int | None] = mapped_column(ForeignKey("models.id"), nullable=True)
+    provider_id: Mapped[int | None] = mapped_column(ForeignKey("providers.id"), nullable=True)
+    model_route_id: Mapped[int | None] = mapped_column(
+        ForeignKey("model_routes.id"),
+        nullable=True,
+    )
+    inbound_protocol: Mapped[Protocol] = mapped_column(
+        Enum(Protocol, name="protocol", values_callable=enum_values)
+    )
+    outbound_protocol: Mapped[Protocol | None] = mapped_column(
+        Enum(Protocol, name="protocol", values_callable=enum_values),
+        nullable=True,
+    )
+    transport: Mapped[str] = mapped_column(String(32))
+    stream: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
+    status: Mapped[RequestStatus] = mapped_column(
+        Enum(RequestStatus, name="request_status", values_callable=enum_values),
+        default=RequestStatus.STARTED,
+        server_default=RequestStatus.STARTED.value,
+    )
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    completion_tokens: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default=text("0"),
+    )
+    usage_source: Mapped[UsageSource | None] = mapped_column(
+        Enum(UsageSource, name="usage_source", values_callable=enum_values),
+        nullable=True,
+    )
+    cost: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8),
+        default=Decimal("0"),
+        server_default=text("0.00000000"),
+    )
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    first_token_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    request_detail_gzip: Mapped[bytes | None] = mapped_column(LONGBLOB, nullable=True)
+    response_detail_gzip: Mapped[bytes | None] = mapped_column(LONGBLOB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

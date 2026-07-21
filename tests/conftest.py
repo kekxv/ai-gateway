@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from ai_gateway.db.base import Base
 
@@ -14,7 +15,7 @@ async def test_engine() -> AsyncIterator[AsyncEngine]:
     if database_url is None:
         pytest.fail("GATEWAY_TEST_DATABASE_URL is required for database tests")
 
-    engine = create_async_engine(database_url, pool_pre_ping=True)
+    engine = create_async_engine(database_url, pool_pre_ping=True, poolclass=NullPool)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
 
