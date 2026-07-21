@@ -46,22 +46,31 @@ def _exception(failure: object) -> BaseException | None:
     return failure if isinstance(failure, BaseException) else None
 
 
+def _dns_or_tls_error_code(exception: BaseException) -> str | None:
+    current: BaseException | None = exception
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, socket.gaierror):
+            return "dns_error"
+        if isinstance(current, ssl.SSLError):
+            return "tls_error"
+        current = current.__cause__ or current.__context__
+    return None
+
+
 def is_health_failure(failure: object) -> bool:
     status_code = _status_code(failure)
     if status_code is not None:
         return status_code in PENALIZING_HTTP_STATUSES
     exception = _exception(failure)
-    return isinstance(
-        exception,
-        (
-            httpx.ConnectTimeout,
-            httpx.ReadTimeout,
-            httpx.ConnectError,
-            ConnectionError,
-            socket.gaierror,
-            ssl.SSLError,
-        ),
-    )
+    if isinstance(exception, (httpx.ConnectTimeout, httpx.ReadTimeout)):
+        return True
+    if isinstance(exception, (socket.gaierror, ssl.SSLError)):
+        return True
+    if isinstance(exception, (httpx.ConnectError, ConnectionError)):
+        return _dns_or_tls_error_code(exception) is not None
+    return False
 
 
 def health_failure_code(failure: object) -> str:
@@ -80,12 +89,12 @@ def health_failure_code(failure: object) -> str:
         return "pool_timeout"
     if isinstance(exception, TimeoutError):
         return "unspecified_timeout"
-    if isinstance(exception, socket.gaierror):
-        return "dns_error"
-    if isinstance(exception, ssl.SSLError):
-        return "tls_error"
     if isinstance(exception, (httpx.ConnectError, ConnectionError)):
+        if network_error_code := _dns_or_tls_error_code(exception):
+            return network_error_code
         return "connect_error"
+    if isinstance(exception, (socket.gaierror, ssl.SSLError)):
+        return _dns_or_tls_error_code(exception) or "upstream_error"
     if isinstance(exception, httpx.WriteError):
         return "write_error"
     if isinstance(exception, httpx.ReadError):

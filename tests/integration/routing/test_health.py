@@ -27,6 +27,11 @@ def utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def caused_by(exception: BaseException, cause: BaseException) -> BaseException:
+    exception.__cause__ = cause
+    return exception
+
+
 @pytest.fixture
 def all_scope_principal() -> ApiKeyPrincipal:
     return ApiKeyPrincipal(api_key_id=1, user_id=1, scope=ApiKeyScope.ALL)
@@ -92,10 +97,16 @@ def test_retryable_http_failures_penalize_route(status_code: int) -> None:
     [
         httpx.ConnectTimeout("connect timed out"),
         httpx.ReadTimeout("read timed out"),
-        httpx.ConnectError("connection failed"),
-        ConnectionRefusedError("connection refused"),
         socket.gaierror("DNS lookup failed"),
         ssl.SSLError("TLS negotiation failed"),
+        caused_by(
+            httpx.ConnectError("wrapped DNS failure"),
+            socket.gaierror("DNS lookup failed"),
+        ),
+        caused_by(
+            httpx.ConnectError("wrapped TLS failure"),
+            ssl.SSLError("TLS negotiation failed"),
+        ),
     ],
 )
 def test_network_failures_penalize_route(failure: BaseException) -> None:
@@ -106,6 +117,9 @@ def test_network_failures_penalize_route(failure: BaseException) -> None:
 @pytest.mark.parametrize(
     "failure",
     [
+        httpx.ConnectError("bare connection failure"),
+        ConnectionRefusedError("connection refused"),
+        ConnectionResetError("connection reset"),
         httpx.WriteTimeout("write timed out"),
         httpx.PoolTimeout("pool timed out"),
         httpx.WriteError("write failed"),
