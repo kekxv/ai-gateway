@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.core.enums import RouteRuntimeState
 from ai_gateway.db.models import ModelRoute
+from ai_gateway.routing.sessions import MutationSessionFactory, mutation_session_factory_for
 from ai_gateway.routing.types import RouteFailure
 
 Clock = Callable[[], datetime]
@@ -53,13 +54,12 @@ def is_health_failure(failure: object) -> bool:
     return isinstance(
         exception,
         (
-            httpx.TimeoutException,
-            httpx.NetworkError,
-            TimeoutError,
+            httpx.ConnectTimeout,
+            httpx.ReadTimeout,
+            httpx.ConnectError,
             ConnectionError,
             socket.gaierror,
             ssl.SSLError,
-            OSError,
         ),
     )
 
@@ -74,16 +74,22 @@ def health_failure_code(failure: object) -> str:
         return "connect_timeout"
     if isinstance(exception, httpx.ReadTimeout):
         return "read_timeout"
-    if isinstance(exception, (httpx.TimeoutException, TimeoutError)):
-        return "timeout"
+    if isinstance(exception, httpx.WriteTimeout):
+        return "write_timeout"
+    if isinstance(exception, httpx.PoolTimeout):
+        return "pool_timeout"
+    if isinstance(exception, TimeoutError):
+        return "unspecified_timeout"
     if isinstance(exception, socket.gaierror):
         return "dns_error"
     if isinstance(exception, ssl.SSLError):
         return "tls_error"
     if isinstance(exception, (httpx.ConnectError, ConnectionError)):
         return "connect_error"
-    if isinstance(exception, (httpx.NetworkError, OSError)):
-        return "network_error"
+    if isinstance(exception, httpx.WriteError):
+        return "write_error"
+    if isinstance(exception, httpx.ReadError):
+        return "read_error"
     if isinstance(failure, RouteFailure) and failure.error_code:
         sanitized = re.sub(r"[^a-z0-9_]+", "_", failure.error_code.lower()).strip("_")
         if sanitized:
@@ -99,68 +105,77 @@ class RouteHealth:
         failure_threshold: int = 3,
         cooldown: timedelta = timedelta(seconds=60),
         clock: Clock = _utcnow,
+        mutation_session_factory: MutationSessionFactory | None = None,
     ) -> None:
         if failure_threshold < 1:
             raise ValueError("failure_threshold must be positive")
         if cooldown <= timedelta(0):
             raise ValueError("cooldown must be positive")
-        self._session = session
+        self._mutation_session_factory = (
+            mutation_session_factory
+            if mutation_session_factory is not None
+            else mutation_session_factory_for(session)
+        )
         self._failure_threshold = failure_threshold
         self._cooldown = cooldown
         self._clock = clock
 
     async def record_success(self, route_id: int) -> bool:
-        result = await self._session.execute(
-            update(ModelRoute)
-            .where(ModelRoute.id == route_id)
-            .values(
-                consecutive_failures=0,
-                runtime_state=RouteRuntimeState.CLOSED,
-                disabled_until=None,
-                last_error_code=None,
-                last_error_at=None,
-            )
-        )
-        await self._session.commit()
-        return cast(CursorResult[Any], result).rowcount == 1
+        async with self._mutation_session_factory() as mutation_session:
+            async with mutation_session.begin():
+                result = await mutation_session.execute(
+                    update(ModelRoute)
+                    .where(ModelRoute.id == route_id)
+                    .values(
+                        consecutive_failures=0,
+                        runtime_state=RouteRuntimeState.CLOSED,
+                        disabled_until=None,
+                        last_error_code=None,
+                        last_error_at=None,
+                    )
+                )
+                changed = cast(CursorResult[Any], result).rowcount == 1
+        return changed
 
     async def record_failure(self, route_id: int, failure: object) -> bool:
         if not is_health_failure(failure):
             return False
 
         now = self._clock()
-        next_failure_count = ModelRoute.consecutive_failures + 1
-        opens_route = (ModelRoute.runtime_state == RouteRuntimeState.HALF_OPEN) | (
-            next_failure_count >= self._failure_threshold
-        )
-        result = await self._session.execute(
-            update(ModelRoute)
-            .where(ModelRoute.id == route_id)
-            .ordered_values(
-                (
-                    ModelRoute.disabled_until,
-                    case(
-                        (opens_route, now + self._cooldown),
-                        else_=ModelRoute.disabled_until,
-                    ),
-                ),
-                (
-                    ModelRoute.runtime_state,
-                    case(
-                        (opens_route, RouteRuntimeState.OPEN),
-                        else_=ModelRoute.runtime_state,
-                    ),
-                ),
-                (
-                    ModelRoute.consecutive_failures,
-                    next_failure_count,
-                ),
-                (ModelRoute.last_error_code, health_failure_code(failure)),
-                (ModelRoute.last_error_at, now),
+        async with self._mutation_session_factory() as mutation_session:
+            next_failure_count = ModelRoute.consecutive_failures + 1
+            opens_route = (ModelRoute.runtime_state == RouteRuntimeState.HALF_OPEN) | (
+                next_failure_count >= self._failure_threshold
             )
-        )
-        await self._session.commit()
-        return cast(CursorResult[Any], result).rowcount == 1
+            async with mutation_session.begin():
+                result = await mutation_session.execute(
+                    update(ModelRoute)
+                    .where(ModelRoute.id == route_id)
+                    .ordered_values(
+                        (
+                            ModelRoute.disabled_until,
+                            case(
+                                (opens_route, now + self._cooldown),
+                                else_=ModelRoute.disabled_until,
+                            ),
+                        ),
+                        (
+                            ModelRoute.runtime_state,
+                            case(
+                                (opens_route, RouteRuntimeState.OPEN),
+                                else_=ModelRoute.runtime_state,
+                            ),
+                        ),
+                        (
+                            ModelRoute.consecutive_failures,
+                            next_failure_count,
+                        ),
+                        (ModelRoute.last_error_code, health_failure_code(failure)),
+                        (ModelRoute.last_error_at, now),
+                    )
+                )
+                changed = cast(CursorResult[Any], result).rowcount == 1
+        return changed
 
 
 HealthManager = RouteHealth

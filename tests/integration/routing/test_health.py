@@ -11,7 +11,7 @@ from uuid import uuid4
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from ai_gateway.auth.api_key import ApiKeyPrincipal
@@ -92,6 +92,8 @@ def test_retryable_http_failures_penalize_route(status_code: int) -> None:
     [
         httpx.ConnectTimeout("connect timed out"),
         httpx.ReadTimeout("read timed out"),
+        httpx.ConnectError("connection failed"),
+        ConnectionRefusedError("connection refused"),
         socket.gaierror("DNS lookup failed"),
         ssl.SSLError("TLS negotiation failed"),
     ],
@@ -99,6 +101,23 @@ def test_retryable_http_failures_penalize_route(status_code: int) -> None:
 def test_network_failures_penalize_route(failure: BaseException) -> None:
     assert is_health_failure(failure) is True
     assert "failed" not in health_failure_code(failure)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        httpx.WriteTimeout("write timed out"),
+        httpx.PoolTimeout("pool timed out"),
+        httpx.WriteError("write failed"),
+        httpx.ReadError("read failed"),
+        TimeoutError("unspecified timeout"),
+        FileNotFoundError("not found"),
+        PermissionError("permission denied"),
+        OSError("generic operating system error"),
+    ],
+)
+def test_non_connection_failures_do_not_penalize_route(failure: BaseException) -> None:
+    assert is_health_failure(failure) is False
 
 
 async def _load_route(session: AsyncSession, route_id: int) -> ModelRoute:
@@ -239,3 +258,129 @@ async def test_half_open_failure_reopens_and_success_closes(
     assert route.runtime_state is RouteRuntimeState.CLOSED
     assert route.consecutive_failures == 0
     assert route.disabled_until is None
+
+
+async def _provider_count(session: AsyncSession, name: str) -> int:
+    return await session.scalar(
+        select(func.count()).select_from(Provider).where(Provider.name == name)
+    )
+
+
+@pytest.mark.parametrize("operation", ["failure", "success"])
+async def test_health_mutation_does_not_flush_or_commit_caller_writes(
+    test_engine: AsyncEngine,
+    committed_route: tuple[ResolvedModel, int],
+    operation: str,
+) -> None:
+    _, route_id = committed_route
+    mutation_sessions = async_sessionmaker(test_engine, expire_on_commit=False)
+    unrelated_name = f"unrelated-health-{operation}-{uuid4().hex}"
+
+    if operation == "success":
+        async with mutation_sessions() as setup_session:
+            await RouteHealth(
+                setup_session,
+                mutation_session_factory=mutation_sessions,
+            ).record_failure(route_id, 500)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as caller_session:
+        unrelated = Provider(
+            name=unrelated_name,
+            credential_encrypted=b"unrelated",
+        )
+        caller_session.add(unrelated)
+        health = RouteHealth(
+            caller_session,
+            mutation_session_factory=mutation_sessions,
+        )
+
+        if operation == "failure":
+            await health.record_failure(route_id, 500)
+        else:
+            await health.record_success(route_id)
+
+        assert unrelated.id is None
+        async with mutation_sessions() as observer:
+            route = await _load_route(observer, route_id)
+            assert await _provider_count(observer, unrelated_name) == 0
+            if operation == "failure":
+                assert route.consecutive_failures == 1
+            else:
+                assert route.consecutive_failures == 0
+                assert route.runtime_state is RouteRuntimeState.CLOSED
+
+        await caller_session.rollback()
+
+    async with mutation_sessions() as observer:
+        assert await _provider_count(observer, unrelated_name) == 0
+
+
+async def test_half_open_claim_isolated_from_caller_transaction_and_returns_fresh_state(
+    test_engine: AsyncEngine,
+    committed_route: tuple[ResolvedModel, int],
+    all_scope_principal: ApiKeyPrincipal,
+) -> None:
+    model, route_id = committed_route
+    mutation_sessions = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with mutation_sessions() as setup_session:
+        route = await _load_route(setup_session, route_id)
+        route.runtime_state = RouteRuntimeState.OPEN
+        route.consecutive_failures = 3
+        route.disabled_until = utcnow() - timedelta(seconds=1)
+        await setup_session.commit()
+
+    unrelated_name = f"unrelated-claim-{uuid4().hex}"
+    async with AsyncSession(test_engine, expire_on_commit=False) as caller_session:
+        unrelated = Provider(name=unrelated_name, credential_encrypted=b"unrelated")
+        caller_session.add(unrelated)
+        selected = await Router(
+            caller_session,
+            mutation_session_factory=mutation_sessions,
+        ).select_route(model, all_scope_principal)
+
+        assert unrelated.id is None
+        assert selected.runtime_state is RouteRuntimeState.HALF_OPEN
+        assert selected.disabled_until is None
+        async with mutation_sessions() as observer:
+            route = await _load_route(observer, route_id)
+            assert route.runtime_state is RouteRuntimeState.HALF_OPEN
+            assert route.disabled_until is None
+            assert await _provider_count(observer, unrelated_name) == 0
+
+        await caller_session.rollback()
+
+    async with mutation_sessions() as observer:
+        assert await _provider_count(observer, unrelated_name) == 0
+
+
+async def test_failed_half_open_claim_does_not_commit_caller_work(
+    test_engine: AsyncEngine,
+    committed_route: tuple[ResolvedModel, int],
+) -> None:
+    _, route_id = committed_route
+    mutation_sessions = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with mutation_sessions() as setup_session:
+        route = await _load_route(setup_session, route_id)
+        route.runtime_state = RouteRuntimeState.HALF_OPEN
+        route.disabled_until = None
+        await setup_session.commit()
+
+    unrelated_name = f"unrelated-failed-claim-{uuid4().hex}"
+    async with AsyncSession(test_engine, expire_on_commit=False) as caller_session:
+        unrelated = Provider(name=unrelated_name, credential_encrypted=b"unrelated")
+        caller_session.add(unrelated)
+        router = Router(
+            caller_session,
+            mutation_session_factory=mutation_sessions,
+        )
+
+        claimed = await router._claim_half_open(route_id, utcnow())
+
+        assert claimed is False
+        assert unrelated.id is None
+        async with mutation_sessions() as observer:
+            assert await _provider_count(observer, unrelated_name) == 0
+        await caller_session.rollback()
+
+    async with mutation_sessions() as observer:
+        assert await _provider_count(observer, unrelated_name) == 0

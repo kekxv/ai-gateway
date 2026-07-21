@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from ai_gateway.core.enums import Protocol, RouteRuntimeState
 from ai_gateway.core.errors import GatewayError
@@ -18,6 +19,7 @@ class RouteCandidate:
     upstream_model: str
     weight: int
     runtime_state: RouteRuntimeState = RouteRuntimeState.CLOSED
+    disabled_until: datetime | None = None
     provider_credential_encrypted: bytes = b""
     extra_headers_encrypted: bytes | None = None
 

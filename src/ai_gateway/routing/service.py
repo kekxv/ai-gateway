@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -14,6 +15,7 @@ from ai_gateway.auth.api_key import ApiKeyPrincipal
 from ai_gateway.catalog.schemas import ResolvedModel
 from ai_gateway.core.enums import ApiKeyScope, Protocol, RouteRuntimeState
 from ai_gateway.db.models import Model, ModelRoute, Provider, ProviderProtocol
+from ai_gateway.routing.sessions import MutationSessionFactory, mutation_session_factory_for
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate
 
 Clock = Callable[[], datetime]
@@ -49,10 +51,16 @@ class Router:
         *,
         rng: random.Random | None = None,
         clock: Clock = _utcnow,
+        mutation_session_factory: MutationSessionFactory | None = None,
     ) -> None:
         self._session = session
         self._rng = rng if rng is not None else random.Random()
         self._clock = clock
+        self._mutation_session_factory = (
+            mutation_session_factory
+            if mutation_session_factory is not None
+            else mutation_session_factory_for(session)
+        )
 
     async def select_route(
         self,
@@ -65,20 +73,21 @@ class Router:
         model_id, requested_name = _model_identity(model, requested_model)
         protocol = Protocol(required_protocol) if required_protocol is not None else None
         now = self._clock()
-        rows = (
-            (
-                await self._session.execute(
-                    _candidate_query(
-                        model_id=model_id,
-                        principal=principal,
-                        required_protocol=protocol,
-                        now=now,
+        with self._session.no_autoflush:
+            rows = (
+                (
+                    await self._session.execute(
+                        _candidate_query(
+                            model_id=model_id,
+                            principal=principal,
+                            required_protocol=protocol,
+                            now=now,
+                        )
                     )
                 )
+                .mappings()
+                .all()
             )
-            .mappings()
-            .all()
-        )
 
         first_row = rows[0]
         candidates = [_candidate_from_row(row) for row in rows if row["route_id"] is not None]
@@ -92,7 +101,11 @@ class Router:
             if candidate.runtime_state is RouteRuntimeState.CLOSED:
                 return candidate
             if await self._claim_half_open(candidate.route_id, now):
-                return candidate
+                return replace(
+                    candidate,
+                    runtime_state=RouteRuntimeState.HALF_OPEN,
+                    disabled_until=None,
+                )
             removed_by_health = True
 
         raise NoRouteAvailable(
@@ -103,29 +116,36 @@ class Router:
         )
 
     async def _claim_half_open(self, route_id: int, now: datetime) -> bool:
-        result = await self._session.execute(
-            update(ModelRoute)
-            .where(
-                ModelRoute.id == route_id,
-                ModelRoute.runtime_state == RouteRuntimeState.OPEN,
-                ModelRoute.disabled_until.is_not(None),
-                ModelRoute.disabled_until <= now,
-            )
-            .values(runtime_state=RouteRuntimeState.HALF_OPEN, disabled_until=None)
-        )
-        claimed = cast(CursorResult[Any], result).rowcount == 1
-        await self._session.commit()
+        async with self._mutation_session_factory() as mutation_session:
+            async with mutation_session.begin():
+                result = await mutation_session.execute(
+                    update(ModelRoute)
+                    .where(
+                        ModelRoute.id == route_id,
+                        ModelRoute.runtime_state == RouteRuntimeState.OPEN,
+                        ModelRoute.disabled_until.is_not(None),
+                        ModelRoute.disabled_until <= now,
+                    )
+                    .values(runtime_state=RouteRuntimeState.HALF_OPEN, disabled_until=None)
+                )
+                claimed = cast(CursorResult[Any], result).rowcount == 1
         return claimed
 
     async def record_success(self, route_id: int) -> bool:
         from ai_gateway.routing.health import RouteHealth
 
-        return await RouteHealth(self._session).record_success(route_id)
+        return await RouteHealth(
+            self._session,
+            mutation_session_factory=self._mutation_session_factory,
+        ).record_success(route_id)
 
     async def record_failure(self, route_id: int, failure: object) -> bool:
         from ai_gateway.routing.health import RouteHealth
 
-        return await RouteHealth(self._session).record_failure(route_id, failure)
+        return await RouteHealth(
+            self._session,
+            mutation_session_factory=self._mutation_session_factory,
+        ).record_failure(route_id, failure)
 
 
 RoutingService = Router
@@ -140,8 +160,14 @@ async def select_route(
     rng: random.Random | None = None,
     clock: Clock = _utcnow,
     requested_model: str | None = None,
+    mutation_session_factory: MutationSessionFactory | None = None,
 ) -> RouteCandidate:
-    return await Router(session, rng=rng, clock=clock).select_route(
+    return await Router(
+        session,
+        rng=rng,
+        clock=clock,
+        mutation_session_factory=mutation_session_factory,
+    ).select_route(
         model,
         principal,
         required_protocol,
@@ -206,18 +232,21 @@ def _route_exists(
     principal: ApiKeyPrincipal,
     required_protocol: Protocol | None,
     now: datetime,
-    omitted_filter: str,
+    removed_filter: str,
 ) -> Any:
     route = aliased(ModelRoute)
     model = aliased(Model)
     provider = aliased(Provider)
     protocol = aliased(ProviderProtocol)
-    conditions = [_base_conditions(route, model, provider, protocol, model_id)]
-    scope = _scope_condition(route, principal)
-    transport = _transport_condition(protocol, required_protocol)
-    health = _health_condition(route, now)
-    for name, condition in (("scope", scope), ("transport", transport), ("health", health)):
-        conditions.append(not_(condition) if name == omitted_filter else condition)
+    filters = {
+        "scope": _scope_condition(route, principal),
+        "transport": _transport_condition(protocol, required_protocol),
+        "health": _health_condition(route, now),
+    }
+    conditions = [
+        _base_conditions(route, model, provider, protocol, model_id),
+        not_(filters[removed_filter]),
+    ]
     return exists(
         select(literal(1))
         .select_from(route)
@@ -247,6 +276,7 @@ def _candidate_query(
             ModelRoute.upstream_model,
             ModelRoute.weight,
             ModelRoute.runtime_state,
+            ModelRoute.disabled_until,
             Provider.credential_encrypted.label("provider_credential_encrypted"),
             ProviderProtocol.extra_headers_encrypted,
         )
@@ -268,21 +298,21 @@ def _candidate_query(
         principal=principal,
         required_protocol=required_protocol,
         now=now,
-        omitted_filter="scope",
+        removed_filter="scope",
     )
     removed_by_transport = _route_exists(
         model_id=model_id,
         principal=principal,
         required_protocol=required_protocol,
         now=now,
-        omitted_filter="transport",
+        removed_filter="transport",
     )
     removed_by_health = _route_exists(
         model_id=model_id,
         principal=principal,
         required_protocol=required_protocol,
         now=now,
-        omitted_filter="health",
+        removed_filter="health",
     )
     return (
         select(
@@ -308,6 +338,7 @@ def _candidate_from_row(row: Any) -> RouteCandidate:
         upstream_model=cast(str, row["upstream_model"]),
         weight=cast(int, row["weight"]),
         runtime_state=RouteRuntimeState(row["runtime_state"]),
+        disabled_until=cast(datetime | None, row["disabled_until"]),
         provider_credential_encrypted=cast(bytes, row["provider_credential_encrypted"]),
         extra_headers_encrypted=cast(bytes | None, row["extra_headers_encrypted"]),
     )

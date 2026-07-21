@@ -233,3 +233,29 @@ async def test_protocol_and_health_filters_are_reported_without_sensitive_detail
     assert health_error.value.removed_by_transport is False
     assert "provider-health" not in str(health_error.value)
     assert "https://" not in str(health_error.value)
+
+
+async def test_no_route_diagnostics_report_multiple_independent_filters(
+    session: AsyncSession,
+) -> None:
+    model, _ = await _add_route(
+        session,
+        suffix="combined-filters",
+        protocol=Protocol.CLAUDE,
+        runtime_state=RouteRuntimeState.OPEN,
+        disabled_until=datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=5),
+    )
+    restricted_principal = principal(ApiKeyScope.PROVIDERS)
+
+    with pytest.raises(NoRouteAvailable) as error:
+        await Router(session).select_route(
+            model,
+            restricted_principal,
+            required_protocol=Protocol.OPENAI,
+        )
+
+    assert error.value.removed_by_scope is True
+    assert error.value.removed_by_transport is True
+    assert error.value.removed_by_health is True
+    assert "provider-combined-filters" not in str(error.value)
+    assert "https://" not in str(error.value)
