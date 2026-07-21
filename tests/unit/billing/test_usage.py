@@ -89,6 +89,36 @@ def test_provider_usage_wins_over_estimation() -> None:
     assert result.usage_source is UsageSource.PROVIDER
 
 
+@pytest.mark.parametrize(
+    ("protocol", "payload"),
+    [
+        (Protocol.OPENAI, {"usage": {"prompt_tokens": 31}}),
+        (Protocol.CLAUDE, {"usage": {"output_tokens": 9}}),
+        (Protocol.GEMINI, {"usageMetadata": {"promptTokenCount": 31}}),
+    ],
+)
+def test_partial_provider_usage_falls_back_to_complete_estimate(
+    protocol: Protocol,
+    payload: dict[str, object],
+) -> None:
+    request = _request()
+    response_text = "complete estimated response"
+    encoding = tiktoken.get_encoding("cl100k_base")
+
+    result = resolve_usage(
+        protocol=protocol,
+        payload=payload,
+        request=request,
+        response_text=response_text,
+    )
+
+    assert result.usage == CanonicalUsage(
+        estimate_request_tokens(request),
+        len(encoding.encode(response_text)),
+    )
+    assert result.usage_source is UsageSource.ESTIMATED
+
+
 def _request() -> CanonicalRequest:
     return CanonicalRequest(
         model="priced-model",

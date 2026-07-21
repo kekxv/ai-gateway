@@ -3,6 +3,7 @@
 from ai_gateway.billing.pricing import calculate_cost
 from ai_gateway.billing.service import (
     BalanceReservation,
+    BillingService,
     InsufficientBalance,
     SettlementResult,
     reserve_balance,
@@ -19,6 +20,7 @@ from ai_gateway.billing.usage import (
 __all__ = [
     "UsageResult",
     "BalanceReservation",
+    "BillingService",
     "InsufficientBalance",
     "SettlementResult",
     "calculate_cost",

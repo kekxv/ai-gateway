@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.auth.dependencies import admin_user, current_user
 from ai_gateway.auth.service import raise_auth_error
-from ai_gateway.billing.service import BillingError, adjust_balance
+from ai_gateway.billing.service import BillingError, BillingService, get_billing_service
 from ai_gateway.core.enums import LedgerKind
 from ai_gateway.db.models import Account, LedgerEntry, User
 from ai_gateway.db.session import get_session
@@ -19,6 +19,7 @@ router = APIRouter(tags=["billing"])
 Session = Annotated[AsyncSession, Depends(get_session)]
 AdminUser = Annotated[User, Depends(admin_user)]
 CurrentUser = Annotated[User, Depends(current_user)]
+Billing = Annotated[BillingService, Depends(get_billing_service)]
 
 
 class BalanceAdjustmentCreate(BaseModel):
@@ -34,6 +35,11 @@ class BalanceAdjustmentCreate(BaseModel):
         if value == 0:
             raise ValueError("amount must be nonzero")
         return value
+
+    @field_validator("reason", "idempotency_key", mode="before")
+    @classmethod
+    def strip_required_text(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
 
 
 class BalanceResponse(BaseModel):
@@ -96,12 +102,11 @@ async def list_user_ledger(
 async def create_balance_adjustment(
     user_id: int,
     payload: BalanceAdjustmentCreate,
-    session: Session,
+    billing: Billing,
     _: AdminUser,
 ) -> BalanceAdjustmentResponse:
     try:
-        result = await adjust_balance(
-            session,
+        result = await billing.adjust_balance(
             user_id=user_id,
             amount=payload.amount,
             reason=payload.reason,

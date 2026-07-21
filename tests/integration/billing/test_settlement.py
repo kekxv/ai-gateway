@@ -18,58 +18,67 @@ from ai_gateway.billing.service import (
     reserve_balance,
     settle_request,
 )
-from ai_gateway.core.config import Settings, get_settings
+from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import LedgerKind, UsageSource
 from ai_gateway.core.security import hash_password, issue_access_token
 from ai_gateway.db.models import Account, LedgerEntry, Model, User
-from ai_gateway.db.session import get_session
 from ai_gateway.main import create_app
 from ai_gateway.protocols.types import CanonicalUsage
 
 
 @pytest_asyncio.fixture
-async def billing_user(session: AsyncSession) -> User:
-    user = User(
-        email=f"billing-{uuid4().hex}@example.com",
-        password_hash=hash_password("billing-password"),
-        role="user",
-    )
-    user.account = Account(balance=Decimal("1.00000000"))
-    session.add(user)
-    await session.flush()
-    return user
+async def billing_user(test_engine: AsyncEngine) -> AsyncIterator[User]:
+    async with AsyncSession(test_engine, expire_on_commit=False) as setup:
+        user = User(
+            email=f"billing-{uuid4().hex}@example.com",
+            password_hash=hash_password("billing-password"),
+            role="user",
+        )
+        user.account = Account(balance=Decimal("1.00000000"))
+        setup.add(user)
+        await setup.commit()
+        user_id = user.id
+    yield user
+    await _delete_user(test_engine, user_id)
 
 
 @pytest_asyncio.fixture
-async def admin_user_record(session: AsyncSession) -> User:
-    user = User(
-        email=f"billing-admin-{uuid4().hex}@example.com",
-        password_hash=hash_password("admin-password"),
-        role="admin",
-    )
-    user.account = Account()
-    session.add(user)
-    await session.flush()
-    return user
+async def admin_user_record(test_engine: AsyncEngine) -> AsyncIterator[User]:
+    async with AsyncSession(test_engine, expire_on_commit=False) as setup:
+        user = User(
+            email=f"billing-admin-{uuid4().hex}@example.com",
+            password_hash=hash_password("admin-password"),
+            role="admin",
+        )
+        user.account = Account()
+        setup.add(user)
+        await setup.commit()
+        user_id = user.id
+    yield user
+    await _delete_user(test_engine, user_id)
 
 
 @pytest_asyncio.fixture
-async def regular_user_record(session: AsyncSession) -> User:
-    user = User(
-        email=f"billing-member-{uuid4().hex}@example.com",
-        password_hash=hash_password("member-password"),
-        role="user",
-    )
-    user.account = Account()
-    session.add(user)
-    await session.flush()
-    return user
+async def regular_user_record(test_engine: AsyncEngine) -> AsyncIterator[User]:
+    async with AsyncSession(test_engine, expire_on_commit=False) as setup:
+        user = User(
+            email=f"billing-member-{uuid4().hex}@example.com",
+            password_hash=hash_password("member-password"),
+            role="user",
+        )
+        user.account = Account()
+        setup.add(user)
+        await setup.commit()
+        user_id = user.id
+    yield user
+    await _delete_user(test_engine, user_id)
 
 
 @pytest.fixture
-def billing_settings() -> Settings:
+def billing_settings(test_engine: AsyncEngine) -> Settings:
     return Settings(
         environment="test",
+        database_url=test_engine.url.render_as_string(hide_password=False),
         jwt_secret="billing-integration-test-secret-at-least-32-bytes",
         encryption_key=Fernet.generate_key().decode(),
     )
@@ -77,17 +86,10 @@ def billing_settings() -> Settings:
 
 async def _client_for_user(
     *,
-    session: AsyncSession,
     settings: Settings,
     user: User,
 ) -> AsyncIterator[AsyncClient]:
-    app = create_app()
-
-    async def override_session() -> AsyncIterator[AsyncSession]:
-        yield session
-
-    app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[get_settings] = lambda: settings
+    app = create_app(settings)
     token = issue_access_token(user_id=user.id, settings=settings)
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -95,16 +97,15 @@ async def _client_for_user(
         headers={"Authorization": f"Bearer {token}"},
     ) as client:
         yield client
+    await app.state.engine.dispose()
 
 
 @pytest_asyncio.fixture
 async def admin_client(
-    session: AsyncSession,
     billing_settings: Settings,
     admin_user_record: User,
 ) -> AsyncIterator[AsyncClient]:
     async for client in _client_for_user(
-        session=session,
         settings=billing_settings,
         user=admin_user_record,
     ):
@@ -113,12 +114,10 @@ async def admin_client(
 
 @pytest_asyncio.fixture
 async def non_admin_client(
-    session: AsyncSession,
     billing_settings: Settings,
     regular_user_record: User,
 ) -> AsyncIterator[AsyncClient]:
     async for client in _client_for_user(
-        session=session,
         settings=billing_settings,
         user=regular_user_record,
     ):
@@ -133,6 +132,22 @@ def priced_model() -> Model:
         input_price_per_million=Decimal("100000.00000000"),
         output_price_per_million=Decimal("100000.00000000"),
     )
+
+
+async def _delete_user(test_engine: AsyncEngine, user_id: int) -> None:
+    async with AsyncSession(test_engine) as cleanup:
+        user = await cleanup.get(User, user_id)
+        if user is not None:
+            await cleanup.delete(user)
+            await cleanup.commit()
+
+
+async def _set_balance(test_engine: AsyncEngine, account_id: int, amount: Decimal) -> None:
+    async with AsyncSession(test_engine) as mutation:
+        account = await mutation.get(Account, account_id)
+        assert account is not None
+        account.balance = amount
+        await mutation.commit()
 
 
 async def test_reservation_and_settlement_update_balance_spend_and_ledger_atomically(
@@ -185,11 +200,11 @@ async def test_reservation_and_settlement_update_balance_spend_and_ledger_atomic
 
 async def test_insufficient_balance_fails_before_any_upstream_work(
     session: AsyncSession,
+    test_engine: AsyncEngine,
     billing_user: User,
     priced_model: Model,
 ) -> None:
-    billing_user.account.balance = Decimal("0.29000000")
-    await session.commit()
+    await _set_balance(test_engine, billing_user.account.id, Decimal("0.29000000"))
     upstream_started = False
 
     with pytest.raises(InsufficientBalance) as raised:
@@ -207,16 +222,21 @@ async def test_insufficient_balance_fails_before_any_upstream_work(
     assert raised.value.status_code == 402
     assert raised.value.code == "insufficient_balance"
     assert upstream_started is False
-    assert await session.scalar(select(LedgerEntry.id)) is None
+    assert (
+        await session.scalar(
+            select(LedgerEntry.id).where(LedgerEntry.account_id == billing_user.account.id)
+        )
+        is None
+    )
 
 
 async def test_exact_zero_balance_is_allowed_and_later_requests_fail(
     session: AsyncSession,
+    test_engine: AsyncEngine,
     billing_user: User,
     priced_model: Model,
 ) -> None:
-    billing_user.account.balance = Decimal("0.30000000")
-    await session.commit()
+    await _set_balance(test_engine, billing_user.account.id, Decimal("0.30000000"))
 
     reservation = await reserve_balance(
         session,
@@ -243,11 +263,11 @@ async def test_exact_zero_balance_is_allowed_and_later_requests_fail(
 
 async def test_actual_charge_above_reservation_exhausts_without_negative_balance(
     session: AsyncSession,
+    test_engine: AsyncEngine,
     billing_user: User,
     priced_model: Model,
 ) -> None:
-    billing_user.account.balance = Decimal("0.50000000")
-    await session.commit()
+    await _set_balance(test_engine, billing_user.account.id, Decimal("0.50000000"))
     reservation = await reserve_balance(
         session,
         user_id=billing_user.id,

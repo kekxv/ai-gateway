@@ -34,33 +34,35 @@ def extract_provider_usage(
     selected_protocol = Protocol(protocol)
     if selected_protocol is Protocol.OPENAI:
         usage = _mapping(payload.get("usage"))
-        if usage is None:
+        if usage is None or not _has_fields(usage, "prompt_tokens", "completion_tokens"):
             return None
         return CanonicalUsage(
-            input_tokens=nonnegative_int(usage.get("prompt_tokens", 0), "usage.prompt_tokens"),
-            output_tokens=nonnegative_int(
-                usage.get("completion_tokens", 0), "usage.completion_tokens"
-            ),
+            input_tokens=nonnegative_int(usage["prompt_tokens"], "usage.prompt_tokens"),
+            output_tokens=nonnegative_int(usage["completion_tokens"], "usage.completion_tokens"),
         )
     if selected_protocol is Protocol.CLAUDE:
         usage = _mapping(payload.get("usage"))
-        if usage is None:
+        if usage is None or not _has_fields(usage, "input_tokens", "output_tokens"):
             return None
         return CanonicalUsage(
-            input_tokens=nonnegative_int(usage.get("input_tokens", 0), "usage.input_tokens"),
-            output_tokens=nonnegative_int(usage.get("output_tokens", 0), "usage.output_tokens"),
+            input_tokens=nonnegative_int(usage["input_tokens"], "usage.input_tokens"),
+            output_tokens=nonnegative_int(usage["output_tokens"], "usage.output_tokens"),
         )
 
     usage = _mapping(payload.get("usageMetadata"))
     if usage is None:
         return None
+    input_key = _first_present(usage, "promptTokenCount", "prompt_token_count")
+    output_key = _first_present(usage, "candidatesTokenCount", "candidates_token_count")
+    if input_key is None or output_key is None:
+        return None
     return CanonicalUsage(
         input_tokens=nonnegative_int(
-            usage.get("promptTokenCount", usage.get("prompt_token_count", 0)),
+            usage[input_key],
             "usageMetadata.promptTokenCount",
         ),
         output_tokens=nonnegative_int(
-            usage.get("candidatesTokenCount", usage.get("candidates_token_count", 0)),
+            usage[output_key],
             "usageMetadata.candidatesTokenCount",
         ),
     )
@@ -127,6 +129,14 @@ def _mapping(value: Any) -> Mapping[str, Any] | None:
     if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
         raise ValueError("provider usage must be an object")
     return value
+
+
+def _has_fields(value: Mapping[str, Any], *fields: str) -> bool:
+    return all(field in value for field in fields)
+
+
+def _first_present(value: Mapping[str, Any], *fields: str) -> str | None:
+    return next((field for field in fields if field in value), None)
 
 
 @lru_cache

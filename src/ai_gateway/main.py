@@ -16,6 +16,7 @@ from ai_gateway.admin.users import router as users_router
 from ai_gateway.audit.codec import DEFAULT_AUDIT_BODY_LIMIT_BYTES
 from ai_gateway.audit.service import AuditService, use_audit_service
 from ai_gateway.auth.router import router as auth_router
+from ai_gateway.billing.service import BillingService
 from ai_gateway.catalog.scheduler import ModelSyncScheduler
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.errors import sanitized_request_validation_error_handler
@@ -27,6 +28,10 @@ def _audit_body_limit(settings: object) -> int:
     return int(getattr(settings, "audit_body_limit_bytes", DEFAULT_AUDIT_BODY_LIMIT_BYTES))
 
 
+def _billing_default_max_output_tokens(settings: object) -> int:
+    return int(getattr(settings, "billing_default_max_output_tokens", 4096))
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured_engine = get_engine_for_url(settings.database_url) if settings is not None else None
     configured_session_factory = (
@@ -36,6 +41,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         AuditService(
             configured_session_factory,
             body_limit_bytes=_audit_body_limit(settings),
+        )
+        if configured_session_factory is not None and settings is not None
+        else None
+    )
+    configured_billing_service = (
+        BillingService(
+            configured_session_factory,
+            default_max_output_tokens=_billing_default_max_output_tokens(settings),
         )
         if configured_session_factory is not None and settings is not None
         else None
@@ -65,6 +78,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session_factory,
             body_limit_bytes=_audit_body_limit(active_settings),
         )
+        app.state.billing_service = BillingService(
+            session_factory,
+            default_max_output_tokens=_billing_default_max_output_tokens(active_settings),
+        )
         app.state.http_client_factory = http_client_factory
         app.state.model_sync_scheduler = scheduler
         scheduler_task = asyncio.create_task(
@@ -84,6 +101,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.engine = configured_engine
         app.state.session_factory = configured_session_factory
         app.state.audit_service = configured_audit_service
+        app.state.billing_service = configured_billing_service
 
     @app.middleware("http")
     async def bind_audit_service(
