@@ -10,6 +10,7 @@ from ai_gateway.admin.api_keys import router as api_keys_router
 from ai_gateway.admin.model_sync import router as model_sync_router
 from ai_gateway.admin.models import models_router, routes_router
 from ai_gateway.admin.providers import router as providers_router
+from ai_gateway.admin.request_logs import router as request_logs_router
 from ai_gateway.admin.users import router as users_router
 from ai_gateway.auth.router import router as auth_router
 from ai_gateway.catalog.scheduler import ModelSyncScheduler
@@ -85,6 +86,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(model_sync_router)
     app.include_router(models_router)
     app.include_router(routes_router)
+    app.include_router(request_logs_router)
 
     @app.get("/health", include_in_schema=False)
     async def health() -> dict[str, str]:
