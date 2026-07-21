@@ -20,3 +20,22 @@ async def generate_content(
         return (await service.handle(request, Protocol.GEMINI, path_model=model)).response()
     except Exception as exc:
         return native_error_response(Protocol.GEMINI, exc)
+
+
+@router.post("/v1beta/models/{model}:streamGenerateContent")
+async def stream_generate_content(
+    model: str,
+    request: Request,
+    service: Annotated[GatewayService, Depends(get_gateway_service)],
+) -> Response:
+    try:
+        return (
+            await service.handle(
+                request,
+                Protocol.GEMINI,
+                path_model=model,
+                force_stream=True,
+            )
+        ).response()
+    except Exception as exc:
+        return native_error_response(Protocol.GEMINI, exc)

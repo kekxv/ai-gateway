@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from time import monotonic
@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.audit.service import (
@@ -30,10 +30,15 @@ from ai_gateway.billing.service import (
     IdempotencyConflict,
     SettlementResult,
 )
-from ai_gateway.billing.usage import UsageResult, estimate_request_tokens, resolve_usage
+from ai_gateway.billing.usage import (
+    UsageResult,
+    estimate_request_tokens,
+    estimate_text_tokens,
+    resolve_usage,
+)
 from ai_gateway.catalog.repository import CatalogRepository
 from ai_gateway.core.config import Settings
-from ai_gateway.core.enums import Protocol
+from ai_gateway.core.enums import Protocol, UsageSource
 from ai_gateway.core.errors import GatewayError
 from ai_gateway.db.models import Model
 from ai_gateway.protocols.base import (
@@ -42,9 +47,10 @@ from ai_gateway.protocols.base import (
     rewrite_passthrough_request,
 )
 from ai_gateway.protocols.registry import get_adapter
-from ai_gateway.protocols.types import CanonicalRequest, CanonicalResponse, TextPart
+from ai_gateway.protocols.types import CanonicalRequest, CanonicalResponse, CanonicalUsage, TextPart
 from ai_gateway.routing.service import Router
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFailure
+from ai_gateway.transport.sse import GatewayContext, stream_gateway_response
 from ai_gateway.transport.upstream import build_upstream_request
 
 logger = logging.getLogger(__name__)
@@ -137,6 +143,20 @@ class GatewayOutput:
 
 
 @dataclass(frozen=True, slots=True)
+class GatewayStreamOutput:
+    body: AsyncIterator[bytes]
+    status_code: int
+    content_type: str = "text/event-stream"
+
+    def response(self) -> StreamingResponse:
+        return StreamingResponse(
+            self.body,
+            status_code=self.status_code,
+            headers={"content-type": self.content_type},
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class _PreparedRequest:
     raw_body: bytes
     payload: dict[str, Any]
@@ -150,6 +170,7 @@ class _AttemptResponse:
     route: RouteCandidate
     response: httpx.Response
     attempts: tuple[dict[str, Any], ...]
+    router: RouteSelector
 
 
 class GatewayService:
@@ -176,18 +197,19 @@ class GatewayService:
         inbound_protocol: Protocol,
         *,
         path_model: str | None = None,
-    ) -> GatewayOutput:
+        force_stream: bool = False,
+    ) -> GatewayOutput | GatewayStreamOutput:
         started_at = monotonic()
 
         # Authentication deliberately precedes parsing or catalog/database work.
         principal = await authenticate_api_key(extract_api_key(request), self._session)
         raw_body = await request.body()
         payload, requested_model = _request_payload(raw_body, inbound_protocol, path_model)
+        if force_stream:
+            payload["stream"] = True
 
         resolved = await CatalogRepository(self._session).resolve_model(requested_model)
         canonical = get_adapter(inbound_protocol).decode_request(payload)
-        if canonical.stream:
-            raise UnsupportedFeatureError("stream", "streaming is not available on this endpoint")
         prepared = _PreparedRequest(
             raw_body,
             payload,
@@ -201,10 +223,11 @@ class GatewayService:
             raise RuntimeError("resolved catalog model disappeared")
         request_id = uuid4()
         billing_key = _billing_key(principal, request_id)
+        estimated_input_tokens = estimate_request_tokens(canonical)
         reservation = await self._billing.reserve_balance(
             user_id=principal.user_id,
             model=priced_model,
-            estimated_input_tokens=estimate_request_tokens(canonical),
+            estimated_input_tokens=estimated_input_tokens,
             max_output_tokens=canonical.max_output_tokens,
             idempotency_key=billing_key,
             request_id=request_id,
@@ -232,7 +255,7 @@ class GatewayService:
                     model_id=resolved.model_id,
                     inbound_protocol=inbound_protocol,
                     transport="http",
-                    stream=False,
+                    stream=canonical.stream,
                     headers=_audit_headers(request, correlation_id),
                     metadata=audit_metadata,
                 ),
@@ -249,6 +272,8 @@ class GatewayService:
             upstream = attempt_response.response
 
             if upstream.status_code >= 400:
+                if canonical.stream:
+                    await upstream.aread()
                 settlement = await self._settle_zero(reservation, billing_key)
                 settled = True
                 settled_cost = settlement.actual_cost
@@ -270,8 +295,37 @@ class GatewayService:
                 )
                 audit_terminal = True
                 if output is not None:
+                    await upstream.aclose()
                     return output
+                await upstream.aclose()
                 raise UpstreamError("The upstream provider rejected the request")
+
+            if canonical.stream:
+                context = GatewayContext(
+                    source_protocol=route.protocol,
+                    target_protocol=inbound_protocol,
+                    initial_input_tokens=estimated_input_tokens,
+                    audit_body_limit_bytes=self._settings.audit_body_limit_bytes,
+                    started_at=started_at,
+                )
+                body = self._stream_body(
+                    context=context,
+                    upstream=upstream,
+                    request=replace(canonical, model=route.upstream_model),
+                    reservation=reservation,
+                    billing_key=billing_key,
+                    audit_id=audit_id,
+                    route=route,
+                    attempts=attempt_response.attempts,
+                    router=attempt_response.router,
+                    priced_model=priced_model,
+                    started_at=started_at,
+                )
+                return GatewayStreamOutput(
+                    body=body,
+                    status_code=upstream.status_code,
+                    content_type=upstream.headers.get("content-type", "text/event-stream"),
+                )
 
             output, response_payload, canonical_response = _convert_response(
                 inbound_protocol=inbound_protocol,
@@ -316,6 +370,12 @@ class GatewayService:
             audit_terminal = True
             return output
         except BaseException as exc:
+            if attempt_response is not None:
+                await _close_response_auxiliary(
+                    attempt_response.response,
+                    attempt_response.route,
+                    attempt_response.attempts,
+                )
             final_route = (
                 attempt_response.route
                 if attempt_response is not None
@@ -344,6 +404,153 @@ class GatewayService:
                 )
             )
             raise
+
+    async def _stream_body(
+        self,
+        *,
+        context: GatewayContext,
+        upstream: httpx.Response,
+        request: CanonicalRequest,
+        reservation: BalanceReservation,
+        billing_key: str,
+        audit_id: UUID,
+        route: RouteCandidate,
+        attempts: tuple[dict[str, Any], ...],
+        router: RouteSelector,
+        priced_model: Model,
+        started_at: float,
+    ) -> AsyncIterator[bytes]:
+        terminal_error: BaseException | None = None
+        completed = False
+        try:
+            async for chunk in stream_gateway_response(context, upstream):
+                yield chunk
+            completed = True
+        except BaseException as exc:
+            terminal_error = exc
+            raise
+        finally:
+            await _run_cleanup_shielded(
+                self._finalize_stream(
+                    context=context,
+                    upstream=upstream,
+                    request=request,
+                    reservation=reservation,
+                    billing_key=billing_key,
+                    audit_id=audit_id,
+                    route=route,
+                    attempts=attempts,
+                    router=router,
+                    priced_model=priced_model,
+                    started_at=started_at,
+                    completed=completed,
+                    terminal_error=terminal_error,
+                )
+            )
+
+    async def _finalize_stream(
+        self,
+        *,
+        context: GatewayContext,
+        upstream: httpx.Response,
+        request: CanonicalRequest,
+        reservation: BalanceReservation,
+        billing_key: str,
+        audit_id: UUID,
+        route: RouteCandidate,
+        attempts: tuple[dict[str, Any], ...],
+        router: RouteSelector,
+        priced_model: Model,
+        started_at: float,
+        completed: bool,
+        terminal_error: BaseException | None,
+    ) -> None:
+        try:
+            await upstream.aclose()
+        except BaseException as cleanup_exc:
+            _log_cleanup_failure("stream_response_close", cleanup_exc)
+
+        usage_result = _stream_usage_result(context, request)
+        settlement_cost = Decimal("0")
+        try:
+            settlement = await self._billing.settle_request(
+                reservation_id=reservation.ledger_entry_id,
+                idempotency_key=billing_key,
+                model=priced_model,
+                usage=usage_result.usage,
+                usage_source=usage_result.usage_source,
+            )
+            settlement_cost = settlement.actual_cost
+        except BaseException as cleanup_exc:
+            _log_cleanup_failure("stream_settlement", cleanup_exc)
+
+        disconnected = isinstance(terminal_error, (asyncio.CancelledError, GeneratorExit))
+        successful = completed and not context.error_observed
+        effective_error = terminal_error
+        if context.error_observed and effective_error is None:
+            effective_error = UpstreamError("The upstream provider returned a stream error")
+        try:
+            if successful:
+                await self._audit.complete_request(
+                    audit_id,
+                    RequestResult(
+                        provider_id=route.provider_id,
+                        model_route_id=route.route_id,
+                        outbound_protocol=route.protocol,
+                        http_status=upstream.status_code,
+                        prompt_tokens=usage_result.usage.input_tokens,
+                        completion_tokens=usage_result.usage.output_tokens,
+                        usage_source=usage_result.usage_source,
+                        cost=settlement_cost,
+                        latency_ms=_elapsed_ms(started_at),
+                        first_token_ms=context.first_token_ms,
+                        headers=dict(upstream.headers),
+                        body=context.audit_preview,
+                        metadata={"attempts": attempts},
+                    ),
+                )
+            else:
+                await self._audit.fail_request(
+                    audit_id,
+                    RequestFailure(
+                        error_code=(
+                            "client_disconnected"
+                            if disconnected
+                            else _public_error_code(
+                                effective_error or UpstreamError("stream failed")
+                            )
+                        ),
+                        client_disconnected=disconnected,
+                        provider_id=route.provider_id,
+                        model_route_id=route.route_id,
+                        outbound_protocol=route.protocol,
+                        http_status=upstream.status_code,
+                        prompt_tokens=usage_result.usage.input_tokens,
+                        completion_tokens=usage_result.usage.output_tokens,
+                        usage_source=usage_result.usage_source,
+                        cost=settlement_cost,
+                        latency_ms=_elapsed_ms(started_at),
+                        first_token_ms=context.first_token_ms,
+                        headers=dict(upstream.headers),
+                        body=context.audit_preview,
+                        metadata={"attempts": attempts},
+                    ),
+                )
+        except BaseException as cleanup_exc:
+            _log_cleanup_failure("stream_audit", cleanup_exc)
+
+        health_operation = (
+            router.record_success(route.route_id)
+            if successful or disconnected
+            else router.record_failure(
+                route.route_id,
+                RouteFailure(exception=effective_error or RuntimeError("stream failed")),
+            )
+        )
+        try:
+            await health_operation
+        except BaseException as cleanup_exc:
+            _log_cleanup_failure("stream_health", cleanup_exc)
 
     async def _cleanup_after_failure(
         self,
@@ -459,7 +666,12 @@ class GatewayService:
             last_route = route
             try:
                 body = _upstream_body(prepared, route)
-                url = upstream_url(route.protocol, route.base_url, route.upstream_model)
+                url = upstream_url(
+                    route.protocol,
+                    route.base_url,
+                    route.upstream_model,
+                    stream=prepared.canonical.stream,
+                )
                 upstream_request = build_upstream_request(
                     route,
                     request.headers,
@@ -477,7 +689,10 @@ class GatewayService:
                 ) from exc
             try:
                 client = await self._http_clients.client_for(url)
-                upstream = await client.send(upstream_request)
+                upstream = await client.send(
+                    upstream_request,
+                    stream=prepared.canonical.stream,
+                )
             except asyncio.CancelledError as exc:
                 _annotate_failure(exc, route, tuple(attempts))
                 raise
@@ -534,6 +749,8 @@ class GatewayService:
                     succeeded=upstream.status_code < 400,
                 )
             )
+            if prepared.canonical.stream and upstream.status_code < 400:
+                return _AttemptResponse(route, upstream, tuple(attempts), router)
             health_operation = (
                 router.record_failure(route.route_id, upstream.status_code)
                 if upstream.status_code >= 400
@@ -548,7 +765,7 @@ class GatewayService:
             if health_failure is not None:
                 await _close_response_auxiliary(upstream, route, tuple(attempts))
                 raise health_failure
-            return _AttemptResponse(route, upstream, tuple(attempts))
+            return _AttemptResponse(route, upstream, tuple(attempts), router)
 
     async def _settle_zero(
         self,
@@ -562,7 +779,13 @@ class GatewayService:
         )
 
 
-def upstream_url(protocol: Protocol | str, base_url: str, upstream_model: str) -> str:
+def upstream_url(
+    protocol: Protocol | str,
+    base_url: str,
+    upstream_model: str,
+    *,
+    stream: bool = False,
+) -> str:
     selected = Protocol(protocol)
     base = base_url.rstrip("/")
     if selected is Protocol.OPENAI:
@@ -571,7 +794,8 @@ def upstream_url(protocol: Protocol | str, base_url: str, upstream_model: str) -
         return f"{base}/messages" if base.endswith("/v1") else f"{base}/v1/messages"
     encoded_model = quote(upstream_model.removeprefix("models/"), safe="")
     prefix = base if base.endswith("/v1beta") else f"{base}/v1beta"
-    return f"{prefix}/models/{encoded_model}:generateContent"
+    method = "streamGenerateContent?alt=sse" if stream else "generateContent"
+    return f"{prefix}/models/{encoded_model}:{method}"
 
 
 def is_retryable_failure(
@@ -609,6 +833,7 @@ def _upstream_body(prepared: _PreparedRequest, route: RouteCandidate) -> bytes:
         if route.protocol is Protocol.GEMINI:
             payload = prepared.payload.copy()
             payload.pop("model", None)
+            payload.pop("stream", None)
             return orjson.dumps(payload)
         return rewrite_passthrough_request(
             route.protocol,
@@ -619,6 +844,7 @@ def _upstream_body(prepared: _PreparedRequest, route: RouteCandidate) -> bytes:
     payload = get_adapter(route.protocol).encode_request(canonical)
     if route.protocol is Protocol.GEMINI:
         payload.pop("model", None)
+        payload.pop("stream", None)
     return orjson.dumps(payload)
 
 
@@ -683,6 +909,22 @@ def _resolve_response_usage(
             request=request,
             response_text=response_text,
         )
+
+
+def _stream_usage_result(context: GatewayContext, request: CanonicalRequest) -> UsageResult:
+    if context.observed_usage is not None:
+        return UsageResult(context.observed_usage, UsageSource.PROVIDER)
+    return UsageResult(
+        usage=CanonicalUsage(
+            input_tokens=(
+                context.initial_input_tokens
+                if context.initial_input_tokens is not None
+                else estimate_request_tokens(request)
+            ),
+            output_tokens=estimate_text_tokens(context.response_content),
+        ),
+        usage_source=UsageSource.ESTIMATED,
+    )
 
 
 def _canonical_response_text(response: CanonicalResponse | None) -> str:
