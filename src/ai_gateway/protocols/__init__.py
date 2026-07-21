@@ -2,6 +2,7 @@
 
 from ai_gateway.protocols.base import (
     CROSS_PROTOCOL_LOSSES,
+    NO_STREAM_OUTPUT,
     ProtocolAdapter,
     UnsupportedFeatureError,
     rewrite_passthrough_request,
@@ -29,6 +30,7 @@ __all__ = [
     "CanonicalTool",
     "CanonicalUsage",
     "ImagePart",
+    "NO_STREAM_OUTPUT",
     "ProtocolAdapter",
     "StreamEvent",
     "TextPart",

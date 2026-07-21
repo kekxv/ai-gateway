@@ -36,13 +36,13 @@ def test_openai_golden_request_decodes_all_contract_fields(load_fixture) -> None
             content=(TextPart('{"temperature":21}'),),
         ),
     )
-    assert canonical.tool_choice == "required"
+    assert canonical.tool_choice == {"name": "weather"}
     assert canonical.temperature == 0.2
     assert canonical.top_p == 0.9
     assert canonical.max_output_tokens == 128
     assert canonical.stop_sequences == ("END", "STOP")
     assert canonical.stream is True
-    assert canonical.metadata["vendor_extensions"]["openai"] == {"service_tier": "auto"}
+    assert canonical.metadata["vendor_extensions"]["openai"]["service_tier"] == "auto"
 
 
 def test_openai_canonical_types_are_frozen(load_fixture) -> None:
@@ -57,7 +57,7 @@ def test_openai_canonical_types_are_frozen(load_fixture) -> None:
 def test_openai_golden_response_and_stream(load_fixture, load_bytes) -> None:
     adapter = OpenAIAdapter()
     response = adapter.decode_response(load_fixture("openai", "response.json"))
-    event = adapter.decode_stream_event(load_bytes("openai", "stream.sse"))
+    events = adapter.decode_stream_event(load_bytes("openai", "stream.sse"))
 
     assert response.finish_reason == "tool_call"
     assert response.usage is not None
@@ -65,9 +65,10 @@ def test_openai_golden_response_and_stream(load_fixture, load_bytes) -> None:
     assert response.message.content[1] == ToolCallPart(
         id="call_weather", name="weather", arguments={"city": "Paris"}
     )
-    assert event.type == "content_delta"
-    assert event.text == "Hello"
-    assert adapter.decode_stream_event(adapter.encode_stream_event(event)) == event
+    assert events == (events[0],)
+    assert events[0].type == "content_delta"
+    assert events[0].text == "Hello"
+    assert adapter.decode_stream_event(adapter.encode_stream_event(events[0])) == events
 
 
 def test_openai_encode_response_uses_native_finish_reason(load_fixture) -> None:

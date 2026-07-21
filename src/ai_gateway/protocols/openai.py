@@ -7,8 +7,10 @@ import orjson
 
 from ai_gateway.core.enums import Protocol
 from ai_gateway.protocols.base import (
+    NO_STREAM_OUTPUT,
     ProtocolAdapter,
     UnsupportedFeatureError,
+    add_vendor_scope,
     decode_sse,
     encode_sse,
     json_arguments,
@@ -16,9 +18,11 @@ from ai_gateway.protocols.base import (
     optional_float,
     optional_int,
     require_object,
+    required_bool,
     string_list,
     thaw,
     vendor_metadata,
+    vendor_scope,
 )
 from ai_gateway.protocols.types import (
     CanonicalMessage,
@@ -66,8 +70,18 @@ class OpenAIAdapter(ProtocolAdapter):
             message = require_object(value, f"messages[{index}]")
             role = message.get("role")
             if role in {"system", "developer"}:
+                if "tool_calls" in message:
+                    raise UnsupportedFeatureError(
+                        f"messages[{index}].tool_calls",
+                        "tool calls are only valid on assistant messages",
+                    )
                 system.extend(_decode_content(message.get("content"), f"messages[{index}].content"))
             elif role == "tool":
+                if "tool_calls" in message:
+                    raise UnsupportedFeatureError(
+                        f"messages[{index}].tool_calls",
+                        "tool calls are only valid on assistant messages",
+                    )
                 tool_call_id = message.get("tool_call_id")
                 name = message.get("name")
                 if not isinstance(tool_call_id, str):
@@ -86,21 +100,43 @@ class OpenAIAdapter(ProtocolAdapter):
                                 ),
                             ),
                         ),
+                        metadata=vendor_metadata(
+                            self.protocol,
+                            message,
+                            {"role", "tool_call_id", "name", "content"},
+                        ),
                     )
                 )
             elif role in {"user", "assistant"}:
                 parts = list(_decode_content(message.get("content"), f"messages[{index}].content"))
+                if role == "user" and "tool_calls" in message:
+                    raise UnsupportedFeatureError(
+                        f"messages[{index}].tool_calls",
+                        "tool calls are only valid on assistant messages",
+                    )
                 if role == "assistant":
                     parts.extend(
                         _decode_tool_calls(
                             message.get("tool_calls"), f"messages[{index}].tool_calls"
                         )
                     )
-                messages.append(CanonicalMessage(role=cast(Any, role), content=parts))
+                messages.append(
+                    CanonicalMessage(
+                        role=cast(Any, role),
+                        content=parts,
+                        metadata=vendor_metadata(
+                            self.protocol,
+                            message,
+                            {"role", "content", "tool_calls"},
+                        ),
+                    )
+                )
             else:
                 raise UnsupportedFeatureError(
                     f"messages[{index}].role", f"unsupported role {role!r}"
                 )
+        metadata = vendor_metadata(self.protocol, payload, _REQUEST_FIELDS)
+        _capture_tool_choice_extensions(metadata, payload.get("tool_choice"))
         return CanonicalRequest(
             model=model,
             messages=messages,
@@ -114,8 +150,8 @@ class OpenAIAdapter(ProtocolAdapter):
                 "max_completion_tokens",
             ),
             stop_sequences=string_list(payload.get("stop"), "stop"),
-            stream=bool(payload.get("stream", False)),
-            metadata=vendor_metadata(self.protocol, payload, _REQUEST_FIELDS),
+            stream=required_bool(payload.get("stream"), "stream"),
+            metadata=metadata,
         )
 
     def encode_request(self, request: CanonicalRequest) -> dict[str, Any]:
@@ -129,23 +165,9 @@ class OpenAIAdapter(ProtocolAdapter):
         )
         payload["messages"] = messages
         if request.tools:
-            payload["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        **(
-                            {"description": tool.description}
-                            if tool.description is not None
-                            else {}
-                        ),
-                        "parameters": thaw(tool.input_schema),
-                    },
-                }
-                for tool in request.tools
-            ]
+            payload["tools"] = [_encode_tool(tool) for tool in request.tools]
         if request.tool_choice is not None:
-            payload["tool_choice"] = _encode_tool_choice(request.tool_choice)
+            payload["tool_choice"] = _encode_tool_choice(request.tool_choice, request.metadata)
         _set_optional(payload, "temperature", request.temperature)
         _set_optional(payload, "top_p", request.top_p)
         _set_optional(payload, "max_completion_tokens", request.max_output_tokens)
@@ -156,17 +178,24 @@ class OpenAIAdapter(ProtocolAdapter):
 
     def decode_response(self, payload: Mapping[str, Any]) -> CanonicalResponse:
         choices = payload.get("choices")
-        if not isinstance(choices, list) or not choices:
-            raise UnsupportedFeatureError("choices", "must contain at least one choice")
+        if not isinstance(choices, list) or len(choices) != 1:
+            raise UnsupportedFeatureError("choices", "must contain exactly one choice")
         choice = require_object(choices[0], "choices[0]")
         message = require_object(choice.get("message"), "choices[0].message")
+        if message.get("role") != "assistant":
+            raise UnsupportedFeatureError("choices[0].message.role", "must be assistant")
         parts = list(_decode_content(message.get("content"), "choices[0].message.content"))
         parts.extend(_decode_tool_calls(message.get("tool_calls"), "choices[0].message.tool_calls"))
         usage = _decode_usage(payload.get("usage"))
         model = payload.get("model")
+        message_metadata = vendor_metadata(
+            self.protocol,
+            message,
+            {"role", "content", "tool_calls"},
+        )
         return CanonicalResponse(
             model=model if isinstance(model, str) else "",
-            message=CanonicalMessage(role="assistant", content=parts),
+            message=CanonicalMessage(role="assistant", content=parts, metadata=message_metadata),
             finish_reason=_decode_finish_reason(choice.get("finish_reason")),
             usage=usage,
             metadata=vendor_metadata(
@@ -179,6 +208,8 @@ class OpenAIAdapter(ProtocolAdapter):
         )
 
     def encode_response(self, response: CanonicalResponse) -> dict[str, Any]:
+        if response.message.role != "assistant":
+            raise UnsupportedFeatureError("message.role", "must be assistant")
         payload = native_extensions(self.protocol, response.metadata)
         encoded_message = _encode_message(response.message, 0)
         payload.update(
@@ -205,58 +236,101 @@ class OpenAIAdapter(ProtocolAdapter):
             }
         return payload
 
-    def decode_stream_event(self, event: bytes | Mapping[str, Any]) -> StreamEvent:
+    def decode_stream_event(self, event: bytes | Mapping[str, Any]) -> tuple[StreamEvent, ...]:
         _, payload = decode_sse(event)
         if payload == "[DONE]":
-            return StreamEvent(type="done")
+            return (StreamEvent(type="done"),)
         body = require_object(payload, "stream_event.data")
+        if "error" in body:
+            return (
+                StreamEvent(
+                    type="error",
+                    metadata=require_object(body["error"], "stream_event.error"),
+                ),
+            )
         choices = body.get("choices", [])
         usage = _decode_usage(body.get("usage"))
         model = body.get("model") if isinstance(body.get("model"), str) else None
-        if not isinstance(choices, list) or not choices:
+        if not isinstance(choices, list) or len(choices) > 1:
+            raise UnsupportedFeatureError("stream_event.choices", "must contain at most one choice")
+        events: list[StreamEvent] = []
+        if not choices:
             if usage is not None:
-                return StreamEvent(type="usage", usage=usage, model=model)
-            raise UnsupportedFeatureError("stream_event.choices", "must contain a choice")
+                return (StreamEvent(type="usage", usage=usage, model=model),)
+            raise UnsupportedFeatureError("stream_event.choices", "must contain a choice or usage")
         choice = require_object(choices[0], "stream_event.choices[0]")
         index = choice.get("index", 0)
         index = index if isinstance(index, int) else 0
         delta = require_object(choice.get("delta", {}), "stream_event.choices[0].delta")
         finish = choice.get("finish_reason")
-        tool_calls = delta.get("tool_calls")
-        if isinstance(tool_calls, list) and tool_calls:
-            tool_call = require_object(tool_calls[0], "stream_event.choices[0].delta.tool_calls[0]")
-            function = require_object(tool_call.get("function", {}), "tool_call.function")
-            return StreamEvent(
-                type="tool_call_delta",
-                index=index,
-                tool_call_id=tool_call.get("id") if isinstance(tool_call.get("id"), str) else None,
-                tool_name=function.get("name") if isinstance(function.get("name"), str) else None,
-                arguments_delta=(
-                    function.get("arguments")
-                    if isinstance(function.get("arguments"), str)
-                    else None
-                ),
-                model=model,
+        role = delta.get("role")
+        if role == "assistant":
+            events.append(
+                StreamEvent(type="message_start", index=index, role="assistant", model=model)
+            )
+        elif role is not None:
+            raise UnsupportedFeatureError(
+                "stream_event.choices[0].delta.role", f"unsupported role {role!r}"
             )
         content = delta.get("content")
         if isinstance(content, str):
-            return StreamEvent(type="content_delta", index=index, text=content, model=model)
-        if finish is not None:
-            return StreamEvent(
-                type="message_end",
-                index=index,
-                finish_reason=_decode_finish_reason(finish),
-                usage=usage,
-                model=model,
+            events.append(StreamEvent(type="content_delta", index=index, text=content, model=model))
+        elif content is not None:
+            raise UnsupportedFeatureError(
+                "stream_event.choices[0].delta.content", "must be a string or null"
             )
-        role = delta.get("role")
-        if role == "assistant":
-            return StreamEvent(type="message_start", index=index, role="assistant", model=model)
-        raise UnsupportedFeatureError("stream_event", "contains no supported delta")
+        tool_calls = delta.get("tool_calls")
+        if tool_calls is not None and not isinstance(tool_calls, list):
+            raise UnsupportedFeatureError(
+                "stream_event.choices[0].delta.tool_calls", "must be a list"
+            )
+        for tool_index, raw_tool_call in enumerate(tool_calls or []):
+            tool_call = require_object(
+                raw_tool_call,
+                f"stream_event.choices[0].delta.tool_calls[{tool_index}]",
+            )
+            function = require_object(
+                tool_call.get("function", {}),
+                f"stream_event.choices[0].delta.tool_calls[{tool_index}].function",
+            )
+            events.append(
+                StreamEvent(
+                    type="tool_call_delta",
+                    index=index,
+                    tool_call_id=(
+                        tool_call.get("id") if isinstance(tool_call.get("id"), str) else None
+                    ),
+                    tool_name=(
+                        function.get("name") if isinstance(function.get("name"), str) else None
+                    ),
+                    arguments_delta=(
+                        function.get("arguments")
+                        if isinstance(function.get("arguments"), str)
+                        else None
+                    ),
+                    model=model,
+                )
+            )
+        if finish is not None:
+            events.append(
+                StreamEvent(
+                    type="message_end",
+                    index=index,
+                    finish_reason=_decode_finish_reason(finish),
+                    model=model,
+                )
+            )
+        if usage is not None:
+            events.append(StreamEvent(type="usage", usage=usage, model=model))
+        if not events:
+            raise UnsupportedFeatureError("stream_event", "contains no supported delta")
+        return tuple(events)
 
     def encode_stream_event(self, event: StreamEvent) -> bytes:
         if event.type == "done":
             return encode_sse("[DONE]")
+        if event.type in {"content_end", "heartbeat"}:
+            return NO_STREAM_OUTPUT
         choice: dict[str, Any] = {"index": event.index, "delta": {}, "finish_reason": None}
         if event.type == "content_delta":
             choice["delta"] = {"content": event.text or ""}
@@ -274,8 +348,12 @@ class OpenAIAdapter(ProtocolAdapter):
         elif event.type == "message_start":
             choice["delta"] = {"role": event.role or "assistant"}
         elif event.type == "message_end":
-            choice["finish_reason"] = _encode_finish_reason(event.finish_reason or "stop")
+            if event.finish_reason is None:
+                raise UnsupportedFeatureError("stream_event.finish_reason", "is required")
+            choice["finish_reason"] = _encode_finish_reason(event.finish_reason)
         elif event.type == "usage":
+            if event.usage is None:
+                raise UnsupportedFeatureError("stream_event.usage", "is required")
             choice = {}
         elif event.type == "error":
             return encode_sse({"error": thaw(event.metadata)})
@@ -307,7 +385,16 @@ def _decode_content(value: Any, field: str) -> tuple[ContentPart, ...]:
         part = require_object(raw_part, f"{field}[{index}]")
         part_type = part.get("type")
         if part_type in {"text", "input_text", "output_text"} and isinstance(part.get("text"), str):
-            parts.append(TextPart(part["text"]))
+            parts.append(
+                TextPart(
+                    part["text"],
+                    metadata=vendor_metadata(
+                        Protocol.OPENAI,
+                        part,
+                        {"type", "text"},
+                    ),
+                )
+            )
         elif part_type == "image_url":
             image = part.get("image_url")
             image = {"url": image} if isinstance(image, str) else require_object(image, field)
@@ -320,13 +407,42 @@ def _decode_content(value: Any, field: str) -> tuple[ContentPart, ...]:
                     raise UnsupportedFeatureError(
                         f"{field}[{index}].image_url.url", "invalid data URI"
                     )
-                parts.append(ImagePart(media_type=header[5:].split(";", 1)[0], data=data))
+                metadata = vendor_metadata(
+                    Protocol.OPENAI,
+                    part,
+                    {"type", "image_url"},
+                )
+                add_vendor_scope(
+                    metadata,
+                    Protocol.OPENAI,
+                    "__image_url__",
+                    {key: item for key, item in image.items() if key not in {"url", "detail"}},
+                )
+                parts.append(
+                    ImagePart(
+                        media_type=header[5:].split(";", 1)[0],
+                        data=data,
+                        metadata=metadata,
+                    )
+                )
             else:
                 detail = image.get("detail")
+                metadata = vendor_metadata(
+                    Protocol.OPENAI,
+                    part,
+                    {"type", "image_url"},
+                )
+                add_vendor_scope(
+                    metadata,
+                    Protocol.OPENAI,
+                    "__image_url__",
+                    {key: item for key, item in image.items() if key not in {"url", "detail"}},
+                )
                 parts.append(
                     ImagePart(
                         url=url,
                         detail=detail if isinstance(detail, str) else None,
+                        metadata=metadata,
                     )
                 )
         else:
@@ -356,6 +472,17 @@ def _decode_tool_calls(value: Any, field: str) -> tuple[ToolCallPart, ...]:
         if not isinstance(name, str):
             raise UnsupportedFeatureError(f"{field}[{index}].function.name", "must be a string")
         call_id = call.get("id")
+        metadata = vendor_metadata(
+            Protocol.OPENAI,
+            call,
+            {"id", "type", "function"},
+        )
+        add_vendor_scope(
+            metadata,
+            Protocol.OPENAI,
+            "__function__",
+            {key: item for key, item in function.items() if key not in {"name", "arguments"}},
+        )
         result.append(
             ToolCallPart(
                 id=call_id if isinstance(call_id, str) else None,
@@ -363,6 +490,7 @@ def _decode_tool_calls(value: Any, field: str) -> tuple[ToolCallPart, ...]:
                 arguments=json_arguments(
                     function.get("arguments", {}), f"{field}[{index}].function.arguments"
                 ),
+                metadata=metadata,
             )
         )
     return tuple(result)
@@ -385,6 +513,21 @@ def _decode_tools(value: Any) -> tuple[CanonicalTool, ...]:
         if not isinstance(name, str):
             raise UnsupportedFeatureError(f"tools[{index}].function.name", "must be a string")
         description = function.get("description")
+        metadata = vendor_metadata(
+            Protocol.OPENAI,
+            tool,
+            {"type", "function"},
+        )
+        add_vendor_scope(
+            metadata,
+            Protocol.OPENAI,
+            "__function__",
+            {
+                key: item
+                for key, item in function.items()
+                if key not in {"name", "description", "parameters"}
+            },
+        )
         tools.append(
             CanonicalTool(
                 name=name,
@@ -392,6 +535,7 @@ def _decode_tools(value: Any) -> tuple[CanonicalTool, ...]:
                 input_schema=require_object(
                     function.get("parameters", {}), f"tools[{index}].function.parameters"
                 ),
+                metadata=metadata,
             )
         )
     return tuple(tools)
@@ -408,38 +552,69 @@ def _decode_tool_choice(value: Any) -> str | dict[str, Any] | None:
     return {"name": name}
 
 
-def _encode_tool_choice(value: str | Mapping[str, Any]) -> Any:
+def _encode_tool_choice(value: str | Mapping[str, Any], metadata: Mapping[str, Any]) -> Any:
     if isinstance(value, str):
         return value
+    if "names" in value:
+        raise UnsupportedFeatureError(
+            "tool_choice.names", "OpenAI cannot restrict tool choice to multiple names"
+        )
     name = value.get("name")
     if not isinstance(name, str):
         raise UnsupportedFeatureError("tool_choice.name", "must be a string")
-    return {"type": "function", "function": {"name": name}}
+    choice = vendor_scope(Protocol.OPENAI, metadata, "__tool_choice__")
+    function = vendor_scope(Protocol.OPENAI, metadata, "__tool_choice_function__")
+    function["name"] = name
+    choice.update({"type": "function", "function": function})
+    return choice
 
 
 def _encode_message(message: CanonicalMessage, index: int) -> dict[str, Any]:
     results = [part for part in message.content if isinstance(part, ToolResultPart)]
     if results:
+        if message.role != "user":
+            raise UnsupportedFeatureError(
+                f"messages[{index}].role",
+                "tool results are only valid on canonical user messages",
+            )
         if len(results) != 1 or len(message.content) != 1:
             raise UnsupportedFeatureError(
                 f"messages[{index}].content",
                 "OpenAI tool result messages cannot mix content blocks",
             )
         result = results[0]
+        if not isinstance(result.is_error, bool):
+            raise UnsupportedFeatureError(
+                f"messages[{index}].content[0].is_error", "must be a boolean"
+            )
+        if result.is_error:
+            raise UnsupportedFeatureError(
+                f"messages[{index}].content[0].is_error",
+                "OpenAI tool messages cannot represent an error flag",
+            )
         if result.tool_call_id is None:
             raise UnsupportedFeatureError(
                 f"messages[{index}].content[0].tool_call_id", "is required by OpenAI"
             )
-        payload: dict[str, Any] = {
-            "role": "tool",
-            "tool_call_id": result.tool_call_id,
-            "content": _encode_content(result.content),
-        }
+        payload: dict[str, Any] = native_extensions(Protocol.OPENAI, message.metadata)
+        payload.update(
+            {
+                "role": "tool",
+                "tool_call_id": result.tool_call_id,
+                "content": _encode_content(result.content),
+            }
+        )
         _set_optional(payload, "name", result.name)
         return payload
     calls = [part for part in message.content if isinstance(part, ToolCallPart)]
+    if calls and message.role != "assistant":
+        raise UnsupportedFeatureError(
+            f"messages[{index}].role",
+            "tool calls are only valid on canonical assistant messages",
+        )
     regular = [part for part in message.content if not isinstance(part, ToolCallPart)]
-    payload = {"role": message.role, "content": _encode_content(regular) if regular else None}
+    payload = native_extensions(Protocol.OPENAI, message.metadata)
+    payload.update({"role": message.role, "content": _encode_content(regular) if regular else None})
     if calls:
         encoded_calls = []
         for part_index, call in enumerate(calls):
@@ -447,36 +622,51 @@ def _encode_message(message: CanonicalMessage, index: int) -> dict[str, Any]:
                 raise UnsupportedFeatureError(
                     f"messages[{index}].content[{part_index}].id", "is required by OpenAI"
                 )
-            encoded_calls.append(
+            function = vendor_scope(Protocol.OPENAI, call.metadata, "__function__")
+            function.update(
+                {
+                    "name": call.name,
+                    "arguments": orjson.dumps(thaw(call.arguments)).decode(),
+                }
+            )
+            encoded_call = native_extensions(Protocol.OPENAI, call.metadata)
+            encoded_call.update(
                 {
                     "id": call.id,
                     "type": "function",
-                    "function": {
-                        "name": call.name,
-                        "arguments": orjson.dumps(thaw(call.arguments)).decode(),
-                    },
+                    "function": function,
                 }
             )
+            encoded_calls.append(encoded_call)
         payload["tool_calls"] = encoded_calls
     return payload
 
 
 def _encode_content(parts: Sequence[ContentPart]) -> str | list[dict[str, Any]]:
-    if len(parts) == 1 and isinstance(parts[0], TextPart):
+    if (
+        len(parts) == 1
+        and isinstance(parts[0], TextPart)
+        and not native_extensions(Protocol.OPENAI, parts[0].metadata)
+    ):
         return parts[0].text
     encoded: list[dict[str, Any]] = []
     for part in parts:
         if isinstance(part, TextPart):
-            encoded.append({"type": "text", "text": part.text})
+            block = native_extensions(Protocol.OPENAI, part.metadata)
+            block.update({"type": "text", "text": part.text})
+            encoded.append(block)
         elif isinstance(part, ImagePart):
             url = (
                 part.url
                 if part.url is not None
                 else f"data:{part.media_type};base64,{part.data or ''}"
             )
-            image: dict[str, Any] = {"url": url}
+            image = vendor_scope(Protocol.OPENAI, part.metadata, "__image_url__")
+            image["url"] = url
             _set_optional(image, "detail", part.detail)
-            encoded.append({"type": "image_url", "image_url": image})
+            block = native_extensions(Protocol.OPENAI, part.metadata)
+            block.update({"type": "image_url", "image_url": image})
+            encoded.append(block)
         else:
             raise UnsupportedFeatureError("content", f"cannot encode {type(part).__name__} inline")
     return encoded
@@ -504,13 +694,49 @@ def _decode_finish_reason(value: Any) -> FinishReason:
 
 
 def _encode_finish_reason(value: FinishReason) -> str:
+    if value == "error":
+        raise UnsupportedFeatureError(
+            "finish_reason", "OpenAI has no successful finish reason for canonical errors"
+        )
     return {
         "stop": "stop",
         "length": "length",
         "tool_call": "tool_calls",
         "content_filter": "content_filter",
-        "error": "stop",
     }[value]
+
+
+def _encode_tool(tool: CanonicalTool) -> dict[str, Any]:
+    payload = native_extensions(Protocol.OPENAI, tool.metadata)
+    function = vendor_scope(Protocol.OPENAI, tool.metadata, "__function__")
+    function.update(
+        {
+            "name": tool.name,
+            **({"description": tool.description} if tool.description is not None else {}),
+            "parameters": thaw(tool.input_schema),
+        }
+    )
+    payload.update({"type": "function", "function": function})
+    return payload
+
+
+def _capture_tool_choice_extensions(metadata: dict[str, Any], value: Any) -> None:
+    if not isinstance(value, Mapping):
+        return
+    add_vendor_scope(
+        metadata,
+        Protocol.OPENAI,
+        "__tool_choice__",
+        {key: item for key, item in value.items() if key not in {"type", "function"}},
+    )
+    function = value.get("function")
+    if isinstance(function, Mapping):
+        add_vendor_scope(
+            metadata,
+            Protocol.OPENAI,
+            "__tool_choice_function__",
+            {key: item for key, item in function.items() if key != "name"},
+        )
 
 
 def _set_optional(payload: dict[str, Any], key: str, value: Any) -> None:

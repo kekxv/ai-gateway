@@ -4,8 +4,9 @@
   "contents": [
     {
       "role": "user",
+      "vendorMessage": "fixture",
       "parts": [
-        {"text": "Inspect both images."},
+        {"text": "Inspect both images.", "thoughtSignature": "fixture-signature"},
         {"fileData": {"mimeType": "image/png", "fileUri": "https://example.test/cat.png"}, "detail": "high"},
         {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}
       ]
@@ -24,10 +25,10 @@
     {"role": "user", "parts": [{"text": "Summarize it."}]}
   ],
   "tools": [
-    {"functionDeclarations": [{"name": "weather", "description": "Get weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}]}
+    {"vendorGroup": "fixture", "functionDeclarations": [{"name": "weather", "description": "Get weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}, "behavior": "BLOCKING"}]}
   ],
-  "toolConfig": {"functionCallingConfig": {"mode": "ANY"}},
-  "generationConfig": {"temperature": 0.2, "topP": 0.9, "maxOutputTokens": 128, "stopSequences": ["END", "STOP"]},
+  "toolConfig": {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": ["weather"], "vendorCalling": "fixture"}, "vendorToolConfig": "fixture"},
+  "generationConfig": {"temperature": 0.2, "topP": 0.9, "maxOutputTokens": 128, "stopSequences": ["END", "STOP"], "responseMimeType": "application/json"},
   "stream": true,
   "cachedContent": "cachedContents/example"
 }

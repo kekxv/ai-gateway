@@ -4,8 +4,9 @@
     {"role": "system", "content": "Be concise."},
     {
       "role": "user",
+      "name": "fixture-user",
       "content": [
-        {"type": "text", "text": "Inspect both images."},
+        {"type": "text", "text": "Inspect both images.", "cache_control": {"type": "ephemeral"}},
         {"type": "image_url", "image_url": {"url": "https://example.test/cat.png", "detail": "high"}},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}
       ]
@@ -21,9 +22,9 @@
     {"role": "user", "content": "Summarize it."}
   ],
   "tools": [
-    {"type": "function", "function": {"name": "weather", "description": "Get weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}
+    {"type": "function", "x-tool": "fixture", "function": {"name": "weather", "description": "Get weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}, "strict": true}}
   ],
-  "tool_choice": "required",
+  "tool_choice": {"type": "function", "function": {"name": "weather"}, "parallel": false},
   "temperature": 0.2,
   "top_p": 0.9,
   "max_completion_tokens": 128,

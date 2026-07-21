@@ -17,7 +17,14 @@ from ai_gateway.protocols.types import CanonicalRequest, CanonicalResponse, Stre
 CROSS_PROTOCOL_LOSSES = (
     "metadata.vendor_extensions are emitted only to the protocol that supplied them",
     "Claude content delta events do not carry the optional stream model envelope",
+    "an empty encoded stream frame means the target protocol has no wire event for that "
+    "canonical event",
 )
+
+# Encoders return this when a canonical event has no native frame. Streaming orchestration must
+# skip it. Gemini decoding interprets an empty input only when the HTTP response reaches EOF, where
+# it becomes the canonical `done` event; callers must not feed ordinary encoder no-ops back in.
+NO_STREAM_OUTPUT = b""
 
 
 class UnsupportedFeatureError(GatewayError):
@@ -45,7 +52,7 @@ class ProtocolAdapter(ABC):
     def encode_response(self, response: CanonicalResponse) -> dict[str, Any]: ...
 
     @abstractmethod
-    def decode_stream_event(self, event: bytes | Mapping[str, Any]) -> StreamEvent: ...
+    def decode_stream_event(self, event: bytes | Mapping[str, Any]) -> tuple[StreamEvent, ...]: ...
 
     @abstractmethod
     def encode_stream_event(self, event: StreamEvent) -> bytes: ...
@@ -94,6 +101,14 @@ def optional_int(value: Any, field: str) -> int | None:
     return value
 
 
+def required_bool(value: Any, field: str, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise UnsupportedFeatureError(field, "must be a boolean")
+    return value
+
+
 def string_list(value: Any, field: str) -> tuple[str, ...]:
     if value is None:
         return ()
@@ -133,13 +148,43 @@ def vendor_metadata(
     return metadata
 
 
+def add_vendor_scope(
+    metadata: dict[str, Any],
+    protocol: Protocol,
+    scope: str,
+    extensions: Mapping[str, Any],
+) -> None:
+    if not extensions:
+        return
+    all_extensions = metadata.setdefault("vendor_extensions", {})
+    protocol_extensions = all_extensions.setdefault(protocol.value, {})
+    protocol_extensions[scope] = thaw(extensions)
+
+
 def native_extensions(protocol: Protocol, metadata: Mapping[str, Any]) -> dict[str, Any]:
     """Return extensions only for their originating protocol to prevent vendor leakage."""
     all_extensions = metadata.get("vendor_extensions")
     if not isinstance(all_extensions, Mapping):
         return {}
     extensions = all_extensions.get(protocol.value)
-    return cast(dict[str, Any], thaw(extensions)) if isinstance(extensions, Mapping) else {}
+    if not isinstance(extensions, Mapping):
+        return {}
+    return {key: thaw(value) for key, value in extensions.items() if not str(key).startswith("__")}
+
+
+def vendor_scope(
+    protocol: Protocol,
+    metadata: Mapping[str, Any],
+    scope: str,
+) -> dict[str, Any]:
+    all_extensions = metadata.get("vendor_extensions")
+    if not isinstance(all_extensions, Mapping):
+        return {}
+    extensions = all_extensions.get(protocol.value)
+    if not isinstance(extensions, Mapping):
+        return {}
+    scoped = extensions.get(scope)
+    return cast(dict[str, Any], thaw(scoped)) if isinstance(scoped, Mapping) else {}
 
 
 def decode_sse(event: bytes | Mapping[str, Any]) -> tuple[str | None, Any]:

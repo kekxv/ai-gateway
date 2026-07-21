@@ -14,7 +14,7 @@ def test_claude_golden_request_round_trips(load_fixture) -> None:
 
     assert decoded_again == canonical
     assert canonical.max_output_tokens == 128
-    assert canonical.metadata["vendor_extensions"]["claude"] == {"service_tier": "auto"}
+    assert canonical.metadata["vendor_extensions"]["claude"]["service_tier"] == "auto"
 
 
 @pytest.mark.parametrize(
@@ -35,14 +35,15 @@ def test_claude_finish_reasons(native: str, canonical: str, load_fixture) -> Non
 def test_claude_golden_response_and_stream(load_fixture, load_bytes) -> None:
     adapter = ClaudeAdapter()
     response = adapter.decode_response(load_fixture("claude", "response.json"))
-    event = adapter.decode_stream_event(load_bytes("claude", "stream.sse"))
+    events = adapter.decode_stream_event(load_bytes("claude", "stream.sse"))
 
     assert response.finish_reason == "tool_call"
     assert response.usage is not None
     assert response.usage.input_tokens == 42
-    assert event.type == "content_delta"
-    assert event.text == "Hello"
-    assert adapter.decode_stream_event(adapter.encode_stream_event(event)) == event
+    assert events == (events[0],)
+    assert events[0].type == "content_delta"
+    assert events[0].text == "Hello"
+    assert adapter.decode_stream_event(adapter.encode_stream_event(events[0])) == events
 
 
 def test_impossible_tool_result_conversion_is_422_and_names_field() -> None:

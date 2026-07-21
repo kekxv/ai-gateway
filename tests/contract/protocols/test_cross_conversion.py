@@ -8,17 +8,126 @@ import pytest
 from ai_gateway.core.enums import Protocol
 from ai_gateway.protocols.base import rewrite_passthrough_request
 from ai_gateway.protocols.registry import get_adapter
-from ai_gateway.protocols.types import CanonicalRequest, CanonicalResponse, StreamEvent
+from ai_gateway.protocols.types import (
+    CanonicalMessage,
+    CanonicalRequest,
+    CanonicalResponse,
+    CanonicalTool,
+    CanonicalUsage,
+    ContentPart,
+    ImagePart,
+    StreamEvent,
+    TextPart,
+    ToolCallPart,
+    ToolResultPart,
+)
 
 PROTOCOLS = tuple(Protocol)
 
 
+def expected_request() -> CanonicalRequest:
+    return CanonicalRequest(
+        model="gateway-chat",
+        messages=(
+            CanonicalMessage(
+                "user",
+                (
+                    TextPart("Inspect both images."),
+                    ImagePart(url="https://example.test/cat.png", detail="high"),
+                    ImagePart(media_type="image/png", data="aGVsbG8="),
+                ),
+            ),
+            CanonicalMessage(
+                "assistant",
+                (
+                    TextPart("I will check the weather."),
+                    ToolCallPart("call_weather", "weather", {"city": "Paris"}),
+                ),
+            ),
+            CanonicalMessage(
+                "user",
+                (
+                    ToolResultPart(
+                        "call_weather",
+                        "weather",
+                        (TextPart('{"temperature":21}'),),
+                    ),
+                ),
+            ),
+            CanonicalMessage("user", (TextPart("Summarize it."),)),
+        ),
+        system=(TextPart("Be concise."),),
+        tools=(
+            CanonicalTool(
+                "weather",
+                "Get weather",
+                {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            ),
+        ),
+        tool_choice={"name": "weather"},
+        temperature=0.2,
+        top_p=0.9,
+        max_output_tokens=128,
+        stop_sequences=("END", "STOP"),
+        stream=True,
+        metadata={},
+    )
+
+
+def expected_response(model: str) -> CanonicalResponse:
+    return CanonicalResponse(
+        model=model,
+        message=CanonicalMessage(
+            "assistant",
+            (
+                TextPart("Calling weather."),
+                ToolCallPart("call_weather", "weather", {"city": "Paris"}),
+            ),
+        ),
+        finish_reason="tool_call",
+        usage=CanonicalUsage(42, 7),
+        metadata={},
+    )
+
+
+def semantic_part(part: ContentPart) -> ContentPart:
+    if isinstance(part, ToolResultPart):
+        return replace(
+            part,
+            content=tuple(semantic_part(item) for item in part.content),
+            metadata={},
+        )
+    return replace(part, metadata={})
+
+
+def semantic_message(message: CanonicalMessage) -> CanonicalMessage:
+    return replace(
+        message,
+        content=tuple(semantic_part(part) for part in message.content),
+        metadata={},
+    )
+
+
+def semantic_tool(tool: CanonicalTool) -> CanonicalTool:
+    return replace(tool, metadata={})
+
+
 def semantic_request(request: CanonicalRequest) -> CanonicalRequest:
-    return replace(request, metadata={})
+    return replace(
+        request,
+        messages=tuple(semantic_message(message) for message in request.messages),
+        system=tuple(semantic_part(part) for part in request.system),
+        tools=tuple(semantic_tool(tool) for tool in request.tools),
+        metadata={},
+    )
 
 
 def semantic_response(response: CanonicalResponse) -> CanonicalResponse:
-    return replace(response, metadata={})
+    return replace(response, message=semantic_message(response.message), metadata={})
 
 
 def semantic_stream_event(event: StreamEvent) -> StreamEvent:
@@ -36,7 +145,8 @@ def test_all_nine_request_conversion_pairs_preserve_semantics(source, target, lo
     converted = target_adapter.encode_request(canonical)
     decoded = target_adapter.decode_request(converted)
 
-    assert semantic_request(decoded) == semantic_request(canonical)
+    assert semantic_request(canonical) == expected_request()
+    assert semantic_request(decoded) == expected_request()
     if source != target:
         assert "service_tier" not in converted
         assert "cachedContent" not in converted
@@ -54,7 +164,9 @@ def test_all_nine_response_conversion_pairs_preserve_semantics(
     converted = target_adapter.encode_response(canonical)
     decoded = target_adapter.decode_response(converted)
 
-    assert semantic_response(decoded) == semantic_response(canonical)
+    expected = expected_response(canonical.model)
+    assert semantic_response(canonical) == expected
+    assert semantic_response(decoded) == expected
 
 
 @pytest.mark.parametrize("source", PROTOCOLS)
@@ -64,10 +176,17 @@ def test_all_nine_sse_conversion_pairs_preserve_delta_semantics(source, target, 
     target_adapter = get_adapter(target)
     canonical = source_adapter.decode_stream_event(load_bytes(source.value, "stream.sse"))
 
-    converted = target_adapter.encode_stream_event(canonical)
-    decoded = target_adapter.decode_stream_event(converted)
+    converted = (target_adapter.encode_stream_event(event) for event in canonical)
+    decoded = tuple(
+        decoded_event
+        for frame in converted
+        if frame
+        for decoded_event in target_adapter.decode_stream_event(frame)
+    )
 
-    assert semantic_stream_event(decoded) == semantic_stream_event(canonical)
+    expected = (StreamEvent(type="content_delta", text="Hello"),)
+    assert tuple(semantic_stream_event(event) for event in canonical) == expected
+    assert tuple(semantic_stream_event(event) for event in decoded) == expected
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)

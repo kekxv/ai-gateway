@@ -11,11 +11,11 @@ def test_gemini_golden_request_round_trips(load_fixture) -> None:
     decoded_again = adapter.decode_request(adapter.encode_request(canonical))
 
     assert decoded_again == canonical
-    assert canonical.tool_choice == "required"
+    assert canonical.tool_choice == {"name": "weather"}
     assert canonical.stop_sequences == ("END", "STOP")
-    assert canonical.metadata["vendor_extensions"]["gemini"] == {
-        "cachedContent": "cachedContents/example"
-    }
+    assert canonical.metadata["vendor_extensions"]["gemini"]["cachedContent"] == (
+        "cachedContents/example"
+    )
 
 
 @pytest.mark.parametrize(
@@ -42,10 +42,11 @@ def test_gemini_function_call_stop_is_normalized_to_tool_call(load_fixture) -> N
 def test_gemini_golden_response_and_stream(load_fixture, load_bytes) -> None:
     adapter = GeminiAdapter()
     response = adapter.decode_response(load_fixture("gemini", "response.json"))
-    event = adapter.decode_stream_event(load_bytes("gemini", "stream.sse"))
+    events = adapter.decode_stream_event(load_bytes("gemini", "stream.sse"))
 
     assert response.usage is not None
     assert response.usage.output_tokens == 7
-    assert event.type == "content_delta"
-    assert event.text == "Hello"
-    assert adapter.decode_stream_event(adapter.encode_stream_event(event)) == event
+    assert events == (events[0],)
+    assert events[0].type == "content_delta"
+    assert events[0].text == "Hello"
+    assert adapter.decode_stream_event(adapter.encode_stream_event(events[0])) == events

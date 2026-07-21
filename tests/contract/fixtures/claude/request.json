@@ -1,11 +1,12 @@
 {
   "model": "gateway-chat",
-  "system": [{"type": "text", "text": "Be concise."}],
+  "system": [{"type": "text", "text": "Be concise.", "cache_control": {"type": "ephemeral"}}],
   "messages": [
     {
       "role": "user",
+      "vendor_message": "fixture",
       "content": [
-        {"type": "text", "text": "Inspect both images."},
+        {"type": "text", "text": "Inspect both images.", "cache_control": {"type": "ephemeral"}},
         {"type": "image", "source": {"type": "url", "url": "https://example.test/cat.png"}, "detail": "high"},
         {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}}
       ]
@@ -24,9 +25,9 @@
     {"role": "user", "content": "Summarize it."}
   ],
   "tools": [
-    {"name": "weather", "description": "Get weather", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}
+    {"name": "weather", "description": "Get weather", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}, "cache_control": {"type": "ephemeral"}}
   ],
-  "tool_choice": {"type": "any"},
+  "tool_choice": {"type": "tool", "name": "weather", "disable_parallel_tool_use": true},
   "temperature": 0.2,
   "top_p": 0.9,
   "max_tokens": 128,
