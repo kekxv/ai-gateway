@@ -69,6 +69,7 @@ class Router:
         required_protocol: Protocol | str | None = None,
         *,
         requested_model: str | None = None,
+        excluded_route_ids: frozenset[int] | set[int] = frozenset(),
     ) -> RouteCandidate:
         model_id, requested_name = _model_identity(model, requested_model)
         protocol = Protocol(required_protocol) if required_protocol is not None else None
@@ -82,6 +83,7 @@ class Router:
                             principal=principal,
                             required_protocol=protocol,
                             now=now,
+                            excluded_route_ids=excluded_route_ids,
                         )
                     )
                 )
@@ -161,6 +163,7 @@ async def select_route(
     clock: Clock = _utcnow,
     requested_model: str | None = None,
     mutation_session_factory: MutationSessionFactory | None = None,
+    excluded_route_ids: frozenset[int] | set[int] = frozenset(),
 ) -> RouteCandidate:
     return await Router(
         session,
@@ -172,6 +175,7 @@ async def select_route(
         principal,
         required_protocol,
         requested_model=requested_model,
+        excluded_route_ids=excluded_route_ids,
     )
 
 
@@ -263,6 +267,7 @@ def _candidate_query(
     principal: ApiKeyPrincipal,
     required_protocol: Protocol | None,
     now: datetime,
+    excluded_route_ids: frozenset[int] | set[int] = frozenset(),
 ) -> Select[tuple[Any, ...]]:
     eligible = (
         select(
@@ -289,6 +294,7 @@ def _candidate_query(
             _scope_condition(ModelRoute, principal),
             _transport_condition(ProviderProtocol, required_protocol),
             _health_condition(ModelRoute, now),
+            ModelRoute.id.not_in(excluded_route_ids) if excluded_route_ids else true(),
         )
         .subquery("eligible_routes")
     )

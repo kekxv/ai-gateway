@@ -1,0 +1,675 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
+from decimal import Decimal
+from time import monotonic
+from typing import Any
+from typing import Protocol as TypingProtocol
+from urllib.parse import quote
+from uuid import UUID, uuid4
+
+import httpx
+import orjson
+from fastapi import HTTPException, Request, status
+from fastapi.responses import JSONResponse, Response
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ai_gateway.audit.service import (
+    AuditService,
+    RequestContext,
+    RequestFailure,
+    RequestResult,
+)
+from ai_gateway.auth.api_key import ApiKeyPrincipal, authenticate_api_key, extract_api_key
+from ai_gateway.billing.pricing import calculate_cost
+from ai_gateway.billing.service import BalanceReservation, BillingService, SettlementResult
+from ai_gateway.billing.usage import UsageResult, estimate_request_tokens, resolve_usage
+from ai_gateway.catalog.repository import CatalogRepository
+from ai_gateway.core.config import Settings
+from ai_gateway.core.enums import Protocol
+from ai_gateway.core.errors import GatewayError
+from ai_gateway.db.models import Model
+from ai_gateway.protocols.base import (
+    UnsupportedFeatureError,
+    is_object,
+    rewrite_passthrough_request,
+)
+from ai_gateway.protocols.registry import get_adapter
+from ai_gateway.protocols.types import CanonicalRequest, CanonicalResponse, TextPart
+from ai_gateway.routing.service import Router
+from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFailure
+from ai_gateway.transport.upstream import build_upstream_request
+
+
+class HttpClientProvider(TypingProtocol):
+    async def client_for(self, url: str | httpx.URL) -> httpx.AsyncClient: ...
+
+
+class RouteSelector(TypingProtocol):
+    async def select_route(
+        self,
+        model: int,
+        principal: ApiKeyPrincipal,
+        required_protocol: Protocol | str | None = None,
+        *,
+        requested_model: str | None = None,
+        excluded_route_ids: frozenset[int] | set[int] = frozenset(),
+    ) -> RouteCandidate: ...
+
+    async def record_success(self, route_id: int) -> bool: ...
+
+    async def record_failure(self, route_id: int, failure: object) -> bool: ...
+
+
+class InvalidRequestError(GatewayError):
+    code = "invalid_request"
+    status_code = 400
+
+
+class UpstreamError(GatewayError):
+    code = "upstream_error"
+    status_code = 502
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        route: RouteCandidate | None = None,
+        attempts: tuple[dict[str, Any], ...] = (),
+    ) -> None:
+        self.route = route
+        self.attempts = attempts
+        super().__init__(message)
+
+
+class UpstreamTimeout(GatewayError):
+    code = "upstream_timeout"
+    status_code = 504
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        route: RouteCandidate | None = None,
+        attempts: tuple[dict[str, Any], ...] = (),
+    ) -> None:
+        self.route = route
+        self.attempts = attempts
+        super().__init__(message)
+
+
+class _RoutedGatewayError(GatewayError):
+    def __init__(
+        self,
+        source: GatewayError,
+        route: RouteCandidate,
+        attempts: tuple[dict[str, Any], ...],
+    ) -> None:
+        self.code = source.code
+        self.status_code = source.status_code
+        self.route = route
+        self.attempts = attempts
+        super().__init__(source.message)
+
+
+@dataclass(frozen=True, slots=True)
+class GatewayOutput:
+    body: bytes
+    status_code: int
+    content_type: str
+
+    def response(self) -> Response:
+        return Response(
+            content=self.body,
+            status_code=self.status_code,
+            headers={"content-type": self.content_type},
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedRequest:
+    raw_body: bytes
+    payload: dict[str, Any]
+    canonical: CanonicalRequest
+    requested_model: str
+    inbound_protocol: Protocol
+
+
+@dataclass(frozen=True, slots=True)
+class _AttemptResponse:
+    route: RouteCandidate
+    response: httpx.Response
+    attempts: tuple[dict[str, Any], ...]
+
+
+class GatewayService:
+    def __init__(
+        self,
+        *,
+        session: AsyncSession,
+        settings: Settings,
+        billing_service: BillingService,
+        audit_service: AuditService,
+        http_client_factory: HttpClientProvider,
+        router_factory: Callable[[AsyncSession], RouteSelector] = Router,
+    ) -> None:
+        self._session = session
+        self._settings = settings
+        self._billing = billing_service
+        self._audit = audit_service
+        self._http_clients = http_client_factory
+        self._router_factory = router_factory
+
+    async def handle(
+        self,
+        request: Request,
+        inbound_protocol: Protocol,
+        *,
+        path_model: str | None = None,
+    ) -> GatewayOutput:
+        started_at = monotonic()
+
+        # Authentication deliberately precedes parsing or catalog/database work.
+        principal = await authenticate_api_key(extract_api_key(request), self._session)
+        raw_body = await request.body()
+        payload, requested_model = _request_payload(raw_body, inbound_protocol, path_model)
+
+        resolved = await CatalogRepository(self._session).resolve_model(requested_model)
+        canonical = get_adapter(inbound_protocol).decode_request(payload)
+        if canonical.stream:
+            raise UnsupportedFeatureError("stream", "streaming is not available on this endpoint")
+        prepared = _PreparedRequest(
+            raw_body,
+            payload,
+            canonical,
+            requested_model,
+            inbound_protocol,
+        )
+
+        priced_model = await self._session.get(Model, resolved.model_id)
+        if priced_model is None:
+            raise RuntimeError("resolved catalog model disappeared")
+        request_id = uuid4()
+        billing_key = _billing_key(request, request_id)
+        reservation = await self._billing.reserve_balance(
+            user_id=principal.user_id,
+            model=priced_model,
+            estimated_input_tokens=estimate_request_tokens(canonical),
+            max_output_tokens=canonical.max_output_tokens,
+            idempotency_key=billing_key,
+            request_id=request_id,
+        )
+
+        audit_id = await self._audit.start_request(
+            RequestContext(
+                user_id=principal.user_id,
+                api_key_id=principal.api_key_id,
+                model_id=resolved.model_id,
+                inbound_protocol=inbound_protocol,
+                transport="http",
+                stream=False,
+                headers=dict(request.headers),
+                metadata={
+                    "requested_model": requested_model,
+                    "canonical_model": resolved.canonical_name,
+                },
+            ),
+            raw_body,
+        )
+
+        attempt_response: _AttemptResponse | None = None
+        settled = False
+        try:
+            attempt_response = await self._send_with_failover(
+                request=request,
+                prepared=prepared,
+                principal=principal,
+                model_id=resolved.model_id,
+            )
+            route = attempt_response.route
+            upstream = attempt_response.response
+
+            if upstream.status_code >= 400:
+                settlement = await self._settle_zero(reservation, billing_key)
+                settled = True
+                output = _same_protocol_error_output(inbound_protocol, route, upstream)
+                await self._audit.fail_request(
+                    audit_id,
+                    RequestFailure(
+                        error_code="upstream_error",
+                        provider_id=route.provider_id,
+                        model_route_id=route.route_id,
+                        outbound_protocol=route.protocol,
+                        http_status=upstream.status_code,
+                        cost=settlement.actual_cost,
+                        latency_ms=_elapsed_ms(started_at),
+                        headers=dict(upstream.headers),
+                        body=upstream.content,
+                        metadata={"attempts": attempt_response.attempts},
+                    ),
+                )
+                if output is not None:
+                    return output
+                raise UpstreamError("The upstream provider rejected the request")
+
+            output, response_payload, canonical_response = _convert_response(
+                inbound_protocol=inbound_protocol,
+                route=route,
+                upstream=upstream,
+            )
+            usage_result = _resolve_response_usage(
+                route=route,
+                response_payload=response_payload,
+                request=replace(canonical, model=route.upstream_model),
+                canonical_response=canonical_response,
+                response_body=upstream.content,
+            )
+            cost = calculate_cost(priced_model, usage_result.usage)
+            settlement = await self._billing.settle_request(
+                reservation_id=reservation.ledger_entry_id,
+                idempotency_key=billing_key,
+                cost=cost,
+                usage=usage_result.usage,
+                usage_source=usage_result.usage_source,
+            )
+            settled = True
+            await self._audit.complete_request(
+                audit_id,
+                RequestResult(
+                    provider_id=route.provider_id,
+                    model_route_id=route.route_id,
+                    outbound_protocol=route.protocol,
+                    http_status=output.status_code,
+                    prompt_tokens=usage_result.usage.input_tokens,
+                    completion_tokens=usage_result.usage.output_tokens,
+                    usage_source=usage_result.usage_source,
+                    cost=settlement.actual_cost,
+                    latency_ms=_elapsed_ms(started_at),
+                    headers=dict(upstream.headers),
+                    body=output.body,
+                    metadata={"attempts": attempt_response.attempts},
+                ),
+            )
+            return output
+        except Exception as exc:
+            if not settled:
+                settlement = await self._settle_zero(reservation, billing_key)
+                settled = True
+                final_route = (
+                    attempt_response.route
+                    if attempt_response is not None
+                    else getattr(exc, "route", None)
+                )
+                attempts = (
+                    attempt_response.attempts
+                    if attempt_response is not None
+                    else getattr(exc, "attempts", ())
+                )
+                await self._audit.fail_request(
+                    audit_id,
+                    RequestFailure(
+                        error_code=_public_error_code(exc),
+                        provider_id=final_route.provider_id if final_route is not None else None,
+                        model_route_id=(final_route.route_id if final_route is not None else None),
+                        outbound_protocol=(
+                            final_route.protocol if final_route is not None else None
+                        ),
+                        http_status=getattr(exc, "status_code", None),
+                        cost=settlement.actual_cost,
+                        latency_ms=_elapsed_ms(started_at),
+                        metadata={"attempts": attempts},
+                    ),
+                )
+            raise
+
+    async def _send_with_failover(
+        self,
+        *,
+        request: Request,
+        prepared: _PreparedRequest,
+        principal: ApiKeyPrincipal,
+        model_id: int,
+    ) -> _AttemptResponse:
+        router = self._router_factory(self._session)
+        attempted_route_ids: set[int] = set()
+        attempts: list[dict[str, Any]] = []
+        last_failure: BaseException | httpx.Response | None = None
+        last_route: RouteCandidate | None = None
+
+        while True:
+            try:
+                route = await router.select_route(
+                    model_id,
+                    principal,
+                    requested_model=prepared.requested_model,
+                    excluded_route_ids=attempted_route_ids,
+                )
+            except NoRouteAvailable:
+                if not attempts:
+                    raise
+                if isinstance(last_failure, httpx.TimeoutException):
+                    raise UpstreamTimeout(
+                        "The upstream provider timed out",
+                        route=last_route,
+                        attempts=tuple(attempts),
+                    ) from last_failure
+                raise UpstreamError(
+                    "No upstream provider completed the request",
+                    route=last_route,
+                    attempts=tuple(attempts),
+                )
+
+            attempted_route_ids.add(route.route_id)
+            last_route = route
+            try:
+                body = _upstream_body(prepared, route)
+                url = upstream_url(route.protocol, route.base_url, route.upstream_model)
+                upstream_request = build_upstream_request(
+                    route,
+                    request.headers,
+                    body,
+                    settings=self._settings,
+                    url=url,
+                )
+            except UnsupportedFeatureError as exc:
+                raise _RoutedGatewayError(exc, route, tuple(attempts)) from exc
+            except Exception as exc:
+                raise UpstreamError(
+                    "The upstream request could not be prepared",
+                    route=route,
+                    attempts=tuple(attempts),
+                ) from exc
+            try:
+                client = await self._http_clients.client_for(url)
+                upstream = await client.send(upstream_request)
+            except Exception as exc:
+                if not is_retryable_failure(exception=exc):
+                    raise UpstreamError(
+                        "The upstream request failed",
+                        route=route,
+                        attempts=tuple(attempts),
+                    ) from exc
+                await router.record_failure(route.route_id, RouteFailure(exception=exc))
+                attempts.append(_attempt_summary(route, len(attempts) + 1, exception=exc))
+                last_failure = exc
+                continue
+
+            if is_retryable_failure(status_code=upstream.status_code):
+                await router.record_failure(route.route_id, upstream.status_code)
+                attempts.append(
+                    _attempt_summary(
+                        route,
+                        len(attempts) + 1,
+                        status_code=upstream.status_code,
+                    )
+                )
+                last_failure = upstream
+                await upstream.aclose()
+                continue
+
+            if upstream.status_code >= 400:
+                await router.record_failure(route.route_id, upstream.status_code)
+            else:
+                await router.record_success(route.route_id)
+            attempts.append(
+                _attempt_summary(
+                    route,
+                    len(attempts) + 1,
+                    status_code=upstream.status_code,
+                    succeeded=upstream.status_code < 400,
+                )
+            )
+            return _AttemptResponse(route, upstream, tuple(attempts))
+
+    async def _settle_zero(
+        self,
+        reservation: BalanceReservation,
+        billing_key: str,
+    ) -> SettlementResult:
+        return await self._billing.settle_request(
+            reservation_id=reservation.ledger_entry_id,
+            idempotency_key=billing_key,
+            cost=Decimal("0"),
+        )
+
+
+def upstream_url(protocol: Protocol | str, base_url: str, upstream_model: str) -> str:
+    selected = Protocol(protocol)
+    base = base_url.rstrip("/")
+    if selected is Protocol.OPENAI:
+        return f"{base}/chat/completions" if base.endswith("/v1") else f"{base}/v1/chat/completions"
+    if selected is Protocol.CLAUDE:
+        return f"{base}/messages" if base.endswith("/v1") else f"{base}/v1/messages"
+    encoded_model = quote(upstream_model.removeprefix("models/"), safe="")
+    prefix = base if base.endswith("/v1beta") else f"{base}/v1beta"
+    return f"{prefix}/models/{encoded_model}:generateContent"
+
+
+def is_retryable_failure(
+    *,
+    status_code: int | None = None,
+    exception: BaseException | None = None,
+) -> bool:
+    if status_code is not None:
+        return status_code in {408, 429} or 500 <= status_code <= 599
+    return isinstance(exception, (httpx.ConnectError, httpx.TimeoutException, ConnectionError))
+
+
+def _request_payload(
+    raw_body: bytes,
+    protocol: Protocol,
+    path_model: str | None,
+) -> tuple[dict[str, Any], str]:
+    try:
+        payload = orjson.loads(raw_body)
+    except (UnicodeDecodeError, orjson.JSONDecodeError):
+        raise InvalidRequestError("Request body must contain valid JSON") from None
+    if not is_object(payload):
+        raise InvalidRequestError("Request body must be a JSON object")
+    model = path_model if protocol is Protocol.GEMINI else payload.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise InvalidRequestError("A non-empty model is required")
+    normalized_model = model.removeprefix("models/") if protocol is Protocol.GEMINI else model
+    payload = payload.copy()
+    payload["model"] = normalized_model
+    return payload, normalized_model
+
+
+def _upstream_body(prepared: _PreparedRequest, route: RouteCandidate) -> bytes:
+    if route.protocol is prepared.inbound_protocol:
+        return rewrite_passthrough_request(
+            route.protocol,
+            orjson.dumps(prepared.payload),
+            route.upstream_model,
+        )
+    canonical = replace(prepared.canonical, model=route.upstream_model)
+    return orjson.dumps(get_adapter(route.protocol).encode_request(canonical))
+
+
+def _convert_response(
+    *,
+    inbound_protocol: Protocol,
+    route: RouteCandidate,
+    upstream: httpx.Response,
+) -> tuple[GatewayOutput, dict[str, Any], CanonicalResponse | None]:
+    content_type = upstream.headers.get("content-type", "application/json")
+    payload = _json_object_or_empty(upstream.content)
+    source_adapter = get_adapter(route.protocol)
+    canonical_response: CanonicalResponse | None = None
+    if route.protocol is inbound_protocol:
+        try:
+            canonical_response = source_adapter.decode_response(payload)
+        except (GatewayError, ValueError):
+            canonical_response = None
+        return (
+            GatewayOutput(upstream.content, upstream.status_code, content_type),
+            payload,
+            canonical_response,
+        )
+
+    try:
+        canonical_response = source_adapter.decode_response(payload)
+    except (GatewayError, ValueError) as exc:
+        raise UpstreamError("The upstream provider returned an invalid response") from exc
+    try:
+        encoded = get_adapter(inbound_protocol).encode_response(canonical_response)
+    except UnsupportedFeatureError:
+        raise
+    return (
+        GatewayOutput(orjson.dumps(encoded), upstream.status_code, "application/json"),
+        payload,
+        canonical_response,
+    )
+
+
+def _resolve_response_usage(
+    *,
+    route: RouteCandidate,
+    response_payload: Mapping[str, Any],
+    request: CanonicalRequest,
+    canonical_response: CanonicalResponse | None,
+    response_body: bytes,
+) -> UsageResult:
+    response_text = _canonical_response_text(canonical_response)
+    if not response_text:
+        response_text = response_body.decode("utf-8", errors="replace")
+    try:
+        return resolve_usage(
+            protocol=route.protocol,
+            payload=response_payload,
+            request=request,
+            response_text=response_text,
+        )
+    except (GatewayError, ValueError):
+        return resolve_usage(
+            protocol=route.protocol,
+            payload={},
+            request=request,
+            response_text=response_text,
+        )
+
+
+def _canonical_response_text(response: CanonicalResponse | None) -> str:
+    if response is None:
+        return ""
+    return "".join(part.text for part in response.message.content if isinstance(part, TextPart))
+
+
+def _json_object_or_empty(body: bytes) -> dict[str, Any]:
+    try:
+        payload = orjson.loads(body)
+    except (UnicodeDecodeError, orjson.JSONDecodeError):
+        return {}
+    return payload if is_object(payload) else {}
+
+
+def _same_protocol_error_output(
+    inbound_protocol: Protocol,
+    route: RouteCandidate,
+    response: httpx.Response,
+) -> GatewayOutput | None:
+    if route.protocol is not inbound_protocol:
+        return None
+    return GatewayOutput(
+        response.content,
+        response.status_code,
+        response.headers.get("content-type", "application/json"),
+    )
+
+
+def _attempt_summary(
+    route: RouteCandidate,
+    attempt: int,
+    *,
+    status_code: int | None = None,
+    exception: BaseException | None = None,
+    succeeded: bool = False,
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "attempt": attempt,
+        "route_id": route.route_id,
+        "provider_id": route.provider_id,
+        "protocol": route.protocol.value,
+        "outcome": "success" if succeeded else "failure",
+    }
+    if status_code is not None:
+        summary["http_status"] = status_code
+    if exception is not None:
+        summary["error_code"] = (
+            "upstream_timeout"
+            if isinstance(exception, httpx.TimeoutException)
+            else "upstream_error"
+        )
+    return summary
+
+
+def _billing_key(request: Request, request_id: UUID) -> str:
+    supplied = request.headers.get("idempotency-key") or request.headers.get("x-request-id")
+    return supplied.strip() if supplied and supplied.strip() else f"gateway:{request_id}"
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, round((monotonic() - started_at) * 1000))
+
+
+def _public_error_code(exc: BaseException) -> str:
+    code = getattr(exc, "code", None)
+    return code if isinstance(code, str) else "upstream_error"
+
+
+def native_error_response(protocol: Protocol, exc: BaseException) -> JSONResponse:
+    status_code, code, message = _error_detail(exc)
+    if protocol is Protocol.OPENAI:
+        error_type = (
+            "authentication_error"
+            if code == "invalid_api_key"
+            else ("server_error" if status_code >= 500 else "invalid_request_error")
+        )
+        content: dict[str, Any] = {"error": {"message": message, "type": error_type, "code": code}}
+    elif protocol is Protocol.CLAUDE:
+        content = {"type": "error", "error": {"type": code, "message": message}}
+    else:
+        content = {
+            "error": {
+                "code": status_code,
+                "message": message,
+                "status": _gemini_status(status_code, code),
+            }
+        }
+    return JSONResponse(status_code=status_code, content=content)
+
+
+def _error_detail(exc: BaseException) -> tuple[int, str, str]:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail
+        raw_code = detail.get("code") if isinstance(detail, Mapping) else None
+        raw_message = detail.get("message") if isinstance(detail, Mapping) else None
+        code = raw_code if isinstance(raw_code, str) else "invalid_api_key"
+        if code in {"authentication_required", "ambiguous_credentials", "user_disabled"}:
+            code = "invalid_api_key"
+        message = raw_message if isinstance(raw_message, str) else "Invalid API key"
+        return exc.status_code, code, message
+    if isinstance(exc, GatewayError):
+        return exc.status_code, exc.code, exc.message
+    return status.HTTP_500_INTERNAL_SERVER_ERROR, "upstream_error", "The gateway request failed"
+
+
+def _gemini_status(status_code: int, code: str) -> str:
+    if code == "upstream_timeout":
+        return "DEADLINE_EXCEEDED"
+    if status_code == 400:
+        return "INVALID_ARGUMENT"
+    if status_code == 401:
+        return "UNAUTHENTICATED"
+    if status_code == 402 or status_code == 429:
+        return "RESOURCE_EXHAUSTED"
+    if status_code == 403:
+        return "PERMISSION_DENIED"
+    if status_code == 404:
+        return "NOT_FOUND"
+    if status_code == 422:
+        return "FAILED_PRECONDITION"
+    if status_code == 503:
+        return "UNAVAILABLE"
+    return "INTERNAL"
