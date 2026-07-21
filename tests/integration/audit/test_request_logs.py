@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import gzip
 import logging
+import os
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
@@ -9,9 +12,11 @@ from hashlib import sha256
 import pytest
 import pytest_asyncio
 from cryptography.fernet import Fernet
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from pydantic import BaseModel
+from sqlalchemy import delete, event
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from ai_gateway.audit.codec import gunzip_json, gzip_json
 from ai_gateway.audit.service import (
@@ -271,7 +276,9 @@ async def test_audit_write_failure_is_logged_and_not_raised(
 ) -> None:
     class BrokenSessionContext:
         async def __aenter__(self) -> AsyncSession:
-            raise RuntimeError("database unavailable")
+            raise RuntimeError(
+                "password=log-secret SQL params={'access_token': 'sql-param-secret'}"
+            )
 
         async def __aexit__(self, *_: object) -> None:
             return None
@@ -292,6 +299,9 @@ async def test_audit_write_failure_is_logged_and_not_raised(
     assert request_id.version == 4
     assert caplog.text.count("Audit write failed") == 3
     assert "never logged" not in caplog.text
+    assert "log-secret" not in caplog.text
+    assert "sql-param-secret" not in caplog.text
+    assert "RuntimeError" in caplog.text
 
 
 async def test_default_lifecycle_wrappers_do_not_raise_when_setup_fails(
@@ -301,7 +311,7 @@ async def test_default_lifecycle_wrappers_do_not_raise_when_setup_fails(
     import ai_gateway.audit.service as audit_service
 
     def fail_setup() -> AuditService:
-        raise RuntimeError("settings unavailable")
+        raise RuntimeError("Authorization=Bearer wrapper-log-secret")
 
     monkeypatch.setattr(audit_service, "_default_service", fail_setup)
     context = RequestContext(
@@ -320,6 +330,195 @@ async def test_default_lifecycle_wrappers_do_not_raise_when_setup_fails(
 
     assert request_id.version == 4
     assert caplog.text.count("Audit write failed") == 3
+    assert "wrapper-log-secret" not in caplog.text
+    assert "RuntimeError" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("body", "secret"),
+    [
+        (b'{"password":"invalid-utf8-secret-\xff"}', b"invalid-utf8-secret"),
+        (b'{"access_token":"incomplete-json-secret"', b"incomplete-json-secret"),
+    ],
+)
+async def test_unparseable_request_bodies_store_only_safe_metadata(
+    body: bytes,
+    secret: bytes,
+    caplog: pytest.LogCaptureFixture,
+    session: AsyncSession,
+    audit_session_factory: async_sessionmaker[AsyncSession],
+    audit_records: tuple[User, User, ApiKey, Model, Provider, ModelRoute],
+) -> None:
+    _, member, api_key, model, _, _ = audit_records
+    service = AuditService(audit_session_factory)
+
+    request_id = await service.start_request(
+        RequestContext(
+            user_id=member.id,
+            api_key_id=api_key.id,
+            model_id=model.id,
+            inbound_protocol=Protocol.OPENAI,
+            transport="http",
+            stream=False,
+        ),
+        body,
+    )
+    stored = await session.get(RequestLog, str(request_id))
+
+    assert stored is not None
+    assert stored.request_detail_gzip is not None
+    uncompressed = gzip.decompress(stored.request_detail_gzip)
+    detail = gunzip_json(stored.request_detail_gzip)
+    assert detail["body"]["unparseable"] is True
+    assert detail["body"]["byte_length"] == len(body)
+    assert "sha256" in detail["body"]
+    assert secret not in stored.request_detail_gzip
+    assert secret not in uncompressed
+    assert secret.decode() not in str(detail)
+    assert secret.decode() not in caplog.text
+
+
+async def test_dataclass_and_pydantic_bodies_are_normalized_then_redacted(
+    caplog: pytest.LogCaptureFixture,
+    session: AsyncSession,
+    audit_session_factory: async_sessionmaker[AsyncSession],
+    audit_records: tuple[User, User, ApiKey, Model, Provider, ModelRoute],
+) -> None:
+    @dataclass
+    class CredentialRecord:
+        credential: str
+        safe: str
+
+    class NestedPayload(BaseModel):
+        access_token: str
+        records: list[CredentialRecord]
+
+    _, member, api_key, model, _, _ = audit_records
+    service = AuditService(audit_session_factory)
+    request_id = await service.start_request(
+        RequestContext(
+            user_id=member.id,
+            api_key_id=api_key.id,
+            model_id=model.id,
+            inbound_protocol=Protocol.OPENAI,
+            transport="http",
+            stream=False,
+        ),
+        b"{}",
+    )
+    body = {
+        "password": "mapping-secret",
+        "nested": NestedPayload(
+            access_token="pydantic-secret",
+            records=[CredentialRecord(credential="dataclass-secret", safe="preserved")],
+        ),
+    }
+
+    await service.complete_request(request_id, RequestResult(http_status=200, body=body))
+    stored = await session.get(RequestLog, str(request_id))
+
+    assert stored is not None
+    assert stored.response_detail_gzip is not None
+    uncompressed = gzip.decompress(stored.response_detail_gzip)
+    detail = gunzip_json(stored.response_detail_gzip)
+    assert detail["body"] == {
+        "password": "[REDACTED]",
+        "nested": {
+            "access_token": "[REDACTED]",
+            "records": [{"credential": "[REDACTED]", "safe": "preserved"}],
+        },
+    }
+    for secret in (b"mapping-secret", b"pydantic-secret", b"dataclass-secret"):
+        assert secret not in stored.response_detail_gzip
+        assert secret not in uncompressed
+        assert secret.decode() not in caplog.text
+
+
+async def test_custom_app_binds_module_audit_lifecycle_to_its_own_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    test_engine: AsyncEngine,
+) -> None:
+    del test_engine
+    import ai_gateway.audit.service as audit_service
+
+    database_url = os.environ["GATEWAY_TEST_DATABASE_URL"]
+    settings = Settings(
+        environment="test",
+        database_url=database_url,
+        jwt_secret="app-scoped-audit-secret-at-least-32-bytes",
+        encryption_key=Fernet.generate_key().decode(),
+        audit_body_limit_bytes=64,
+    )
+    app: FastAPI = create_app(settings)
+    session_factory = app.state.session_factory
+    async with session_factory() as seed_session:
+        user = User(
+            email=f"app-audit-{datetime.now(UTC).timestamp()}@example.com",
+            password_hash=hash_password("app-audit-password"),
+            role="user",
+        )
+        user.account = Account()
+        seed_session.add(user)
+        await seed_session.commit()
+        await seed_session.refresh(user)
+        user_id = user.id
+
+    def fail_global_service() -> AuditService:
+        raise RuntimeError("global-resource-secret")
+
+    monkeypatch.setattr(audit_service, "_default_service", fail_global_service)
+
+    @app.post("/_test/app-audit")
+    async def app_audit() -> dict[str, str]:
+        request_id = await audit_service.start_request(
+            RequestContext(
+                user_id=user_id,
+                inbound_protocol=Protocol.OPENAI,
+                transport="http",
+                stream=False,
+            ),
+            b'{"message":"request body large enough to exceed the custom app limit"}',
+        )
+        await audit_service.complete_request(
+            request_id,
+            RequestResult(
+                http_status=200,
+                body={"message": "response body large enough to exceed the custom app limit"},
+            ),
+        )
+        return {"id": str(request_id)}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/_test/app-audit")
+
+    with caplog.at_level(logging.ERROR, logger="ai_gateway.audit.service"):
+        outside_request_id = await audit_service.start_request(
+            RequestContext(
+                user_id=user_id,
+                inbound_protocol=Protocol.OPENAI,
+                transport="http",
+                stream=False,
+            ),
+            b"{}",
+        )
+
+    assert response.status_code == 200, response.text
+    request_id = response.json()["id"]
+    async with session_factory() as check_session:
+        stored = await check_session.get(RequestLog, request_id)
+        assert stored is not None
+        assert stored.request_detail_gzip is not None
+        assert stored.response_detail_gzip is not None
+        assert gunzip_json(stored.request_detail_gzip)["truncated"] is True
+        assert gunzip_json(stored.response_detail_gzip)["truncated"] is True
+        assert await check_session.get(RequestLog, str(outside_request_id)) is None
+        await check_session.execute(delete(RequestLog).where(RequestLog.id == request_id))
+        await check_session.execute(delete(Account).where(Account.user_id == user_id))
+        await check_session.execute(delete(User).where(User.id == user_id))
+        await check_session.commit()
+    await app.state.engine.dispose()
+    assert "global-resource-secret" not in caplog.text
 
 
 async def test_admin_list_filters_cursor_and_detail_are_safe(

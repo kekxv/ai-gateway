@@ -1,8 +1,8 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +12,8 @@ from ai_gateway.admin.models import models_router, routes_router
 from ai_gateway.admin.providers import router as providers_router
 from ai_gateway.admin.request_logs import router as request_logs_router
 from ai_gateway.admin.users import router as users_router
+from ai_gateway.audit.codec import DEFAULT_AUDIT_BODY_LIMIT_BYTES
+from ai_gateway.audit.service import AuditService, use_audit_service
 from ai_gateway.auth.router import router as auth_router
 from ai_gateway.catalog.scheduler import ModelSyncScheduler
 from ai_gateway.core.config import Settings, get_settings
@@ -20,10 +22,22 @@ from ai_gateway.db.session import get_engine_for_url, get_session, get_session_f
 from ai_gateway.transport.http import HttpClientFactory
 
 
+def _audit_body_limit(settings: object) -> int:
+    return int(getattr(settings, "audit_body_limit_bytes", DEFAULT_AUDIT_BODY_LIMIT_BYTES))
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured_engine = get_engine_for_url(settings.database_url) if settings is not None else None
     configured_session_factory = (
         get_session_factory_for_url(settings.database_url) if settings is not None else None
+    )
+    configured_audit_service = (
+        AuditService(
+            configured_session_factory,
+            body_limit_bytes=_audit_body_limit(settings),
+        )
+        if configured_session_factory is not None and settings is not None
+        else None
     )
 
     def app_settings() -> Settings:
@@ -46,6 +60,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = active_settings
         app.state.engine = engine
         app.state.session_factory = session_factory
+        app.state.audit_service = AuditService(
+            session_factory,
+            body_limit_bytes=_audit_body_limit(active_settings),
+        )
         app.state.http_client_factory = http_client_factory
         app.state.model_sync_scheduler = scheduler
         scheduler_task = asyncio.create_task(
@@ -64,6 +82,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings
         app.state.engine = configured_engine
         app.state.session_factory = configured_session_factory
+        app.state.audit_service = configured_audit_service
+
+    @app.middleware("http")
+    async def bind_audit_service(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        audit_service = getattr(request.app.state, "audit_service", None)
+        if not isinstance(audit_service, AuditService):
+            return await call_next(request)
+        with use_audit_service(audit_service):
+            return await call_next(request)
 
     async def app_session() -> AsyncIterator[AsyncSession]:
         active_settings = app_settings()

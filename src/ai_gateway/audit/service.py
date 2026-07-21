@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
-from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import AbstractAsyncContextManager, contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field, fields, is_dataclass
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
+from enum import Enum
+from hashlib import sha256
 from typing import Any
 from uuid import UUID, uuid4
 
 import orjson
+from pydantic import BaseModel
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 Clock = Callable[[], datetime]
+_current_audit_service: ContextVar[AuditService | None] = ContextVar(
+    "current_audit_service",
+    default=None,
+)
 
 
 def _utcnow() -> datetime:
@@ -116,11 +124,8 @@ class AuditService:
                     )
                 )
                 await session.commit()
-        except Exception:
-            logger.exception(
-                "Audit write failed operation=start request_id=%s",
-                request_id,
-            )
+        except Exception as exc:
+            _log_write_failure("start", request_id, exc)
         return request_id
 
     async def complete_request(self, request_id: UUID, result: RequestResult) -> None:
@@ -217,12 +222,8 @@ class AuditService:
                     )
                 )
                 await session.commit()
-        except Exception:
-            logger.exception(
-                "Audit write failed operation=finish request_id=%s status=%s",
-                request_id,
-                status.value,
-            )
+        except Exception as exc:
+            _log_write_failure("finish", request_id, exc, status=status)
 
 
 def _detail(
@@ -231,7 +232,7 @@ def _detail(
     body: Any | None,
     metadata: Mapping[str, Any],
 ) -> dict[str, Any]:
-    detail = dict(redact_json(metadata))
+    detail = dict(redact_json(_normalize_json(metadata)))
     if headers:
         detail["headers"] = redact_headers(headers)
     if body is not None:
@@ -240,19 +241,72 @@ def _detail(
 
 
 def _redacted_body(body: Any) -> Any:
-    decoded: Any = body
     if isinstance(body, bytes):
-        text = body.decode("utf-8", errors="replace")
-        try:
-            decoded = orjson.loads(text)
-        except orjson.JSONDecodeError:
-            decoded = text
+        decoded = _decode_json_bytes(body)
     elif isinstance(body, str):
+        raw = body.encode("utf-8")
         try:
             decoded = orjson.loads(body)
         except orjson.JSONDecodeError:
-            decoded = body
-    return redact_json(decoded)
+            decoded = _unparseable_metadata(raw)
+    else:
+        decoded = body
+    return redact_json(_normalize_json(decoded))
+
+
+def _decode_json_bytes(body: bytes) -> Any:
+    try:
+        return orjson.loads(body)
+    except (UnicodeDecodeError, orjson.JSONDecodeError):
+        return _unparseable_metadata(body)
+
+
+def _unparseable_metadata(body: bytes) -> dict[str, Any]:
+    return {
+        "unparseable": True,
+        "byte_length": len(body),
+        "sha256": sha256(body).hexdigest(),
+    }
+
+
+def _normalize_json(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return _normalize_json(value.model_dump(mode="python"))
+    if is_dataclass(value) and not isinstance(value, type):
+        return {item.name: _normalize_json(getattr(value, item.name)) for item in fields(value)}
+    if isinstance(value, Mapping):
+        return {str(key): _normalize_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_normalize_json(item) for item in value]
+    if isinstance(value, bytes):
+        return _normalize_json(_decode_json_bytes(value))
+    if isinstance(value, Enum):
+        return _normalize_json(value.value)
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return {"unserializable": True, "type": type(value).__name__}
+
+
+def _log_write_failure(
+    operation: str,
+    request_id: UUID,
+    exception: Exception,
+    *,
+    status: RequestStatus | None = None,
+) -> None:
+    logger.error(
+        "Audit write failed operation=%s request_id=%s status=%s exception_type=%s",
+        operation,
+        request_id,
+        status.value if status is not None else "none",
+        type(exception).__name__,
+    )
 
 
 def _default_service() -> AuditService:
@@ -262,45 +316,49 @@ def _default_service() -> AuditService:
     )
 
 
+def current_audit_service() -> AuditService:
+    return _current_audit_service.get() or _default_service()
+
+
+@contextmanager
+def use_audit_service(service: AuditService) -> Iterator[None]:
+    """Bind one app-owned audit service to the current async request context."""
+
+    token = _current_audit_service.set(service)
+    try:
+        yield
+    finally:
+        _current_audit_service.reset(token)
+
+
 async def start_request(context: RequestContext, body: bytes) -> UUID:
     try:
-        service = _default_service()
-    except Exception:
+        service = current_audit_service()
+    except Exception as exc:
         request_id = uuid4()
-        logger.exception(
-            "Audit write failed operation=start request_id=%s",
-            request_id,
-        )
+        _log_write_failure("start", request_id, exc)
         return request_id
     return await service.start_request(context, body)
 
 
 async def complete_request(request_id: UUID, result: RequestResult) -> None:
     try:
-        service = _default_service()
-    except Exception:
-        logger.exception(
-            "Audit write failed operation=finish request_id=%s status=%s",
-            request_id,
-            RequestStatus.COMPLETED.value,
-        )
+        service = current_audit_service()
+    except Exception as exc:
+        _log_write_failure("finish", request_id, exc, status=RequestStatus.COMPLETED)
         return
     await service.complete_request(request_id, result)
 
 
 async def fail_request(request_id: UUID, failure: RequestFailure) -> None:
     try:
-        service = _default_service()
-    except Exception:
+        service = current_audit_service()
+    except Exception as exc:
         failure_status = (
             RequestStatus.CLIENT_DISCONNECTED
             if failure.client_disconnected
             else RequestStatus.FAILED
         )
-        logger.exception(
-            "Audit write failed operation=finish request_id=%s status=%s",
-            request_id,
-            failure_status.value,
-        )
+        _log_write_failure("finish", request_id, exc, status=failure_status)
         return
     await service.fail_request(request_id, failure)
