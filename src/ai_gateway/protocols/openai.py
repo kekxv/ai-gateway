@@ -504,6 +504,7 @@ class OpenAIAdapter(ProtocolAdapter):
         elif event.type == "message_end":
             if event.finish_reason is None:
                 raise UnsupportedFeatureError("stream_event.finish_reason", "is required")
+            choice["delta"] = delta_extensions
             choice["finish_reason"] = _encode_finish_reason(event.finish_reason)
         elif event.type == "usage":
             if event.usage is None:

@@ -300,7 +300,6 @@ class ClaudeAdapter(ProtocolAdapter):
                             index=index,
                             text=text,
                             content_type="text",
-                            metadata=event_metadata,
                         )
                     )
                 return tuple(events)

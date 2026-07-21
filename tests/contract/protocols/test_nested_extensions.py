@@ -190,6 +190,30 @@ def test_openai_stream_envelope_choice_and_delta_extensions_round_trip() -> None
     )
 
 
+def test_openai_finish_only_delta_extensions_round_trip_only_to_openai() -> None:
+    frame = _sse(
+        {
+            "model": "m",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"x-delta": {"kept": True}},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+    )
+    adapter = get_adapter("openai")
+    event = next(
+        item for item in adapter.create_stream_decoder().decode(frame) if item.type == "message_end"
+    )
+    body = decode_sse(adapter.create_stream_encoder().encode(event)[0])[1]
+
+    assert body["choices"][0]["delta"]["x-delta"] == {"kept": True}
+    cross = b"".join(get_adapter("gemini").create_stream_encoder().encode(event))
+    assert b"x-delta" not in cross
+
+
 def test_openai_stream_tool_item_and_function_extensions_round_trip() -> None:
     frame = _sse(
         {
@@ -352,6 +376,35 @@ def test_claude_stream_content_start_block_and_stop_extensions_round_trip() -> N
     assert start["x-start"] == 1
     assert start["content_block"]["x-block"] == 2
     assert stop["x-stop"] == 3
+
+
+def test_claude_nonempty_content_start_extensions_stay_on_start_frame() -> None:
+    frame = _sse(
+        {
+            "type": "content_block_start",
+            "index": 4,
+            "x-start": 1,
+            "content_block": {"type": "text", "text": "hi", "x-block": 2},
+        },
+        "content_block_start",
+    )
+    adapter = get_adapter("claude")
+    events = adapter.create_stream_decoder().decode(frame)
+    start_event = next(event for event in events if event.type == "content_start")
+    delta_event = next(event for event in events if event.type == "content_delta")
+
+    assert start_event.metadata
+    assert not delta_event.metadata
+
+    encoder = adapter.create_stream_encoder()
+    encoded = _native_bodies(frame for event in events for frame in encoder.encode(event))
+    start = next(body for body in encoded if body["type"] == "content_block_start")
+    delta = next(body for body in encoded if body["type"] == "content_block_delta")
+
+    assert start["x-start"] == 1
+    assert start["content_block"]["x-block"] == 2
+    assert "x-start" not in delta
+    assert "x-block" not in delta["delta"]
 
 
 def test_claude_stream_message_delta_and_stop_extensions_round_trip() -> None:
