@@ -1,0 +1,21 @@
+{
+  "id": "chatcmpl_test",
+  "object": "chat.completion",
+  "created": 1700000000,
+  "model": "upstream-openai",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Calling weather.",
+        "tool_calls": [
+          {"id": "call_weather", "type": "function", "function": {"name": "weather", "arguments": "{\"city\":\"Paris\"}"}}
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {"prompt_tokens": 42, "completion_tokens": 7, "total_tokens": 49},
+  "system_fingerprint": "fp_test"
+}

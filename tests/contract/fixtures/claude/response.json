@@ -1,0 +1,14 @@
+{
+  "id": "msg_test",
+  "type": "message",
+  "role": "assistant",
+  "model": "upstream-claude",
+  "content": [
+    {"type": "text", "text": "Calling weather."},
+    {"type": "tool_use", "id": "call_weather", "name": "weather", "input": {"city": "Paris"}}
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {"input_tokens": 42, "output_tokens": 7},
+  "service_tier": "standard_only"
+}

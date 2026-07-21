@@ -1,0 +1,2 @@
+data: {"id":"chatcmpl_test","object":"chat.completion.chunk","model":"upstream-openai","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+

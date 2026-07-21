@@ -1,0 +1,36 @@
+{
+  "model": "gateway-chat",
+  "system": [{"type": "text", "text": "Be concise."}],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Inspect both images."},
+        {"type": "image", "source": {"type": "url", "url": "https://example.test/cat.png"}, "detail": "high"},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}}
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {"type": "text", "text": "I will check the weather."},
+        {"type": "tool_use", "id": "call_weather", "name": "weather", "input": {"city": "Paris"}}
+      ]
+    },
+    {
+      "role": "user",
+      "content": [{"type": "tool_result", "tool_use_id": "call_weather", "name": "weather", "content": "{\"temperature\":21}"}]
+    },
+    {"role": "user", "content": "Summarize it."}
+  ],
+  "tools": [
+    {"name": "weather", "description": "Get weather", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}
+  ],
+  "tool_choice": {"type": "any"},
+  "temperature": 0.2,
+  "top_p": 0.9,
+  "max_tokens": 128,
+  "stop_sequences": ["END", "STOP"],
+  "stream": true,
+  "service_tier": "auto"
+}

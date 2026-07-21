@@ -1,0 +1,19 @@
+{
+  "modelVersion": "upstream-gemini",
+  "responseId": "resp_test",
+  "candidates": [
+    {
+      "index": 0,
+      "content": {
+        "role": "model",
+        "parts": [
+          {"text": "Calling weather."},
+          {"functionCall": {"id": "call_weather", "name": "weather", "args": {"city": "Paris"}}}
+        ]
+      },
+      "finishReason": "STOP"
+    }
+  ],
+  "usageMetadata": {"promptTokenCount": 42, "candidatesTokenCount": 7, "totalTokenCount": 49},
+  "promptFeedback": {"blockReason": "BLOCK_REASON_UNSPECIFIED"}
+}

@@ -1,0 +1,2 @@
+data: {"modelVersion":"upstream-gemini","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Hello"}]}}]}
+

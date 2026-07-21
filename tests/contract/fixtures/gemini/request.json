@@ -1,0 +1,33 @@
+{
+  "model": "gateway-chat",
+  "systemInstruction": {"parts": [{"text": "Be concise."}]},
+  "contents": [
+    {
+      "role": "user",
+      "parts": [
+        {"text": "Inspect both images."},
+        {"fileData": {"mimeType": "image/png", "fileUri": "https://example.test/cat.png"}, "detail": "high"},
+        {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}
+      ]
+    },
+    {
+      "role": "model",
+      "parts": [
+        {"text": "I will check the weather."},
+        {"functionCall": {"id": "call_weather", "name": "weather", "args": {"city": "Paris"}}}
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [{"functionResponse": {"id": "call_weather", "name": "weather", "response": {"temperature": 21}}}]
+    },
+    {"role": "user", "parts": [{"text": "Summarize it."}]}
+  ],
+  "tools": [
+    {"functionDeclarations": [{"name": "weather", "description": "Get weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}]}
+  ],
+  "toolConfig": {"functionCallingConfig": {"mode": "ANY"}},
+  "generationConfig": {"temperature": 0.2, "topP": 0.9, "maxOutputTokens": 128, "stopSequences": ["END", "STOP"]},
+  "stream": true,
+  "cachedContent": "cachedContents/example"
+}
