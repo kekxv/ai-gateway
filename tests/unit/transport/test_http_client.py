@@ -124,6 +124,81 @@ async def test_hostname_resolving_into_no_proxy_cidr_returns_direct_client(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("network", "resolved_ip", "family"),
+    [
+        ("10.23.45.67/32", "10.23.45.67", socket.AF_INET),
+        ("2001:db8::7/128", "2001:db8::7", socket.AF_INET6),
+    ],
+)
+async def test_hostname_resolving_into_host_prefix_network_returns_direct_client(
+    monkeypatch: pytest.MonkeyPatch,
+    network: str,
+    resolved_ip: str,
+    family: socket.AddressFamily,
+) -> None:
+    calls: list[str] = []
+
+    def fake_getaddrinfo(
+        host: str,
+        port: int | None,
+        *,
+        type: socket.SocketKind,
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]]:
+        calls.append(host)
+        assert port is None
+        assert type is socket.SOCK_STREAM
+        return [(family, socket.SOCK_STREAM, 6, "", (resolved_ip, 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    factory = HttpClientFactory(
+        proxy_settings(
+            http_proxy="http://proxy.internal:8080",
+            no_proxy=network,
+        )
+    )
+
+    assert await factory.client_for("http://provider.example/v1") is FakeAsyncClient.created[0]
+    assert calls == ["provider.example"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "no_proxy"),
+    [
+        ("http://provider.example/v1", "provider.example:80"),
+        ("http://provider.example:80/v1", "provider.example:80"),
+        ("https://secure.example/v1", "secure.example:443"),
+        ("https://secure.example:443/v1", "secure.example:443"),
+    ],
+)
+async def test_no_proxy_default_port_matches_implicit_and_explicit_urls(
+    url: str,
+    no_proxy: str,
+) -> None:
+    factory = HttpClientFactory(
+        proxy_settings(
+            http_proxy="http://http-proxy.internal:8080",
+            https_proxy="http://https-proxy.internal:8443",
+            no_proxy=no_proxy,
+        )
+    )
+
+    assert await factory.client_for(url) is FakeAsyncClient.created[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("http_proxy", [None, "http://proxy.internal:8080"])
+async def test_hostless_outbound_url_is_rejected_before_client_selection(
+    http_proxy: str | None,
+) -> None:
+    factory = HttpClientFactory(proxy_settings(http_proxy=http_proxy))
+
+    with pytest.raises(ValueError, match="must include a host"):
+        await factory.client_for("http:///v1/models")
+
+
+@pytest.mark.asyncio
 async def test_dns_failure_is_not_treated_as_no_proxy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -63,14 +63,15 @@ class HttpClientFactory:
             raise RuntimeError("HTTP client factory is closed")
 
         parsed_url = _parse_outbound_url(url)
+        if not parsed_url.host:
+            raise ValueError("Outbound HTTP URL must include a host")
+
         proxy_client = self._proxy_client_for_scheme(parsed_url.scheme)
         if proxy_client is None:
             return self._direct_client
 
         host = parsed_url.host
-        if host is None:
-            raise ValueError("Outbound HTTP URL must include a host")
-        matcher_host = _host_with_port(host, parsed_url.port)
+        matcher_host = _host_with_port(host, _effective_port(parsed_url))
         if self._no_proxy.matches(matcher_host, ()):
             return self._direct_client
 
@@ -165,6 +166,12 @@ def _host_with_port(host: str, port: int | None) -> str:
     if ":" in host:
         return f"[{host}]:{port}"
     return f"{host}:{port}"
+
+
+def _effective_port(url: httpx.URL) -> int:
+    if url.port is not None:
+        return url.port
+    return 80 if url.scheme == "http" else 443
 
 
 def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:

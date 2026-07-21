@@ -27,10 +27,6 @@ class _NetworkRule:
     network: IPNetwork
     port: int | None
 
-    @property
-    def needs_dns_resolution(self) -> bool:
-        return self.network.prefixlen < self.network.max_prefixlen
-
     def matches(self, address: IPAddress, port: int | None) -> bool:
         return (self.port is None or self.port == port) and address in self.network
 
@@ -82,7 +78,7 @@ class NoProxyMatcher:
     def needs_dns_resolution(self) -> bool:
         """Whether a hostname may match only after resolving a CIDR rule."""
 
-        return any(rule.needs_dns_resolution for rule in self._network_rules)
+        return bool(self._network_rules)
 
     def matches(self, host: str, resolved_ips: Iterable[str | IPAddress]) -> bool:
         normalized_host, port = _normalized_host_and_port(host)

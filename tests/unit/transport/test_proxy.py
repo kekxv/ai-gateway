@@ -72,3 +72,10 @@ def test_non_ip_resolution_results_are_ignored() -> None:
     matcher = NoProxyMatcher.from_string("10.0.0.0/8")
 
     assert not matcher.matches("service.internal", ["not-an-address", "192.0.2.4"])
+
+
+@pytest.mark.parametrize("value", ["10.23.45.67/32", "2001:db8::7/128"])
+def test_host_prefix_network_rules_still_require_hostname_resolution(value: str) -> None:
+    matcher = NoProxyMatcher.from_string(value)
+
+    assert matcher.needs_dns_resolution
