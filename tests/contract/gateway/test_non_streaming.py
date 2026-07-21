@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from dataclasses import dataclass, field
 from decimal import Decimal
 from hashlib import sha256
 from typing import Any
@@ -15,6 +16,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.audit.service import RequestContext, RequestFailure, RequestResult
+from ai_gateway.auth.api_key import ApiKeyPrincipal
 from ai_gateway.billing.service import BalanceReservation, InsufficientBalance, SettlementResult
 from ai_gateway.catalog.repository import ModelNotFound
 from ai_gateway.core.config import Settings
@@ -29,6 +31,7 @@ from ai_gateway.gateway.service import (
     GatewayService,
     UpstreamError,
     UpstreamTimeout,
+    _billing_key,
     native_error_response,
     upstream_url,
 )
@@ -51,20 +54,23 @@ class FakeBilling:
         balance_after=Decimal("9"),
     )
     settlements: int = 0
+    reservation_keys: list[str] = field(default_factory=list)
 
-    async def reserve_balance(self, **_: Any) -> BalanceReservation:
+    async def reserve_balance(self, **kwargs: Any) -> BalanceReservation:
+        self.reservation_keys.append(kwargs["idempotency_key"])
         return self.reservation
 
     async def settle_request(self, **kwargs: Any) -> SettlementResult:
         self.settlements += 1
+        cost = kwargs.get("cost", Decimal("0"))
         return SettlementResult(
             account_id=1,
             request_id="request",
             reserved_amount=Decimal("1"),
-            actual_cost=kwargs.get("cost", Decimal("0")),
-            charged_amount=kwargs.get("cost", Decimal("0")),
+            actual_cost=cost,
+            charged_amount=cost,
             balance=Decimal("9"),
-            total_spent=kwargs.get("cost", Decimal("0")),
+            total_spent=cost,
             exhausted=False,
         )
 
@@ -74,8 +80,14 @@ class FakeAudit:
     completed: RequestResult | None = None
     failed: RequestFailure | None = None
 
-    async def start_request(self, _: RequestContext, __: bytes) -> UUID:
-        return uuid4()
+    async def start_request(
+        self,
+        _: RequestContext,
+        __: bytes,
+        *,
+        request_id: UUID | None = None,
+    ) -> UUID:
+        return request_id or uuid4()
 
     async def complete_request(self, _: UUID, result: RequestResult) -> None:
         self.completed = result
@@ -277,10 +289,15 @@ async def test_all_protocol_pairs_bind_alias_to_selected_upstream_model(
     assert response.status_code == 200, response.text
     assert len(seen) == 1
     upstream_payload = orjson.loads(seen[0].content)
-    assert upstream_payload["model"] == upstream_model
+    if outbound is Protocol.GEMINI:
+        assert "model" not in upstream_payload
+        assert request_model_path(seen[0]) == upstream_model
+    else:
+        assert upstream_payload["model"] == upstream_model
     assert alias not in seen[0].content.decode()
     assert model.canonical_name not in seen[0].content.decode()
-    get_adapter(outbound).decode_request(upstream_payload)
+    decode_payload = {**upstream_payload, "model": upstream_model}
+    get_adapter(outbound).decode_request(decode_payload)
     canonical_response = get_adapter(inbound).decode_response(response.json())
     assert canonical_response.message.content[0].text == "world"  # type: ignore[union-attr]
     expected_auth = {
@@ -359,7 +376,11 @@ async def test_same_protocol_preserves_vendor_json_and_response_bytes(
     assert response.headers["content-type"] == "application/vnd.provider+json"
     upstream_payload = orjson.loads(seen[0].content)
     assert upstream_payload["vendor_unknown"] == {"nested": [1, "two"]}
-    assert upstream_payload["model"] == upstream_model
+    if protocol is Protocol.GEMINI:
+        assert "model" not in upstream_payload
+        assert request_model_path(seen[0]) == upstream_model
+    else:
+        assert upstream_payload["model"] == upstream_model
     assert "x-remove" not in seen[0].headers
 
 
@@ -417,6 +438,369 @@ def test_upstream_urls_use_native_generation_endpoints_and_route_model() -> None
         upstream_url(Protocol.OPENAI, "https://provider.example/v1", "native-model")
         == "https://provider.example/v1/chat/completions"
     )
+
+
+def request_model_path(request: httpx.Request) -> str:
+    marker = "/models/"
+    encoded = request.url.raw_path.decode().split(marker, 1)[1].split(":generateContent", 1)[0]
+    return httpx.URL(f"https://example.test/{encoded}").path.lstrip("/")
+
+
+async def test_authentication_precedes_malformed_json(session: AsyncSession) -> None:
+    settings = _settings()
+    called = False
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(500)
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([]),
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": "Bearer sk-gw-invalid"},
+    ) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            content=b"{not-json",
+            headers={"content-type": "application/json"},
+        )
+    await upstream_client.aclose()
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "invalid_api_key"
+    assert not called
+
+
+async def test_missing_upstream_content_type_remains_absent(session: AsyncSession) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    route = RouteCandidate(
+        route_id=91,
+        model_id=model.id,
+        provider_id=92,
+        provider_protocol_id=93,
+        protocol=Protocol.OPENAI,
+        base_url="https://provider.example",
+        websocket_url=None,
+        upstream_model="native-no-content-type",
+        weight=100,
+        provider_credential_encrypted=encrypt_secret(
+            orjson.dumps({"api_key": "provider-secret"}).decode(),
+            settings=settings,
+        ),
+    )
+    response_bytes = orjson.dumps(_response(Protocol.OPENAI, route.upstream_model))
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=response_bytes)
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([route]),
+    )
+    path, body = _request(Protocol.OPENAI, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.content == response_bytes
+    assert "content-type" not in response.headers
+
+
+async def test_same_client_idempotency_header_never_reuses_billing_key(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    route = RouteCandidate(
+        route_id=94,
+        model_id=model.id,
+        provider_id=95,
+        provider_protocol_id=96,
+        protocol=Protocol.OPENAI,
+        base_url="https://provider.example",
+        websocket_url=None,
+        upstream_model="native-billing-key",
+        weight=100,
+        provider_credential_encrypted=encrypt_secret(
+            orjson.dumps({"api_key": "provider-secret"}).decode(),
+            settings=settings,
+        ),
+    )
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_response(Protocol.OPENAI, route.upstream_model))
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    billing = FakeBilling()
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=billing,  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([route]),
+    )
+    path, body = _request(Protocol.OPENAI, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={
+            "authorization": f"Bearer {RAW_KEY}",
+            "idempotency-key": "shared-client-key",
+            "x-request-id": "shared-request-id",
+        },
+    ) as client:
+        first = await client.post(path, json=body)
+        second = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert first.status_code == second.status_code == 200
+    assert len(set(billing.reservation_keys)) == 2
+    assert all("shared-client-key" not in key for key in billing.reservation_keys)
+    assert all("shared-request-id" not in key for key in billing.reservation_keys)
+
+
+@pytest.mark.parametrize("network_error", [httpx.ReadError, httpx.WriteError, httpx.CloseError])
+async def test_network_error_family_retries_distinct_route_and_audits_attempt(
+    session: AsyncSession,
+    network_error: type[httpx.NetworkError],
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+
+    def route(route_id: int, native_model: str) -> RouteCandidate:
+        return RouteCandidate(
+            route_id=route_id,
+            model_id=model.id,
+            provider_id=route_id + 100,
+            provider_protocol_id=route_id + 200,
+            protocol=Protocol.OPENAI,
+            base_url=f"https://provider-{route_id}.example",
+            websocket_url=None,
+            upstream_model=native_model,
+            weight=100,
+            provider_credential_encrypted=encrypt_secret(
+                orjson.dumps({"api_key": "provider-secret"}).decode(),
+                settings=settings,
+            ),
+        )
+
+    routes = [route(101, "first-native"), route(102, "second-native")]
+    seen: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(orjson.loads(request.content)["model"])
+        if len(seen) == 1:
+            raise network_error("network failed", request=request)
+        return httpx.Response(200, json=_response(Protocol.OPENAI, "second-native"))
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    audit = FakeAudit()
+    router = FakeRouter(routes)
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: router,
+    )
+    path, body = _request(Protocol.OPENAI, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200
+    assert seen == ["first-native", "second-native"]
+    assert router.failures == [101]
+    assert router.successes == [102]
+    assert audit.completed is not None
+    assert [item["route_id"] for item in audit.completed.metadata["attempts"]] == [101, 102]
+
+
+async def test_network_failover_is_bounded_by_distinct_routes(session: AsyncSession) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    encrypted = encrypt_secret(
+        orjson.dumps({"api_key": "provider-secret"}).decode(),
+        settings=settings,
+    )
+    routes = [
+        RouteCandidate(
+            route_id=route_id,
+            model_id=model.id,
+            provider_id=route_id + 100,
+            provider_protocol_id=route_id + 200,
+            protocol=Protocol.OPENAI,
+            base_url=f"https://provider-{route_id}.example",
+            websocket_url=None,
+            upstream_model=f"native-{route_id}",
+            weight=100,
+            provider_credential_encrypted=encrypted,
+        )
+        for route_id in (111, 112)
+    ]
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadError("network failed", request=request)
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    audit = FakeAudit()
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter(routes),
+    )
+    path, body = _request(Protocol.OPENAI, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 502
+    assert calls == 2
+    assert audit.failed is not None
+    assert [item["route_id"] for item in audit.failed.metadata["attempts"]] == [111, 112]
+
+
+async def test_cross_protocol_upstream_400_is_not_retried_and_uses_native_error(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    route = RouteCandidate(
+        route_id=121,
+        model_id=model.id,
+        provider_id=122,
+        provider_protocol_id=123,
+        protocol=Protocol.OPENAI,
+        base_url="https://provider.example",
+        websocket_url=None,
+        upstream_model="native-openai-error",
+        weight=100,
+        provider_credential_encrypted=encrypt_secret(
+            orjson.dumps({"api_key": "provider-secret"}).decode(),
+            settings=settings,
+        ),
+    )
+    calls = 0
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(400, json={"error": {"message": "bad request"}})
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([route]),
+    )
+    path, body = _request(Protocol.CLAUDE, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert calls == 1
+    assert response.status_code == 502
+    assert response.json()["error"]["type"] == "upstream_error"
+
+
+def test_internal_billing_key_is_namespaced_by_user_and_api_key() -> None:
+    request_id = uuid4()
+    first = _billing_key(
+        ApiKeyPrincipal(api_key_id=10, user_id=20, scope=ApiKeyScope.ALL),
+        request_id,
+    )
+    second = _billing_key(
+        ApiKeyPrincipal(api_key_id=11, user_id=21, scope=ApiKeyScope.ALL),
+        request_id,
+    )
+
+    assert first != second
+    assert first == f"gateway:20:10:{request_id}"
+    assert second == f"gateway:21:11:{request_id}"
+
+
+async def test_cleanup_failures_do_not_replace_original_cancellation(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    original = asyncio.CancelledError("client disconnected")
+
+    class CancellingRouter(FakeRouter):
+        async def select_route(self, *_: Any, **__: Any) -> RouteCandidate:
+            raise original
+
+    class FailingBilling(FakeBilling):
+        async def settle_request(self, **_: Any) -> SettlementResult:
+            raise RuntimeError("cleanup settlement failed")
+
+    class FailingAudit(FakeAudit):
+        async def fail_request(self, _: UUID, __: RequestFailure) -> None:
+            raise RuntimeError("cleanup audit failed")
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: None))
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FailingBilling(),  # type: ignore[arg-type]
+        audit_service=FailingAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: CancellingRouter([]),
+    )
+    path, body = _request(Protocol.OPENAI, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert caught.value is original
     assert (
         upstream_url(Protocol.CLAUDE, "https://provider.example", "native-model")
         == "https://provider.example/v1/messages"

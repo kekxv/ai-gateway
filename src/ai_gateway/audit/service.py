@@ -102,8 +102,14 @@ class AuditService:
         self._body_limit_bytes = body_limit_bytes
         self._clock = clock
 
-    async def start_request(self, context: RequestContext, body: bytes) -> UUID:
-        request_id = uuid4()
+    async def start_request(
+        self,
+        context: RequestContext,
+        body: bytes,
+        *,
+        request_id: UUID | None = None,
+    ) -> UUID:
+        request_id = request_id or uuid4()
         try:
             detail = _detail(headers=context.headers, body=body, metadata=context.metadata)
             async with self._session_factory() as session:
@@ -331,14 +337,19 @@ def use_audit_service(service: AuditService) -> Iterator[None]:
         _current_audit_service.reset(token)
 
 
-async def start_request(context: RequestContext, body: bytes) -> UUID:
+async def start_request(
+    context: RequestContext,
+    body: bytes,
+    *,
+    request_id: UUID | None = None,
+) -> UUID:
     try:
         service = current_audit_service()
     except Exception as exc:
-        request_id = uuid4()
-        _log_write_failure("start", request_id, exc)
-        return request_id
-    return await service.start_request(context, body)
+        fallback_id = request_id or uuid4()
+        _log_write_failure("start", fallback_id, exc)
+        return fallback_id
+    return await service.start_request(context, body, request_id=request_id)
 
 
 async def complete_request(request_id: UUID, result: RequestResult) -> None:

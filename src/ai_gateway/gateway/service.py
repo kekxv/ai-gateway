@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import asyncio
+import logging
+from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from time import monotonic
@@ -22,7 +24,6 @@ from ai_gateway.audit.service import (
     RequestResult,
 )
 from ai_gateway.auth.api_key import ApiKeyPrincipal, authenticate_api_key, extract_api_key
-from ai_gateway.billing.pricing import calculate_cost
 from ai_gateway.billing.service import BalanceReservation, BillingService, SettlementResult
 from ai_gateway.billing.usage import UsageResult, estimate_request_tokens, resolve_usage
 from ai_gateway.catalog.repository import CatalogRepository
@@ -40,6 +41,8 @@ from ai_gateway.protocols.types import CanonicalRequest, CanonicalResponse, Text
 from ai_gateway.routing.service import Router
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFailure
 from ai_gateway.transport.upstream import build_upstream_request
+
+logger = logging.getLogger(__name__)
 
 
 class HttpClientProvider(TypingProtocol):
@@ -117,13 +120,14 @@ class _RoutedGatewayError(GatewayError):
 class GatewayOutput:
     body: bytes
     status_code: int
-    content_type: str
+    content_type: str | None
 
     def response(self) -> Response:
+        headers = {"content-type": self.content_type} if self.content_type is not None else None
         return Response(
             content=self.body,
             status_code=self.status_code,
-            headers={"content-type": self.content_type},
+            headers=headers,
         )
 
 
@@ -191,7 +195,7 @@ class GatewayService:
         if priced_model is None:
             raise RuntimeError("resolved catalog model disappeared")
         request_id = uuid4()
-        billing_key = _billing_key(request, request_id)
+        billing_key = _billing_key(principal, request_id)
         reservation = await self._billing.reserve_balance(
             user_id=principal.user_id,
             model=priced_model,
@@ -201,26 +205,33 @@ class GatewayService:
             request_id=request_id,
         )
 
-        audit_id = await self._audit.start_request(
-            RequestContext(
-                user_id=principal.user_id,
-                api_key_id=principal.api_key_id,
-                model_id=resolved.model_id,
-                inbound_protocol=inbound_protocol,
-                transport="http",
-                stream=False,
-                headers=dict(request.headers),
-                metadata={
-                    "requested_model": requested_model,
-                    "canonical_model": resolved.canonical_name,
-                },
-            ),
-            raw_body,
-        )
-
+        audit_id = uuid4()
         attempt_response: _AttemptResponse | None = None
         settled = False
+        settled_cost = Decimal("0")
+        audit_terminal = False
         try:
+            correlation_id = _audit_correlation_id(request)
+            audit_metadata = {
+                "requested_model": requested_model,
+                "canonical_model": resolved.canonical_name,
+            }
+            if correlation_id is not None:
+                audit_metadata["client_request_id"] = correlation_id
+            audit_id = await self._audit.start_request(
+                RequestContext(
+                    user_id=principal.user_id,
+                    api_key_id=principal.api_key_id,
+                    model_id=resolved.model_id,
+                    inbound_protocol=inbound_protocol,
+                    transport="http",
+                    stream=False,
+                    headers=_audit_headers(request, correlation_id),
+                    metadata=audit_metadata,
+                ),
+                raw_body,
+                request_id=audit_id,
+            )
             attempt_response = await self._send_with_failover(
                 request=request,
                 prepared=prepared,
@@ -233,6 +244,7 @@ class GatewayService:
             if upstream.status_code >= 400:
                 settlement = await self._settle_zero(reservation, billing_key)
                 settled = True
+                settled_cost = settlement.actual_cost
                 output = _same_protocol_error_output(inbound_protocol, route, upstream)
                 await self._audit.fail_request(
                     audit_id,
@@ -249,6 +261,7 @@ class GatewayService:
                         metadata={"attempts": attempt_response.attempts},
                     ),
                 )
+                audit_terminal = True
                 if output is not None:
                     return output
                 raise UpstreamError("The upstream provider rejected the request")
@@ -265,15 +278,15 @@ class GatewayService:
                 canonical_response=canonical_response,
                 response_body=upstream.content,
             )
-            cost = calculate_cost(priced_model, usage_result.usage)
             settlement = await self._billing.settle_request(
                 reservation_id=reservation.ledger_entry_id,
                 idempotency_key=billing_key,
-                cost=cost,
+                model=priced_model,
                 usage=usage_result.usage,
                 usage_source=usage_result.usage_source,
             )
             settled = True
+            settled_cost = settlement.actual_cost
             await self._audit.complete_request(
                 audit_id,
                 RequestResult(
@@ -291,37 +304,74 @@ class GatewayService:
                     metadata={"attempts": attempt_response.attempts},
                 ),
             )
+            audit_terminal = True
             return output
-        except Exception as exc:
-            if not settled:
-                settlement = await self._settle_zero(reservation, billing_key)
-                settled = True
-                final_route = (
-                    attempt_response.route
-                    if attempt_response is not None
-                    else getattr(exc, "route", None)
+        except BaseException as exc:
+            final_route = (
+                attempt_response.route
+                if attempt_response is not None
+                else getattr(exc, "route", None)
+            )
+            attempts = (
+                attempt_response.attempts
+                if attempt_response is not None
+                else getattr(exc, "attempts", ())
+            )
+            await _run_cleanup_shielded(
+                self._cleanup_after_failure(
+                    reservation=reservation,
+                    billing_key=billing_key,
+                    audit_id=audit_id,
+                    exc=exc,
+                    final_route=final_route,
+                    attempts=attempts,
+                    settled=settled,
+                    settled_cost=settled_cost,
+                    audit_terminal=audit_terminal,
+                    started_at=started_at,
                 )
-                attempts = (
-                    attempt_response.attempts
-                    if attempt_response is not None
-                    else getattr(exc, "attempts", ())
-                )
-                await self._audit.fail_request(
-                    audit_id,
-                    RequestFailure(
-                        error_code=_public_error_code(exc),
-                        provider_id=final_route.provider_id if final_route is not None else None,
-                        model_route_id=(final_route.route_id if final_route is not None else None),
-                        outbound_protocol=(
-                            final_route.protocol if final_route is not None else None
-                        ),
-                        http_status=getattr(exc, "status_code", None),
-                        cost=settlement.actual_cost,
-                        latency_ms=_elapsed_ms(started_at),
-                        metadata={"attempts": attempts},
-                    ),
-                )
+            )
             raise
+
+    async def _cleanup_after_failure(
+        self,
+        *,
+        reservation: BalanceReservation,
+        billing_key: str,
+        audit_id: UUID,
+        exc: BaseException,
+        final_route: RouteCandidate | None,
+        attempts: tuple[dict[str, Any], ...],
+        settled: bool,
+        settled_cost: Decimal,
+        audit_terminal: bool,
+        started_at: float,
+    ) -> None:
+        cleanup_cost = settled_cost
+        if not settled:
+            try:
+                cleanup_cost = (await self._settle_zero(reservation, billing_key)).actual_cost
+            except BaseException as cleanup_exc:
+                _log_cleanup_failure("settlement", cleanup_exc)
+        if audit_terminal:
+            return
+        try:
+            await self._audit.fail_request(
+                audit_id,
+                RequestFailure(
+                    error_code=_public_error_code(exc),
+                    client_disconnected=isinstance(exc, asyncio.CancelledError),
+                    provider_id=(final_route.provider_id if final_route is not None else None),
+                    model_route_id=(final_route.route_id if final_route is not None else None),
+                    outbound_protocol=(final_route.protocol if final_route is not None else None),
+                    http_status=getattr(exc, "status_code", None),
+                    cost=cleanup_cost,
+                    latency_ms=_elapsed_ms(started_at),
+                    metadata={"attempts": attempts},
+                ),
+            )
+        except BaseException as cleanup_exc:
+            _log_cleanup_failure("audit", cleanup_exc)
 
     async def _send_with_failover(
         self,
@@ -383,6 +433,9 @@ class GatewayService:
             try:
                 client = await self._http_clients.client_for(url)
                 upstream = await client.send(upstream_request)
+            except asyncio.CancelledError as exc:
+                _annotate_failure(exc, route, tuple(attempts))
+                raise
             except Exception as exc:
                 if not is_retryable_failure(exception=exc):
                     raise UpstreamError(
@@ -390,13 +443,16 @@ class GatewayService:
                         route=route,
                         attempts=tuple(attempts),
                     ) from exc
-                await router.record_failure(route.route_id, RouteFailure(exception=exc))
                 attempts.append(_attempt_summary(route, len(attempts) + 1, exception=exc))
                 last_failure = exc
+                try:
+                    await router.record_failure(route.route_id, RouteFailure(exception=exc))
+                except asyncio.CancelledError as cancelled:
+                    _annotate_failure(cancelled, route, tuple(attempts))
+                    raise
                 continue
 
             if is_retryable_failure(status_code=upstream.status_code):
-                await router.record_failure(route.route_id, upstream.status_code)
                 attempts.append(
                     _attempt_summary(
                         route,
@@ -405,13 +461,18 @@ class GatewayService:
                     )
                 )
                 last_failure = upstream
-                await upstream.aclose()
+                try:
+                    await router.record_failure(route.route_id, upstream.status_code)
+                except asyncio.CancelledError as exc:
+                    _annotate_failure(exc, route, tuple(attempts))
+                    raise
+                try:
+                    await upstream.aclose()
+                except asyncio.CancelledError as exc:
+                    _annotate_failure(exc, route, tuple(attempts))
+                    raise
                 continue
 
-            if upstream.status_code >= 400:
-                await router.record_failure(route.route_id, upstream.status_code)
-            else:
-                await router.record_success(route.route_id)
             attempts.append(
                 _attempt_summary(
                     route,
@@ -420,6 +481,14 @@ class GatewayService:
                     succeeded=upstream.status_code < 400,
                 )
             )
+            try:
+                if upstream.status_code >= 400:
+                    await router.record_failure(route.route_id, upstream.status_code)
+                else:
+                    await router.record_success(route.route_id)
+            except asyncio.CancelledError as exc:
+                _annotate_failure(exc, route, tuple(attempts))
+                raise
             return _AttemptResponse(route, upstream, tuple(attempts))
 
     async def _settle_zero(
@@ -453,7 +522,7 @@ def is_retryable_failure(
 ) -> bool:
     if status_code is not None:
         return status_code in {408, 429} or 500 <= status_code <= 599
-    return isinstance(exception, (httpx.ConnectError, httpx.TimeoutException, ConnectionError))
+    return isinstance(exception, (httpx.NetworkError, httpx.TimeoutException, ConnectionError))
 
 
 def _request_payload(
@@ -478,13 +547,20 @@ def _request_payload(
 
 def _upstream_body(prepared: _PreparedRequest, route: RouteCandidate) -> bytes:
     if route.protocol is prepared.inbound_protocol:
+        if route.protocol is Protocol.GEMINI:
+            payload = prepared.payload.copy()
+            payload.pop("model", None)
+            return orjson.dumps(payload)
         return rewrite_passthrough_request(
             route.protocol,
             orjson.dumps(prepared.payload),
             route.upstream_model,
         )
     canonical = replace(prepared.canonical, model=route.upstream_model)
-    return orjson.dumps(get_adapter(route.protocol).encode_request(canonical))
+    payload = get_adapter(route.protocol).encode_request(canonical)
+    if route.protocol is Protocol.GEMINI:
+        payload.pop("model", None)
+    return orjson.dumps(payload)
 
 
 def _convert_response(
@@ -493,7 +569,7 @@ def _convert_response(
     route: RouteCandidate,
     upstream: httpx.Response,
 ) -> tuple[GatewayOutput, dict[str, Any], CanonicalResponse | None]:
-    content_type = upstream.headers.get("content-type", "application/json")
+    content_type = upstream.headers.get("content-type")
     payload = _json_object_or_empty(upstream.content)
     source_adapter = get_adapter(route.protocol)
     canonical_response: CanonicalResponse | None = None
@@ -574,7 +650,7 @@ def _same_protocol_error_output(
     return GatewayOutput(
         response.content,
         response.status_code,
-        response.headers.get("content-type", "application/json"),
+        response.headers.get("content-type"),
     )
 
 
@@ -604,9 +680,57 @@ def _attempt_summary(
     return summary
 
 
-def _billing_key(request: Request, request_id: UUID) -> str:
-    supplied = request.headers.get("idempotency-key") or request.headers.get("x-request-id")
-    return supplied.strip() if supplied and supplied.strip() else f"gateway:{request_id}"
+def _billing_key(principal: ApiKeyPrincipal, request_id: UUID) -> str:
+    return f"gateway:{principal.user_id}:{principal.api_key_id}:{request_id}"
+
+
+def _audit_correlation_id(request: Request) -> str | None:
+    value = request.headers.get("x-request-id")
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized or len(normalized) > 128:
+        return None
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+        return None
+    return normalized
+
+
+def _audit_headers(request: Request, correlation_id: str | None) -> dict[str, str]:
+    headers = dict(request.headers)
+    headers.pop("idempotency-key", None)
+    headers.pop("x-request-id", None)
+    if correlation_id is not None:
+        headers["x-request-id"] = correlation_id
+    return headers
+
+
+async def _run_cleanup_shielded(cleanup: Coroutine[Any, Any, None]) -> None:
+    cleanup_task = asyncio.create_task(cleanup)
+    while True:
+        try:
+            await asyncio.shield(cleanup_task)
+            return
+        except asyncio.CancelledError:
+            if cleanup_task.done():
+                return
+
+
+def _annotate_failure(
+    exc: BaseException,
+    route: RouteCandidate,
+    attempts: tuple[dict[str, Any], ...],
+) -> None:
+    setattr(exc, "route", route)
+    setattr(exc, "attempts", attempts)
+
+
+def _log_cleanup_failure(operation: str, exc: BaseException) -> None:
+    logger.error(
+        "Gateway cleanup failed operation=%s exception_type=%s",
+        operation,
+        type(exc).__name__,
+    )
 
 
 def _elapsed_ms(started_at: float) -> int:
