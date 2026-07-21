@@ -414,6 +414,23 @@ class OpenAIAdapter(ProtocolAdapter):
                 tool_call.get("function", {}),
                 f"stream_event.choices[0].delta.tool_calls[{tool_index}].function",
             )
+            tool_metadata = thaw(event_metadata)
+            add_vendor_scope(
+                tool_metadata,
+                self.protocol,
+                "__stream_tool_call__",
+                {
+                    key: item
+                    for key, item in tool_call.items()
+                    if key not in {"index", "id", "type", "function"}
+                },
+            )
+            add_vendor_scope(
+                tool_metadata,
+                self.protocol,
+                "__stream_function__",
+                {key: item for key, item in function.items() if key not in {"name", "arguments"}},
+            )
             events.append(
                 StreamEvent(
                     type="tool_call_delta",
@@ -434,7 +451,7 @@ class OpenAIAdapter(ProtocolAdapter):
                         else None
                     ),
                     model=model,
-                    metadata=event_metadata,
+                    metadata=tool_metadata,
                 )
             )
         if finish is not None:
@@ -467,14 +484,17 @@ class OpenAIAdapter(ProtocolAdapter):
             delta_extensions["content"] = event.text or ""
             choice["delta"] = delta_extensions
         elif event.type == "tool_call_delta":
-            function: dict[str, Any] = {}
+            function = vendor_scope(self.protocol, event.metadata, "__stream_function__")
             _set_optional(function, "name", event.tool_name)
             _set_optional(function, "arguments", event.arguments_delta)
-            tool_call: dict[str, Any] = {
-                "index": event.tool_index if event.tool_index is not None else event.index,
-                "type": "function",
-                "function": function,
-            }
+            tool_call = vendor_scope(self.protocol, event.metadata, "__stream_tool_call__")
+            tool_call.update(
+                {
+                    "index": event.tool_index if event.tool_index is not None else event.index,
+                    "type": "function",
+                    "function": function,
+                }
+            )
             _set_optional(tool_call, "id", event.tool_call_id)
             delta_extensions["tool_calls"] = [tool_call]
             choice["delta"] = delta_extensions
@@ -491,7 +511,15 @@ class OpenAIAdapter(ProtocolAdapter):
             validate_usage(event.usage, "stream_event.usage")
             choice = {}
         elif event.type == "error":
-            return encode_sse({"error": thaw(event.metadata)})
+            return encode_sse(
+                {
+                    "error": {
+                        key: thaw(item)
+                        for key, item in event.metadata.items()
+                        if key != "vendor_extensions"
+                    }
+                }
+            )
         else:
             raise UnsupportedFeatureError("stream_event.type", f"cannot encode {event.type!r}")
         payload = native_extensions(self.protocol, event.metadata)
@@ -609,6 +637,8 @@ class _OpenAIStreamEncoder(StreamEncoder):
     def encode(self, event: StreamEvent) -> tuple[bytes, ...]:
         if event.type in {"content_start", "content_end", "heartbeat"}:
             return ()
+        if event.type == "message_start" and event.usage is not None:
+            event = replace(event, usage=None)
         if event.type == "tool_call_delta":
             key = (event.index, event.tool_call_id)
             tool_index = event.tool_index

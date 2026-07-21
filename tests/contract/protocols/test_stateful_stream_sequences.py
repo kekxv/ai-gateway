@@ -21,12 +21,28 @@ def _decode_sequence(protocol: str, frames: Iterable[bytes]) -> tuple[StreamEven
 
 
 def _encode_sequence(protocol: str, events: Iterable[StreamEvent]) -> tuple[bytes, ...]:
+    event_sequence = tuple(events)
     encoder = get_adapter(protocol).create_stream_encoder()
-    return tuple(frame for event in events for frame in encoder.encode(event) if frame)
+    if protocol == "claude":
+        final_usage = next(
+            (
+                event.usage
+                for event in reversed(event_sequence)
+                if event.type == "usage" and event.usage is not None
+            ),
+            None,
+        )
+        if final_usage is not None:
+            encoder.set_initial_usage(final_usage.input_tokens)
+    return tuple(frame for event in event_sequence for frame in encoder.encode(event) if frame)
 
 
 def _native_bodies(frames: Iterable[bytes]) -> tuple[dict[str, object], ...]:
     return tuple(decode_sse(frame)[1] for frame in frames)
+
+
+def _fixture_frames(data: bytes) -> tuple[bytes, ...]:
+    return tuple(chunk + b"\n\n" for chunk in data.strip().split(b"\n\n"))
 
 
 def test_openai_decoder_tracks_boundaries_and_parallel_native_tool_indices() -> None:
@@ -212,6 +228,56 @@ def test_claude_encoder_synthesizes_balanced_blocks_and_accepts_partial_tool_jso
     assert bodies[7]["delta"]["partial_json"] == "1}"
 
 
+def test_claude_usage_is_one_final_cumulative_total_for_cross_protocol_targets(
+    load_bytes,
+) -> None:
+    frames = _fixture_frames(load_bytes("claude", "stream_usage.sse"))
+    canonical = _decode_sequence("claude", frames)
+
+    usage_events = [event for event in canonical if event.type == "usage"]
+    assert len(usage_events) == 1
+    assert usage_events[0].usage == CanonicalUsage(11, 7)
+    start = next(event for event in canonical if event.type == "message_start")
+    assert start.usage == CanonicalUsage(11, 0)
+
+    openai = _native_bodies(_encode_sequence("openai", canonical))
+    openai_usage = [
+        body["usage"] for body in openai if isinstance(body, dict) and body.get("usage")
+    ]
+    assert openai_usage == [{"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}]
+
+    gemini = _native_bodies(_encode_sequence("gemini", canonical))
+    gemini_usage = [body["usageMetadata"] for body in gemini if body.get("usageMetadata")]
+    assert gemini_usage == [
+        {"promptTokenCount": 11, "candidatesTokenCount": 7, "totalTokenCount": 18}
+    ]
+
+
+def test_claude_same_protocol_usage_returns_to_native_start_and_final_delta(load_bytes) -> None:
+    native = _fixture_frames(load_bytes("claude", "stream_usage.sse"))
+    canonical = _decode_sequence("claude", native)
+    encoded = _native_bodies(_encode_sequence("claude", canonical))
+
+    assert [body["type"] for body in encoded] == [
+        "message_start",
+        "message_delta",
+        "message_stop",
+    ]
+    assert encoded[0]["message"]["usage"] == {"input_tokens": 11}
+    assert encoded[1]["delta"]["stop_reason"] == "end_turn"
+    assert encoded[1]["usage"] == {"output_tokens": 7}
+
+
+def test_claude_encoder_accepts_initial_usage_hook_before_message_start() -> None:
+    encoder = get_adapter("claude").create_stream_encoder()
+    encoder.set_initial_usage(5)
+
+    frames = encoder.encode(StreamEvent(type="message_start", role="assistant", model="m"))
+    body = decode_sse(frames[0])[1]
+
+    assert body["message"]["usage"] == {"input_tokens": 5}
+
+
 def test_gemini_stop_after_prior_function_call_is_statefully_tool_call() -> None:
     frames = (
         _sse(
@@ -324,7 +390,14 @@ def test_all_nine_pairs_convert_a_complete_incremental_sequence(source: str, tar
         ),
         "claude": (
             _sse(
-                {"type": "message_start", "message": {"role": "assistant", "model": "m"}},
+                {
+                    "type": "message_start",
+                    "message": {
+                        "role": "assistant",
+                        "model": "m",
+                        "usage": {"input_tokens": 2},
+                    },
+                },
                 "message_start",
             ),
             _sse(
@@ -390,7 +463,7 @@ def test_all_nine_pairs_convert_a_complete_incremental_sequence(source: str, tar
                 {
                     "type": "message_delta",
                     "delta": {"stop_reason": "tool_use"},
-                    "usage": {"input_tokens": 2, "output_tokens": 3},
+                    "usage": {"output_tokens": 3},
                 },
                 "message_delta",
             ),

@@ -1,0 +1,8 @@
+event: message_start
+data: {"type":"message_start","message":{"type":"message","role":"assistant","model":"m","content":[],"usage":{"input_tokens":11}}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}
+
+event: message_stop
+data: {"type":"message_stop"}

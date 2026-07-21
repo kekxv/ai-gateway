@@ -115,8 +115,12 @@ def test_claude_all_native_event_shapes_have_independent_canonical_sequences() -
             "message_start",
         )
     ) == (
-        StreamEvent(type="message_start", role="assistant", model="claude-x"),
-        StreamEvent(type="usage", usage=CanonicalUsage(3, 0), model="claude-x"),
+        StreamEvent(
+            type="message_start",
+            role="assistant",
+            usage=CanonicalUsage(3, 0),
+            model="claude-x",
+        ),
     )
     assert decoder.decode(
         _sse(
@@ -175,14 +179,17 @@ def test_claude_all_native_event_shapes_have_independent_canonical_sequences() -
         )
     ) == (
         StreamEvent(type="message_end", finish_reason="stop"),
-        StreamEvent(type="usage", usage=CanonicalUsage(0, 4)),
+        StreamEvent(type="usage", usage=CanonicalUsage(3, 4)),
     )
-    assert decoder.decode(
-        _sse(
-            {"type": "message_delta", "delta": {}, "usage": {"output_tokens": 4}},
-            "message_delta",
+    assert (
+        decoder.decode(
+            _sse(
+                {"type": "message_delta", "delta": {}, "usage": {"output_tokens": 4}},
+                "message_delta",
+            )
         )
-    ) == (StreamEvent(type="usage", usage=CanonicalUsage(0, 4)),)
+        == ()
+    )
     assert decoder.decode(_sse({"type": "message_stop"}, "message_stop")) == (
         StreamEvent(type="done"),
     )
@@ -195,22 +202,27 @@ def test_claude_all_native_event_shapes_have_independent_canonical_sequences() -
 def test_claude_encoded_native_shapes_decode_without_invented_finish() -> None:
     adapter = ClaudeAdapter()
     events = (
-        StreamEvent(type="content_end", index=3),
+        StreamEvent(
+            type="message_start",
+            role="assistant",
+            usage=CanonicalUsage(0, 0),
+        ),
+        StreamEvent(type="message_end", finish_reason="stop"),
         StreamEvent(type="usage", usage=CanonicalUsage(0, 5)),
         StreamEvent(type="heartbeat"),
         StreamEvent(type="done"),
     )
 
-    encoded = tuple(adapter.encode_stream_event(event) for event in events)
+    encoder = adapter.create_stream_encoder()
+    encoded = tuple(frame for event in events for frame in encoder.encode(event))
     native_types = tuple(decode_sse(frame)[1]["type"] for frame in encoded)
 
-    assert native_types == ("content_block_stop", "message_delta", "ping", "message_stop")
-    assert tuple(adapter.decode_stream_event(frame) for frame in encoded) == (
-        (events[0],),
-        (events[1],),
-        (events[2],),
-        (events[3],),
-    )
+    assert native_types == ("message_start", "message_delta", "ping", "message_stop")
+    decoder = adapter.create_stream_decoder()
+    decoded = tuple(item for frame in encoded for item in decoder.decode(frame))
+    assert next(item for item in decoded if item.type == "message_end").finish_reason == "stop"
+    assert next(item for item in decoded if item.type == "usage").usage == CanonicalUsage(0, 5)
+    assert [item.type for item in decoded[-2:]] == ["heartbeat", "done"]
 
 
 def test_claude_encodes_start_text_tool_finish_and_error_native_shapes() -> None:

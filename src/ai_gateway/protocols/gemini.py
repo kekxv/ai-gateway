@@ -380,7 +380,15 @@ class GeminiAdapter(ProtocolAdapter):
         if event.type in {"done", "message_start", "content_start", "content_end", "heartbeat"}:
             return NO_STREAM_OUTPUT
         if event.type == "error":
-            return encode_sse({"error": thaw(event.metadata)})
+            return encode_sse(
+                {
+                    "error": {
+                        key: thaw(item)
+                        for key, item in event.metadata.items()
+                        if key != "vendor_extensions"
+                    }
+                }
+            )
         payload = native_extensions(self.protocol, event.metadata)
         _set_optional(payload, "modelVersion", event.model)
         if event.type == "usage":

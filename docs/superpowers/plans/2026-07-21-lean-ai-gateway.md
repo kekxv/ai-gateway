@@ -871,6 +871,16 @@ git commit -m "feat: add non streaming gateway endpoints"
 
 **Interfaces:**
 - Produces: `SSEDecoder.feed(chunk: bytes) -> list[SSEEvent]`, `stream_gateway_response(context: GatewayContext, upstream: httpx.Response) -> AsyncIterator[bytes]`。
+- Consumes: one `source_adapter.create_stream_decoder()` and one `target_adapter.create_stream_encoder()` per upstream response stream. These two context objects are created once before iteration and retained until the actual upstream EOF/finalization path.
+
+**Mandatory stream-adapter contract:**
+
+- Never call the isolated `decode_stream_event` or `encode_stream_event` helpers to convert a complete stream; they intentionally have no cross-frame state.
+- For every native SSE frame, fan out the full tuple returned by `stream_decoder.decode(frame)` in order. For every canonical event, fan out every frame returned by `stream_encoder.encode(event)` in order.
+- Skip `NO_STREAM_OUTPUT`/empty encoded frames. Empty encoder output is a target-native no-op, not a frame to feed back into a decoder.
+- Call Gemini `stream_decoder.decode(b"")` exactly once and only when the upstream HTTP body reaches actual EOF. Never use empty bytes for an ordinary SSE event or encoder no-op.
+- Preserve partial OpenAI/Claude tool argument fragments through the canonical stream. Assemble/buffer them only inside the target Gemini encoder, because Gemini function-call parts require a complete JSON argument object.
+- When Claude is the target and input-token usage is known or estimated before the first frame, call `stream_encoder.set_initial_usage(input_tokens)` before encoding `message_start`. Claude input usage belongs on `message_start`; the encoder retains the terminal finish until cumulative final usage arrives and emits output usage on the final `message_delta`, without buffering the response body.
 
 - [ ] **Step 1: Write incremental SSE parser tests**
 
@@ -878,11 +888,11 @@ Cover CRLF/LF, event split across arbitrary byte chunks, multi-line `data:`, com
 
 - [ ] **Step 2: Write all nine streaming conversion tests**
 
-Assert text deltas, tool-call argument deltas, start/end events, finish reasons and final usage are converted into the inbound protocol's expected event sequence. Same-protocol tests assert exact upstream bytes.
+Assert text deltas, parallel tool-call argument deltas, start/end events, finish reasons and final cumulative usage are converted into the inbound protocol's expected event sequence. Tests must retain one decoder and encoder context for the entire sequence, exercise tuple/frame fan-out, and cover Gemini EOF separately from ordinary no-output events. Same-protocol tests assert exact upstream bytes, including Claude input usage on `message_start` and output usage on the final `message_delta`.
 
 - [ ] **Step 3: Implement streaming without buffering full responses**
 
-Read `aiter_bytes()`, parse only when protocols differ, emit encoded events immediately, record first-token latency on the first non-heartbeat content event, and accumulate only usage plus a redacted audit preview capped by the configured byte limit.
+Read `aiter_bytes()`, parse only when protocols differ, and emit each non-empty encoded frame immediately. Create the persistent decoder/encoder pair before the loop; do not recreate either context per frame. At actual EOF, invoke the Gemini decoder's empty-input terminal exactly once when Gemini is the source. Record first-token latency on the first non-heartbeat content event, and accumulate only cumulative usage plus a redacted audit preview capped by the configured byte limit.
 
 - [ ] **Step 4: Implement disconnect and error finalization**
 

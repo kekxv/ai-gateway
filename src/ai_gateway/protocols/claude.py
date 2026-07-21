@@ -246,6 +246,21 @@ class ClaudeAdapter(ProtocolAdapter):
         if event_type == "content_block_start":
             block = require_object(payload.get("content_block"), "stream_event.content_block")
             index = nonnegative_int(payload.get("index", 0), "stream_event.index")
+            event_metadata = vendor_metadata(
+                self.protocol,
+                payload,
+                {"type", "index", "content_block"},
+            )
+            add_vendor_scope(
+                event_metadata,
+                self.protocol,
+                "__content_block__",
+                {
+                    key: item
+                    for key, item in block.items()
+                    if key not in {"type", "text", "id", "name", "input"}
+                },
+            )
             if block.get("type") == "tool_use":
                 arguments = block.get("input", {})
                 arguments = require_object(arguments, "stream_event.content_block.input")
@@ -261,6 +276,7 @@ class ClaudeAdapter(ProtocolAdapter):
                         ),
                         arguments_delta=(orjson.dumps(arguments).decode() if arguments else None),
                         content_type="tool_call",
+                        metadata=event_metadata,
                     ),
                 )
             if block.get("type") == "text":
@@ -269,7 +285,14 @@ class ClaudeAdapter(ProtocolAdapter):
                     raise UnsupportedFeatureError(
                         "stream_event.content_block.text", "must be a string"
                     )
-                events = [StreamEvent(type="content_start", index=index, content_type="text")]
+                events = [
+                    StreamEvent(
+                        type="content_start",
+                        index=index,
+                        content_type="text",
+                        metadata=event_metadata,
+                    )
+                ]
                 if text:
                     events.append(
                         StreamEvent(
@@ -277,6 +300,7 @@ class ClaudeAdapter(ProtocolAdapter):
                             index=index,
                             text=text,
                             content_type="text",
+                            metadata=event_metadata,
                         )
                     )
                 return tuple(events)
@@ -286,17 +310,62 @@ class ClaudeAdapter(ProtocolAdapter):
             )
         if event_type == "content_block_stop":
             index = nonnegative_int(payload.get("index", 0), "stream_event.index")
-            return (StreamEvent(type="content_end", index=index),)
+            return (
+                StreamEvent(
+                    type="content_end",
+                    index=index,
+                    metadata=vendor_metadata(
+                        self.protocol,
+                        payload,
+                        {"type", "index"},
+                    ),
+                ),
+            )
         if event_type == "message_start":
             message = require_object(payload.get("message", {}), "stream_event.message")
             model = message.get("model") if isinstance(message.get("model"), str) else None
-            events = [StreamEvent(type="message_start", role="assistant", model=model)]
             usage = _decode_usage(message.get("usage"))
-            if usage is not None:
-                events.append(StreamEvent(type="usage", usage=usage, model=model))
-            return tuple(events)
+            event_metadata = vendor_metadata(
+                self.protocol,
+                payload,
+                {"type", "message"},
+            )
+            add_vendor_scope(
+                event_metadata,
+                self.protocol,
+                "__message__",
+                {
+                    key: item
+                    for key, item in message.items()
+                    if key not in {"type", "role", "model", "content", "usage"}
+                },
+            )
+            return (
+                StreamEvent(
+                    type="message_start",
+                    role="assistant",
+                    model=model,
+                    usage=usage,
+                    metadata=event_metadata,
+                ),
+            )
         if event_type == "message_delta":
             delta = require_object(payload.get("delta", {}), "stream_event.delta")
+            event_metadata = vendor_metadata(
+                self.protocol,
+                payload,
+                {"type", "delta", "usage"},
+            )
+            add_vendor_scope(
+                event_metadata,
+                self.protocol,
+                "__message_delta__",
+                {
+                    key: item
+                    for key, item in delta.items()
+                    if key not in {"stop_reason", "stop_sequence"}
+                },
+            )
             events = []
             stop_reason = delta.get("stop_reason")
             if stop_reason is not None:
@@ -304,26 +373,53 @@ class ClaudeAdapter(ProtocolAdapter):
                     StreamEvent(
                         type="message_end",
                         finish_reason=_decode_finish_reason(stop_reason),
+                        metadata=event_metadata,
                     )
                 )
             usage = _decode_usage(payload.get("usage"))
             if usage is not None:
-                events.append(StreamEvent(type="usage", usage=usage))
+                events.append(StreamEvent(type="usage", usage=usage, metadata=event_metadata))
             if not events:
                 raise UnsupportedFeatureError(
                     "stream_event", "message_delta contains neither stop reason nor usage"
                 )
             return tuple(events)
         if event_type == "message_stop":
-            return (StreamEvent(type="done"),)
+            return (
+                StreamEvent(
+                    type="done",
+                    metadata=vendor_metadata(self.protocol, payload, {"type"}),
+                ),
+            )
         if event_type == "ping":
-            return (StreamEvent(type="heartbeat"),)
+            return (
+                StreamEvent(
+                    type="heartbeat",
+                    metadata=vendor_metadata(self.protocol, payload, {"type"}),
+                ),
+            )
         if event_type == "error":
-            error = payload.get("error", payload)
+            error = require_object(payload.get("error", payload), "stream_event.error")
+            metadata = {
+                key: thaw(item)
+                for key, item in error.items()
+                if key in {"type", "message", "code", "status"}
+            }
+            metadata.update(vendor_metadata(self.protocol, payload, {"type", "error"}))
+            add_vendor_scope(
+                metadata,
+                self.protocol,
+                "__error__",
+                {
+                    key: item
+                    for key, item in error.items()
+                    if key not in {"type", "message", "code", "status"}
+                },
+            )
             return (
                 StreamEvent(
                     type="error",
-                    metadata=require_object(error, "stream_event.error"),
+                    metadata=metadata,
                 ),
             )
         raise UnsupportedFeatureError(
@@ -403,14 +499,10 @@ class ClaudeAdapter(ProtocolAdapter):
         elif event.type == "heartbeat":
             payload = {"type": "ping"}
         elif event.type == "usage":
-            if event.usage is None:
-                raise UnsupportedFeatureError("stream_event.usage", "is required")
-            validate_usage(event.usage, "stream_event.usage")
-            payload = {
-                "type": "message_delta",
-                "delta": {},
-                "usage": _encode_usage(event.usage),
-            }
+            raise UnsupportedFeatureError(
+                "stream_event.usage",
+                "Claude usage requires a stateful encoder to place input and output tokens",
+            )
         else:
             raise UnsupportedFeatureError("stream_event.type", f"cannot encode {event.type!r}")
         return encode_sse(payload, str(payload["type"]))
@@ -422,6 +514,10 @@ class _ClaudeStreamDecoder(StreamDecoder):
         self._block_types: dict[int, str] = {}
         self._tool_indices: dict[int, int] = {}
         self._next_tool_index = 0
+        self._input_tokens = 0
+        self._output_tokens = 0
+        self._saw_usage = False
+        self._usage_emitted = False
 
     def _close_open_blocks(self) -> list[StreamEvent]:
         events: list[StreamEvent] = []
@@ -442,8 +538,24 @@ class _ClaudeStreamDecoder(StreamDecoder):
     def decode(self, event: bytes | Mapping[str, Any]) -> tuple[StreamEvent, ...]:
         raw_events = self._adapter._decode_isolated_stream_event(event)
         events: list[StreamEvent] = []
+        terminal = any(raw.type == "message_end" for raw in raw_events)
+        done = any(raw.type == "done" for raw in raw_events)
+        usage_metadata: Mapping[str, Any] = {}
         for raw in raw_events:
-            if raw.type == "content_start":
+            if raw.type == "message_start":
+                if raw.usage is not None:
+                    self._input_tokens = raw.usage.input_tokens
+                    self._output_tokens = raw.usage.output_tokens
+                    self._saw_usage = True
+                events.append(raw)
+            elif raw.type == "usage":
+                if raw.usage is not None:
+                    if raw.usage.input_tokens:
+                        self._input_tokens = raw.usage.input_tokens
+                    self._output_tokens = raw.usage.output_tokens
+                    self._saw_usage = True
+                    usage_metadata = raw.metadata
+            elif raw.type == "content_start":
                 self._block_types[raw.index] = "text"
                 events.append(raw)
             elif raw.type == "content_delta":
@@ -476,6 +588,17 @@ class _ClaudeStreamDecoder(StreamDecoder):
                 events.append(raw)
             else:
                 events.append(raw)
+        if (terminal or done) and self._saw_usage and not self._usage_emitted:
+            usage_event = StreamEvent(
+                type="usage",
+                usage=CanonicalUsage(self._input_tokens, self._output_tokens),
+                metadata=usage_metadata,
+            )
+            if done and events and events[-1].type == "done":
+                events.insert(len(events) - 1, usage_event)
+            else:
+                events.append(usage_event)
+            self._usage_emitted = True
         return tuple(events)
 
 
@@ -485,6 +608,13 @@ class _ClaudeStreamEncoder(StreamEncoder):
         self._block_indices: dict[tuple[str, object], int] = {}
         self._open_blocks: dict[int, str] = {}
         self._used_indices: set[int] = set()
+        self._input_tokens: int | None = None
+        self._output_tokens: int | None = None
+        self._pending_end: StreamEvent | None = None
+        self._usage_metadata: Mapping[str, Any] = {}
+
+    def set_initial_usage(self, input_tokens: int) -> None:
+        self._input_tokens = nonnegative_int(input_tokens, "stream_event.usage.input_tokens")
 
     def _key(self, event: StreamEvent, content_type: str) -> tuple[str, object]:
         if content_type == "tool_call":
@@ -516,18 +646,58 @@ class _ClaudeStreamEncoder(StreamEncoder):
     def _frame(payload: Mapping[str, Any]) -> bytes:
         return encode_sse(payload, str(payload["type"]))
 
-    def _start_text(self, event: StreamEvent) -> tuple[int, bytes | None]:
+    def _message_start_frame(self, event: StreamEvent) -> bytes:
+        payload = native_extensions(Protocol.CLAUDE, event.metadata)
+        message = vendor_scope(Protocol.CLAUDE, event.metadata, "__message__")
+        message.update(
+            {
+                "type": "message",
+                "role": "assistant",
+                "model": event.model or "",
+                "content": [],
+            }
+        )
+        if event.usage is not None:
+            validate_usage(event.usage, "stream_event.usage")
+            self._input_tokens = event.usage.input_tokens
+        if self._input_tokens is not None:
+            message["usage"] = {"input_tokens": self._input_tokens}
+        payload.update({"type": "message_start", "message": message})
+        return self._frame(payload)
+
+    def _terminal_frame(self) -> bytes | None:
+        event = self._pending_end
+        if event is None:
+            return None
+        if event.finish_reason is None:
+            raise UnsupportedFeatureError("stream_event.finish_reason", "is required")
+        payload = native_extensions(Protocol.CLAUDE, event.metadata)
+        delta = vendor_scope(Protocol.CLAUDE, event.metadata, "__message_delta__")
+        delta["stop_reason"] = _encode_finish_reason(event.finish_reason)
+        payload.update({"type": "message_delta", "delta": delta})
+        if self._output_tokens is not None:
+            usage = vendor_scope(Protocol.CLAUDE, self._usage_metadata, "__usage__")
+            usage["output_tokens"] = self._output_tokens
+            payload["usage"] = usage
+        self._pending_end = None
+        return self._frame(payload)
+
+    def _start_text(
+        self, event: StreamEvent, *, preserve_metadata: bool
+    ) -> tuple[int, bytes | None]:
         index = self._index_for(event, "text")
         if index in self._open_blocks:
             return index, None
         self._open_blocks[index] = "text"
-        return index, self._frame(
-            {
-                "type": "content_block_start",
-                "index": index,
-                "content_block": {"type": "text", "text": ""},
-            }
+        payload = native_extensions(Protocol.CLAUDE, event.metadata) if preserve_metadata else {}
+        block = (
+            vendor_scope(Protocol.CLAUDE, event.metadata, "__content_block__")
+            if preserve_metadata
+            else {}
         )
+        block.update({"type": "text", "text": ""})
+        payload.update({"type": "content_block_start", "index": index, "content_block": block})
+        return index, self._frame(payload)
 
     def _start_tool(self, event: StreamEvent) -> tuple[int, bytes | None]:
         index = self._index_for(event, "tool_call")
@@ -539,23 +709,25 @@ class _ClaudeStreamEncoder(StreamEncoder):
                 "Claude requires id and name before tool argument deltas",
             )
         self._open_blocks[index] = "tool_call"
-        return index, self._frame(
+        payload = native_extensions(Protocol.CLAUDE, event.metadata)
+        block = vendor_scope(Protocol.CLAUDE, event.metadata, "__content_block__")
+        block.update(
             {
-                "type": "content_block_start",
-                "index": index,
-                "content_block": {
-                    "type": "tool_use",
-                    "id": event.tool_call_id,
-                    "name": event.tool_name,
-                    "input": {},
-                },
+                "type": "tool_use",
+                "id": event.tool_call_id,
+                "name": event.tool_name,
+                "input": {},
             }
         )
+        payload.update({"type": "content_block_start", "index": index, "content_block": block})
+        return index, self._frame(payload)
 
-    def _close_index(self, index: int) -> bytes | None:
+    def _close_index(self, index: int, metadata: Mapping[str, Any] | None = None) -> bytes | None:
         if self._open_blocks.pop(index, None) is None:
             return None
-        return self._frame({"type": "content_block_stop", "index": index})
+        payload = native_extensions(Protocol.CLAUDE, metadata or {})
+        payload.update({"type": "content_block_stop", "index": index})
+        return self._frame(payload)
 
     def _close_all(self) -> list[bytes]:
         frames = []
@@ -577,12 +749,14 @@ class _ClaudeStreamEncoder(StreamEncoder):
 
     def encode(self, event: StreamEvent) -> tuple[bytes, ...]:
         frames: list[bytes] = []
-        if event.type == "content_start":
-            _, start = self._start_text(event)
+        if event.type == "message_start":
+            frames.append(self._message_start_frame(event))
+        elif event.type == "content_start":
+            _, start = self._start_text(event, preserve_metadata=True)
             if start is not None:
                 frames.append(start)
         elif event.type == "content_delta":
-            index, start = self._start_text(event)
+            index, start = self._start_text(event, preserve_metadata=False)
             if start is not None:
                 frames.append(start)
             payload = native_extensions(Protocol.CLAUDE, event.metadata)
@@ -602,30 +776,69 @@ class _ClaudeStreamEncoder(StreamEncoder):
             if start is not None:
                 frames.append(start)
             if event.arguments_delta:
-                frames.append(
-                    self._frame(
-                        {
-                            "type": "content_block_delta",
-                            "index": index,
-                            "delta": {
-                                "type": "input_json_delta",
-                                "partial_json": event.arguments_delta,
-                            },
-                        }
-                    )
+                payload = native_extensions(Protocol.CLAUDE, event.metadata)
+                delta = vendor_scope(Protocol.CLAUDE, event.metadata, "__delta__")
+                delta.update(
+                    {
+                        "type": "input_json_delta",
+                        "partial_json": event.arguments_delta,
+                    }
                 )
+                payload.update(
+                    {
+                        "type": "content_block_delta",
+                        "index": index,
+                        "delta": delta,
+                    }
+                )
+                frames.append(self._frame(payload))
         elif event.type == "content_end":
             content_type = event.content_type or "text"
             block_index = self._block_indices.get(self._key(event, content_type))
             if block_index is not None:
-                frame = self._close_index(block_index)
+                frame = self._close_index(block_index, event.metadata)
                 if frame is not None:
                     frames.append(frame)
-        elif event.type in {"message_end", "done"}:
+        elif event.type == "message_end":
             frames.extend(self._close_all())
-            frame = self._adapter.encode_stream_event(event)
+            self._pending_end = event
+            if self._output_tokens is not None:
+                frame = self._terminal_frame()
+                if frame is not None:
+                    frames.append(frame)
+        elif event.type == "usage":
+            if event.usage is None:
+                raise UnsupportedFeatureError("stream_event.usage", "is required")
+            validate_usage(event.usage, "stream_event.usage")
+            if self._input_tokens is None:
+                self._input_tokens = event.usage.input_tokens
+            self._output_tokens = event.usage.output_tokens
+            self._usage_metadata = event.metadata
+            frame = self._terminal_frame()
             if frame:
                 frames.append(frame)
+        elif event.type == "done":
+            frames.extend(self._close_all())
+            terminal = self._terminal_frame()
+            if terminal is not None:
+                frames.append(terminal)
+            payload = native_extensions(Protocol.CLAUDE, event.metadata)
+            payload["type"] = "message_stop"
+            frames.append(self._frame(payload))
+        elif event.type == "heartbeat":
+            payload = native_extensions(Protocol.CLAUDE, event.metadata)
+            payload["type"] = "ping"
+            frames.append(self._frame(payload))
+        elif event.type == "error":
+            payload = native_extensions(Protocol.CLAUDE, event.metadata)
+            error = {
+                key: thaw(item)
+                for key, item in event.metadata.items()
+                if key != "vendor_extensions"
+            }
+            error.update(vendor_scope(Protocol.CLAUDE, event.metadata, "__error__"))
+            payload.update({"type": "error", "error": error})
+            frames.append(self._frame(payload))
         else:
             frame = self._adapter.encode_stream_event(event)
             if frame:

@@ -51,6 +51,13 @@ class StreamDecoder(ABC):
 class StreamEncoder(ABC):
     """State retained while incrementally encoding one native response stream."""
 
+    def set_initial_usage(self, input_tokens: int) -> None:
+        """Provide input usage known before the first native frame, when supported."""
+        raise UnsupportedFeatureError(
+            "stream_event.usage.input_tokens",
+            "this protocol does not accept an initial usage hint",
+        )
+
     @abstractmethod
     def encode(self, event: StreamEvent) -> tuple[bytes, ...]: ...
 
