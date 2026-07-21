@@ -1,0 +1,313 @@
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from hashlib import sha256
+
+import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ai_gateway.core.enums import ApiKeyScope, Protocol
+from ai_gateway.db.models import (
+    ApiKey,
+    ApiKeyModel,
+    ApiKeyProvider,
+    Model,
+    ModelAlias,
+    ModelRoute,
+    Provider,
+    ProviderProtocol,
+    User,
+)
+from ai_gateway.db.session import get_session
+from ai_gateway.gateway.models import router as models_router
+
+
+def _raw_key(scope: ApiKeyScope) -> str:
+    return f"sk-gw-model-listing-{scope.value}"
+
+
+def _api_key(scope: ApiKeyScope) -> tuple[User, ApiKey, str]:
+    raw_key = _raw_key(scope)
+    user = User(
+        email=f"model-listing-{scope.value}@example.com",
+        password_hash="unused",
+    )
+    api_key = ApiKey(
+        name=scope.value,
+        key_prefix=raw_key[:12],
+        key_hash=sha256(raw_key.encode()).digest(),
+        scope=scope,
+    )
+    user.api_keys.append(api_key)
+    return user, api_key, raw_key
+
+
+def _provider(name: str, *protocols: Protocol, enabled: bool = True) -> Provider:
+    provider = Provider(
+        name=name,
+        credential_encrypted=b"unused",
+        enabled=enabled,
+    )
+    provider.protocols.extend(
+        ProviderProtocol(
+            protocol=protocol,
+            base_url=f"https://{name}.{protocol.value}.example",
+        )
+        for protocol in protocols
+    )
+    return provider
+
+
+def _model(name: str, *, enabled: bool = True) -> Model:
+    return Model(canonical_name=name, display_name=name.replace("-", " ").title(), enabled=enabled)
+
+
+def _route(
+    model: Model,
+    provider: Provider,
+    protocol: Protocol,
+    *,
+    enabled: bool = True,
+) -> ModelRoute:
+    provider_protocol = next(item for item in provider.protocols if item.protocol is protocol)
+    return ModelRoute(
+        model=model,
+        provider=provider,
+        provider_protocol=provider_protocol,
+        upstream_model=model.canonical_name,
+        enabled=enabled,
+    )
+
+
+def _client(session: AsyncSession, raw_key: str) -> AsyncClient:
+    app = FastAPI()
+    app.include_router(models_router)
+
+    async def override_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[get_session] = override_session
+    return AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {raw_key}"},
+    )
+
+
+async def _listing_catalog(session: AsyncSession) -> tuple[dict[ApiKeyScope, str], Model]:
+    openai_provider = _provider("listing-openai", Protocol.OPENAI)
+    gemini_provider = _provider("listing-gemini", Protocol.GEMINI)
+    claude_provider = _provider("listing-claude", Protocol.CLAUDE)
+    disabled_provider = _provider("listing-disabled-provider", Protocol.OPENAI, enabled=False)
+    disabled_protocol_provider = _provider("listing-disabled-protocol", Protocol.GEMINI)
+    disabled_protocol_provider.protocols[0].enabled = False
+
+    model = _model("gpt-4.1-mini")
+    model.display_name = "GPT 4.1 Mini"
+    model.aliases.extend(
+        [
+            ModelAlias(alias="fast-chat"),
+            ModelAlias(alias="cheap-chat"),
+            ModelAlias(alias="retired-chat", enabled=False),
+        ]
+    )
+    disabled_model = _model("disabled-model", enabled=False)
+    disabled_model.aliases.append(ModelAlias(alias="disabled-model-alias"))
+    wrong_channel = _model("claude-only")
+    no_route = _model("no-route")
+    disabled_route = _model("disabled-route")
+    disabled_provider_model = _model("disabled-provider-model")
+    disabled_protocol_model = _model("disabled-protocol-model")
+
+    session.add_all(
+        [
+            _route(model, openai_provider, Protocol.OPENAI),
+            _route(model, gemini_provider, Protocol.GEMINI),
+            _route(disabled_model, openai_provider, Protocol.OPENAI),
+            _route(disabled_model, gemini_provider, Protocol.GEMINI),
+            _route(wrong_channel, claude_provider, Protocol.CLAUDE),
+            _route(disabled_route, openai_provider, Protocol.OPENAI, enabled=False),
+            _route(disabled_route, gemini_provider, Protocol.GEMINI, enabled=False),
+            _route(disabled_provider_model, disabled_provider, Protocol.OPENAI),
+            _route(disabled_protocol_model, disabled_protocol_provider, Protocol.GEMINI),
+            no_route,
+        ]
+    )
+
+    raw_keys: dict[ApiKeyScope, str] = {}
+    for scope in ApiKeyScope:
+        user, api_key, raw_key = _api_key(scope)
+        session.add(user)
+        await session.flush()
+        if scope in {ApiKeyScope.MODELS, ApiKeyScope.PROVIDERS_AND_MODELS}:
+            session.add(ApiKeyModel(api_key_id=api_key.id, model=model))
+        if scope in {ApiKeyScope.PROVIDERS, ApiKeyScope.PROVIDERS_AND_MODELS}:
+            session.add(ApiKeyProvider(api_key_id=api_key.id, provider=openai_provider))
+            session.add(ApiKeyProvider(api_key_id=api_key.id, provider=gemini_provider))
+        raw_keys[scope] = raw_key
+    await session.flush()
+    return raw_keys, model
+
+
+async def test_openai_and_gemini_list_selectable_aliases_in_native_shapes(
+    session: AsyncSession,
+) -> None:
+    raw_keys, _ = await _listing_catalog(session)
+    async with _client(session, raw_keys[ApiKeyScope.ALL]) as client:
+        openai_response = await client.get("/v1/models")
+        gemini_response = await client.get("/v1beta/models")
+
+    assert openai_response.status_code == 200
+    assert openai_response.json() == {
+        "object": "list",
+        "data": [
+            {
+                "id": "cheap-chat",
+                "object": "model",
+                "owned_by": "gateway",
+                "metadata": {"canonical_model": "gpt-4.1-mini"},
+            },
+            {
+                "id": "fast-chat",
+                "object": "model",
+                "owned_by": "gateway",
+                "metadata": {"canonical_model": "gpt-4.1-mini"},
+            },
+            {
+                "id": "gpt-4.1-mini",
+                "object": "model",
+                "owned_by": "gateway",
+                "metadata": {},
+            },
+        ],
+    }
+    assert gemini_response.status_code == 200
+    assert gemini_response.json() == {
+        "models": [
+            {
+                "name": "models/cheap-chat",
+                "displayName": "GPT 4.1 Mini",
+                "supportedGenerationMethods": [
+                    "generateContent",
+                    "streamGenerateContent",
+                ],
+                "gatewayMetadata": {"canonical_model": "gpt-4.1-mini"},
+            },
+            {
+                "name": "models/fast-chat",
+                "displayName": "GPT 4.1 Mini",
+                "supportedGenerationMethods": [
+                    "generateContent",
+                    "streamGenerateContent",
+                ],
+                "gatewayMetadata": {"canonical_model": "gpt-4.1-mini"},
+            },
+            {
+                "name": "models/gpt-4.1-mini",
+                "displayName": "GPT 4.1 Mini",
+                "supportedGenerationMethods": [
+                    "generateContent",
+                    "streamGenerateContent",
+                ],
+                "gatewayMetadata": {},
+            },
+        ]
+    }
+
+
+async def test_openai_detail_preserves_alias_identity_and_scope(
+    session: AsyncSession,
+) -> None:
+    raw_keys, _ = await _listing_catalog(session)
+    async with _client(session, raw_keys[ApiKeyScope.MODELS]) as client:
+        alias_response = await client.get("/v1/models/fast-chat")
+        canonical_response = await client.get("/v1/models/gpt-4.1-mini")
+        disabled_alias_response = await client.get("/v1/models/retired-chat")
+        absent_response = await client.get("/v1/models/no-route")
+
+    assert alias_response.status_code == 200
+    assert alias_response.json() == {
+        "id": "fast-chat",
+        "object": "model",
+        "owned_by": "gateway",
+        "metadata": {"canonical_model": "gpt-4.1-mini"},
+    }
+    assert canonical_response.status_code == 200
+    assert canonical_response.json() == {
+        "id": "gpt-4.1-mini",
+        "object": "model",
+        "owned_by": "gateway",
+        "metadata": {},
+    }
+    for response in (disabled_alias_response, absent_response):
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "model_not_found"
+
+
+@pytest.mark.parametrize("scope", list(ApiKeyScope))
+async def test_all_api_key_scope_modes_filter_names_through_same_channel_route(
+    session: AsyncSession,
+    scope: ApiKeyScope,
+) -> None:
+    raw_keys, allowed_model = await _listing_catalog(session)
+    other_provider = _provider(f"other-{scope.value}", Protocol.OPENAI, Protocol.GEMINI)
+    other_model = _model(f"other-model-{scope.value}")
+    other_model.aliases.append(ModelAlias(alias=f"other-alias-{scope.value}"))
+    session.add_all(
+        [
+            _route(other_model, other_provider, Protocol.OPENAI),
+            _route(other_model, other_provider, Protocol.GEMINI),
+        ]
+    )
+    await session.flush()
+
+    if scope is ApiKeyScope.ALL:
+        expected_ids = {
+            "cheap-chat",
+            "fast-chat",
+            "gpt-4.1-mini",
+            f"other-alias-{scope.value}",
+            f"other-model-{scope.value}",
+        }
+    else:
+        expected_ids = {"cheap-chat", "fast-chat", allowed_model.canonical_name}
+
+    async with _client(session, raw_keys[scope]) as client:
+        openai_response = await client.get("/v1/models")
+        gemini_response = await client.get("/v1beta/models")
+
+    assert openai_response.status_code == 200
+    assert {item["id"] for item in openai_response.json()["data"]} == expected_ids
+    assert {
+        item["name"].removeprefix("models/") for item in gemini_response.json()["models"]
+    } == expected_ids
+
+
+async def test_provider_scope_does_not_leak_a_model_from_a_different_channel_route(
+    session: AsyncSession,
+) -> None:
+    openai_provider = _provider("correlated-openai", Protocol.OPENAI)
+    gemini_provider = _provider("correlated-gemini", Protocol.GEMINI)
+    model = _model("correlated-model")
+    session.add_all(
+        [
+            _route(model, openai_provider, Protocol.OPENAI),
+            _route(model, gemini_provider, Protocol.GEMINI),
+        ]
+    )
+    user, api_key, raw_key = _api_key(ApiKeyScope.PROVIDERS)
+    session.add(user)
+    await session.flush()
+    session.add(ApiKeyProvider(api_key_id=api_key.id, provider=gemini_provider))
+    await session.flush()
+
+    async with _client(session, raw_key) as client:
+        openai_response = await client.get("/v1/models")
+        gemini_response = await client.get("/v1beta/models")
+
+    assert openai_response.json() == {"object": "list", "data": []}
+    assert [item["name"] for item in gemini_response.json()["models"]] == [
+        "models/correlated-model"
+    ]

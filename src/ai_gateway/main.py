@@ -23,6 +23,7 @@ from ai_gateway.core.errors import sanitized_request_validation_error_handler
 from ai_gateway.db.session import get_engine_for_url, get_session, get_session_factory_for_url
 from ai_gateway.gateway.claude import router as claude_gateway_router
 from ai_gateway.gateway.gemini import router as gemini_gateway_router
+from ai_gateway.gateway.models import router as models_gateway_router
 from ai_gateway.gateway.openai import router as openai_gateway_router
 from ai_gateway.transport.http import HttpClientFactory
 
@@ -143,6 +144,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(openai_gateway_router)
     app.include_router(claude_gateway_router)
     app.include_router(gemini_gateway_router)
+    app.include_router(models_gateway_router)
 
     @app.get("/health", include_in_schema=False)
     async def health() -> dict[str, str]:
