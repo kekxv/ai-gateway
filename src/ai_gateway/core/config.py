@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     route_cooldown_seconds: int = 60
     model_sync_interval_seconds: int = 3600
     audit_body_limit_bytes: int = 1_048_576
+    billing_default_max_output_tokens: int = Field(default=4096, ge=1)
 
 
 @lru_cache

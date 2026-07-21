@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.admin.api_keys import router as api_keys_router
+from ai_gateway.admin.billing import router as billing_router
 from ai_gateway.admin.model_sync import router as model_sync_router
 from ai_gateway.admin.models import models_router, routes_router
 from ai_gateway.admin.providers import router as providers_router
@@ -117,6 +118,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(models_router)
     app.include_router(routes_router)
     app.include_router(request_logs_router)
+    app.include_router(billing_router)
 
     @app.get("/health", include_in_schema=False)
     async def health() -> dict[str, str]:
