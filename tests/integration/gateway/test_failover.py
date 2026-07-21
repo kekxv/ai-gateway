@@ -303,6 +303,9 @@ class StageBilling:
         self.service = service
         self.stage = stage
         self.settlement_calls = 0
+        self.post_commit_cancellation = asyncio.CancelledError(
+            "settlement committed before cancellation"
+        )
 
     async def reserve_balance(self, **kwargs: Any) -> BalanceReservation:
         return await self.service.reserve_balance(**kwargs)
@@ -311,7 +314,10 @@ class StageBilling:
         self.settlement_calls += 1
         if self.stage == "settlement" and self.settlement_calls == 1:
             raise asyncio.CancelledError
-        return await self.service.settle_request(**kwargs)
+        result = await self.service.settle_request(**kwargs)
+        if self.stage == "settlement_post_commit" and self.settlement_calls == 1:
+            raise self.post_commit_cancellation
+        return result
 
 
 def gateway_request(raw_key: str, model: str) -> FastAPIRequest:
@@ -360,6 +366,7 @@ def gateway_request(raw_key: str, model: str) -> FastAPIRequest:
         "task_cancel_route_selection",
         "upstream_send",
         "settlement",
+        "settlement_post_commit",
         "audit_completion",
     ],
 )
@@ -464,10 +471,11 @@ async def test_cancellation_after_reservation_is_shielded_and_terminal(
     actual_audit = AuditService(session_factory)
     async with session_factory() as gateway_session:
         stage_router = StageRouter(route, stage)
+        stage_billing = StageBilling(actual_billing, stage)
         service = GatewayService(
             session=gateway_session,
             settings=settings,
-            billing_service=StageBilling(actual_billing, stage),  # type: ignore[arg-type]
+            billing_service=stage_billing,  # type: ignore[arg-type]
             audit_service=StageAudit(actual_audit, stage),  # type: ignore[arg-type]
             http_client_factory=FakeHttpClients(upstream_client),
             router_factory=lambda _: stage_router,
@@ -481,8 +489,10 @@ async def test_cancellation_after_reservation_is_shielded_and_terminal(
             with pytest.raises(asyncio.CancelledError):
                 await task
         else:
-            with pytest.raises(asyncio.CancelledError):
+            with pytest.raises(asyncio.CancelledError) as cancellation:
                 await service.handle(gateway_request(raw_key, alias_name), Protocol.OPENAI)
+            if stage == "settlement_post_commit":
+                assert cancellation.value is stage_billing.post_commit_cancellation
     await upstream_client.aclose()
 
     async with session_factory() as verify:
@@ -503,8 +513,12 @@ async def test_cancellation_after_reservation_is_shielded_and_terminal(
             LedgerKind.RESERVATION_RELEASE,
             LedgerKind.USAGE,
         }
-        if stage != "audit_completion":
+        assert len(entries) == 3
+        if stage not in {"audit_completion", "settlement_post_commit"}:
             assert account.balance == initial_balance
             assert entries[-1].amount == Decimal("0E-8")
         else:
             assert account.balance < initial_balance
+            assert audit.prompt_tokens == 2
+            assert audit.completion_tokens == 1
+            assert audit.cost == Decimal("0.00300000")

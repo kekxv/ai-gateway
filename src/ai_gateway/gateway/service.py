@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from time import monotonic
@@ -24,7 +24,12 @@ from ai_gateway.audit.service import (
     RequestResult,
 )
 from ai_gateway.auth.api_key import ApiKeyPrincipal, authenticate_api_key, extract_api_key
-from ai_gateway.billing.service import BalanceReservation, BillingService, SettlementResult
+from ai_gateway.billing.service import (
+    BalanceReservation,
+    BillingService,
+    IdempotencyConflict,
+    SettlementResult,
+)
 from ai_gateway.billing.usage import UsageResult, estimate_request_tokens, resolve_usage
 from ai_gateway.catalog.repository import CatalogRepository
 from ai_gateway.core.config import Settings
@@ -209,6 +214,8 @@ class GatewayService:
         attempt_response: _AttemptResponse | None = None
         settled = False
         settled_cost = Decimal("0")
+        pending_usage_result: UsageResult | None = None
+        settled_usage_result: UsageResult | None = None
         audit_terminal = False
         try:
             correlation_id = _audit_correlation_id(request)
@@ -278,6 +285,7 @@ class GatewayService:
                 canonical_response=canonical_response,
                 response_body=upstream.content,
             )
+            pending_usage_result = usage_result
             settlement = await self._billing.settle_request(
                 reservation_id=reservation.ledger_entry_id,
                 idempotency_key=billing_key,
@@ -287,6 +295,7 @@ class GatewayService:
             )
             settled = True
             settled_cost = settlement.actual_cost
+            settled_usage_result = usage_result
             await self._audit.complete_request(
                 audit_id,
                 RequestResult(
@@ -327,6 +336,9 @@ class GatewayService:
                     attempts=attempts,
                     settled=settled,
                     settled_cost=settled_cost,
+                    priced_model=priced_model,
+                    pending_usage_result=pending_usage_result,
+                    settled_usage_result=settled_usage_result,
                     audit_terminal=audit_terminal,
                     started_at=started_at,
                 )
@@ -344,13 +356,31 @@ class GatewayService:
         attempts: tuple[dict[str, Any], ...],
         settled: bool,
         settled_cost: Decimal,
+        priced_model: Model,
+        pending_usage_result: UsageResult | None,
+        settled_usage_result: UsageResult | None,
         audit_terminal: bool,
         started_at: float,
     ) -> None:
         cleanup_cost = settled_cost
+        charged_usage_result = settled_usage_result
         if not settled:
             try:
                 cleanup_cost = (await self._settle_zero(reservation, billing_key)).actual_cost
+            except IdempotencyConflict:
+                if pending_usage_result is not None:
+                    try:
+                        recovered = await self._billing.settle_request(
+                            reservation_id=reservation.ledger_entry_id,
+                            idempotency_key=billing_key,
+                            model=priced_model,
+                            usage=pending_usage_result.usage,
+                            usage_source=pending_usage_result.usage_source,
+                        )
+                        cleanup_cost = recovered.actual_cost
+                        charged_usage_result = pending_usage_result
+                    except BaseException as cleanup_exc:
+                        _log_cleanup_failure("settlement_recovery", cleanup_exc)
             except BaseException as cleanup_exc:
                 _log_cleanup_failure("settlement", cleanup_exc)
         if audit_terminal:
@@ -365,6 +395,21 @@ class GatewayService:
                     model_route_id=(final_route.route_id if final_route is not None else None),
                     outbound_protocol=(final_route.protocol if final_route is not None else None),
                     http_status=getattr(exc, "status_code", None),
+                    prompt_tokens=(
+                        charged_usage_result.usage.input_tokens
+                        if charged_usage_result is not None
+                        else 0
+                    ),
+                    completion_tokens=(
+                        charged_usage_result.usage.output_tokens
+                        if charged_usage_result is not None
+                        else 0
+                    ),
+                    usage_source=(
+                        charged_usage_result.usage_source
+                        if charged_usage_result is not None
+                        else None
+                    ),
                     cost=cleanup_cost,
                     latency_ms=_elapsed_ms(started_at),
                     metadata={"attempts": attempts},
@@ -445,11 +490,14 @@ class GatewayService:
                     ) from exc
                 attempts.append(_attempt_summary(route, len(attempts) + 1, exception=exc))
                 last_failure = exc
-                try:
-                    await router.record_failure(route.route_id, RouteFailure(exception=exc))
-                except asyncio.CancelledError as cancelled:
-                    _annotate_failure(cancelled, route, tuple(attempts))
-                    raise
+                health_failure = await _record_health_auxiliary(
+                    "record_failure",
+                    router.record_failure(route.route_id, RouteFailure(exception=exc)),
+                    route,
+                    tuple(attempts),
+                )
+                if health_failure is not None:
+                    raise health_failure
                 continue
 
             if is_retryable_failure(status_code=upstream.status_code):
@@ -461,16 +509,21 @@ class GatewayService:
                     )
                 )
                 last_failure = upstream
-                try:
-                    await router.record_failure(route.route_id, upstream.status_code)
-                except asyncio.CancelledError as exc:
-                    _annotate_failure(exc, route, tuple(attempts))
-                    raise
-                try:
-                    await upstream.aclose()
-                except asyncio.CancelledError as exc:
-                    _annotate_failure(exc, route, tuple(attempts))
-                    raise
+                health_failure = await _record_health_auxiliary(
+                    "record_failure",
+                    router.record_failure(route.route_id, upstream.status_code),
+                    route,
+                    tuple(attempts),
+                )
+                close_failure = await _close_response_auxiliary(
+                    upstream,
+                    route,
+                    tuple(attempts),
+                )
+                if health_failure is not None:
+                    raise health_failure
+                if close_failure is not None:
+                    raise close_failure
                 continue
 
             attempts.append(
@@ -481,14 +534,20 @@ class GatewayService:
                     succeeded=upstream.status_code < 400,
                 )
             )
-            try:
-                if upstream.status_code >= 400:
-                    await router.record_failure(route.route_id, upstream.status_code)
-                else:
-                    await router.record_success(route.route_id)
-            except asyncio.CancelledError as exc:
-                _annotate_failure(exc, route, tuple(attempts))
-                raise
+            health_operation = (
+                router.record_failure(route.route_id, upstream.status_code)
+                if upstream.status_code >= 400
+                else router.record_success(route.route_id)
+            )
+            health_failure = await _record_health_auxiliary(
+                "record_failure" if upstream.status_code >= 400 else "record_success",
+                health_operation,
+                route,
+                tuple(attempts),
+            )
+            if health_failure is not None:
+                await _close_response_auxiliary(upstream, route, tuple(attempts))
+                raise health_failure
             return _AttemptResponse(route, upstream, tuple(attempts))
 
     async def _settle_zero(
@@ -716,6 +775,51 @@ async def _run_cleanup_shielded(cleanup: Coroutine[Any, Any, None]) -> None:
                 return
 
 
+async def _record_health_auxiliary(
+    operation: str,
+    mutation: Awaitable[bool],
+    route: RouteCandidate,
+    attempts: tuple[dict[str, Any], ...],
+) -> BaseException | None:
+    try:
+        await mutation
+    except asyncio.CancelledError as exc:
+        _annotate_failure(exc, route, attempts)
+        return exc
+    except Exception as exc:
+        _log_auxiliary_failure(operation, exc)
+    except BaseException as exc:
+        _annotate_failure(exc, route, attempts)
+        return exc
+    return None
+
+
+async def _close_response_auxiliary(
+    response: httpx.Response,
+    route: RouteCandidate,
+    attempts: tuple[dict[str, Any], ...],
+) -> BaseException | None:
+    close_task = asyncio.create_task(response.aclose())
+    pending_cancellation: asyncio.CancelledError | None = None
+    while True:
+        try:
+            await asyncio.shield(close_task)
+            break
+        except asyncio.CancelledError as exc:
+            pending_cancellation = pending_cancellation or exc
+            if close_task.done():
+                break
+        except Exception as exc:
+            _log_auxiliary_failure("response_close", exc)
+            return pending_cancellation
+        except BaseException as exc:
+            _annotate_failure(exc, route, attempts)
+            return pending_cancellation or exc
+    if pending_cancellation is not None:
+        _annotate_failure(pending_cancellation, route, attempts)
+    return pending_cancellation
+
+
 def _annotate_failure(
     exc: BaseException,
     route: RouteCandidate,
@@ -728,6 +832,14 @@ def _annotate_failure(
 def _log_cleanup_failure(operation: str, exc: BaseException) -> None:
     logger.error(
         "Gateway cleanup failed operation=%s exception_type=%s",
+        operation,
+        type(exc).__name__,
+    )
+
+
+def _log_auxiliary_failure(operation: str, exc: BaseException) -> None:
+    logger.warning(
+        "Gateway auxiliary operation failed operation=%s exception_type=%s",
         operation,
         type(exc).__name__,
     )

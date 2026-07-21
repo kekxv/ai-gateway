@@ -801,6 +801,200 @@ async def test_cleanup_failures_do_not_replace_original_cancellation(
     await upstream_client.aclose()
 
     assert caught.value is original
+
+
+@pytest.mark.parametrize("failure_kind", ["network", "status"])
+async def test_health_failure_write_is_auxiliary_to_bounded_failover(
+    session: AsyncSession,
+    failure_kind: str,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    encrypted = encrypt_secret(
+        orjson.dumps({"api_key": "provider-secret"}).decode(),
+        settings=settings,
+    )
+    routes = [
+        RouteCandidate(
+            route_id=route_id,
+            model_id=model.id,
+            provider_id=route_id + 100,
+            provider_protocol_id=route_id + 200,
+            protocol=Protocol.OPENAI,
+            base_url=f"https://provider-{route_id}.example",
+            websocket_url=None,
+            upstream_model=f"native-{route_id}",
+            weight=100,
+            provider_credential_encrypted=encrypted,
+        )
+        for route_id in (131, 132)
+    ]
+
+    class FailingHealthRouter(FakeRouter):
+        async def record_failure(self, route_id: int, _: object) -> bool:
+            self.failures.append(route_id)
+            raise RuntimeError("health-secret-must-not-leak")
+
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            if failure_kind == "network":
+                raise httpx.ReadError("network-secret-must-not-leak", request=request)
+            return httpx.Response(503, json={"secret": "status-secret-must-not-leak"})
+        return httpx.Response(200, json=_response(Protocol.OPENAI, "native-132"))
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    audit = FakeAudit()
+    router = FailingHealthRouter(routes)
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: router,
+    )
+    path, body = _request(Protocol.OPENAI, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200
+    assert calls == 2
+    assert router.failures == [131]
+    assert audit.completed is not None
+    assert [item["route_id"] for item in audit.completed.metadata["attempts"]] == [131, 132]
+    audit_text = str(audit.completed.metadata)
+    assert "secret" not in audit_text
+    assert "provider-secret" not in audit_text
+
+
+async def test_health_success_write_is_auxiliary_to_successful_response(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    route = RouteCandidate(
+        route_id=141,
+        model_id=model.id,
+        provider_id=142,
+        provider_protocol_id=143,
+        protocol=Protocol.OPENAI,
+        base_url="https://provider.example",
+        websocket_url=None,
+        upstream_model="native-health-success",
+        weight=100,
+        provider_credential_encrypted=encrypt_secret(
+            orjson.dumps({"api_key": "provider-secret"}).decode(),
+            settings=settings,
+        ),
+    )
+
+    class FailingSuccessRouter(FakeRouter):
+        async def record_success(self, route_id: int) -> bool:
+            self.successes.append(route_id)
+            raise RuntimeError("success-health-secret")
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_response(Protocol.OPENAI, route.upstream_model))
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    audit = FakeAudit()
+    router = FailingSuccessRouter([route])
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: router,
+    )
+    path, body = _request(Protocol.OPENAI, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200
+    assert router.successes == [141]
+    assert audit.completed is not None
+    assert audit.completed.model_route_id == 141
+    assert "secret" not in str(audit.completed.metadata)
+
+
+async def test_retry_response_close_failure_is_auxiliary_to_failover(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    encrypted = encrypt_secret(
+        orjson.dumps({"api_key": "provider-secret"}).decode(),
+        settings=settings,
+    )
+    routes = [
+        RouteCandidate(
+            route_id=route_id,
+            model_id=model.id,
+            provider_id=route_id + 100,
+            provider_protocol_id=route_id + 200,
+            protocol=Protocol.OPENAI,
+            base_url=f"https://provider-{route_id}.example",
+            websocket_url=None,
+            upstream_model=f"native-{route_id}",
+            weight=100,
+            provider_credential_encrypted=encrypted,
+        )
+        for route_id in (151, 152)
+    ]
+    calls = 0
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            response = httpx.Response(503, json={"error": "temporary"})
+
+            async def failing_close() -> None:
+                raise RuntimeError("close-secret-must-not-leak")
+
+            response.aclose = failing_close  # type: ignore[method-assign]
+            return response
+        return httpx.Response(200, json=_response(Protocol.OPENAI, "native-152"))
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    audit = FakeAudit()
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter(routes),
+    )
+    path, body = _request(Protocol.OPENAI, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200
+    assert calls == 2
+    assert audit.completed is not None
+    assert [item["route_id"] for item in audit.completed.metadata["attempts"]] == [151, 152]
+    assert "secret" not in str(audit.completed.metadata)
     assert (
         upstream_url(Protocol.CLAUDE, "https://provider.example", "native-model")
         == "https://provider.example/v1/messages"
