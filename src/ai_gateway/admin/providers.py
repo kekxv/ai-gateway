@@ -91,7 +91,13 @@ async def update_provider(
     provider = await _get_provider(session, provider_id)
     if payload.name is not None:
         provider.name = payload.name
-    if payload.credential is not None:
+    if "credential" in payload.model_fields_set:
+        if payload.credential is None:
+            raise_auth_error(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "credential_required",
+                "Provider credentials cannot be cleared",
+            )
         provider.credential_encrypted = _encrypt_json(payload.credential, settings)
     if payload.enabled is not None:
         provider.enabled = payload.enabled
@@ -175,15 +181,21 @@ async def _replace_protocols(
         else:
             protocol = existing_by_key.get((payload.protocol, payload.base_url))
         if protocol is None:
+            is_new = True
             protocol = ProviderProtocol(provider=provider)
+        else:
+            is_new = False
         protocol.protocol = payload.protocol
         protocol.base_url = payload.base_url
         protocol.websocket_url = payload.websocket_url
-        protocol.extra_headers_encrypted = (
-            _encrypt_json(payload.extra_headers, settings)
-            if payload.extra_headers is not None
-            else None
-        )
+        if "extra_headers" in payload.model_fields_set:
+            protocol.extra_headers_encrypted = (
+                _encrypt_json(payload.extra_headers, settings)
+                if payload.extra_headers is not None
+                else None
+            )
+        elif is_new:
+            protocol.extra_headers_encrypted = None
         protocol.enabled = payload.enabled
         selected.append(protocol)
 

@@ -165,7 +165,6 @@ async def create_model_route(
         provider_id=payload.provider_id,
         provider_protocol_id=payload.provider_protocol_id,
     )
-    await _validate_upstream_model(session, payload.upstream_model)
     route = ModelRoute(
         model_id=payload.model_id,
         provider_id=payload.provider_id,
@@ -229,7 +228,6 @@ async def update_model_route(
         provider_id=provider_id,
         provider_protocol_id=provider_protocol_id,
     )
-    await _validate_upstream_model(session, upstream_model)
     route.model_id = model_id
     route.provider_id = provider_id
     route.provider_protocol_id = provider_protocol_id
@@ -317,16 +315,6 @@ async def _validate_catalog_names(
             "model_name_conflict",
             "Canonical model names and aliases must be unique",
         )
-    if alias_names:
-        route_id = await session.scalar(
-            select(ModelRoute.id).where(ModelRoute.upstream_model.in_(alias_names)).limit(1)
-        )
-        if route_id is not None:
-            raise_auth_error(
-                status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "alias_conflicts_with_upstream_model",
-                "An alias cannot reuse a provider-native upstream model name",
-            )
 
 
 async def _validate_route_relations(
@@ -350,18 +338,6 @@ async def _validate_route_relations(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "provider_protocol_mismatch",
             "Provider protocol must belong to the selected provider",
-        )
-
-
-async def _validate_upstream_model(session: AsyncSession, upstream_model: str) -> None:
-    alias_id = await session.scalar(
-        select(ModelAlias.id).where(ModelAlias.alias == upstream_model).limit(1)
-    )
-    if alias_id is not None:
-        raise_auth_error(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "alias_not_allowed_upstream",
-            "Model aliases are inbound names and cannot be used as upstream model names",
         )
 
 
