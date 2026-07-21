@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from time import monotonic
 
 import httpx
 import orjson
 
-from ai_gateway.billing.usage import estimate_text_tokens
 from ai_gateway.core.enums import Protocol
 from ai_gateway.protocols.registry import get_adapter
 from ai_gateway.protocols.types import CanonicalUsage, StreamEvent
+
+
+class IncompleteStreamError(ValueError):
+    """The provider reached EOF without a complete semantic stream terminal."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,29 +131,45 @@ class GatewayContext:
     started_at: float = field(default_factory=monotonic)
     observed_usage: CanonicalUsage | None = None
     provider_usage_complete: bool = False
-    estimated_output_tokens: int = 0
+    semantic_finish_observed: bool = False
+    terminal_done_observed: bool = False
     first_token_ms: int | None = None
     emitted_any: bool = False
     error_observed: bool = False
     gemini_eof_decodes: int = 0
+    _estimated_output_utf8_bytes: int = field(default=0, init=False, repr=False)
     _audit_preview: bytearray = field(default_factory=bytearray, init=False, repr=False)
 
     @property
     def audit_preview(self) -> bytes:
         return bytes(self._audit_preview)
 
+    @property
+    def estimated_output_tokens(self) -> int:
+        """Return a fragmentation-independent estimate using one token per four UTF-8 bytes."""
+
+        return (self._estimated_output_utf8_bytes + 3) // 4
+
     def observe(self, event: StreamEvent) -> None:
         if event.type == "error":
             self.error_observed = True
+        elif event.type == "message_end":
+            self.semantic_finish_observed = True
+        elif event.type == "done":
+            self.terminal_done_observed = True
         if event.usage is not None:
-            self.observed_usage = event.usage
+            self._merge_usage(event.usage)
             if event.type == "usage":
                 self.provider_usage_complete = True
         content = ""
         if event.type == "content_delta" and event.text:
             content = event.text
         elif event.type == "tool_call_delta":
-            content = event.arguments_delta or event.tool_name or event.tool_call_id or ""
+            content = "".join(
+                part
+                for part in (event.tool_call_id, event.tool_name, event.arguments_delta)
+                if part
+            )
         self._observe_content(content)
 
     def observe_passthrough(self, event: SSEEvent) -> None:
@@ -189,6 +208,8 @@ class GatewayContext:
                     tool_calls = delta.get("tool_calls")
                     if isinstance(tool_calls, list):
                         for call in tool_calls:
+                            if isinstance(call, dict) and isinstance(call.get("id"), str):
+                                content += call["id"]
                             function = call.get("function") if isinstance(call, dict) else None
                             if isinstance(function, dict):
                                 for key in ("name", "arguments"):
@@ -246,13 +267,23 @@ class GatewayContext:
                             content += part["text"]
                         call = part.get("functionCall")
                         if isinstance(call, dict):
-                            if isinstance(call.get("name"), str):
-                                content += call["name"]
+                            for key in ("id", "name"):
+                                if isinstance(call.get(key), str):
+                                    content += call[key]
                             if isinstance(call.get("args"), dict):
                                 content += orjson.dumps(call["args"]).decode()
         if usage is not None:
-            self.observed_usage = usage
+            self._merge_usage(usage)
         self._observe_content(content)
+
+    def _merge_usage(self, usage: CanonicalUsage) -> None:
+        if self.observed_usage is None:
+            self.observed_usage = usage
+            return
+        self.observed_usage = CanonicalUsage(
+            input_tokens=max(self.observed_usage.input_tokens, usage.input_tokens),
+            output_tokens=max(self.observed_usage.output_tokens, usage.output_tokens),
+        )
 
     def estimated_usage(self) -> CanonicalUsage:
         input_tokens = (
@@ -265,7 +296,7 @@ class GatewayContext:
     def _observe_content(self, content: str) -> None:
         if not content:
             return
-        self.estimated_output_tokens += estimate_text_tokens(content)
+        self._estimated_output_utf8_bytes += len(content.encode("utf-8"))
         if self.first_token_ms is None:
             self.first_token_ms = max(0, round((monotonic() - self.started_at) * 1000))
 
@@ -301,12 +332,11 @@ async def stream_gateway_response(
     def encode_canonical(event: StreamEvent) -> tuple[bytes, ...]:
         nonlocal pending_done
         context.observe(event)
-        if (
-            event.type == "done"
-            and context.target_protocol is Protocol.CLAUDE
-            and not context.provider_usage_complete
-        ):
-            pending_done = event
+        if event.usage is not None and context.observed_usage is not None:
+            event = replace(event, usage=context.observed_usage)
+        if event.type == "done":
+            if pending_done is None:
+                pending_done = event
             return ()
         return tuple(frame for frame in stream_encoder.encode(event) if frame)
 
@@ -343,13 +373,21 @@ async def stream_gateway_response(
                     context.observe(canonical_event)
                     continue
                 terminal_frames.extend(encode_canonical(canonical_event))
-        if pending_done is not None:
-            if not context.provider_usage_complete:
-                estimated_usage = context.estimated_usage()
-                terminal_frames.extend(
-                    stream_encoder.encode(StreamEvent(type="usage", usage=estimated_usage))
-                )
-            terminal_frames.extend(stream_encoder.encode(pending_done))
+        if context.source_protocol is context.target_protocol:
+            return
+        if not context.semantic_finish_observed:
+            raise IncompleteStreamError(
+                "The upstream provider reached EOF without a semantic finish event"
+            )
+        if pending_done is None:
+            pending_done = StreamEvent(type="done")
+            context.observe(pending_done)
+        if not context.provider_usage_complete:
+            estimated_usage = context.estimated_usage()
+            terminal_frames.extend(
+                stream_encoder.encode(StreamEvent(type="usage", usage=estimated_usage))
+            )
+        terminal_frames.extend(stream_encoder.encode(pending_done))
         for frame in terminal_frames:
             context.record_output(frame)
             yield frame

@@ -1061,14 +1061,6 @@ def _upstream_body(prepared: _PreparedRequest, route: RouteCandidate) -> bytes:
             orjson.dumps(prepared.payload),
             route.upstream_model,
         )
-        if route.protocol is Protocol.OPENAI and prepared.canonical.stream:
-            payload = _json_object_or_empty(rewritten)
-            stream_options = payload.get("stream_options")
-            if not isinstance(stream_options, dict):
-                stream_options = {}
-                payload["stream_options"] = stream_options
-            stream_options["include_usage"] = True
-            return orjson.dumps(payload)
         return rewritten
     canonical = replace(prepared.canonical, model=route.upstream_model)
     payload = get_adapter(route.protocol).encode_request(canonical)

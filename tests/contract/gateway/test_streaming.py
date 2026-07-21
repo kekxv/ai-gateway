@@ -450,7 +450,14 @@ async def test_same_protocol_forwards_opaque_heartbeat_and_vendor_frames_exactly
 
 
 async def test_openai_bom_is_normalized_only_for_cross_protocol_decoder() -> None:
-    native = b"\xef\xbb\xbf" + _source_frames(Protocol.OPENAI)[1]
+    frames = _source_frames(Protocol.OPENAI)
+    finish = _sse(
+        {
+            "model": "m",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+    )
+    native = b"\xef\xbb\xbf" + b"".join((frames[1], finish, frames[-1]))
     response = httpx.Response(200, stream=ChunkStream(_odd_chunks(native)))
     context = GatewayContext(Protocol.OPENAI, Protocol.GEMINI, initial_input_tokens=2)
 
@@ -475,6 +482,32 @@ async def test_openai_to_claude_estimates_terminal_usage_when_provider_omits_it(
     assert bodies[-1]["type"] == "message_stop"
 
 
+@pytest.mark.parametrize(
+    ("source", "target", "terminal_frame"),
+    (
+        (Protocol.OPENAI, Protocol.CLAUDE, b"event: message_stop"),
+        (Protocol.CLAUDE, Protocol.OPENAI, b"data: [DONE]"),
+    ),
+)
+async def test_cross_protocol_eof_synthesizes_done_after_semantic_finish(
+    source: Protocol,
+    target: Protocol,
+    terminal_frame: bytes,
+) -> None:
+    response = httpx.Response(200, stream=ChunkStream(_source_frames(source)[:-1]))
+    context = GatewayContext(source, target, initial_input_tokens=2)
+
+    output = b"".join([chunk async for chunk in stream_gateway_response(context, response)])
+    events = _decode_output(target, output)
+
+    assert output.count(terminal_frame) == 1
+    assert (
+        next(event for event in events if event.type == "message_end").finish_reason == "tool_call"
+    )
+    assert next(event for event in events if event.type == "usage").usage == CanonicalUsage(2, 3)
+    assert sum(event.type == "done" for event in events) == 1
+
+
 async def test_large_stream_retains_only_bounded_preview_and_incremental_count() -> None:
     frame = _sse({"model": "m", "choices": [{"index": 0, "delta": {"content": "abcdefgh"}}]})
     response = httpx.Response(200, stream=ChunkStream((frame,) * 10_000))
@@ -491,6 +524,32 @@ async def test_large_stream_retains_only_bounded_preview_and_incremental_count()
     assert len(context.audit_preview) == 64
     assert context.estimated_output_tokens > 0
     assert not hasattr(context, "_response_content")
+
+
+def test_output_estimate_is_fragmentation_independent_with_constant_state() -> None:
+    text = "abcdefghij" * 1_000
+    whole = GatewayContext(Protocol.OPENAI, Protocol.CLAUDE)
+    fragmented = GatewayContext(Protocol.OPENAI, Protocol.CLAUDE)
+
+    whole.observe(StreamEvent(type="content_delta", text=text))
+    for character in text:
+        fragmented.observe(StreamEvent(type="content_delta", text=character))
+
+    assert whole.estimated_output_tokens == fragmented.estimated_output_tokens
+    assert whole.estimated_output_tokens == (len(text.encode("utf-8")) + 3) // 4
+    assert not hasattr(whole, "_response_content")
+    assert not hasattr(fragmented, "_response_content")
+
+
+def test_provider_usage_never_regresses_component_wise() -> None:
+    context = GatewayContext(Protocol.OPENAI, Protocol.CLAUDE)
+
+    context.observe(StreamEvent(type="usage", usage=CanonicalUsage(10, 5)))
+    context.observe(StreamEvent(type="usage", usage=CanonicalUsage(8, 7)))
+    context.observe(StreamEvent(type="usage", usage=CanonicalUsage(12, 6)))
+
+    assert context.observed_usage == CanonicalUsage(12, 7)
+    assert context.provider_usage_complete
 
 
 def _route(model_id: int, route_id: int, host: str, settings: object) -> object:
@@ -560,7 +619,7 @@ async def test_first_read_network_error_fails_over_before_response_start(
 
     assert response.status_code == 200
     assert seen == ["first-read-fails.example", "second-read-works.example"]
-    assert all(payload["stream_options"] == {"include_usage": True} for payload in seen_payloads)
+    assert all("stream_options" not in payload for payload in seen_payloads)
     assert streams[0].closed and streams[1].closed
     assert router.failures == [71]
     assert router.successes == [72]
@@ -569,6 +628,42 @@ async def test_first_read_network_error_fails_over_before_response_start(
         "failure",
         "success",
     ]
+
+
+async def test_same_protocol_openai_preserves_explicit_include_usage_false(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    alias = model.aliases[0].alias
+    route = _route(model.id, 73, "same-protocol-options", settings)
+    seen_payload: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen_payload.update(orjson.loads(request.content))
+        return httpx.Response(200, stream=ChunkStream(_source_frames(Protocol.OPENAI)))
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([route]),  # type: ignore[list-item]
+    )
+    path, body = _request(Protocol.OPENAI, alias)
+    body.update({"stream": True, "stream_options": {"include_usage": False}})
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200
+    assert seen_payload["stream_options"] == {"include_usage": False}
 
 
 async def test_malformed_first_sse_returns_native_error_before_200_start(
@@ -580,7 +675,10 @@ async def test_malformed_first_sse_returns_native_error_before_200_start(
     route = _route(model.id, 81, "malformed", settings)
     stream = ChunkStream((b"data: not-json\n\n",))
 
-    async def handler(_: httpx.Request) -> httpx.Response:
+    seen_payload: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen_payload.update(orjson.loads(request.content))
         return httpx.Response(200, stream=stream)
 
     upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -612,6 +710,7 @@ async def test_malformed_first_sse_returns_native_error_before_200_start(
     assert router.successes == []
     assert audit.failed is not None
     assert billing.settlements == 1
+    assert seen_payload["stream_options"] == {"include_usage": True}
 
 
 async def test_read_error_after_prefetch_never_retries_another_route(
@@ -659,4 +758,47 @@ async def test_read_error_after_prefetch_never_retries_another_route(
     assert stream.closed
     assert router.failures == [91]
     assert router.successes == []
+    assert audit.failed is not None
+
+
+async def test_incomplete_cross_protocol_eof_after_prefetch_records_failure(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    alias = model.aliases[0].alias
+    route = _route(model.id, 93, "incomplete", settings)
+    frames = _source_frames(Protocol.OPENAI)
+    stream = ChunkStream((frames[0], frames[1], frames[-1]))
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=stream)
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    audit = FakeAudit()
+    router = FakeRouter([route])  # type: ignore[list-item]
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: router,
+    )
+    path, body = _request(Protocol.CLAUDE, alias)
+    body["stream"] = True
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service), raise_app_exceptions=False),
+        base_url="http://test",
+        headers={"x-api-key": RAW_KEY},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200
+    assert b"message_stop" not in response.content
+    assert stream.closed
+    assert router.failures == [93]
+    assert router.successes == []
+    assert audit.completed is None
     assert audit.failed is not None
