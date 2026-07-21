@@ -2,6 +2,7 @@ from typing import Annotated
 
 import pyotp
 from fastapi import APIRouter, Depends, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.auth.dependencies import current_user
@@ -12,6 +13,7 @@ from ai_gateway.auth.schemas import (
     TokenPair,
     TotpConfirmRequest,
     TotpConfirmResponse,
+    TotpSetupRequest,
     TotpSetupResponse,
 )
 from ai_gateway.auth.service import authenticate_user, raise_auth_error, refresh_access_token
@@ -66,13 +68,47 @@ async def setup_totp(
     user: CurrentUser,
     session: Session,
     settings: AppSettings,
+    payload: TotpSetupRequest | None = None,
 ) -> TotpSetupResponse:
+    locked_user = await session.scalar(select(User).where(User.id == user.id).with_for_update())
+    if locked_user is None:
+        raise_auth_error(
+            status.HTTP_401_UNAUTHORIZED,
+            "invalid_token",
+            "Invalid or expired token",
+            authenticate=True,
+        )
+    if locked_user.totp_enabled:
+        if payload is None or payload.current_totp_code is None:
+            raise_auth_error(
+                status.HTTP_401_UNAUTHORIZED,
+                "current_totp_required",
+                "The current TOTP code is required",
+                authenticate=True,
+            )
+        if locked_user.totp_secret_encrypted is None:
+            raise_auth_error(
+                status.HTTP_401_UNAUTHORIZED,
+                "invalid_totp",
+                "Invalid TOTP code",
+                authenticate=True,
+            )
+        active_secret = decrypt_secret(locked_user.totp_secret_encrypted, settings=settings)
+        if not pyotp.TOTP(active_secret).verify(
+            payload.current_totp_code.get_secret_value(),
+            valid_window=1,
+        ):
+            raise_auth_error(
+                status.HTTP_401_UNAUTHORIZED,
+                "invalid_totp",
+                "Invalid TOTP code",
+                authenticate=True,
+            )
     secret = pyotp.random_base32()
-    user.totp_secret_encrypted = encrypt_secret(secret, settings=settings)
-    user.totp_enabled = False
+    locked_user.pending_totp_secret_encrypted = encrypt_secret(secret, settings=settings)
     await session.commit()
     uri = pyotp.TOTP(secret).provisioning_uri(
-        name=user.email,
+        name=locked_user.email,
         issuer_name=settings.jwt_issuer,
     )
     return TotpSetupResponse(otpauth_uri=uri)
@@ -85,13 +121,21 @@ async def confirm_totp(
     session: Session,
     settings: AppSettings,
 ) -> TotpConfirmResponse:
-    if user.totp_secret_encrypted is None:
+    locked_user = await session.scalar(select(User).where(User.id == user.id).with_for_update())
+    if locked_user is None:
+        raise_auth_error(
+            status.HTTP_401_UNAUTHORIZED,
+            "invalid_token",
+            "Invalid or expired token",
+            authenticate=True,
+        )
+    if locked_user.pending_totp_secret_encrypted is None:
         raise_auth_error(
             status.HTTP_400_BAD_REQUEST,
             "totp_not_configured",
             "TOTP enrollment has not been started",
         )
-    secret = decrypt_secret(user.totp_secret_encrypted, settings=settings)
+    secret = decrypt_secret(locked_user.pending_totp_secret_encrypted, settings=settings)
     if not pyotp.TOTP(secret).verify(payload.code.get_secret_value(), valid_window=1):
         raise_auth_error(
             status.HTTP_401_UNAUTHORIZED,
@@ -99,6 +143,8 @@ async def confirm_totp(
             "Invalid TOTP code",
             authenticate=True,
         )
-    user.totp_enabled = True
+    locked_user.totp_secret_encrypted = locked_user.pending_totp_secret_encrypted
+    locked_user.pending_totp_secret_encrypted = None
+    locked_user.totp_enabled = True
     await session.commit()
     return TotpConfirmResponse(totp_enabled=True)

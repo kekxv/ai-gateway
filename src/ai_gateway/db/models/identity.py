@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, LargeBinary, String, func, text
+from sqlalchemy.dialects import mysql
 from sqlalchemy.dialects.mysql import BINARY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -28,6 +29,10 @@ class User(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     totp_secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary(512), nullable=True)
+    pending_totp_secret_encrypted: Mapped[bytes | None] = mapped_column(
+        mysql.LONGBLOB,
+        nullable=True,
+    )
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

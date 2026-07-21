@@ -38,6 +38,7 @@ def test_schema_contains_exact_tables_and_columns() -> None:
             "role",
             "is_active",
             "totp_secret_encrypted",
+            "pending_totp_secret_encrypted",
             "totp_enabled",
             "created_at",
             "updated_at",

@@ -26,6 +26,10 @@ class TotpSetupResponse(BaseModel):
     otpauth_uri: str
 
 
+class TotpSetupRequest(BaseModel):
+    current_totp_code: SecretStr | None = None
+
+
 class TotpConfirmRequest(BaseModel):
     code: SecretStr
 
