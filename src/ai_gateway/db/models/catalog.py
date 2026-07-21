@@ -20,7 +20,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.mysql import LONGBLOB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from ai_gateway.core.enums import Protocol, RouteRuntimeState, enum_values
+from ai_gateway.core.enums import Protocol, RouteRuntimeState, RouteSource, enum_values
 from ai_gateway.db.base import Base
 
 if TYPE_CHECKING:
@@ -154,6 +154,11 @@ class ModelRoute(Base):
     upstream_model: Mapped[str] = mapped_column(String(255))
     weight: Mapped[int] = mapped_column(Integer, default=100, server_default=text("100"))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
+    source: Mapped[RouteSource] = mapped_column(
+        Enum(RouteSource, name="route_source", values_callable=enum_values),
+        default=RouteSource.MANUAL,
+        server_default=RouteSource.MANUAL.value,
+    )
     runtime_state: Mapped[RouteRuntimeState] = mapped_column(
         Enum(RouteRuntimeState, name="route_runtime_state", values_callable=enum_values),
         default=RouteRuntimeState.CLOSED,

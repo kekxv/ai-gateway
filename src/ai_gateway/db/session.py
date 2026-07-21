@@ -13,12 +13,22 @@ from ai_gateway.core.config import get_settings
 
 @lru_cache
 def get_engine() -> AsyncEngine:
-    return create_async_engine(get_settings().database_url, pool_pre_ping=True)
+    return get_engine_for_url(get_settings().database_url)
+
+
+@lru_cache
+def get_engine_for_url(database_url: str) -> AsyncEngine:
+    return create_async_engine(database_url, pool_pre_ping=True)
 
 
 @lru_cache
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
-    return async_sessionmaker(get_engine(), expire_on_commit=False)
+    return get_session_factory_for_url(get_settings().database_url)
+
+
+@lru_cache
+def get_session_factory_for_url(database_url: str) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(get_engine_for_url(database_url), expire_on_commit=False)
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

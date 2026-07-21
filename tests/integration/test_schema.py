@@ -96,6 +96,7 @@ def test_schema_contains_exact_tables_and_columns() -> None:
             "upstream_model",
             "weight",
             "enabled",
+            "source",
             "runtime_state",
             "consecutive_failures",
             "disabled_until",

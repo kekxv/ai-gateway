@@ -22,6 +22,7 @@ from ai_gateway.catalog.schemas import (
     RoutingStrategy,
     alias_values,
 )
+from ai_gateway.core.enums import RouteSource
 from ai_gateway.db.models import (
     ApiKeyModel,
     Model,
@@ -172,6 +173,7 @@ async def create_model_route(
         upstream_model=payload.upstream_model,
         weight=payload.weight,
         enabled=payload.enabled,
+        source=RouteSource.MANUAL,
     )
     session.add(route)
     try:
@@ -381,6 +383,7 @@ def _route_response(route: ModelRoute) -> ModelRouteResponse:
         upstream_model=route.upstream_model,
         weight=route.weight,
         enabled=route.enabled,
+        source=route.source,
         runtime_state=route.runtime_state,
         consecutive_failures=route.consecutive_failures,
         disabled_until=route.disabled_until,

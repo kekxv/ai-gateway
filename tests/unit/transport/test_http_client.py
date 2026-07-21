@@ -41,6 +41,7 @@ def proxy_settings(
     return cast(
         Settings,
         SimpleNamespace(
+            database_url="mysql+asyncmy://gateway:gateway@127.0.0.1:3306/gateway",
             http_proxy=http_proxy,
             https_proxy=https_proxy,
             no_proxy=no_proxy,
@@ -355,6 +356,7 @@ async def test_fastapi_lifespan_publishes_and_closes_the_factory_once(
     from ai_gateway import main
 
     factories: list[StubHttpClientFactory] = []
+    schedulers: list[StubModelSyncScheduler] = []
 
     class StubHttpClientFactory:
         def __init__(self, settings: Settings) -> None:
@@ -365,13 +367,36 @@ async def test_fastapi_lifespan_publishes_and_closes_the_factory_once(
         async def aclose(self) -> None:
             self.close_calls += 1
 
+    class StubModelSyncScheduler:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+            self.started = asyncio.Event()
+            self.stopped = asyncio.Event()
+            self.stop_calls = 0
+            self.completed = False
+            schedulers.append(self)
+
+        async def run(self) -> None:
+            self.started.set()
+            await self.stopped.wait()
+            self.completed = True
+
+        def stop(self) -> None:
+            self.stop_calls += 1
+            self.stopped.set()
+
     monkeypatch.setattr(main, "HttpClientFactory", StubHttpClientFactory)
+    monkeypatch.setattr(main, "ModelSyncScheduler", StubModelSyncScheduler)
     settings = proxy_settings()
     app = main.create_app(settings=settings)
 
     async with app.router.lifespan_context(app):
+        await asyncio.wait_for(schedulers[0].started.wait(), timeout=1)
         assert app.state.http_client_factory is factories[0]
+        assert app.state.model_sync_scheduler is schedulers[0]
         assert factories[0].settings is settings
         assert factories[0].close_calls == 0
 
     assert factories[0].close_calls == 1
+    assert schedulers[0].stop_calls == 1
+    assert schedulers[0].completed is True

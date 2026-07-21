@@ -20,6 +20,11 @@ class RouteRuntimeState(StrEnum):
     HALF_OPEN = "half_open"
 
 
+class RouteSource(StrEnum):
+    MANUAL = "manual"
+    DISCOVERED = "discovered"
+
+
 class LedgerKind(StrEnum):
     RESERVATION = "reservation"
     RESERVATION_RELEASE = "reservation_release"

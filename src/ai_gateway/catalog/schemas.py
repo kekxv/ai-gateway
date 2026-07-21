@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
 
-from ai_gateway.core.enums import Protocol, RouteRuntimeState
+from ai_gateway.core.enums import Protocol, RouteRuntimeState, RouteSource
 
 CatalogName = Annotated[
     str,
@@ -180,6 +180,7 @@ class ModelRouteResponse(BaseModel):
     upstream_model: str
     weight: int
     enabled: bool
+    source: RouteSource
     runtime_state: RouteRuntimeState
     consecutive_failures: int
     disabled_until: datetime | None
