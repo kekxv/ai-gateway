@@ -23,6 +23,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "freezegun",
+    "httpx2",
     "mypy",
     "pytest",
     "pytest-asyncio",
