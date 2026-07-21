@@ -49,7 +49,7 @@ async def list_openai_models(request: Request, session: Session) -> Response:
         return native_error_response(Protocol.OPENAI, exc)
 
 
-@router.get("/v1/models/{model_id}")
+@router.get("/v1/models/{model_id:path}")
 async def get_openai_model(model_id: str, request: Request, session: Session) -> Response:
     try:
         principal = await authenticate_api_key(extract_api_key(request), session)

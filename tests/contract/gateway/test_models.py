@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from hashlib import sha256
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,10 @@ from ai_gateway.db.models import (
 )
 from ai_gateway.db.session import get_session
 from ai_gateway.gateway.models import router as models_router
+from ai_gateway.gateway.service import native_error_response
+from ai_gateway.main import create_app
+
+HeaderValues = dict[str, str] | list[tuple[str, str]]
 
 
 def _raw_key(scope: ApiKeyScope) -> str:
@@ -81,18 +85,28 @@ def _route(
     )
 
 
-def _client(session: AsyncSession, raw_key: str) -> AsyncClient:
-    app = FastAPI()
-    app.include_router(models_router)
+def _client(
+    session: AsyncSession,
+    raw_key: str | None = None,
+    *,
+    headers: HeaderValues | None = None,
+    app: FastAPI | None = None,
+) -> AsyncClient:
+    active_app = app or FastAPI()
+    if app is None:
+        active_app.include_router(models_router)
 
     async def override_session() -> AsyncIterator[AsyncSession]:
         yield session
 
-    app.dependency_overrides[get_session] = override_session
+    active_app.dependency_overrides[get_session] = override_session
+    client_headers: HeaderValues = headers or {}
+    if raw_key is not None:
+        client_headers = {"Authorization": f"Bearer {raw_key}"}
     return AsyncClient(
-        transport=ASGITransport(app=app),
+        transport=ASGITransport(app=active_app),
         base_url="http://test",
-        headers={"Authorization": f"Bearer {raw_key}"},
+        headers=client_headers,
     )
 
 
@@ -246,6 +260,55 @@ async def test_openai_detail_preserves_alias_identity_and_scope(
         assert response.json()["error"]["code"] == "model_not_found"
 
 
+@pytest.mark.parametrize(
+    ("path", "expected_id", "metadata"),
+    [
+        ("/v1/models/vendor/model", "vendor/model", {}),
+        ("/v1/models/vendor%2Fmodel", "vendor/model", {}),
+        (
+            "/v1/models/fast/family",
+            "fast/family",
+            {"canonical_model": "vendor/model"},
+        ),
+        (
+            "/v1/models/fast%2Ffamily",
+            "fast/family",
+            {"canonical_model": "vendor/model"},
+        ),
+    ],
+)
+async def test_openai_detail_accepts_slash_ids_from_list(
+    session: AsyncSession,
+    path: str,
+    expected_id: str,
+    metadata: dict[str, str],
+) -> None:
+    provider = _provider("slash-openai", Protocol.OPENAI)
+    model = _model("vendor/model")
+    model.aliases.append(ModelAlias(alias="fast/family"))
+    session.add(_route(model, provider, Protocol.OPENAI))
+    user, _, raw_key = _api_key(ApiKeyScope.ALL)
+    session.add(user)
+    await session.flush()
+
+    async with _client(session, raw_key) as client:
+        listing = await client.get("/v1/models")
+        detail = await client.get(path)
+
+    assert listing.status_code == 200
+    assert [item["id"] for item in listing.json()["data"]] == [
+        "fast/family",
+        "vendor/model",
+    ]
+    assert detail.status_code == 200
+    assert detail.json() == {
+        "id": expected_id,
+        "object": "model",
+        "owned_by": "gateway",
+        "metadata": metadata,
+    }
+
+
 @pytest.mark.parametrize("scope", list(ApiKeyScope))
 async def test_all_api_key_scope_modes_filter_names_through_same_channel_route(
     session: AsyncSession,
@@ -311,3 +374,122 @@ async def test_provider_scope_does_not_leak_a_model_from_a_different_channel_rou
     assert [item["name"] for item in gemini_response.json()["models"]] == [
         "models/correlated-model"
     ]
+
+
+@pytest.mark.parametrize(
+    ("path", "header_name"),
+    [
+        ("/v1/models", "x-api-key"),
+        ("/v1beta/models", "x-goog-api-key"),
+    ],
+)
+async def test_native_api_key_headers_authenticate_model_lists(
+    session: AsyncSession,
+    path: str,
+    header_name: str,
+) -> None:
+    raw_keys, _ = await _listing_catalog(session)
+    raw_key = raw_keys[ApiKeyScope.ALL]
+    async with _client(session, headers={header_name: raw_key}) as client:
+        response = await client.get(path)
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [
+            ("Authorization", f"Bearer {_raw_key(ApiKeyScope.ALL)}"),
+            ("Authorization", "Bearer sk-gw-conflicting-duplicate"),
+        ],
+        [
+            ("Authorization", f"Bearer {_raw_key(ApiKeyScope.ALL)}"),
+            ("x-api-key", "sk-gw-conflicting-multiple"),
+        ],
+    ],
+)
+async def test_conflicting_credentials_use_native_openai_error(
+    session: AsyncSession,
+    headers: HeaderValues,
+) -> None:
+    async with _client(session, headers=headers) as client:
+        response = await client.get("/v1/models")
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": {
+            "message": "Credential headers contain different API keys",
+            "type": "authentication_error",
+            "code": "invalid_api_key",
+        }
+    }
+    assert "www-authenticate" not in response.headers
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected_message"),
+    [
+        ({}, "An API key is required"),
+        ({"Authorization": "Bearer sk-gw-invalid-model-key"}, "Invalid or expired API key"),
+    ],
+)
+async def test_missing_and_invalid_auth_preserve_bearer_challenge(
+    session: AsyncSession,
+    headers: HeaderValues,
+    expected_message: str,
+) -> None:
+    async with _client(session, headers=headers) as client:
+        response = await client.get("/v1/models")
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+    assert response.json() == {
+        "error": {
+            "message": expected_message,
+            "type": "authentication_error",
+            "code": "invalid_api_key",
+        }
+    }
+
+
+def test_native_error_response_copies_only_safe_http_exception_headers() -> None:
+    response = native_error_response(
+        Protocol.OPENAI,
+        HTTPException(
+            status_code=401,
+            detail={"code": "invalid_api_key", "message": "Invalid API key"},
+            headers={
+                "WWW-Authenticate": "Bearer realm=gateway",
+                "Retry-After": "5",
+                "Set-Cookie": "gateway-secret=must-not-copy",
+                "Location": "https://unsafe.example",
+            },
+        ),
+    )
+
+    assert response.headers["www-authenticate"] == "Bearer realm=gateway"
+    assert response.headers["retry-after"] == "5"
+    assert "set-cookie" not in response.headers
+    assert "location" not in response.headers
+
+
+async def test_create_app_registers_model_routes_with_app_session_override(
+    session: AsyncSession,
+) -> None:
+    provider = _provider("create-app-openai", Protocol.OPENAI)
+    model = _model("create-app-model")
+    session.add(_route(model, provider, Protocol.OPENAI))
+    user, _, raw_key = _api_key(ApiKeyScope.ALL)
+    session.add(user)
+    await session.flush()
+    app = create_app()
+
+    async with _client(session, raw_key, app=app) as client:
+        listing = await client.get("/v1/models")
+        detail = await client.get("/v1/models/create-app-model")
+
+    assert listing.status_code == 200
+    assert [item["id"] for item in listing.json()["data"]] == ["create-app-model"]
+    assert detail.status_code == 200
+    assert detail.json()["id"] == "create-app-model"

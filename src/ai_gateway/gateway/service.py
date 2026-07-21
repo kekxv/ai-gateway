@@ -56,6 +56,8 @@ from ai_gateway.transport.upstream import build_upstream_request
 
 logger = logging.getLogger(__name__)
 
+_SAFE_NATIVE_ERROR_HEADERS = frozenset({"retry-after", "www-authenticate"})
+
 
 class HttpClientProvider(TypingProtocol):
     async def client_for(self, url: str | httpx.URL) -> httpx.AsyncClient: ...
@@ -1353,7 +1355,22 @@ def native_error_response(protocol: Protocol, exc: BaseException) -> JSONRespons
                 "status": _gemini_status(status_code, code),
             }
         }
-    return JSONResponse(status_code=status_code, content=content)
+    return JSONResponse(
+        status_code=status_code,
+        content=content,
+        headers=_safe_native_error_headers(exc),
+    )
+
+
+def _safe_native_error_headers(exc: BaseException) -> dict[str, str] | None:
+    if not isinstance(exc, HTTPException) or exc.headers is None:
+        return None
+    headers = {
+        name: value
+        for name, value in exc.headers.items()
+        if name.lower() in _SAFE_NATIVE_ERROR_HEADERS
+    }
+    return headers or None
 
 
 def _error_detail(exc: BaseException) -> tuple[int, str, str]:
