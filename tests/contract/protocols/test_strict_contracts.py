@@ -10,6 +10,8 @@ from ai_gateway.protocols.registry import get_adapter
 from ai_gateway.protocols.types import (
     CanonicalMessage,
     CanonicalRequest,
+    CanonicalUsage,
+    ImagePart,
     StreamEvent,
     TextPart,
     ToolCallPart,
@@ -245,3 +247,95 @@ def test_error_finish_reason_is_never_encoded_as_success(protocol, load_fixture)
         adapter.encode_response(replace(response, finish_reason="error"))
     with pytest.raises(UnsupportedFeatureError, match="finish_reason"):
         adapter.encode_stream_event(StreamEvent(type="message_end", finish_reason="error"))
+
+
+@pytest.mark.parametrize("protocol", tuple(Protocol))
+def test_native_system_surfaces_reject_non_text_content(protocol) -> None:
+    if protocol is Protocol.OPENAI:
+        payload = {
+            "model": "m",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [{"type": "image_url", "image_url": {"url": "https://x"}}],
+                }
+            ],
+        }
+    elif protocol is Protocol.CLAUDE:
+        payload = {
+            "model": "m",
+            "max_tokens": 1,
+            "system": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": "eA=="},
+                }
+            ],
+            "messages": [],
+        }
+    else:
+        payload = {
+            "model": "m",
+            "systemInstruction": {
+                "parts": [{"inlineData": {"mimeType": "image/png", "data": "eA=="}}]
+            },
+            "contents": [],
+        }
+
+    with pytest.raises(UnsupportedFeatureError, match="system"):
+        get_adapter(protocol).decode_request(payload)
+
+
+@pytest.mark.parametrize("protocol", tuple(Protocol))
+def test_canonical_system_rejects_non_text_content(protocol) -> None:
+    request = replace(
+        _request(CanonicalMessage("user", (TextPart("hi"),))),
+        system=(ImagePart(media_type="image/png", data="eA=="),),
+    )
+
+    with pytest.raises(UnsupportedFeatureError, match="system"):
+        get_adapter(protocol).encode_request(request)
+
+
+@pytest.mark.parametrize("choice", ["any", "tool", "sometimes", "required_tool"])
+def test_openai_rejects_unsupported_string_tool_choice(choice: str) -> None:
+    payload = {"model": "m", "messages": [], "tool_choice": choice}
+    with pytest.raises(UnsupportedFeatureError, match="tool_choice"):
+        get_adapter("openai").decode_request(payload)
+
+    request = replace(
+        _request(CanonicalMessage("user", (TextPart("hi"),))),
+        tool_choice=choice,
+    )
+    with pytest.raises(UnsupportedFeatureError, match="tool_choice"):
+        get_adapter("openai").encode_request(request)
+
+
+@pytest.mark.parametrize("protocol", tuple(Protocol))
+@pytest.mark.parametrize("bad_tokens", [True, False, -1])
+def test_usage_token_counts_are_nonnegative_integers(protocol, bad_tokens, load_fixture) -> None:
+    payload = load_fixture(protocol.value, "response.json")
+    if protocol is Protocol.OPENAI:
+        payload["usage"]["prompt_tokens"] = bad_tokens
+    elif protocol is Protocol.CLAUDE:
+        payload["usage"]["input_tokens"] = bad_tokens
+    else:
+        payload["usageMetadata"]["promptTokenCount"] = bad_tokens
+
+    with pytest.raises(UnsupportedFeatureError, match="usage"):
+        get_adapter(protocol).decode_response(payload)
+
+
+@pytest.mark.parametrize("protocol", tuple(Protocol))
+def test_canonical_usage_token_counts_are_validated(protocol, load_fixture) -> None:
+    adapter = get_adapter(protocol)
+    response = replace(
+        adapter.decode_response(load_fixture(protocol.value, "response.json")),
+        usage=CanonicalUsage(-1, 2),
+    )
+    with pytest.raises(UnsupportedFeatureError, match="usage"):
+        adapter.encode_response(response)
+
+    encoder = adapter.create_stream_encoder()
+    with pytest.raises(UnsupportedFeatureError, match="usage"):
+        encoder.encode(StreamEvent(type="usage", usage=CanonicalUsage(1, -2)))

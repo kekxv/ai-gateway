@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import orjson
@@ -9,17 +10,21 @@ from ai_gateway.core.enums import Protocol
 from ai_gateway.protocols.base import (
     NO_STREAM_OUTPUT,
     ProtocolAdapter,
+    StreamDecoder,
+    StreamEncoder,
     UnsupportedFeatureError,
     add_vendor_scope,
     decode_sse,
     encode_sse,
     native_extensions,
+    nonnegative_int,
     optional_float,
     optional_int,
     require_object,
     required_bool,
     string_list,
     thaw,
+    validate_usage,
     vendor_metadata,
     vendor_scope,
 )
@@ -89,6 +94,10 @@ class GeminiAdapter(ProtocolAdapter):
         if system_instruction is not None:
             system_object = require_object(system_instruction, "systemInstruction")
             system = _decode_parts(system_object.get("parts"), "systemInstruction.parts")
+            if not all(isinstance(part, TextPart) for part in system):
+                raise UnsupportedFeatureError(
+                    "systemInstruction.parts", "system content must contain only text"
+                )
         generation = require_object(payload.get("generationConfig", {}), "generationConfig")
         metadata = vendor_metadata(self.protocol, payload, _REQUEST_FIELDS)
         if system_instruction is not None:
@@ -127,6 +136,8 @@ class GeminiAdapter(ProtocolAdapter):
         payload = native_extensions(self.protocol, request.metadata)
         payload["model"] = request.model
         if request.system:
+            if not all(isinstance(part, TextPart) for part in request.system):
+                raise UnsupportedFeatureError("system", "must contain only text")
             system_instruction = vendor_scope(
                 self.protocol, request.metadata, "__system_instruction__"
             )
@@ -165,6 +176,22 @@ class GeminiAdapter(ProtocolAdapter):
         ):
             finish_reason = "tool_call"
         model = payload.get("modelVersion")
+        metadata = vendor_metadata(
+            self.protocol,
+            payload,
+            _RESPONSE_FIELDS,
+            response_id=payload.get("responseId"),
+        )
+        add_vendor_scope(
+            metadata,
+            self.protocol,
+            "__candidate__",
+            {
+                key: item
+                for key, item in candidate.items()
+                if key not in {"index", "content", "finishReason"}
+            },
+        )
         return CanonicalResponse(
             model=model if isinstance(model, str) else "",
             message=CanonicalMessage(
@@ -178,12 +205,7 @@ class GeminiAdapter(ProtocolAdapter):
             ),
             finish_reason=finish_reason,
             usage=_decode_usage(payload.get("usageMetadata")),
-            metadata=vendor_metadata(
-                self.protocol,
-                payload,
-                _RESPONSE_FIELDS,
-                response_id=payload.get("responseId"),
-            ),
+            metadata=metadata,
         )
 
     def encode_response(self, response: CanonicalResponse) -> dict[str, Any]:
@@ -201,24 +223,38 @@ class GeminiAdapter(ProtocolAdapter):
                 ),
             }
         )
+        candidate = vendor_scope(self.protocol, response.metadata, "__candidate__")
+        candidate.update(
+            {
+                "index": 0,
+                "content": content,
+                "finishReason": _encode_finish_reason(response.finish_reason),
+            }
+        )
         payload.update(
             {
                 "modelVersion": response.model,
                 "responseId": response.metadata.get("response_id", "resp_gateway"),
-                "candidates": [
-                    {
-                        "index": 0,
-                        "content": content,
-                        "finishReason": _encode_finish_reason(response.finish_reason),
-                    }
-                ],
+                "candidates": [candidate],
             }
         )
         if response.usage is not None:
+            validate_usage(response.usage)
             payload["usageMetadata"] = _encode_usage(response.usage)
         return payload
 
+    def create_stream_decoder(self) -> StreamDecoder:
+        return _GeminiStreamDecoder()
+
+    def create_stream_encoder(self) -> StreamEncoder:
+        return _GeminiStreamEncoder(self)
+
     def decode_stream_event(self, event: bytes | Mapping[str, Any]) -> tuple[StreamEvent, ...]:
+        return self.create_stream_decoder().decode(event)
+
+    def _decode_isolated_stream_event(
+        self, event: bytes | Mapping[str, Any]
+    ) -> tuple[StreamEvent, ...]:
         if event == NO_STREAM_OUTPUT:
             return (StreamEvent(type="done"),)
         _, raw_payload = decode_sse(event)
@@ -242,31 +278,76 @@ class GeminiAdapter(ProtocolAdapter):
                 "stream_event.candidates", "must contain a candidate or usage"
             )
         candidate = require_object(candidates[0], "stream_event.candidates[0]")
-        index = candidate.get("index", 0)
-        index = index if isinstance(index, int) else 0
+        candidate_index = nonnegative_int(
+            candidate.get("index", 0), "stream_event.candidates[0].index"
+        )
         content = require_object(candidate.get("content", {}), "stream_event.candidate.content")
+        base_metadata = vendor_metadata(
+            self.protocol,
+            payload,
+            {"modelVersion", "responseId", "candidates", "usageMetadata"},
+        )
+        add_vendor_scope(
+            base_metadata,
+            self.protocol,
+            "__candidate__",
+            {
+                key: item
+                for key, item in candidate.items()
+                if key not in {"index", "content", "finishReason"}
+            },
+        )
+        add_vendor_scope(
+            base_metadata,
+            self.protocol,
+            "__content__",
+            {key: item for key, item in content.items() if key not in {"role", "parts"}},
+        )
         parts = content.get("parts", [])
         if not isinstance(parts, list):
             raise UnsupportedFeatureError("stream_event.candidate.content.parts", "must be a list")
         saw_tool_call = False
         for part_index, raw_part in enumerate(parts):
             part = require_object(raw_part, f"stream_event.candidate.content.parts[{part_index}]")
+            part_metadata = thaw(base_metadata)
+            add_vendor_scope(
+                part_metadata,
+                self.protocol,
+                "__part__",
+                {key: item for key, item in part.items() if key not in {"text", "functionCall"}},
+            )
             if isinstance(part.get("text"), str):
                 events.append(
-                    StreamEvent(type="content_delta", index=index, text=part["text"], model=model)
+                    StreamEvent(
+                        type="content_delta",
+                        index=part_index,
+                        text=part["text"],
+                        model=model,
+                        content_type="text",
+                        metadata=part_metadata,
+                    )
                 )
             elif "functionCall" in part:
                 saw_tool_call = True
                 call = require_object(part["functionCall"], "stream_event.functionCall")
+                add_vendor_scope(
+                    part_metadata,
+                    self.protocol,
+                    "__function_call__",
+                    {key: item for key, item in call.items() if key not in {"id", "name", "args"}},
+                )
                 args = require_object(call.get("args", {}), "stream_event.functionCall.args")
                 events.append(
                     StreamEvent(
                         type="tool_call_delta",
-                        index=index,
+                        index=part_index,
+                        tool_index=part_index,
                         tool_call_id=(call.get("id") if isinstance(call.get("id"), str) else None),
                         tool_name=(call.get("name") if isinstance(call.get("name"), str) else None),
                         arguments_delta=orjson.dumps(args).decode(),
                         model=model,
+                        content_type="tool_call",
+                        metadata=part_metadata,
                     )
                 )
             else:
@@ -281,32 +362,41 @@ class GeminiAdapter(ProtocolAdapter):
             events.append(
                 StreamEvent(
                     type="message_end",
-                    index=index,
+                    index=candidate_index,
                     finish_reason=finish_reason,
                     model=model,
+                    metadata=base_metadata,
                 )
             )
         if usage is not None:
-            events.append(StreamEvent(type="usage", usage=usage, model=model))
+            events.append(
+                StreamEvent(type="usage", usage=usage, model=model, metadata=base_metadata)
+            )
         if not events:
             raise UnsupportedFeatureError("stream_event", "contains no supported delta")
         return tuple(events)
 
     def encode_stream_event(self, event: StreamEvent) -> bytes:
-        if event.type in {"done", "message_start", "content_end", "heartbeat"}:
+        if event.type in {"done", "message_start", "content_start", "content_end", "heartbeat"}:
             return NO_STREAM_OUTPUT
         if event.type == "error":
             return encode_sse({"error": thaw(event.metadata)})
-        payload: dict[str, Any] = {}
+        payload = native_extensions(self.protocol, event.metadata)
         _set_optional(payload, "modelVersion", event.model)
         if event.type == "usage":
             if event.usage is None:
                 raise UnsupportedFeatureError("stream_event.usage", "is required")
+            validate_usage(event.usage, "stream_event.usage")
             payload["candidates"] = []
         else:
-            candidate: dict[str, Any] = {"index": event.index}
+            candidate = vendor_scope(self.protocol, event.metadata, "__candidate__")
+            candidate["index"] = 0
             if event.type == "content_delta":
-                candidate["content"] = {"role": "model", "parts": [{"text": event.text or ""}]}
+                content = vendor_scope(self.protocol, event.metadata, "__content__")
+                part = vendor_scope(self.protocol, event.metadata, "__part__")
+                part["text"] = event.text or ""
+                content.update({"role": "model", "parts": [part]})
+                candidate["content"] = content
             elif event.type == "tool_call_delta":
                 try:
                     arguments = orjson.loads(event.arguments_delta or "{}")
@@ -315,9 +405,14 @@ class GeminiAdapter(ProtocolAdapter):
                         "stream_event.arguments_delta", "Gemini requires complete JSON arguments"
                     ) from exc
                 arguments = require_object(arguments, "stream_event.arguments_delta")
-                call: dict[str, Any] = {"name": event.tool_name or "", "args": arguments}
+                call = vendor_scope(self.protocol, event.metadata, "__function_call__")
+                call.update({"name": event.tool_name or "", "args": arguments})
                 _set_optional(call, "id", event.tool_call_id)
-                candidate["content"] = {"role": "model", "parts": [{"functionCall": call}]}
+                content = vendor_scope(self.protocol, event.metadata, "__content__")
+                part = vendor_scope(self.protocol, event.metadata, "__part__")
+                part["functionCall"] = call
+                content.update({"role": "model", "parts": [part]})
+                candidate["content"] = content
             elif event.type == "message_end":
                 if event.finish_reason is None:
                     raise UnsupportedFeatureError("stream_event.finish_reason", "is required")
@@ -328,6 +423,205 @@ class GeminiAdapter(ProtocolAdapter):
         if event.usage is not None:
             payload["usageMetadata"] = _encode_usage(event.usage)
         return encode_sse(payload)
+
+
+class _GeminiStreamDecoder(StreamDecoder):
+    def __init__(self) -> None:
+        self._adapter = GeminiAdapter()
+        self._message_started = False
+        self._text_index: int | None = None
+        self._open_tools: dict[int, int] = {}
+        self._next_part_index = 0
+        self._next_tool_index = 0
+        self._saw_tool_call = False
+
+    def _ensure_message_start(self, model: str | None) -> list[StreamEvent]:
+        if self._message_started:
+            return []
+        self._message_started = True
+        return [StreamEvent(type="message_start", role="assistant", model=model)]
+
+    def _close_text(self, model: str | None = None) -> list[StreamEvent]:
+        if self._text_index is None:
+            return []
+        index = self._text_index
+        self._text_index = None
+        return [
+            StreamEvent(
+                type="content_end",
+                index=index,
+                content_type="text",
+                model=model,
+            )
+        ]
+
+    def _close_tools(self, model: str | None = None) -> list[StreamEvent]:
+        events = [
+            StreamEvent(
+                type="content_end",
+                index=block_index,
+                tool_index=tool_index,
+                content_type="tool_call",
+                model=model,
+            )
+            for tool_index, block_index in sorted(self._open_tools.items())
+        ]
+        self._open_tools.clear()
+        return events
+
+    def decode(self, event: bytes | Mapping[str, Any]) -> tuple[StreamEvent, ...]:
+        raw_events = self._adapter._decode_isolated_stream_event(event)
+        events: list[StreamEvent] = []
+        part_events = [
+            raw for raw in raw_events if raw.type in {"content_delta", "tool_call_delta"}
+        ]
+        multiple_parts = len(part_events) > 1
+        seen_part_in_frame = False
+        for raw in raw_events:
+            if raw.type == "content_delta":
+                events.extend(self._ensure_message_start(raw.model))
+                if self._text_index is None or (multiple_parts and seen_part_in_frame):
+                    events.extend(self._close_text(raw.model))
+                    self._text_index = self._next_part_index
+                    self._next_part_index += 1
+                    events.append(
+                        StreamEvent(
+                            type="content_start",
+                            index=self._text_index,
+                            content_type="text",
+                            model=raw.model,
+                        )
+                    )
+                events.append(replace(raw, index=self._text_index, content_type="text"))
+                seen_part_in_frame = True
+            elif raw.type == "tool_call_delta":
+                events.extend(self._ensure_message_start(raw.model))
+                events.extend(self._close_text(raw.model))
+                tool_index = self._next_tool_index
+                self._next_tool_index += 1
+                block_index = self._next_part_index
+                self._next_part_index += 1
+                self._open_tools[tool_index] = block_index
+                self._saw_tool_call = True
+                events.append(
+                    replace(
+                        raw,
+                        index=block_index,
+                        tool_index=tool_index,
+                        content_type="tool_call",
+                    )
+                )
+                seen_part_in_frame = True
+            elif raw.type == "message_end":
+                events.extend(self._close_text(raw.model))
+                events.extend(self._close_tools(raw.model))
+                finish_reason = raw.finish_reason
+                if finish_reason == "stop" and self._saw_tool_call:
+                    finish_reason = "tool_call"
+                events.append(replace(raw, finish_reason=finish_reason))
+            elif raw.type == "done":
+                events.extend(self._close_text(raw.model))
+                events.extend(self._close_tools(raw.model))
+                events.append(raw)
+            else:
+                events.append(raw)
+        return tuple(events)
+
+
+@dataclass(slots=True)
+class _GeminiToolBuffer:
+    index: int
+    tool_index: int | None
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    arguments: list[str] = field(default_factory=list)
+    model: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+class _GeminiStreamEncoder(StreamEncoder):
+    def __init__(self, adapter: GeminiAdapter) -> None:
+        self._adapter = adapter
+        self._tools: dict[tuple[object, object], _GeminiToolBuffer] = {}
+
+    @staticmethod
+    def _key(event: StreamEvent) -> tuple[object, object]:
+        if event.tool_index is not None:
+            return ("tool_index", event.tool_index)
+        if event.tool_call_id is not None:
+            return ("tool_call_id", event.tool_call_id)
+        return (
+            "index",
+            event.index,
+        )
+
+    def _flush(self, key: tuple[object, object]) -> bytes | None:
+        buffer = self._tools.pop(key, None)
+        if buffer is None:
+            return None
+        arguments_text = "".join(buffer.arguments) or "{}"
+        try:
+            arguments = orjson.loads(arguments_text)
+        except orjson.JSONDecodeError as exc:
+            raise UnsupportedFeatureError(
+                "stream_event.arguments_delta",
+                "Gemini requires complete JSON arguments at tool content end",
+            ) from exc
+        require_object(arguments, "stream_event.arguments_delta")
+        return self._adapter.encode_stream_event(
+            StreamEvent(
+                type="tool_call_delta",
+                index=buffer.index,
+                tool_index=buffer.tool_index,
+                tool_call_id=buffer.tool_call_id,
+                tool_name=buffer.tool_name,
+                arguments_delta=orjson.dumps(arguments).decode(),
+                model=buffer.model,
+                content_type="tool_call",
+                metadata=buffer.metadata,
+            )
+        )
+
+    def _flush_all(self) -> list[bytes]:
+        frames = []
+        for key in list(self._tools):
+            frame = self._flush(key)
+            if frame:
+                frames.append(frame)
+        return frames
+
+    def encode(self, event: StreamEvent) -> tuple[bytes, ...]:
+        if event.type in {"message_start", "content_start", "heartbeat", "done"}:
+            return ()
+        if event.type == "tool_call_delta":
+            key = self._key(event)
+            buffer = self._tools.get(key)
+            if buffer is None:
+                buffer = _GeminiToolBuffer(index=event.index, tool_index=event.tool_index)
+                self._tools[key] = buffer
+            if event.tool_call_id is not None:
+                buffer.tool_call_id = event.tool_call_id
+            if event.tool_name is not None:
+                buffer.tool_name = event.tool_name
+            if event.arguments_delta is not None:
+                buffer.arguments.append(event.arguments_delta)
+            if event.model is not None:
+                buffer.model = event.model
+            if event.metadata:
+                buffer.metadata = event.metadata
+            return ()
+        if event.type == "content_end":
+            if event.content_type != "tool_call":
+                return ()
+            frame = self._flush(self._key(event))
+            return (frame,) if frame else ()
+        frames: list[bytes] = []
+        if event.type == "message_end":
+            frames.extend(self._flush_all())
+        frame = self._adapter.encode_stream_event(event)
+        if frame:
+            frames.append(frame)
+        return tuple(frames)
 
 
 def _decode_parts(
@@ -732,14 +1026,19 @@ def _decode_usage(value: Any) -> CanonicalUsage | None:
     if value is None:
         return None
     usage = require_object(value, "usageMetadata")
-    input_tokens = usage.get("promptTokenCount", usage.get("prompt_token_count", 0))
-    output_tokens = usage.get("candidatesTokenCount", usage.get("candidates_token_count", 0))
-    if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
-        raise UnsupportedFeatureError("usageMetadata", "token counts must be integers")
+    input_tokens = nonnegative_int(
+        usage.get("promptTokenCount", usage.get("prompt_token_count", 0)),
+        "usageMetadata.promptTokenCount",
+    )
+    output_tokens = nonnegative_int(
+        usage.get("candidatesTokenCount", usage.get("candidates_token_count", 0)),
+        "usageMetadata.candidatesTokenCount",
+    )
     return CanonicalUsage(input_tokens=input_tokens, output_tokens=output_tokens)
 
 
 def _encode_usage(usage: CanonicalUsage) -> dict[str, int]:
+    validate_usage(usage)
     return {
         "promptTokenCount": usage.input_tokens,
         "candidatesTokenCount": usage.output_tokens,

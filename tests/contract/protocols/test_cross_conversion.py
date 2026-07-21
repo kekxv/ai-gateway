@@ -174,19 +174,19 @@ def test_all_nine_response_conversion_pairs_preserve_semantics(
 def test_all_nine_sse_conversion_pairs_preserve_delta_semantics(source, target, load_bytes) -> None:
     source_adapter = get_adapter(source)
     target_adapter = get_adapter(target)
-    canonical = source_adapter.decode_stream_event(load_bytes(source.value, "stream.sse"))
-
-    converted = (target_adapter.encode_stream_event(event) for event in canonical)
-    decoded = tuple(
-        decoded_event
-        for frame in converted
-        if frame
-        for decoded_event in target_adapter.decode_stream_event(frame)
+    canonical = source_adapter.create_stream_decoder().decode(
+        load_bytes(source.value, "stream.sse")
     )
 
-    expected = (StreamEvent(type="content_delta", text="Hello"),)
-    assert tuple(semantic_stream_event(event) for event in canonical) == expected
-    assert tuple(semantic_stream_event(event) for event in decoded) == expected
+    encoder = target_adapter.create_stream_encoder()
+    converted = tuple(frame for event in canonical for frame in encoder.encode(event))
+    decoder = target_adapter.create_stream_decoder()
+    decoded = tuple(
+        decoded_event for frame in converted if frame for decoded_event in decoder.decode(frame)
+    )
+
+    assert [event.text for event in canonical if event.type == "content_delta"] == ["Hello"]
+    assert [event.text for event in decoded if event.type == "content_delta"] == ["Hello"]
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)

@@ -40,19 +40,25 @@ def test_openai_combined_chunk_emits_every_event_in_order() -> None:
         }
     )
 
-    assert OpenAIAdapter().decode_stream_event(frame) == (
-        StreamEvent(type="message_start", role="assistant", model="model-a"),
-        StreamEvent(type="content_delta", text="Hi", model="model-a"),
-        StreamEvent(
-            type="tool_call_delta",
-            tool_call_id="call_1",
-            tool_name="weather",
-            arguments_delta='{"city":',
-            model="model-a",
-        ),
-        StreamEvent(type="message_end", finish_reason="tool_call", model="model-a"),
-        StreamEvent(type="usage", usage=CanonicalUsage(3, 4), model="model-a"),
-    )
+    events = OpenAIAdapter().decode_stream_event(frame)
+
+    assert [event.type for event in events] == [
+        "message_start",
+        "content_start",
+        "content_delta",
+        "content_end",
+        "tool_call_delta",
+        "content_end",
+        "message_end",
+        "usage",
+    ]
+    assert events[2].text == "Hi"
+    assert events[4].tool_index == 0
+    assert events[4].tool_call_id == "call_1"
+    assert events[4].tool_name == "weather"
+    assert events[4].arguments_delta == '{"city":'
+    assert events[6].finish_reason == "tool_call"
+    assert events[7].usage == CanonicalUsage(3, 4)
 
 
 def test_openai_error_and_done_are_distinct_terminal_events() -> None:
@@ -98,8 +104,9 @@ def test_openai_encodes_each_canonical_event_to_the_expected_native_shape() -> N
 
 def test_claude_all_native_event_shapes_have_independent_canonical_sequences() -> None:
     adapter = ClaudeAdapter()
+    decoder = adapter.create_stream_decoder()
 
-    assert adapter.decode_stream_event(
+    assert decoder.decode(
         _sse(
             {
                 "type": "message_start",
@@ -111,7 +118,7 @@ def test_claude_all_native_event_shapes_have_independent_canonical_sequences() -
         StreamEvent(type="message_start", role="assistant", model="claude-x"),
         StreamEvent(type="usage", usage=CanonicalUsage(3, 0), model="claude-x"),
     )
-    assert adapter.decode_stream_event(
+    assert decoder.decode(
         _sse(
             {
                 "type": "content_block_start",
@@ -129,12 +136,14 @@ def test_claude_all_native_event_shapes_have_independent_canonical_sequences() -
         StreamEvent(
             type="tool_call_delta",
             index=2,
+            tool_index=0,
+            content_type="tool_call",
             tool_call_id="call_1",
             tool_name="weather",
             arguments_delta='{"city":"Paris"}',
         ),
     )
-    assert adapter.decode_stream_event(
+    assert decoder.decode(
         _sse(
             {
                 "type": "content_block_delta",
@@ -143,11 +152,19 @@ def test_claude_all_native_event_shapes_have_independent_canonical_sequences() -
             },
             "content_block_delta",
         )
-    ) == (StreamEvent(type="tool_call_delta", index=2, arguments_delta="}"),)
-    assert adapter.decode_stream_event(
+    ) == (
+        StreamEvent(
+            type="tool_call_delta",
+            index=2,
+            tool_index=0,
+            content_type="tool_call",
+            arguments_delta="}",
+        ),
+    )
+    assert decoder.decode(
         _sse({"type": "content_block_stop", "index": 2}, "content_block_stop")
-    ) == (StreamEvent(type="content_end", index=2),)
-    assert adapter.decode_stream_event(
+    ) == (StreamEvent(type="content_end", index=2, tool_index=0, content_type="tool_call"),)
+    assert decoder.decode(
         _sse(
             {
                 "type": "message_delta",
@@ -160,19 +177,17 @@ def test_claude_all_native_event_shapes_have_independent_canonical_sequences() -
         StreamEvent(type="message_end", finish_reason="stop"),
         StreamEvent(type="usage", usage=CanonicalUsage(0, 4)),
     )
-    assert adapter.decode_stream_event(
+    assert decoder.decode(
         _sse(
             {"type": "message_delta", "delta": {}, "usage": {"output_tokens": 4}},
             "message_delta",
         )
     ) == (StreamEvent(type="usage", usage=CanonicalUsage(0, 4)),)
-    assert adapter.decode_stream_event(_sse({"type": "message_stop"}, "message_stop")) == (
+    assert decoder.decode(_sse({"type": "message_stop"}, "message_stop")) == (
         StreamEvent(type="done"),
     )
-    assert adapter.decode_stream_event(_sse({"type": "ping"}, "ping")) == (
-        StreamEvent(type="heartbeat"),
-    )
-    assert adapter.decode_stream_event(
+    assert decoder.decode(_sse({"type": "ping"}, "ping")) == (StreamEvent(type="heartbeat"),)
+    assert decoder.decode(
         _sse({"type": "error", "error": {"type": "overloaded_error"}}, "error")
     ) == (StreamEvent(type="error", metadata={"type": "overloaded_error"}),)
 
@@ -242,19 +257,34 @@ def test_gemini_combined_chunk_processes_all_parts_finish_and_usage() -> None:
         }
     )
 
-    assert GeminiAdapter().decode_stream_event(frame) == (
-        StreamEvent(type="content_delta", text="One", model="gemini-x"),
-        StreamEvent(type="content_delta", text="Two", model="gemini-x"),
-        StreamEvent(
-            type="tool_call_delta",
-            tool_call_id="call_1",
-            tool_name="weather",
-            arguments_delta='{"x":1}',
-            model="gemini-x",
-        ),
-        StreamEvent(type="message_end", finish_reason="tool_call", model="gemini-x"),
-        StreamEvent(type="usage", usage=CanonicalUsage(3, 4), model="gemini-x"),
+    events = GeminiAdapter().decode_stream_event(frame)
+
+    assert [event.type for event in events] == [
+        "message_start",
+        "content_start",
+        "content_delta",
+        "content_end",
+        "content_start",
+        "content_delta",
+        "content_end",
+        "tool_call_delta",
+        "content_end",
+        "message_end",
+        "usage",
+    ]
+    assert [event.text for event in events if event.type == "content_delta"] == ["One", "Two"]
+    tool = next(event for event in events if event.type == "tool_call_delta")
+    assert (tool.index, tool.tool_index, tool.tool_call_id, tool.tool_name) == (
+        2,
+        0,
+        "call_1",
+        "weather",
     )
+    assert tool.arguments_delta == '{"x":1}'
+    assert (
+        next(event for event in events if event.type == "message_end").finish_reason == "tool_call"
+    )
+    assert events[-1].usage == CanonicalUsage(3, 4)
 
 
 def test_gemini_connection_terminal_uses_empty_frame_not_stop_candidate() -> None:

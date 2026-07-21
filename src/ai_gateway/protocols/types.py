@@ -8,8 +8,10 @@ from typing import Any, Literal, cast
 type JsonMapping = Mapping[str, Any]
 type MessageRole = Literal["user", "assistant"]
 type FinishReason = Literal["stop", "length", "tool_call", "content_filter", "error"]
+type StreamContentType = Literal["text", "tool_call"]
 type StreamEventType = Literal[
     "message_start",
+    "content_start",
     "content_delta",
     "content_end",
     "tool_call_delta",
@@ -151,6 +153,8 @@ class CanonicalResponse:
 class StreamEvent:
     type: StreamEventType
     index: int = 0
+    tool_index: int | None = None
+    content_type: StreamContentType | None = None
     text: str | None = None
     role: MessageRole | None = None
     tool_call_id: str | None = None

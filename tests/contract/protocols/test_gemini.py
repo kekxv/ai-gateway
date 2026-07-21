@@ -46,7 +46,10 @@ def test_gemini_golden_response_and_stream(load_fixture, load_bytes) -> None:
 
     assert response.usage is not None
     assert response.usage.output_tokens == 7
-    assert events == (events[0],)
-    assert events[0].type == "content_delta"
-    assert events[0].text == "Hello"
-    assert adapter.decode_stream_event(adapter.encode_stream_event(events[0])) == events
+    content = next(event for event in events if event.type == "content_delta")
+    assert content.text == "Hello"
+    encoded = adapter.create_stream_encoder().encode(content)
+    decoded = tuple(
+        item for frame in encoded for item in adapter.create_stream_decoder().decode(frame)
+    )
+    assert next(event for event in decoded if event.type == "content_delta").text == "Hello"

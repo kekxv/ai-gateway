@@ -8,7 +8,12 @@ import orjson
 
 from ai_gateway.core.enums import Protocol
 from ai_gateway.core.errors import GatewayError
-from ai_gateway.protocols.types import CanonicalRequest, CanonicalResponse, StreamEvent
+from ai_gateway.protocols.types import (
+    CanonicalRequest,
+    CanonicalResponse,
+    CanonicalUsage,
+    StreamEvent,
+)
 
 # These are the only intentional semantic losses at this conversion layer. Native extensions are
 # protocol-scoped so they survive same-protocol canonical round trips without leaking to another
@@ -36,6 +41,20 @@ class UnsupportedFeatureError(GatewayError):
         super().__init__(f"{field}: {detail}")
 
 
+class StreamDecoder(ABC):
+    """State retained while incrementally decoding one native response stream."""
+
+    @abstractmethod
+    def decode(self, event: bytes | Mapping[str, Any]) -> tuple[StreamEvent, ...]: ...
+
+
+class StreamEncoder(ABC):
+    """State retained while incrementally encoding one native response stream."""
+
+    @abstractmethod
+    def encode(self, event: StreamEvent) -> tuple[bytes, ...]: ...
+
+
 class ProtocolAdapter(ABC):
     protocol: Protocol
 
@@ -52,10 +71,20 @@ class ProtocolAdapter(ABC):
     def encode_response(self, response: CanonicalResponse) -> dict[str, Any]: ...
 
     @abstractmethod
-    def decode_stream_event(self, event: bytes | Mapping[str, Any]) -> tuple[StreamEvent, ...]: ...
+    def create_stream_decoder(self) -> StreamDecoder: ...
 
     @abstractmethod
-    def encode_stream_event(self, event: StreamEvent) -> bytes: ...
+    def create_stream_encoder(self) -> StreamEncoder: ...
+
+    @abstractmethod
+    def decode_stream_event(self, event: bytes | Mapping[str, Any]) -> tuple[StreamEvent, ...]:
+        """Decode one isolated frame; use create_stream_decoder for a complete stream."""
+        ...
+
+    @abstractmethod
+    def encode_stream_event(self, event: StreamEvent) -> bytes:
+        """Encode one isolated event; use create_stream_encoder for a complete stream."""
+        ...
 
 
 def rewrite_passthrough_request(
@@ -99,6 +128,20 @@ def optional_int(value: Any, field: str) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         raise UnsupportedFeatureError(field, "must be an integer")
     return value
+
+
+def nonnegative_int(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise UnsupportedFeatureError(field, "must be an integer")
+    if value < 0:
+        raise UnsupportedFeatureError(field, "must be nonnegative")
+    return value
+
+
+def validate_usage(usage: CanonicalUsage, field: str = "usage") -> CanonicalUsage:
+    nonnegative_int(usage.input_tokens, f"{field}.input_tokens")
+    nonnegative_int(usage.output_tokens, f"{field}.output_tokens")
+    return usage
 
 
 def required_bool(value: Any, field: str, *, default: bool = False) -> bool:

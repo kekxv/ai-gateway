@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any, cast
 
 import orjson
@@ -9,18 +10,22 @@ from ai_gateway.core.enums import Protocol
 from ai_gateway.protocols.base import (
     NO_STREAM_OUTPUT,
     ProtocolAdapter,
+    StreamDecoder,
+    StreamEncoder,
     UnsupportedFeatureError,
     add_vendor_scope,
     decode_sse,
     encode_sse,
     json_arguments,
     native_extensions,
+    nonnegative_int,
     optional_float,
     optional_int,
     require_object,
     required_bool,
     string_list,
     thaw,
+    validate_usage,
     vendor_metadata,
     vendor_scope,
 )
@@ -62,6 +67,7 @@ class OpenAIAdapter(ProtocolAdapter):
         if not isinstance(model, str):
             raise UnsupportedFeatureError("model", "must be a string")
         system: list[ContentPart] = []
+        system_messages: list[dict[str, Any]] = []
         messages: list[CanonicalMessage] = []
         native_messages = payload.get("messages", [])
         if not isinstance(native_messages, list):
@@ -75,7 +81,24 @@ class OpenAIAdapter(ProtocolAdapter):
                         f"messages[{index}].tool_calls",
                         "tool calls are only valid on assistant messages",
                     )
-                system.extend(_decode_content(message.get("content"), f"messages[{index}].content"))
+                system_parts = _decode_content(message.get("content"), f"messages[{index}].content")
+                if not all(isinstance(part, TextPart) for part in system_parts):
+                    raise UnsupportedFeatureError(
+                        f"messages[{index}].content",
+                        "system content must contain only text",
+                    )
+                system.extend(system_parts)
+                system_messages.append(
+                    {
+                        "role": role,
+                        "part_count": len(system_parts),
+                        "extensions": {
+                            key: thaw(item)
+                            for key, item in message.items()
+                            if key not in {"role", "content"}
+                        },
+                    }
+                )
             elif role == "tool":
                 if "tool_calls" in message:
                     raise UnsupportedFeatureError(
@@ -136,6 +159,13 @@ class OpenAIAdapter(ProtocolAdapter):
                     f"messages[{index}].role", f"unsupported role {role!r}"
                 )
         metadata = vendor_metadata(self.protocol, payload, _REQUEST_FIELDS)
+        if system_messages:
+            add_vendor_scope(
+                metadata,
+                self.protocol,
+                "__system_messages__",
+                {"items": system_messages},
+            )
         _capture_tool_choice_extensions(metadata, payload.get("tool_choice"))
         return CanonicalRequest(
             model=model,
@@ -159,7 +189,34 @@ class OpenAIAdapter(ProtocolAdapter):
         payload["model"] = request.model
         messages: list[dict[str, Any]] = []
         if request.system:
-            messages.append({"role": "system", "content": _encode_content(request.system)})
+            if not all(isinstance(part, TextPart) for part in request.system):
+                raise UnsupportedFeatureError("system", "must contain only text")
+            scope = vendor_scope(self.protocol, request.metadata, "__system_messages__")
+            descriptors = scope.get("items")
+            consumed = 0
+            if isinstance(descriptors, list):
+                for descriptor in descriptors:
+                    if not isinstance(descriptor, Mapping):
+                        continue
+                    count = descriptor.get("part_count")
+                    role = descriptor.get("role")
+                    if not isinstance(count, int) or role not in {"system", "developer"}:
+                        continue
+                    encoded_message = (
+                        thaw(descriptor.get("extensions"))
+                        if isinstance(descriptor.get("extensions"), Mapping)
+                        else {}
+                    )
+                    encoded_message.update(
+                        {
+                            "role": role,
+                            "content": _encode_content(request.system[consumed : consumed + count]),
+                        }
+                    )
+                    messages.append(encoded_message)
+                    consumed += count
+            if consumed != len(request.system):
+                messages = [{"role": "system", "content": _encode_content(request.system)}]
         messages.extend(
             _encode_message(message, index) for index, message in enumerate(request.messages)
         )
@@ -193,18 +250,29 @@ class OpenAIAdapter(ProtocolAdapter):
             message,
             {"role", "content", "tool_calls"},
         )
+        metadata = vendor_metadata(
+            self.protocol,
+            payload,
+            _RESPONSE_FIELDS,
+            response_id=payload.get("id"),
+            created=payload.get("created"),
+        )
+        add_vendor_scope(
+            metadata,
+            self.protocol,
+            "__choice__",
+            {
+                key: item
+                for key, item in choice.items()
+                if key not in {"index", "message", "finish_reason"}
+            },
+        )
         return CanonicalResponse(
             model=model if isinstance(model, str) else "",
             message=CanonicalMessage(role="assistant", content=parts, metadata=message_metadata),
             finish_reason=_decode_finish_reason(choice.get("finish_reason")),
             usage=usage,
-            metadata=vendor_metadata(
-                self.protocol,
-                payload,
-                _RESPONSE_FIELDS,
-                response_id=payload.get("id"),
-                created=payload.get("created"),
-            ),
+            metadata=metadata,
         )
 
     def encode_response(self, response: CanonicalResponse) -> dict[str, Any]:
@@ -212,23 +280,26 @@ class OpenAIAdapter(ProtocolAdapter):
             raise UnsupportedFeatureError("message.role", "must be assistant")
         payload = native_extensions(self.protocol, response.metadata)
         encoded_message = _encode_message(response.message, 0)
+        choice = vendor_scope(self.protocol, response.metadata, "__choice__")
+        choice.update(
+            {
+                "index": 0,
+                "message": encoded_message,
+                "finish_reason": _encode_finish_reason(response.finish_reason),
+            }
+        )
         payload.update(
             {
                 "id": response.metadata.get("response_id", "chatcmpl_gateway"),
                 "object": "chat.completion",
                 "model": response.model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": encoded_message,
-                        "finish_reason": _encode_finish_reason(response.finish_reason),
-                    }
-                ],
+                "choices": [choice],
             }
         )
         if "created" in response.metadata:
             payload["created"] = response.metadata["created"]
         if response.usage is not None:
+            validate_usage(response.usage)
             payload["usage"] = {
                 "prompt_tokens": response.usage.input_tokens,
                 "completion_tokens": response.usage.output_tokens,
@@ -236,7 +307,18 @@ class OpenAIAdapter(ProtocolAdapter):
             }
         return payload
 
+    def create_stream_decoder(self) -> StreamDecoder:
+        return _OpenAIStreamDecoder()
+
+    def create_stream_encoder(self) -> StreamEncoder:
+        return _OpenAIStreamEncoder(self)
+
     def decode_stream_event(self, event: bytes | Mapping[str, Any]) -> tuple[StreamEvent, ...]:
+        return self.create_stream_decoder().decode(event)
+
+    def _decode_isolated_stream_event(
+        self, event: bytes | Mapping[str, Any]
+    ) -> tuple[StreamEvent, ...]:
         _, payload = decode_sse(event)
         if payload == "[DONE]":
             return (StreamEvent(type="done"),)
@@ -262,11 +344,42 @@ class OpenAIAdapter(ProtocolAdapter):
         index = choice.get("index", 0)
         index = index if isinstance(index, int) else 0
         delta = require_object(choice.get("delta", {}), "stream_event.choices[0].delta")
+        event_metadata = vendor_metadata(
+            self.protocol,
+            body,
+            {"id", "object", "created", "model", "choices", "usage", "system_fingerprint"},
+        )
+        add_vendor_scope(
+            event_metadata,
+            self.protocol,
+            "__choice__",
+            {
+                key: item
+                for key, item in choice.items()
+                if key not in {"index", "delta", "finish_reason"}
+            },
+        )
+        add_vendor_scope(
+            event_metadata,
+            self.protocol,
+            "__delta__",
+            {
+                key: item
+                for key, item in delta.items()
+                if key not in {"role", "content", "tool_calls"}
+            },
+        )
         finish = choice.get("finish_reason")
         role = delta.get("role")
         if role == "assistant":
             events.append(
-                StreamEvent(type="message_start", index=index, role="assistant", model=model)
+                StreamEvent(
+                    type="message_start",
+                    index=index,
+                    role="assistant",
+                    model=model,
+                    metadata=event_metadata,
+                )
             )
         elif role is not None:
             raise UnsupportedFeatureError(
@@ -274,7 +387,15 @@ class OpenAIAdapter(ProtocolAdapter):
             )
         content = delta.get("content")
         if isinstance(content, str):
-            events.append(StreamEvent(type="content_delta", index=index, text=content, model=model))
+            events.append(
+                StreamEvent(
+                    type="content_delta",
+                    index=index,
+                    text=content,
+                    model=model,
+                    metadata=event_metadata,
+                )
+            )
         elif content is not None:
             raise UnsupportedFeatureError(
                 "stream_event.choices[0].delta.content", "must be a string or null"
@@ -297,6 +418,10 @@ class OpenAIAdapter(ProtocolAdapter):
                 StreamEvent(
                     type="tool_call_delta",
                     index=index,
+                    tool_index=nonnegative_int(
+                        tool_call.get("index", tool_index),
+                        f"stream_event.choices[0].delta.tool_calls[{tool_index}].index",
+                    ),
                     tool_call_id=(
                         tool_call.get("id") if isinstance(tool_call.get("id"), str) else None
                     ),
@@ -309,6 +434,7 @@ class OpenAIAdapter(ProtocolAdapter):
                         else None
                     ),
                     model=model,
+                    metadata=event_metadata,
                 )
             )
         if finish is not None:
@@ -318,10 +444,13 @@ class OpenAIAdapter(ProtocolAdapter):
                     index=index,
                     finish_reason=_decode_finish_reason(finish),
                     model=model,
+                    metadata=event_metadata,
                 )
             )
         if usage is not None:
-            events.append(StreamEvent(type="usage", usage=usage, model=model))
+            events.append(
+                StreamEvent(type="usage", usage=usage, model=model, metadata=event_metadata)
+            )
         if not events:
             raise UnsupportedFeatureError("stream_event", "contains no supported delta")
         return tuple(events)
@@ -329,24 +458,29 @@ class OpenAIAdapter(ProtocolAdapter):
     def encode_stream_event(self, event: StreamEvent) -> bytes:
         if event.type == "done":
             return encode_sse("[DONE]")
-        if event.type in {"content_end", "heartbeat"}:
+        if event.type in {"content_start", "content_end", "heartbeat"}:
             return NO_STREAM_OUTPUT
-        choice: dict[str, Any] = {"index": event.index, "delta": {}, "finish_reason": None}
+        choice = vendor_scope(self.protocol, event.metadata, "__choice__")
+        choice.update({"index": 0, "delta": {}, "finish_reason": None})
+        delta_extensions = vendor_scope(self.protocol, event.metadata, "__delta__")
         if event.type == "content_delta":
-            choice["delta"] = {"content": event.text or ""}
+            delta_extensions["content"] = event.text or ""
+            choice["delta"] = delta_extensions
         elif event.type == "tool_call_delta":
             function: dict[str, Any] = {}
             _set_optional(function, "name", event.tool_name)
             _set_optional(function, "arguments", event.arguments_delta)
             tool_call: dict[str, Any] = {
-                "index": event.index,
+                "index": event.tool_index if event.tool_index is not None else event.index,
                 "type": "function",
                 "function": function,
             }
             _set_optional(tool_call, "id", event.tool_call_id)
-            choice["delta"] = {"tool_calls": [tool_call]}
+            delta_extensions["tool_calls"] = [tool_call]
+            choice["delta"] = delta_extensions
         elif event.type == "message_start":
-            choice["delta"] = {"role": event.role or "assistant"}
+            delta_extensions["role"] = event.role or "assistant"
+            choice["delta"] = delta_extensions
         elif event.type == "message_end":
             if event.finish_reason is None:
                 raise UnsupportedFeatureError("stream_event.finish_reason", "is required")
@@ -354,16 +488,20 @@ class OpenAIAdapter(ProtocolAdapter):
         elif event.type == "usage":
             if event.usage is None:
                 raise UnsupportedFeatureError("stream_event.usage", "is required")
+            validate_usage(event.usage, "stream_event.usage")
             choice = {}
         elif event.type == "error":
             return encode_sse({"error": thaw(event.metadata)})
         else:
             raise UnsupportedFeatureError("stream_event.type", f"cannot encode {event.type!r}")
-        payload: dict[str, Any] = {
-            "object": "chat.completion.chunk",
-            "model": event.model or "",
-            "choices": [] if event.type == "usage" else [choice],
-        }
+        payload = native_extensions(self.protocol, event.metadata)
+        payload.update(
+            {
+                "object": "chat.completion.chunk",
+                "model": event.model or "",
+                "choices": [] if event.type == "usage" else [choice],
+            }
+        )
         if event.usage is not None:
             payload["usage"] = {
                 "prompt_tokens": event.usage.input_tokens,
@@ -371,6 +509,118 @@ class OpenAIAdapter(ProtocolAdapter):
                 "total_tokens": event.usage.input_tokens + event.usage.output_tokens,
             }
         return encode_sse(payload)
+
+
+class _OpenAIStreamDecoder(StreamDecoder):
+    def __init__(self) -> None:
+        self._adapter = OpenAIAdapter()
+        self._message_started = False
+        self._text_index: int | None = None
+        self._tool_blocks: dict[int, int] = {}
+        self._open_tools: set[int] = set()
+        self._next_block_index = 0
+
+    def _close_open_blocks(self, model: str | None = None) -> list[StreamEvent]:
+        events: list[StreamEvent] = []
+        if self._text_index is not None:
+            events.append(
+                StreamEvent(
+                    type="content_end",
+                    index=self._text_index,
+                    content_type="text",
+                    model=model,
+                )
+            )
+            self._text_index = None
+        for tool_index in sorted(self._open_tools):
+            events.append(
+                StreamEvent(
+                    type="content_end",
+                    index=self._tool_blocks[tool_index],
+                    tool_index=tool_index,
+                    content_type="tool_call",
+                    model=model,
+                )
+            )
+        self._open_tools.clear()
+        return events
+
+    def decode(self, event: bytes | Mapping[str, Any]) -> tuple[StreamEvent, ...]:
+        raw_events = self._adapter._decode_isolated_stream_event(event)
+        events: list[StreamEvent] = []
+        for raw in raw_events:
+            if raw.type == "message_start":
+                if not self._message_started:
+                    events.append(raw)
+                    self._message_started = True
+            elif raw.type == "content_delta":
+                if not self._message_started:
+                    events.append(
+                        StreamEvent(type="message_start", role="assistant", model=raw.model)
+                    )
+                    self._message_started = True
+                if self._text_index is None:
+                    self._text_index = self._next_block_index
+                    self._next_block_index += 1
+                    events.append(
+                        StreamEvent(
+                            type="content_start",
+                            index=self._text_index,
+                            content_type="text",
+                            model=raw.model,
+                        )
+                    )
+                events.append(replace(raw, index=self._text_index, content_type="text"))
+            elif raw.type == "tool_call_delta":
+                if self._text_index is not None:
+                    events.extend(self._close_open_blocks(raw.model))
+                tool_index = raw.tool_index if raw.tool_index is not None else 0
+                block_index = self._tool_blocks.get(tool_index)
+                if block_index is None:
+                    block_index = self._next_block_index
+                    self._next_block_index += 1
+                    self._tool_blocks[tool_index] = block_index
+                self._open_tools.add(tool_index)
+                events.append(
+                    replace(
+                        raw,
+                        index=block_index,
+                        tool_index=tool_index,
+                        content_type="tool_call",
+                    )
+                )
+            elif raw.type == "message_end":
+                events.extend(self._close_open_blocks(raw.model))
+                events.append(raw)
+            elif raw.type == "done":
+                events.extend(self._close_open_blocks(raw.model))
+                events.append(raw)
+            else:
+                events.append(raw)
+        return tuple(events)
+
+
+class _OpenAIStreamEncoder(StreamEncoder):
+    def __init__(self, adapter: OpenAIAdapter) -> None:
+        self._adapter = adapter
+        self._tool_indices: dict[tuple[int, str | None], int] = {}
+        self._next_tool_index = 0
+
+    def encode(self, event: StreamEvent) -> tuple[bytes, ...]:
+        if event.type in {"content_start", "content_end", "heartbeat"}:
+            return ()
+        if event.type == "tool_call_delta":
+            key = (event.index, event.tool_call_id)
+            tool_index = event.tool_index
+            if tool_index is None:
+                tool_index = self._tool_indices.get(key)
+                if tool_index is None:
+                    tool_index = self._next_tool_index
+                    self._next_tool_index += 1
+                    self._tool_indices[key] = tool_index
+            event = replace(event, tool_index=tool_index)
+        frame = self._adapter.encode_stream_event(event)
+        return (frame,) if frame else ()
 
 
 def _decode_content(value: Any, field: str) -> tuple[ContentPart, ...]:
@@ -542,7 +792,11 @@ def _decode_tools(value: Any) -> tuple[CanonicalTool, ...]:
 
 
 def _decode_tool_choice(value: Any) -> str | dict[str, Any] | None:
-    if value is None or isinstance(value, str):
+    if value is None:
+        return value
+    if isinstance(value, str):
+        if value not in {"none", "auto", "required"}:
+            raise UnsupportedFeatureError("tool_choice", f"unsupported choice {value!r}")
         return value
     choice = require_object(value, "tool_choice")
     function = require_object(choice.get("function"), "tool_choice.function")
@@ -554,6 +808,8 @@ def _decode_tool_choice(value: Any) -> str | dict[str, Any] | None:
 
 def _encode_tool_choice(value: str | Mapping[str, Any], metadata: Mapping[str, Any]) -> Any:
     if isinstance(value, str):
+        if value not in {"none", "auto", "required"}:
+            raise UnsupportedFeatureError("tool_choice", f"unsupported choice {value!r}")
         return value
     if "names" in value:
         raise UnsupportedFeatureError(
@@ -676,10 +932,8 @@ def _decode_usage(value: Any) -> CanonicalUsage | None:
     if value is None:
         return None
     usage = require_object(value, "usage")
-    input_tokens = usage.get("prompt_tokens", 0)
-    output_tokens = usage.get("completion_tokens", 0)
-    if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
-        raise UnsupportedFeatureError("usage", "token counts must be integers")
+    input_tokens = nonnegative_int(usage.get("prompt_tokens", 0), "usage.prompt_tokens")
+    output_tokens = nonnegative_int(usage.get("completion_tokens", 0), "usage.completion_tokens")
     return CanonicalUsage(input_tokens=input_tokens, output_tokens=output_tokens)
 
 

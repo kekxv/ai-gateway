@@ -40,10 +40,12 @@ def test_claude_golden_response_and_stream(load_fixture, load_bytes) -> None:
     assert response.finish_reason == "tool_call"
     assert response.usage is not None
     assert response.usage.input_tokens == 42
-    assert events == (events[0],)
-    assert events[0].type == "content_delta"
-    assert events[0].text == "Hello"
-    assert adapter.decode_stream_event(adapter.encode_stream_event(events[0])) == events
+    content = next(event for event in events if event.type == "content_delta")
+    assert content.text == "Hello"
+    encoded = adapter.create_stream_encoder().encode(content)
+    decoder = adapter.create_stream_decoder()
+    decoded = tuple(item for frame in encoded for item in decoder.decode(frame))
+    assert next(event for event in decoded if event.type == "content_delta").text == "Hello"
 
 
 def test_impossible_tool_result_conversion_is_422_and_names_field() -> None:
