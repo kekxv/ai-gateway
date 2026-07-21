@@ -10,7 +10,7 @@ import pytest_asyncio
 from cryptography.fernet import Fernet
 from fastapi import Depends
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from ai_gateway.auth.dependencies import admin_user, current_user
 from ai_gateway.core.config import Settings, get_settings
@@ -447,6 +447,121 @@ async def test_totp_confirm_atomically_switches_to_pending_secret(
     assert old_login.status_code == 401
     assert error_code(old_login.json()) == "invalid_totp"
     assert new_login.status_code == 200
+
+
+async def test_totp_setup_refreshes_stale_preloaded_active_state_under_lock(
+    test_engine: AsyncEngine,
+    auth_settings: Settings,
+) -> None:
+    async with AsyncSession(test_engine, expire_on_commit=False) as seed_session:
+        user = await create_user(seed_session)
+        await seed_session.commit()
+        user_id = user.id
+
+    old_secret = pyotp.random_base32()
+    old_ciphertext = encrypt_secret(old_secret, settings=auth_settings)
+    try:
+        async with AsyncSession(test_engine, expire_on_commit=False) as request_session:
+            stale_user = await request_session.get(User, user_id)
+            assert stale_user is not None
+            assert not stale_user.totp_enabled
+
+            async with AsyncSession(test_engine, expire_on_commit=False) as concurrent_session:
+                concurrent_user = await concurrent_session.get(User, user_id)
+                assert concurrent_user is not None
+                concurrent_user.totp_enabled = True
+                concurrent_user.totp_secret_encrypted = old_ciphertext
+                await concurrent_session.commit()
+
+            app = create_app()
+
+            async def override_session() -> AsyncIterator[AsyncSession]:
+                yield request_session
+
+            app.dependency_overrides[get_session] = override_session
+            app.dependency_overrides[get_settings] = lambda: auth_settings
+            access_token = issue_access_token(user_id=user_id, settings=auth_settings)
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as concurrent_client:
+                response = await concurrent_client.post(
+                    "/auth/totp/setup",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+
+            assert response.status_code == 401
+            assert error_code(response.json()) == "current_totp_required"
+    finally:
+        async with AsyncSession(test_engine) as cleanup_session:
+            cleanup_user = await cleanup_session.get(User, user_id)
+            if cleanup_user is not None:
+                await cleanup_session.delete(cleanup_user)
+                await cleanup_session.commit()
+
+
+async def test_totp_confirm_cannot_reactivate_stale_pending_secret_after_concurrent_confirm(
+    test_engine: AsyncEngine,
+    auth_settings: Settings,
+) -> None:
+    stale_pending_secret = pyotp.random_base32()
+    stale_pending_ciphertext = encrypt_secret(stale_pending_secret, settings=auth_settings)
+    async with AsyncSession(test_engine, expire_on_commit=False) as seed_session:
+        user = await create_user(seed_session)
+        user.pending_totp_secret_encrypted = stale_pending_ciphertext
+        await seed_session.commit()
+        user_id = user.id
+
+    active_secret = pyotp.random_base32()
+    active_ciphertext = encrypt_secret(active_secret, settings=auth_settings)
+    try:
+        async with AsyncSession(test_engine, expire_on_commit=False) as request_session:
+            stale_user = await request_session.get(User, user_id)
+            assert stale_user is not None
+            assert stale_user.pending_totp_secret_encrypted == stale_pending_ciphertext
+            assert not stale_user.totp_enabled
+
+            async with AsyncSession(test_engine, expire_on_commit=False) as concurrent_session:
+                concurrent_user = await concurrent_session.get(User, user_id)
+                assert concurrent_user is not None
+                concurrent_user.totp_secret_encrypted = active_ciphertext
+                concurrent_user.pending_totp_secret_encrypted = None
+                concurrent_user.totp_enabled = True
+                await concurrent_session.commit()
+
+            app = create_app()
+
+            async def override_session() -> AsyncIterator[AsyncSession]:
+                yield request_session
+
+            app.dependency_overrides[get_session] = override_session
+            app.dependency_overrides[get_settings] = lambda: auth_settings
+            access_token = issue_access_token(user_id=user_id, settings=auth_settings)
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as concurrent_client:
+                response = await concurrent_client.post(
+                    "/auth/totp/confirm",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    json={"code": pyotp.TOTP(stale_pending_secret).now()},
+                )
+
+            assert response.status_code == 400
+            assert error_code(response.json()) == "totp_not_configured"
+
+        async with AsyncSession(test_engine) as verification_session:
+            persisted_user = await verification_session.get(User, user_id)
+            assert persisted_user is not None
+            assert persisted_user.totp_enabled
+            assert persisted_user.pending_totp_secret_encrypted is None
+            assert persisted_user.totp_secret_encrypted == active_ciphertext
+    finally:
+        async with AsyncSession(test_engine) as cleanup_session:
+            cleanup_user = await cleanup_session.get(User, user_id)
+            if cleanup_user is not None:
+                await cleanup_session.delete(cleanup_user)
+                await cleanup_session.commit()
 
 
 @pytest.mark.parametrize(

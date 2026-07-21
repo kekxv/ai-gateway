@@ -70,7 +70,12 @@ async def setup_totp(
     settings: AppSettings,
     payload: TotpSetupRequest | None = None,
 ) -> TotpSetupResponse:
-    locked_user = await session.scalar(select(User).where(User.id == user.id).with_for_update())
+    locked_user = await session.scalar(
+        select(User)
+        .where(User.id == user.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if locked_user is None:
         raise_auth_error(
             status.HTTP_401_UNAUTHORIZED,
@@ -121,7 +126,12 @@ async def confirm_totp(
     session: Session,
     settings: AppSettings,
 ) -> TotpConfirmResponse:
-    locked_user = await session.scalar(select(User).where(User.id == user.id).with_for_update())
+    locked_user = await session.scalar(
+        select(User)
+        .where(User.id == user.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if locked_user is None:
         raise_auth_error(
             status.HTTP_401_UNAUTHORIZED,
