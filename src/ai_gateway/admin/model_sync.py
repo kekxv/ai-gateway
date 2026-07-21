@@ -9,6 +9,7 @@ from typing import Protocol as TypingProtocol
 import httpx
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -26,6 +27,7 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 AdminUser = Annotated[User, Depends(admin_user)]
 AppSettings = Annotated[Settings, Depends(get_settings)]
 Clock = Callable[[], datetime]
+_SYNC_WRITE_ATTEMPTS = 3
 
 
 class HttpClientProvider(TypingProtocol):
@@ -112,6 +114,32 @@ async def sync_provider_models(
             client=client,
             settings=settings,
         )
+
+    for attempt in range(_SYNC_WRITE_ATTEMPTS):
+        try:
+            return await _apply_discovered_models(
+                provider_id,
+                discovered_by_protocol=discovered_by_protocol,
+                session=session,
+                clock=clock,
+            )
+        except IntegrityError:
+            await session.rollback()
+            if attempt == _SYNC_WRITE_ATTEMPTS - 1:
+                raise
+    raise AssertionError("unreachable")
+
+
+async def _apply_discovered_models(
+    provider_id: int,
+    *,
+    discovered_by_protocol: dict[int, list[str]],
+    session: AsyncSession,
+    clock: Clock,
+) -> ModelSyncResult:
+    provider = await session.get(Provider, provider_id)
+    if provider is None:
+        raise SyncProviderNotFoundError(provider_id)
 
     all_names = {
         name for discovered_names in discovered_by_protocol.values() for name in discovered_names

@@ -27,7 +27,7 @@ from ai_gateway.db.models import (
     ProviderProtocol,
     User,
 )
-from ai_gateway.db.session import get_session
+from ai_gateway.db.session import get_session, get_session_factory_for_url
 from ai_gateway.main import create_app
 
 
@@ -238,6 +238,103 @@ async def test_failed_multi_protocol_discovery_does_not_apply_partial_catalog_ch
 
 
 @pytest.mark.asyncio
+async def test_concurrent_providers_share_one_new_canonical_model(
+    test_engine: AsyncEngine,
+    sync_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_gateway.admin import model_sync as model_sync_module
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    suffix = str(datetime.now(UTC).timestamp()).replace(".", "-")
+    canonical_name = f"shared-concurrent-model-{suffix}"
+    providers = [
+        _provider(sync_settings, name=f"concurrent-provider-a-{suffix}"),
+        _provider(sync_settings, name=f"concurrent-provider-b-{suffix}"),
+    ]
+    async with session_factory() as setup_session:
+        setup_session.add_all(providers)
+        await setup_session.commit()
+        provider_ids = [provider.id for provider in providers]
+
+    original_lookup = model_sync_module._models_by_discovered_name
+    lookup_count = 0
+    lookup_lock = asyncio.Lock()
+    both_looked_up = asyncio.Event()
+
+    async def synchronized_lookup(
+        session: AsyncSession,
+        names: set[str],
+    ) -> dict[str, Model]:
+        nonlocal lookup_count
+        result = await original_lookup(session, names)
+        async with lookup_lock:
+            lookup_count += 1
+            if lookup_count == 2:
+                both_looked_up.set()
+        await asyncio.wait_for(both_looked_up.wait(), timeout=2)
+        return result
+
+    monkeypatch.setattr(model_sync_module, "_models_by_discovered_name", synchronized_lookup)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _json_response(
+            request,
+            {"data": [{"id": canonical_name}], "has_more": False},
+        )
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            factory = FakeHttpClientFactory(client)
+            async with session_factory() as first_session, session_factory() as second_session:
+                results = await asyncio.gather(
+                    sync_provider_models(
+                        provider_ids[0],
+                        session=first_session,
+                        http_client_factory=factory,
+                        settings=sync_settings,
+                    ),
+                    sync_provider_models(
+                        provider_ids[1],
+                        session=second_session,
+                        http_client_factory=factory,
+                        settings=sync_settings,
+                    ),
+                )
+
+        async with session_factory() as verification_session:
+            models = list(
+                await verification_session.scalars(
+                    select(Model).where(Model.canonical_name == canonical_name)
+                )
+            )
+            routes = list(
+                await verification_session.scalars(
+                    select(ModelRoute).where(ModelRoute.provider_id.in_(provider_ids))
+                )
+            )
+
+        assert [result.provider_id for result in results] == provider_ids
+        assert len(models) == 1
+        assert {route.provider_id for route in routes} == set(provider_ids)
+        assert {route.model_id for route in routes} == {models[0].id}
+        assert all(route.source is RouteSource.DISCOVERED for route in routes)
+    finally:
+        async with session_factory() as cleanup_session:
+            await cleanup_session.execute(
+                delete(ModelRoute).where(ModelRoute.provider_id.in_(provider_ids))
+            )
+            await cleanup_session.execute(
+                delete(ProviderProtocol).where(ProviderProtocol.provider_id.in_(provider_ids))
+            )
+            await cleanup_session.execute(delete(Provider).where(Provider.id.in_(provider_ids)))
+            await cleanup_session.execute(
+                delete(Model).where(Model.canonical_name == canonical_name)
+            )
+            await cleanup_session.commit()
+
+
+@pytest.mark.asyncio
 async def test_sync_endpoint_uses_app_owned_http_factory(
     session: AsyncSession,
     sync_settings: Settings,
@@ -280,6 +377,120 @@ async def test_sync_endpoint_uses_app_owned_http_factory(
     assert response.json()["provider_id"] == provider.id
     assert response.json()["discovered_models"] == 1
     assert factory.urls == ["https://openai.example/v1/models"]
+
+
+@pytest.mark.asyncio
+async def test_custom_app_scopes_endpoint_and_scheduler_dependencies(
+    test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_gateway import main as main_module
+    from ai_gateway.db import session as db_session_module
+
+    database_url = test_engine.url.render_as_string(hide_password=False)
+    custom_settings = Settings(
+        _env_file=None,
+        environment="test",
+        database_url=database_url,
+        jwt_secret="custom-app-jwt-secret-at-least-32-bytes",
+        encryption_key=Fernet.generate_key().decode(),
+    )
+    session_factory = get_session_factory_for_url(database_url)
+    suffix = str(datetime.now(UTC).timestamp()).replace(".", "-")
+    async with session_factory() as setup_session:
+        provider = _provider(custom_settings, name=f"custom-app-provider-{suffix}")
+        admin = User(
+            email=f"custom-app-admin-{suffix}@example.com",
+            password_hash=hash_password("custom-app-password"),
+            role="admin",
+            account=Account(),
+        )
+        setup_session.add_all([provider, admin])
+        await setup_session.commit()
+        provider_id = provider.id
+        admin_id = admin.id
+
+    factory_instances: list[AppHttpClientFactory] = []
+    scheduler_instances: list[CapturingScheduler] = []
+
+    class AppHttpClientFactory:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+            self.urls: list[str] = []
+            self.client = httpx.AsyncClient(
+                transport=httpx.MockTransport(
+                    lambda request: _json_response(
+                        request,
+                        {"data": [{"id": f"custom-app-model-{suffix}"}], "has_more": False},
+                    )
+                )
+            )
+            factory_instances.append(self)
+
+        async def client_for(self, url: str | httpx.URL) -> httpx.AsyncClient:
+            self.urls.append(str(url))
+            return self.client
+
+        async def aclose(self) -> None:
+            await self.client.aclose()
+
+    class CapturingScheduler:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+            self.stopped = asyncio.Event()
+            scheduler_instances.append(self)
+
+        async def run(self) -> None:
+            await self.stopped.wait()
+
+        def stop(self) -> None:
+            self.stopped.set()
+
+    def forbidden_global_session_factory() -> object:
+        pytest.fail("custom app endpoint must not use the global session factory")
+
+    monkeypatch.setattr(main_module, "HttpClientFactory", AppHttpClientFactory)
+    monkeypatch.setattr(main_module, "ModelSyncScheduler", CapturingScheduler)
+    monkeypatch.setattr(
+        db_session_module,
+        "get_session_factory",
+        forbidden_global_session_factory,
+    )
+    app = create_app(custom_settings)
+    token = issue_access_token(user_id=admin_id, settings=custom_settings)
+
+    try:
+        async with app.router.lifespan_context(app):
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers={"authorization": f"Bearer {token}"},
+            ) as client:
+                response = await client.post(f"/admin/providers/{provider_id}/sync-models")
+
+            assert response.status_code == 200, response.text
+            assert response.json()["discovered_models"] == 1
+            assert app.state.settings is custom_settings
+            assert app.state.session_factory is session_factory
+            assert factory_instances[0].settings is custom_settings
+            assert scheduler_instances[0].kwargs["settings"] is custom_settings
+            assert scheduler_instances[0].kwargs["session_factory"] is session_factory
+            assert scheduler_instances[0].kwargs["http_client_factory"] is factory_instances[0]
+    finally:
+        async with session_factory() as cleanup_session:
+            await cleanup_session.execute(
+                delete(ModelRoute).where(ModelRoute.provider_id == provider_id)
+            )
+            await cleanup_session.execute(
+                delete(Model).where(Model.canonical_name == f"custom-app-model-{suffix}")
+            )
+            await cleanup_session.execute(
+                delete(ProviderProtocol).where(ProviderProtocol.provider_id == provider_id)
+            )
+            await cleanup_session.execute(delete(Provider).where(Provider.id == provider_id))
+            await cleanup_session.execute(delete(Account).where(Account.user_id == admin_id))
+            await cleanup_session.execute(delete(User).where(User.id == admin_id))
+            await cleanup_session.commit()
 
 
 @pytest.mark.asyncio
