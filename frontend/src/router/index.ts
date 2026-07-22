@@ -54,7 +54,7 @@ export const routes: RouteRecordRaw[] = [
       {
         path: 'request-logs',
         name: 'request-logs',
-        component: () => import('@/views/FutureView.vue'),
+        component: () => import('@/views/RequestLogsView.vue'),
         meta: { title: '请求日志' },
       },
       {
