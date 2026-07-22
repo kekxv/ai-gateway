@@ -70,6 +70,7 @@ class Router:
         *,
         requested_model: str | None = None,
         excluded_route_ids: frozenset[int] | set[int] = frozenset(),
+        require_websocket: bool = False,
     ) -> RouteCandidate:
         model_id, requested_name = _model_identity(model, requested_model)
         protocol = Protocol(required_protocol) if required_protocol is not None else None
@@ -82,6 +83,7 @@ class Router:
                             model_id=model_id,
                             principal=principal,
                             required_protocol=protocol,
+                            require_websocket=require_websocket,
                             now=now,
                             excluded_route_ids=excluded_route_ids,
                         )
@@ -164,6 +166,7 @@ async def select_route(
     requested_model: str | None = None,
     mutation_session_factory: MutationSessionFactory | None = None,
     excluded_route_ids: frozenset[int] | set[int] = frozenset(),
+    require_websocket: bool = False,
 ) -> RouteCandidate:
     return await Router(
         session,
@@ -176,6 +179,7 @@ async def select_route(
         required_protocol,
         requested_model=requested_model,
         excluded_route_ids=excluded_route_ids,
+        require_websocket=require_websocket,
     )
 
 
@@ -213,10 +217,17 @@ def _health_condition(route: Any, now: datetime) -> Any:
     )
 
 
-def _transport_condition(protocol: Any, required_protocol: Protocol | None) -> Any:
-    if required_protocol is None:
-        return true()
-    return protocol.protocol == required_protocol
+def _transport_condition(
+    protocol: Any,
+    required_protocol: Protocol | None,
+    require_websocket: bool,
+) -> Any:
+    conditions = []
+    if required_protocol is not None:
+        conditions.append(protocol.protocol == required_protocol)
+    if require_websocket:
+        conditions.append(protocol.websocket_url.is_not(None))
+    return and_(*conditions) if conditions else true()
 
 
 def _base_conditions(route: Any, model: Any, provider: Any, protocol: Any, model_id: int) -> Any:
@@ -235,6 +246,7 @@ def _route_exists(
     model_id: int,
     principal: ApiKeyPrincipal,
     required_protocol: Protocol | None,
+    require_websocket: bool,
     now: datetime,
     removed_filter: str,
 ) -> Any:
@@ -244,7 +256,7 @@ def _route_exists(
     protocol = aliased(ProviderProtocol)
     filters = {
         "scope": _scope_condition(route, principal),
-        "transport": _transport_condition(protocol, required_protocol),
+        "transport": _transport_condition(protocol, required_protocol, require_websocket),
         "health": _health_condition(route, now),
     }
     conditions = [
@@ -266,6 +278,7 @@ def _candidate_query(
     model_id: int,
     principal: ApiKeyPrincipal,
     required_protocol: Protocol | None,
+    require_websocket: bool,
     now: datetime,
     excluded_route_ids: frozenset[int] | set[int] = frozenset(),
 ) -> Select[tuple[Any, ...]]:
@@ -292,7 +305,7 @@ def _candidate_query(
         .where(
             _base_conditions(ModelRoute, Model, Provider, ProviderProtocol, model_id),
             _scope_condition(ModelRoute, principal),
-            _transport_condition(ProviderProtocol, required_protocol),
+            _transport_condition(ProviderProtocol, required_protocol, require_websocket),
             _health_condition(ModelRoute, now),
             ModelRoute.id.not_in(excluded_route_ids) if excluded_route_ids else true(),
         )
@@ -303,6 +316,7 @@ def _candidate_query(
         model_id=model_id,
         principal=principal,
         required_protocol=required_protocol,
+        require_websocket=require_websocket,
         now=now,
         removed_filter="scope",
     )
@@ -310,6 +324,7 @@ def _candidate_query(
         model_id=model_id,
         principal=principal,
         required_protocol=required_protocol,
+        require_websocket=require_websocket,
         now=now,
         removed_filter="transport",
     )
@@ -317,6 +332,7 @@ def _candidate_query(
         model_id=model_id,
         principal=principal,
         required_protocol=required_protocol,
+        require_websocket=require_websocket,
         now=now,
         removed_filter="health",
     )

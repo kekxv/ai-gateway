@@ -62,6 +62,18 @@ def build_upstream_request(
 ) -> httpx.Request:
     """Build one authenticated upstream request without forwarding client credentials."""
 
+    headers = build_upstream_headers(route, inbound_headers, settings=settings)
+    return httpx.Request(method, url or route.base_url, headers=headers, content=body)
+
+
+def build_upstream_headers(
+    route: UpstreamRoute,
+    inbound_headers: HeaderInput,
+    *,
+    settings: Settings | None = None,
+) -> httpx.Headers:
+    """Build provider-authenticated headers shared by HTTP and WebSocket transports."""
+
     active_settings = settings or get_settings()
     credentials = _decrypt_json_object(route.credential_encrypted, settings=active_settings)
     configured_headers = (
@@ -72,7 +84,7 @@ def build_upstream_request(
     headers = httpx.Headers(_sanitize_inbound_headers(inbound_headers, configured_headers))
     headers.update(_protocol_auth_headers(route.protocol, credentials))
     headers.update(configured_headers)
-    return httpx.Request(method, url or route.base_url, headers=headers, content=body)
+    return headers
 
 
 def _sanitize_inbound_headers(
