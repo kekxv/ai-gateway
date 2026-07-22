@@ -8,6 +8,23 @@ import AdminLayout from '@/layouts/AdminLayout.vue'
 import { createAppRouter } from '@/router'
 import { useAuthStore } from '@/stores/auth'
 
+vi.mock('@/api/dashboard', () => ({
+  getDashboardSummary: () => Promise.resolve({
+    users_total: 0,
+    active_api_keys: 0,
+    providers: { total: 0, enabled: 0 },
+    models: { total: 0, enabled: 0 },
+    routes: { total: 0, enabled: 0, unavailable: 0 },
+    requests_24h: 0,
+    failed_requests_24h: 0,
+    prompt_tokens_24h: 0,
+    completion_tokens_24h: 0,
+    cost_24h: '0',
+    average_latency_ms_24h: null,
+    daily_usage: [],
+  }),
+}))
+
 const adminUser = {
   id: 1,
   email: 'admin@example.com',
@@ -106,8 +123,11 @@ describe('管理控制台外壳', () => {
     providers.click()
     await flushPromises()
 
-    expect(router.currentRoute.value.name).toBe('providers')
+    await vi.waitFor(() => {
+      expect(router.currentRoute.value.name).toBe('providers')
+    })
     expect((layout.vm as unknown as { drawerOpen: boolean }).drawerOpen).toBe(false)
+    expect(wrapper.get('main#main-content').text()).toContain('功能正在建设中。')
   })
 
   it('提供跳转主内容、可聚焦主区域和路由页面内容', async () => {
@@ -117,7 +137,7 @@ describe('管理控制台外壳', () => {
     const main = wrapper.get('main#main-content')
     expect(main.attributes('tabindex')).toBe('-1')
     expect(main.text()).toContain('控制台概览')
-    expect(main.text()).toContain('功能正在建设中。')
+    expect(main.text()).toContain('查看网关资源状态与近期请求趋势。')
   })
 
   it('支持页头安全设置导航和退出登录', async () => {

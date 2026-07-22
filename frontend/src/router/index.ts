@@ -24,7 +24,7 @@ export const routes: RouteRecordRaw[] = [
       {
         path: '',
         name: 'dashboard',
-        component: () => import('@/views/FutureView.vue'),
+        component: () => import('@/views/DashboardView.vue'),
         meta: { title: '控制台概览' },
       },
       {
