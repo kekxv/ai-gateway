@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response, status
@@ -41,6 +42,7 @@ from ai_gateway.db.session import (
     get_session,
     get_session_factory_for_engine,
 )
+from ai_gateway.frontend import mount_console
 from ai_gateway.gateway.claude import router as claude_gateway_router
 from ai_gateway.gateway.gemini import router as gemini_gateway_router
 from ai_gateway.gateway.models import router as models_gateway_router
@@ -260,6 +262,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 content={"status": "unavailable"},
             )
         return JSONResponse(content={"status": "ok"})
+
+    mount_console(app, Path(__file__).resolve().parents[2] / "frontend" / "dist")
 
     return app
 
