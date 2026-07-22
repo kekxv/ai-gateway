@@ -39,6 +39,7 @@ const emit = defineEmits<{
 }>()
 
 const decimalPattern = /^\d{1,12}(\.\d{1,8})?$/
+const signedScientificZeroPattern = /^[+-]?0+(?:\.0+)?[eE][+-]?\d+$/
 const scientificDecimalPattern = /^\+?(\d+)(?:\.(\d+))?[eE]([+-]?)(\d+)$/
 const canonicalName = ref('')
 const displayName = ref('')
@@ -58,6 +59,7 @@ const drawerTitle = computed(() => (editing.value ? '编辑模型' : '新建模�
 
 function normalizeDecimalInput(value: string): string {
   const trimmed = value.trim()
+  if (signedScientificZeroPattern.test(trimmed)) return '0'
   const match = scientificDecimalPattern.exec(trimmed)
   if (match === null) return value
 

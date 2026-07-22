@@ -188,6 +188,40 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
+  it('将后端负号科学计数零规范为零，但仍拒绝负数价格', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ModelFormDrawer, {
+      props: {
+        modelValue: true,
+        model: {
+          ...scientificZeroFixture,
+          input_price_per_million: '-0E-8',
+          output_price_per_million: '-0.000E+12',
+        },
+        submitting: false,
+        onSubmit,
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="model-input-price"]').element).toHaveProperty('value', '0')
+    expect(wrapper.get('[data-test="model-output-price"]').element).toHaveProperty('value', '0')
+    await wrapper.get('[data-test="model-display-name"]').setValue('负号零价格模型')
+    await wrapper.get('[data-test="model-submit"]').trigger('click')
+    expect(onSubmit).toHaveBeenCalledWith({ display_name: '负号零价格模型' })
+
+    onSubmit.mockClear()
+    await wrapper.get('[data-test="model-input-price"]').setValue('-1E-8')
+    await wrapper.get('[data-test="model-submit"]').trigger('click')
+    await waitForFormErrors()
+    expect(wrapper.get('[data-validation="model-input-price"] .el-form-item__error').text()).toContain(
+      '最多 12 位整数和 8 位小数',
+    )
+    expect(onSubmit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('用纯字符串展开非负 Decimal 科学计数价格', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(ModelFormDrawer, {
