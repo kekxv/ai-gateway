@@ -48,7 +48,7 @@ export const routes: RouteRecordRaw[] = [
       {
         path: 'api-keys',
         name: 'api-keys',
-        component: () => import('@/views/FutureView.vue'),
+        component: () => import('@/views/ApiKeysView.vue'),
         meta: { title: '接口密钥' },
       },
       {
