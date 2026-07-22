@@ -122,11 +122,14 @@ describe('控制台概览', () => {
     const chart = wrapper.getComponent({ name: 'VChartStub' })
     expect(chart.props('autoresize')).toBe(true)
     expect(chart.attributes('aria-label')).toBeUndefined()
+    expect(chart.attributes('aria-hidden')).toBe('true')
     const option = chart.props('option') as {
-      aria: { description?: string }
+      aria: { decal?: { show?: boolean }; description?: string; enabled?: boolean }
       series: Array<{ data: unknown[]; type: string; yAxisIndex?: number }>
       yAxis: unknown[]
     }
+    expect(option.aria.enabled).toBe(false)
+    expect(option.aria.decal?.show).toBe(true)
     expect(option.aria.description).toBeUndefined()
     expect(option.yAxis).toHaveLength(2)
     expect(option.series.map((series) => series.type)).toEqual(['bar', 'bar', 'line'])
@@ -144,6 +147,7 @@ describe('控制台概览', () => {
     expect(tooltip([{ dataIndex: 1, value: 0.00000001 }])).toContain('¥0.00000001')
 
     const accessibleTable = wrapper.get('[data-test="daily-usage-table"]')
+    expect(accessibleTable.attributes('aria-hidden')).toBeUndefined()
     expect(accessibleTable.classes()).toContain('visually-hidden')
     expect(accessibleTable.get('caption').text()).toBe('近 7 天每日请求、失败与费用明细')
     const accessibleRows = accessibleTable.findAll('tbody tr')

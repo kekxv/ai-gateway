@@ -113,7 +113,7 @@ const chartOption = computed<DashboardChartOption>(() => {
   const points = summary.value?.daily_usage ?? []
   return {
     aria: {
-      enabled: true,
+      enabled: false,
       decal: { show: true },
     },
     color: ['#2563eb', '#dc2626', '#0f766e'],
@@ -329,6 +329,7 @@ onBeforeUnmount(() => {
         class="usage-chart"
         :option="chartOption"
         :autoresize="true"
+        aria-hidden="true"
       />
       <table class="visually-hidden" data-test="daily-usage-table">
         <caption>
