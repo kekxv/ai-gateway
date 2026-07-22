@@ -6,7 +6,9 @@ from typing import Any
 
 import pytest
 
+from ai_gateway.billing.pricing import calculate_cost
 from ai_gateway.billing.service import (
+    AdjustmentResult,
     BalanceReservation,
     InsufficientBalance,
     SettlementResult,
@@ -23,6 +25,8 @@ class FakeBilling:
     reservation_amount: Decimal = Decimal("1")
     fail_reservation_number: int | None = None
     fail_settlements_remaining: int = 0
+    recovery_updates: list[dict[str, Any]] = field(default_factory=list)
+    reconciliations: list[dict[str, Any]] = field(default_factory=list)
 
     async def reserve_balance(self, **kwargs: Any) -> BalanceReservation:
         self.reservations.append(kwargs)
@@ -44,15 +48,36 @@ class FakeBilling:
         if self.fail_settlements_remaining:
             self.fail_settlements_remaining -= 1
             raise RuntimeError("transient settlement failure")
+        actual_cost = (
+            calculate_cost(kwargs["model"], kwargs["usage"])
+            if kwargs.get("model") is not None
+            else Decimal(str(kwargs.get("cost", "0")))
+        )
+        charged = min(actual_cost, self.reservation_amount)
         return SettlementResult(
             1,
             f"request-{len(self.settlements)}",
             self.reservation_amount,
-            Decimal("0.1"),
-            Decimal("0.1"),
+            actual_cost,
+            charged,
             Decimal("9"),
-            Decimal("0.1"),
+            charged,
             False,
+            actual_cost - charged,
+        )
+
+    async def update_reservation_recovery(self, **kwargs: Any) -> bool:
+        self.recovery_updates.append(kwargs)
+        return True
+
+    async def reconcile_charge(self, **kwargs: Any) -> AdjustmentResult:
+        self.reconciliations.append(kwargs)
+        return AdjustmentResult(
+            len(self.reconciliations),
+            1,
+            kwargs["amount"],
+            Decimal("9"),
+            Decimal("0"),
         )
 
 
@@ -181,3 +206,95 @@ async def test_finalization_retries_transient_settlement_failure_and_releases_re
 
     assert len(billing.settlements) == 2
     assert cycle.has_open_reservation is False
+
+
+@pytest.mark.asyncio
+async def test_upstream_incurred_frame_is_settled_before_low_balance_closes() -> None:
+    billing = FakeBilling(
+        reservation_amount=Decimal("0.00000200"),
+        fail_reservation_number=2,
+    )
+    usage = WebSocketUsage(Protocol.OPENAI)
+    cycle = WebSocketBillingCycle(
+        billing=billing,  # type: ignore[arg-type]
+        user_id=7,
+        model=PricedModel(),  # type: ignore[arg-type]
+        billing_key="websocket:incurred",
+        usage=usage,
+        max_output_tokens=1,
+    )
+    await cycle.reserve_initial(estimated_input_tokens=0)
+    frame = '{"text":"this provider output is already incurred and must be charged"}'
+
+    with pytest.raises(InsufficientBalance):
+        await cycle.authorize_frame("upstream", frame)
+
+    incurred = usage.snapshot().usage
+    assert incurred.output_tokens > 0
+    assert billing.settlements[-1]["usage"] == incurred
+    assert billing.recovery_updates[-1]["recovery"].usage == incurred
+    assert cycle.actual_cost == calculate_cost(PricedModel(), incurred)
+    assert cycle.uncollected_cost > 0
+    assert cycle.has_open_reservation is False
+
+
+@pytest.mark.asyncio
+async def test_lower_native_usage_reconciles_estimated_checkpoint_once() -> None:
+    billing = FakeBilling(reservation_amount=Decimal("0.00000500"))
+    usage = WebSocketUsage(Protocol.OPENAI)
+    model = PricedModel()
+    cycle = WebSocketBillingCycle(
+        billing=billing,  # type: ignore[arg-type]
+        user_id=7,
+        model=model,  # type: ignore[arg-type]
+        billing_key="websocket:reconcile",
+        usage=usage,
+        max_output_tokens=1,
+    )
+    await cycle.reserve_initial(estimated_input_tokens=0)
+    usage.observe_upstream('{"text":"one two three four five six seven eight"}')
+    estimated = usage.snapshot().usage
+    assert calculate_cost(model, estimated) > billing.reservation_amount
+    assert await cycle.checkpoint(force_time=True) is True
+
+    native_frame = (
+        '{"type":"response.done","response":{"id":"r1","usage":'
+        '{"input_tokens":0,"output_tokens":1}}}'
+    )
+    await cycle.authorize_frame("upstream", native_frame)
+    await cycle.authorize_frame("upstream", native_frame)
+
+    native_cost = calculate_cost(model, CanonicalUsage(0, 1))
+    expected_refund = billing.reservation_amount - native_cost
+    assert [call["amount"] for call in billing.reconciliations] == [expected_refund]
+    assert cycle.actual_cost == native_cost
+    assert cycle.charged_cost == native_cost
+    assert cycle.reported_uncollected_cost == 0
+
+
+@pytest.mark.asyncio
+async def test_higher_later_native_usage_is_charged_as_authorized_delta() -> None:
+    billing = FakeBilling(reservation_amount=Decimal("0.00000500"))
+    usage = WebSocketUsage(Protocol.OPENAI)
+    cycle = WebSocketBillingCycle(
+        billing=billing,  # type: ignore[arg-type]
+        user_id=7,
+        model=PricedModel(),  # type: ignore[arg-type]
+        billing_key="websocket:native-increase",
+        usage=usage,
+        max_output_tokens=1,
+    )
+    await cycle.reserve_initial(estimated_input_tokens=0)
+    await cycle.authorize_frame(
+        "upstream",
+        '{"response":{"id":"r1","usage":{"input_tokens":0,"output_tokens":1}}}',
+    )
+    assert await cycle.checkpoint(force_time=True) is True
+
+    await cycle.authorize_frame(
+        "upstream",
+        '{"response":{"id":"r2","usage":{"input_tokens":0,"output_tokens":10}}}',
+    )
+
+    assert billing.settlements[-1]["usage"] == CanonicalUsage(0, 10)
+    assert len(billing.reservations) == 3

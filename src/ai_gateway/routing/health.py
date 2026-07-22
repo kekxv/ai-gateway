@@ -19,6 +19,7 @@ from ai_gateway.routing.types import RouteFailure
 
 Clock = Callable[[], datetime]
 PENALIZING_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+PENALIZING_WEBSOCKET_CLOSE_CODES = frozenset({1002, 1006, 1011, 1012, 1013, 1014, 1015})
 
 
 def _utcnow() -> datetime:
@@ -65,7 +66,13 @@ def is_health_failure(failure: object) -> bool:
         return status_code in PENALIZING_HTTP_STATUSES
     exception = _exception(failure)
     if isinstance(failure, RouteFailure) and failure.error_code is not None:
-        if failure.error_code.startswith(("websocket_close_", "websocket_connect")):
+        if failure.error_code.startswith("websocket_close_"):
+            try:
+                close_code = int(failure.error_code.removeprefix("websocket_close_"))
+            except ValueError:
+                return False
+            return close_code in PENALIZING_WEBSOCKET_CLOSE_CODES
+        if failure.error_code.startswith("websocket_connect"):
             return True
         if failure.error_code == "websocket_network_error":
             return True

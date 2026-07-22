@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -18,11 +19,13 @@ from ai_gateway.billing.service import (
     BillingService,
     IdempotencyConflict,
     InsufficientBalance,
+    ReservationRecovery,
     adjust_balance,
     reserve_balance,
     settle_request,
 )
 from ai_gateway.core.config import Settings
+from ai_gateway.core.enums import LedgerKind, UsageSource
 from ai_gateway.core.security import hash_password, issue_access_token
 from ai_gateway.db.models import Account, LedgerEntry, Model, Provider, User
 from ai_gateway.main import create_app
@@ -565,3 +568,105 @@ async def test_app_scoped_billing_service_and_whitespace_validation(
                 if user is not None:
                     await cleanup.delete(user)
             await cleanup.commit()
+
+
+async def test_expired_websocket_reservation_recovery_is_exact_once(
+    test_engine: AsyncEngine,
+    billing_service: BillingService,
+    committed_identity: BillingIdentity,
+    priced_model: Model,
+) -> None:
+    recovery = ReservationRecovery(
+        settlement_key=f"recover-settle-{uuid4().hex}",
+        usage=CanonicalUsage(2, 1),
+        usage_source=UsageSource.ESTIMATED,
+        expires_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=1),
+    )
+    reservation = await billing_service.reserve_balance(
+        user_id=committed_identity.user_id,
+        model=priced_model,
+        estimated_input_tokens=0,
+        max_output_tokens=2,
+        idempotency_key=f"recover-reserve-{uuid4().hex}",
+        recovery=recovery,
+    )
+
+    restarted_billing = BillingService(
+        async_sessionmaker(test_engine, expire_on_commit=False),
+        default_max_output_tokens=2,
+    )
+    assert await restarted_billing.recover_orphaned_reservations() == 1
+    assert await restarted_billing.recover_orphaned_reservations() == 0
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as check:
+        entries = list(
+            await check.scalars(
+                select(LedgerEntry)
+                .where(LedgerEntry.request_id == reservation.request_id)
+                .order_by(LedgerEntry.id)
+            )
+        )
+        account = await check.get(Account, committed_identity.account_id)
+    assert account is not None
+    assert [entry.kind for entry in entries] == [
+        LedgerKind.RESERVATION,
+        LedgerKind.RESERVATION_RELEASE,
+        LedgerKind.USAGE,
+    ]
+    assert entries[-1].metadata_json["input_tokens"] == 2
+    assert entries[-1].metadata_json["output_tokens"] == 1
+    assert account.balance == Decimal("0.70000000")
+    assert account.total_spent == Decimal("0.30000000")
+
+
+async def test_internal_usage_reconciliation_refunds_exactly_once(
+    test_engine: AsyncEngine,
+    billing_service: BillingService,
+    committed_identity: BillingIdentity,
+    priced_model: Model,
+) -> None:
+    reservation = await billing_service.reserve_balance(
+        user_id=committed_identity.user_id,
+        model=priced_model,
+        estimated_input_tokens=0,
+        max_output_tokens=4,
+        idempotency_key=f"reconcile-reserve-{uuid4().hex}",
+    )
+    await billing_service.settle_request(
+        reservation_id=reservation.ledger_entry_id,
+        idempotency_key=f"reconcile-settle-{uuid4().hex}",
+        model=priced_model,
+        usage=CanonicalUsage(2, 2),
+        usage_source=UsageSource.ESTIMATED,
+    )
+    key = f"reconcile-refund-{uuid4().hex}"
+
+    first = await billing_service.reconcile_charge(
+        user_id=committed_identity.user_id,
+        request_id=reservation.request_id,
+        amount=Decimal("0.10000000"),
+        idempotency_key=key,
+    )
+    second = await billing_service.reconcile_charge(
+        user_id=committed_identity.user_id,
+        request_id=reservation.request_id,
+        amount=Decimal("0.10000000"),
+        idempotency_key=key,
+    )
+
+    assert second.ledger_entry_id == first.ledger_entry_id
+    async with AsyncSession(test_engine, expire_on_commit=False) as check:
+        account = await check.get(Account, committed_identity.account_id)
+        adjustments = list(
+            await check.scalars(
+                select(LedgerEntry).where(
+                    LedgerEntry.request_id == reservation.request_id,
+                    LedgerEntry.kind == LedgerKind.ADJUSTMENT,
+                )
+            )
+        )
+    assert account is not None
+    assert account.balance == Decimal("0.70000000")
+    assert account.total_spent == Decimal("0.30000000")
+    assert len(adjustments) == 1
+    assert adjustments[0].metadata_json["internal_reconciliation"] is True

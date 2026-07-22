@@ -16,6 +16,7 @@ from ai_gateway.admin.users import router as users_router
 from ai_gateway.audit.codec import DEFAULT_AUDIT_BODY_LIMIT_BYTES
 from ai_gateway.audit.service import AuditService, use_audit_service
 from ai_gateway.auth.router import router as auth_router
+from ai_gateway.billing.recovery import BillingRecoveryScheduler
 from ai_gateway.billing.service import BillingService
 from ai_gateway.catalog.scheduler import ModelSyncScheduler
 from ai_gateway.core.config import Settings, get_settings
@@ -83,21 +84,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session_factory,
             body_limit_bytes=_audit_body_limit(active_settings),
         )
-        app.state.billing_service = BillingService(
+        billing_service = BillingService(
             session_factory,
             default_max_output_tokens=_billing_default_max_output_tokens(active_settings),
         )
+        recovery_scheduler = BillingRecoveryScheduler(
+            billing_service,
+            interval_seconds=getattr(active_settings, "billing_recovery_interval_seconds", 60),
+        )
+        app.state.billing_service = billing_service
         app.state.http_client_factory = http_client_factory
         app.state.model_sync_scheduler = scheduler
+        app.state.billing_recovery_scheduler = recovery_scheduler
         scheduler_task = asyncio.create_task(
             scheduler.run(),
             name="provider-model-sync",
+        )
+        recovery_task = asyncio.create_task(
+            recovery_scheduler.run(),
+            name="billing-reservation-recovery",
         )
         try:
             yield
         finally:
             scheduler.stop()
+            recovery_scheduler.stop()
             await scheduler_task
+            await recovery_task
             await http_client_factory.aclose()
 
     app = FastAPI(title="Lean AI Gateway", version="0.1.0", lifespan=lifespan)

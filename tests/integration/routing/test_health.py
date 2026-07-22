@@ -20,7 +20,7 @@ from ai_gateway.core.enums import ApiKeyScope, Protocol, RouteRuntimeState
 from ai_gateway.db.models import Model, ModelRoute, Provider, ProviderProtocol
 from ai_gateway.routing.health import RouteHealth, health_failure_code, is_health_failure
 from ai_gateway.routing.service import Router
-from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate
+from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFailure
 
 
 def utcnow() -> datetime:
@@ -132,6 +132,38 @@ def test_network_failures_penalize_route(failure: BaseException) -> None:
 )
 def test_non_connection_failures_do_not_penalize_route(failure: BaseException) -> None:
     assert is_health_failure(failure) is False
+
+
+@pytest.mark.parametrize("close_code", [4000, 4001, 4100, 4400, 4401, 4402, 4999])
+def test_websocket_application_closes_do_not_penalize_route(close_code: int) -> None:
+    assert is_health_failure(RouteFailure(error_code=f"websocket_close_{close_code}")) is False
+
+
+@pytest.mark.parametrize("close_code", [1002, 1006, 1011, 1012, 1013, 1014, 1015])
+def test_websocket_protocol_network_and_service_closes_penalize_route(close_code: int) -> None:
+    assert is_health_failure(RouteFailure(error_code=f"websocket_close_{close_code}")) is True
+
+
+async def test_half_open_application_websocket_close_leaves_probe_state_unchanged(
+    test_engine: AsyncEngine,
+    committed_route: tuple[ResolvedModel, int],
+) -> None:
+    _, route_id = committed_route
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        route = await _load_route(session, route_id)
+        route.runtime_state = RouteRuntimeState.HALF_OPEN
+        route.consecutive_failures = 3
+        await session.commit()
+
+        changed = await RouteHealth(session).record_failure(
+            route_id,
+            RouteFailure(error_code="websocket_close_4400"),
+        )
+        route = await _load_route(session, route_id)
+
+    assert changed is False
+    assert route.runtime_state is RouteRuntimeState.HALF_OPEN
+    assert route.consecutive_failures == 3
 
 
 async def _load_route(session: AsyncSession, route_id: int) -> ModelRoute:

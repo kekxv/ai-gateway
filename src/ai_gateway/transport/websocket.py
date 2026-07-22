@@ -57,6 +57,7 @@ _CREDENTIAL_SUBPROTOCOL_MARKERS = (
     "secret",
     "token",
 )
+_PENALIZING_CLOSE_CODES = frozenset({1002, 1006, 1011, 1012, 1013, 1014, 1015})
 
 
 class ClientWebSocket(TypingProtocol):
@@ -174,13 +175,12 @@ class _TerminalCoordinator:
         if terminal.kind is _TerminalKind.UPSTREAM_FAILURE:
             health_outcome = RelayHealthOutcome.FAILURE
         elif terminal.kind is _TerminalKind.UPSTREAM_CLOSE:
-            health_outcome = (
-                RelayHealthOutcome.FAILURE
-                if _is_abnormal_close(terminal.code)
-                else (
-                    RelayHealthOutcome.SUCCESS if provider_observed else RelayHealthOutcome.NEUTRAL
-                )
-            )
+            if _is_penalizing_close(terminal.code):
+                health_outcome = RelayHealthOutcome.FAILURE
+            elif terminal.code in {1000, 1001} and provider_observed:
+                health_outcome = RelayHealthOutcome.SUCCESS
+            else:
+                health_outcome = RelayHealthOutcome.NEUTRAL
         else:
             health_outcome = RelayHealthOutcome.NEUTRAL
         client_disconnected = terminal.kind in {
@@ -276,6 +276,7 @@ async def relay_websocket(
     coordinator = _TerminalCoordinator()
     client_close = _CloseOnce()
     upstream_close = _CloseOnce()
+    setup_rewrite_pending = _query_has_model(query_string)
 
     async def observe(direction: str, frame: Frame) -> None:
         if observe_frame is not None:
@@ -312,18 +313,17 @@ async def relay_websocket(
             )
 
     async def client_to_upstream(task_group: anyio.abc.TaskGroup) -> None:
+        nonlocal setup_rewrite_pending
         if initial_request is not None:
             try:
                 await observe("client", initial_request)
-                outbound_initial = (
-                    initial_request
-                    if _query_has_model(query_string)
-                    else rewrite_initial_request(
-                        initial_request,
-                        route.protocol,
-                        route.upstream_model,
-                    )
+                outbound_initial = rewrite_initial_request(
+                    initial_request,
+                    route.protocol,
+                    route.upstream_model,
                 )
+                if _is_setup_frame(initial_request, route.protocol):
+                    setup_rewrite_pending = False
                 await upstream.send(outbound_initial)
             except anyio.get_cancelled_exc_class():
                 raise
@@ -356,7 +356,16 @@ async def relay_websocket(
 
             try:
                 await observe("client", frame)
-                await upstream.send(frame)
+                outbound = frame
+                if setup_rewrite_pending and _is_setup_frame(frame, route.protocol):
+                    if _has_setup_model(frame, route.protocol):
+                        outbound = rewrite_initial_request(
+                            frame,
+                            route.protocol,
+                            route.upstream_model,
+                        )
+                    setup_rewrite_pending = False
+                await upstream.send(outbound)
             except anyio.get_cancelled_exc_class():
                 raise
             except BaseException as exc:
@@ -567,7 +576,7 @@ def _connection_terminal(exc: ConnectionClosed, upstream: ClientConnection) -> _
             error_code=f"websocket_close_{code}",
             exception=exc,
         )
-        if _is_abnormal_close(code)
+        if _is_penalizing_close(code)
         else None
     )
     return _Terminal(
@@ -604,8 +613,8 @@ def _connection_close_detail(exc: ConnectionClosed, upstream: ClientConnection) 
     return code, reason
 
 
-def _is_abnormal_close(code: int) -> bool:
-    return code not in {1000, 1001}
+def _is_penalizing_close(code: int) -> bool:
+    return code in _PENALIZING_CLOSE_CODES
 
 
 def _wire_close_code(code: int) -> int:
@@ -614,6 +623,42 @@ def _wire_close_code(code: int) -> int:
 
 def _query_has_model(query_string: str) -> bool:
     return any(name == "model" for name, _ in parse_qsl(query_string, keep_blank_values=True))
+
+
+def _has_setup_model(frame: Frame, protocol: Protocol) -> bool:
+    try:
+        payload = orjson.loads(frame)
+    except (orjson.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if not isinstance(payload, Mapping):
+        return False
+    if protocol is Protocol.OPENAI:
+        session = payload.get("session")
+        return (isinstance(session, Mapping) and isinstance(session.get("model"), str)) or (
+            isinstance(payload.get("model"), str)
+        )
+    if protocol is Protocol.GEMINI:
+        setup = payload.get("setup")
+        return isinstance(setup, Mapping) and isinstance(setup.get("model"), str)
+    return False
+
+
+def _is_setup_frame(frame: Frame, protocol: Protocol) -> bool:
+    try:
+        payload = orjson.loads(frame)
+    except (orjson.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if not isinstance(payload, Mapping):
+        return False
+    if protocol is Protocol.OPENAI:
+        return (
+            isinstance(payload.get("session"), Mapping)
+            or isinstance(payload.get("model"), str)
+            or payload.get("type") in {"session.update", "session.create"}
+        )
+    if protocol is Protocol.GEMINI:
+        return isinstance(payload.get("setup"), Mapping)
+    return False
 
 
 def _is_credential_subprotocol(value: str) -> bool:

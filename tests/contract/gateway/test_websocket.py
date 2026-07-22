@@ -18,7 +18,12 @@ from websockets.frames import Close
 
 from ai_gateway.audit.service import RequestContext, RequestFailure, RequestResult
 from ai_gateway.auth.api_key import ApiKeyPrincipal
-from ai_gateway.billing.service import BalanceReservation, InsufficientBalance, SettlementResult
+from ai_gateway.billing.service import (
+    AdjustmentResult,
+    BalanceReservation,
+    InsufficientBalance,
+    SettlementResult,
+)
 from ai_gateway.catalog.schemas import ResolvedModel
 from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import ApiKeyScope, Protocol
@@ -65,10 +70,11 @@ class FakeUpstreamConnection:
         self.close_reason = close_reason
         self.close_delay = close_delay
         self.close_calls: list[tuple[int, str]] = []
+        self.sent: list[str | bytes] = []
         self.started = anyio.Event()
 
-    async def send(self, _: str | bytes) -> None:
-        return None
+    async def send(self, frame: str | bytes) -> None:
+        self.sent.append(frame)
 
     async def recv(self) -> str:
         self.started.set()
@@ -205,6 +211,12 @@ class FakeBilling:
             False,
         )
 
+    async def update_reservation_recovery(self, **_: Any) -> bool:
+        return True
+
+    async def reconcile_charge(self, **kwargs: Any) -> AdjustmentResult:
+        return AdjustmentResult(1, 1, kwargs["amount"], Decimal("9"), Decimal("0"))
+
 
 class FakeRouter:
     def __init__(self, route: RouteCandidate | None = None, *, unsupported: bool = False) -> None:
@@ -321,9 +333,9 @@ async def test_transparent_relay_rewrites_model_injects_auth_and_propagates_fram
     }
     assert client.sent == ["provider-text", b"provider-bytes"]
     assert client.close_calls == [(4100, "provider-finished")]
-    assert result.health_outcome is RelayHealthOutcome.FAILURE
+    assert result.health_outcome is RelayHealthOutcome.NEUTRAL
     assert result.provider_observed is True
-    assert result.route_failure is not None
+    assert result.route_failure is None
 
 
 @pytest.mark.asyncio
@@ -444,9 +456,85 @@ async def test_simultaneous_peer_close_uses_deterministic_provider_outcome_and_c
 
     assert result.close_code == 4100
     assert result.close_reason == "provider-race"
-    assert result.health_outcome is RelayHealthOutcome.FAILURE
+    assert result.health_outcome is RelayHealthOutcome.NEUTRAL
     assert client.close_calls == [(4100, "provider-race")]
     assert upstream.close_calls == [(4100, "provider-race")]
+
+
+@pytest.mark.asyncio
+async def test_query_model_rewrites_only_first_protocol_setup_frame() -> None:
+    settings = _settings()
+    client = FakeClientWebSocket(
+        [
+            {
+                "type": "websocket.receive",
+                "text": '{"type":"session.update","session":{"model":"first-alias"}}',
+            },
+            {
+                "type": "websocket.receive",
+                "text": '{"type":"session.update","session":{"model":"later-alias"}}',
+            },
+            {"type": "websocket.disconnect", "code": 1000},
+        ],
+        {},
+    )
+    upstream = FakeUpstreamConnection()
+
+    async def connector(*_: Any, **__: Any) -> FakeUpstreamConnection:
+        return upstream
+
+    await relay_websocket(
+        client,  # type: ignore[arg-type]
+        _route("ws://provider.example/realtime", settings),
+        None,
+        settings=settings,
+        query_string="model=friendly-alias",
+        connector=connector,
+    )
+
+    assert orjson.loads(upstream.sent[0]) == {
+        "type": "session.update",
+        "session": {"model": "native-realtime-model"},
+    }
+    assert orjson.loads(upstream.sent[1]) == {
+        "type": "session.update",
+        "session": {"model": "later-alias"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_query_model_rewrites_only_first_gemini_setup_frame() -> None:
+    settings = _settings()
+    client = FakeClientWebSocket(
+        [
+            {
+                "type": "websocket.receive",
+                "text": '{"setup":{"model":"models/first-alias"}}',
+            },
+            {
+                "type": "websocket.receive",
+                "text": '{"setup":{"model":"models/later-alias"}}',
+            },
+            {"type": "websocket.disconnect", "code": 1000},
+        ],
+        {},
+    )
+    upstream = FakeUpstreamConnection()
+
+    async def connector(*_: Any, **__: Any) -> FakeUpstreamConnection:
+        return upstream
+
+    await relay_websocket(
+        client,  # type: ignore[arg-type]
+        _route("ws://provider.example/live", settings, Protocol.GEMINI),
+        None,
+        settings=settings,
+        query_string="model=friendly-alias",
+        connector=connector,
+    )
+
+    assert orjson.loads(upstream.sent[0]) == {"setup": {"model": "native-realtime-model"}}
+    assert orjson.loads(upstream.sent[1]) == {"setup": {"model": "models/later-alias"}}
 
 
 @pytest.mark.asyncio
@@ -737,3 +825,45 @@ async def test_handshake_failure_penalizes_health_and_fails_final_audit(
     assert route_router.failures == [(1, failure)]
     assert audit.failed is not None
     assert audit.completed is None
+
+
+@pytest.mark.asyncio
+async def test_persistent_billing_cleanup_failure_uses_specific_audit_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_gateway.gateway.websocket as gateway_module
+
+    async def authenticated(*_: Any, **__: Any) -> ApiKeyPrincipal:
+        return ApiKeyPrincipal(1, 7, ApiKeyScope.ALL)
+
+    async def resolved(*_: Any, **__: Any) -> ResolvedModel:
+        return ResolvedModel(2, "friendly-alias", "canonical-model")
+
+    async def succeeded(*_: Any, **__: Any) -> RelayResult:
+        return RelayResult(
+            close_code=1000,
+            health_outcome=RelayHealthOutcome.SUCCESS,
+            provider_observed=True,
+        )
+
+    class FailingBilling(FakeBilling):
+        async def settle_request(self, **_: Any) -> SettlementResult:
+            raise RuntimeError("persistent settlement failure")
+
+    monkeypatch.setattr(gateway_module, "authenticate_api_key", authenticated)
+    monkeypatch.setattr(gateway_module.CatalogRepository, "resolve_model", resolved)
+    monkeypatch.setattr(gateway_module, "relay_websocket", succeeded)
+    audit = FakeAudit()
+    service = WebSocketGatewayService(
+        session=FakeSession(),  # type: ignore[arg-type]
+        settings=_settings(),
+        billing_service=FailingBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        router_factory=lambda _: FakeRouter(_route("ws://provider.example/realtime", _settings())),  # type: ignore[arg-type]
+    )
+
+    await service.handle(FakeGatewayWebSocket(), Protocol.OPENAI)  # type: ignore[arg-type]
+
+    assert audit.failed is not None
+    assert audit.failed.error_code == "billing_cleanup_failed"
+    assert audit.failed.metadata["billing_recovery_pending"] == "true"

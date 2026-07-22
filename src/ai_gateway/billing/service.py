@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from hashlib import sha256
 from typing import Any
@@ -86,6 +87,7 @@ class SettlementResult:
     balance: Decimal
     total_spent: Decimal
     exhausted: bool
+    uncollected_amount: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +97,21 @@ class AdjustmentResult:
     amount: Decimal
     balance: Decimal
     total_spent: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class ReservationRecovery:
+    settlement_key: str
+    usage: CanonicalUsage
+    usage_source: UsageSource
+    expires_at: datetime
+
+
+@dataclass(slots=True)
+class _RecoveredModel:
+    canonical_name: str
+    input_price_per_million: Decimal
+    output_price_per_million: Decimal
 
 
 class BillingService:
@@ -120,6 +137,7 @@ class BillingService:
         max_output_tokens: int | None,
         idempotency_key: str,
         request_id: UUID | str | None = None,
+        recovery: ReservationRecovery | None = None,
     ) -> BalanceReservation:
         if estimated_input_tokens < 0:
             raise ValueError("estimated_input_tokens must be nonnegative")
@@ -194,6 +212,17 @@ class BillingService:
 
                     account.balance = _money(account.balance - reserved_amount)
                     account.version += 1
+                    metadata = {
+                        "estimated_input_tokens": estimated_input_tokens,
+                        "max_output_tokens": selected_max_output,
+                        "model": _model_name(model),
+                        "input_price_per_million": str(model.input_price_per_million),
+                        "output_price_per_million": str(model.output_price_per_million),
+                        "reserved_amount": str(reserved_amount),
+                        "reservation_fingerprint": fingerprint,
+                    }
+                    if recovery is not None:
+                        metadata.update(_recovery_metadata(recovery))
                     entry = LedgerEntry(
                         account_id=account.id,
                         request_id=normalized_request_id,
@@ -201,15 +230,7 @@ class BillingService:
                         kind=LedgerKind.RESERVATION,
                         amount=-reserved_amount,
                         balance_after=account.balance,
-                        metadata_json={
-                            "estimated_input_tokens": estimated_input_tokens,
-                            "max_output_tokens": selected_max_output,
-                            "model": _model_name(model),
-                            "input_price_per_million": str(model.input_price_per_million),
-                            "output_price_per_million": str(model.output_price_per_million),
-                            "reserved_amount": str(reserved_amount),
-                            "reservation_fingerprint": fingerprint,
-                        },
+                        metadata_json=metadata,
                     )
                     session.add(entry)
                     await session.flush()
@@ -365,6 +386,7 @@ class BillingService:
                         balance=final_balance,
                         total_spent=total_spent,
                         exhausted=exhausted,
+                        uncollected_amount=uncollected,
                     )
         except IntegrityError as exc:
             raise IdempotencyConflict from exc
@@ -442,6 +464,164 @@ class BillingService:
         except IntegrityError as exc:
             raise IdempotencyConflict from exc
 
+    async def update_reservation_recovery(
+        self,
+        *,
+        reservation_id: int,
+        recovery: ReservationRecovery,
+    ) -> bool:
+        async with self._session_factory() as session:
+            async with session.begin():
+                reservation = await session.scalar(
+                    select(LedgerEntry)
+                    .where(
+                        LedgerEntry.id == reservation_id,
+                        LedgerEntry.kind == LedgerKind.RESERVATION,
+                    )
+                    .with_for_update()
+                )
+                if reservation is None:
+                    raise ReservationNotFound
+                if reservation.request_id is None:
+                    raise RuntimeError("reservation is missing its request ID")
+                release = await session.scalar(
+                    select(LedgerEntry.id).where(
+                        LedgerEntry.account_id == reservation.account_id,
+                        LedgerEntry.request_id == reservation.request_id,
+                        LedgerEntry.kind == LedgerKind.RESERVATION_RELEASE,
+                    )
+                )
+                if release is not None:
+                    return False
+                reservation.metadata_json = {
+                    **reservation.metadata_json,
+                    **_recovery_metadata(recovery),
+                }
+                await session.flush()
+                return True
+
+    async def recover_orphaned_reservations(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int = 100,
+    ) -> int:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        effective_now = (now or datetime.now(UTC)).replace(tzinfo=None)
+        async with self._session_factory() as session:
+            reservations = list(
+                await session.scalars(
+                    select(LedgerEntry)
+                    .where(LedgerEntry.kind == LedgerKind.RESERVATION)
+                    .order_by(LedgerEntry.id)
+                )
+            )
+            released_request_ids = set(
+                await session.scalars(
+                    select(LedgerEntry.request_id).where(
+                        LedgerEntry.kind == LedgerKind.RESERVATION_RELEASE
+                    )
+                )
+            )
+        recovered = 0
+        for reservation in reservations:
+            if reservation.request_id in released_request_ids:
+                continue
+            recovery = _reservation_recovery(reservation.metadata_json)
+            if recovery is None or recovery.expires_at > effective_now:
+                continue
+            model = _RecoveredModel(
+                canonical_name=str(reservation.metadata_json["model"]),
+                input_price_per_million=Decimal(
+                    str(reservation.metadata_json["input_price_per_million"])
+                ),
+                output_price_per_million=Decimal(
+                    str(reservation.metadata_json["output_price_per_million"])
+                ),
+            )
+            await self.settle_request(
+                reservation_id=reservation.id,
+                idempotency_key=recovery.settlement_key,
+                model=model,
+                usage=recovery.usage,
+                usage_source=recovery.usage_source,
+            )
+            recovered += 1
+            if recovered >= limit:
+                break
+        return recovered
+
+    async def reconcile_charge(
+        self,
+        *,
+        user_id: int,
+        request_id: str,
+        amount: Decimal,
+        idempotency_key: str,
+        reason: str = "provider_usage_reconciliation",
+    ) -> AdjustmentResult:
+        normalized_amount = _money(amount)
+        if normalized_amount <= 0 or amount != normalized_amount:
+            raise ValueError("reconciliation amount must be positive with at most eight decimals")
+        normalized_key = _normalize_idempotency_key(idempotency_key)
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    account = await _locked_account_for_user(session, user_id)
+                    existing = await session.scalar(
+                        select(LedgerEntry)
+                        .where(LedgerEntry.idempotency_key == normalized_key)
+                        .with_for_update()
+                    )
+                    if existing is not None:
+                        metadata = existing.metadata_json
+                        if (
+                            existing.account_id != account.id
+                            or existing.request_id != request_id
+                            or existing.kind is not LedgerKind.ADJUSTMENT
+                            or existing.amount != normalized_amount
+                            or metadata.get("reason") != reason
+                            or metadata.get("internal_reconciliation") is not True
+                        ):
+                            raise IdempotencyConflict
+                        return AdjustmentResult(
+                            existing.id,
+                            account.id,
+                            existing.amount,
+                            account.balance,
+                            account.total_spent,
+                        )
+                    if account.total_spent < normalized_amount:
+                        raise ValueError("reconciliation exceeds total spent")
+                    account.balance = _money(account.balance + normalized_amount)
+                    account.total_spent = _money(account.total_spent - normalized_amount)
+                    account.version += 1
+                    entry = LedgerEntry(
+                        account_id=account.id,
+                        request_id=request_id,
+                        idempotency_key=normalized_key,
+                        kind=LedgerKind.ADJUSTMENT,
+                        amount=normalized_amount,
+                        balance_after=account.balance,
+                        metadata_json={
+                            "reason": reason,
+                            "internal_reconciliation": True,
+                            "total_spent_after": str(account.total_spent),
+                        },
+                    )
+                    session.add(entry)
+                    await session.flush()
+                    return AdjustmentResult(
+                        entry.id,
+                        account.id,
+                        normalized_amount,
+                        account.balance,
+                        account.total_spent,
+                    )
+        except IntegrityError as exc:
+            raise IdempotencyConflict from exc
+
 
 def get_billing_service(request: Request) -> BillingService:
     service = getattr(request.app.state, "billing_service", None)
@@ -460,6 +640,7 @@ async def reserve_balance(
     idempotency_key: str,
     request_id: UUID | str | None = None,
     default_max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+    recovery: ReservationRecovery | None = None,
 ) -> BalanceReservation:
     return await BillingService(
         mutation_session_factory_for(session),
@@ -471,6 +652,7 @@ async def reserve_balance(
         max_output_tokens=max_output_tokens,
         idempotency_key=idempotency_key,
         request_id=request_id,
+        recovery=recovery,
     )
 
 
@@ -664,6 +846,47 @@ def _settlement_from_entries(
         balance=usage_entry.balance_after,
         total_spent=Decimal(str(metadata["total_spent_after"])),
         exhausted=bool(metadata["exhausted"]),
+        uncollected_amount=Decimal(str(metadata.get("uncollected_amount", "0"))),
+    )
+
+
+def _recovery_metadata(recovery: ReservationRecovery) -> dict[str, Any]:
+    expires_at = recovery.expires_at
+    if expires_at.tzinfo is not None:
+        expires_at = expires_at.astimezone(UTC).replace(tzinfo=None)
+    return {
+        "recovery_pending": True,
+        "recovery_settlement_key": _normalize_idempotency_key(
+            recovery.settlement_key,
+            suffix_length=max(len(":release"), len(":usage")),
+        ),
+        "recovery_input_tokens": recovery.usage.input_tokens,
+        "recovery_output_tokens": recovery.usage.output_tokens,
+        "recovery_usage_source": recovery.usage_source.value,
+        "recovery_expires_at": expires_at.isoformat(timespec="microseconds"),
+    }
+
+
+def _reservation_recovery(metadata: dict[str, Any]) -> ReservationRecovery | None:
+    if metadata.get("recovery_pending") is not True:
+        return None
+    try:
+        settlement_key = str(metadata["recovery_settlement_key"])
+        input_tokens = int(metadata["recovery_input_tokens"])
+        output_tokens = int(metadata["recovery_output_tokens"])
+        usage_source = UsageSource(str(metadata["recovery_usage_source"]))
+        expires_at = datetime.fromisoformat(str(metadata["recovery_expires_at"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if input_tokens < 0 or output_tokens < 0:
+        return None
+    if expires_at.tzinfo is not None:
+        expires_at = expires_at.astimezone(UTC).replace(tzinfo=None)
+    return ReservationRecovery(
+        settlement_key,
+        CanonicalUsage(input_tokens, output_tokens),
+        usage_source,
+        expires_at,
     )
 
 

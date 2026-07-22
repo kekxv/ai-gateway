@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     model_sync_interval_seconds: int = 3600
     audit_body_limit_bytes: int = 1_048_576
     billing_default_max_output_tokens: int = Field(default=4096, ge=1)
+    billing_recovery_interval_seconds: int = Field(default=60, ge=1)
+    billing_reservation_ttl_seconds: int = Field(default=300, ge=60)
 
 
 @lru_cache

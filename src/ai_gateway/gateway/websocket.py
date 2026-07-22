@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from time import monotonic
@@ -19,9 +20,11 @@ from ai_gateway.audit.service import AuditService, RequestContext, RequestFailur
 from ai_gateway.auth.api_key import ApiKeyPrincipal, authenticate_api_key, extract_api_key
 from ai_gateway.billing.pricing import PricedModel, calculate_cost
 from ai_gateway.billing.service import (
+    AdjustmentResult,
     BalanceReservation,
     BillingService,
     InsufficientBalance,
+    ReservationRecovery,
     SettlementResult,
 )
 from ai_gateway.billing.usage import UsageResult, estimate_text_tokens
@@ -59,6 +62,7 @@ class BillingBackend(TypingProtocol):
         max_output_tokens: int | None,
         idempotency_key: str,
         request_id: UUID | str | None = None,
+        recovery: ReservationRecovery | None = None,
     ) -> BalanceReservation: ...
 
     async def settle_request(
@@ -71,6 +75,23 @@ class BillingBackend(TypingProtocol):
         cost: Decimal | None = None,
         usage_source: UsageSource | None = None,
     ) -> SettlementResult: ...
+
+    async def update_reservation_recovery(
+        self,
+        *,
+        reservation_id: int,
+        recovery: ReservationRecovery,
+    ) -> bool: ...
+
+    async def reconcile_charge(
+        self,
+        *,
+        user_id: int,
+        request_id: str,
+        amount: Decimal,
+        idempotency_key: str,
+        reason: str = "provider_usage_reconciliation",
+    ) -> AdjustmentResult: ...
 
 
 class RouteSelector(TypingProtocol):
@@ -122,11 +143,13 @@ class WebSocketUsage:
         if direction == "client":
             self._estimated_input += estimated
             return
-        self._estimated_output += estimated
         native = _native_usage_event(self.protocol, frame)
-        if native is not None and self._apply_native(native):
-            self._native_estimated_input = self._estimated_input
-            self._native_estimated_output = self._estimated_output
+        if native is not None:
+            if self._apply_native(native):
+                self._native_estimated_input = self._estimated_input
+                self._native_estimated_output = self._estimated_output
+            return
+        self._estimated_output += estimated
 
     def preview(self, direction: str, frame: Frame) -> UsageResult:
         projected = self._copy()
@@ -210,6 +233,7 @@ class WebSocketBillingCycle:
         max_output_tokens: int,
         token_threshold: int = 100_000,
         interval_seconds: float = 60,
+        reservation_ttl_seconds: float = 300,
     ) -> None:
         self._billing = billing
         self._user_id = user_id
@@ -219,17 +243,30 @@ class WebSocketBillingCycle:
         self._max_output_tokens = max_output_tokens
         self._token_threshold = token_threshold
         self._interval_seconds = interval_seconds
+        self._reservation_ttl_seconds = reservation_ttl_seconds
         self._reservation: BalanceReservation | None = None
         self._settled_usage = CanonicalUsage(0, 0)
         self._sequence = 0
         self._last_checkpoint = monotonic()
         self._finalized = False
+        self._reconciliation_sequence = 0
+        self._last_settled_request_id: str | None = None
         self._lock = anyio.Lock()
         self.actual_cost = Decimal("0")
+        self.charged_cost = Decimal("0")
+        self.uncollected_cost = Decimal("0")
 
     @property
     def has_open_reservation(self) -> bool:
         return self._reservation is not None
+
+    @property
+    def incurred_cost(self) -> Decimal:
+        return calculate_cost(self._model, self._usage.snapshot().usage)
+
+    @property
+    def reported_uncollected_cost(self) -> Decimal:
+        return max(self.uncollected_cost, self.incurred_cost - self.charged_cost)
 
     async def reserve_initial(self, *, estimated_input_tokens: int) -> None:
         async with self._lock:
@@ -247,6 +284,7 @@ class WebSocketBillingCycle:
             if not force_time and _total_tokens(delta) < self._token_threshold:
                 if elapsed < self._interval_seconds:
                     return False
+            await self._update_recovery_locked(current)
             await self._checkpoint_locked(current)
             return True
 
@@ -254,6 +292,21 @@ class WebSocketBillingCycle:
         async with self._lock:
             if self._finalized or self._reservation is None:
                 raise RuntimeError("WebSocket billing authorization is not active")
+            if direction == "upstream":
+                self._usage.observe(direction, frame)
+                current = self._usage.snapshot()
+                await self._update_recovery_locked(current)
+                if await self._reconcile_locked(current):
+                    return
+                current_delta = _usage_delta(current.usage, self._settled_usage)
+                elapsed = monotonic() - self._last_checkpoint
+                if (
+                    calculate_cost(self._model, current_delta) > self._reservation.amount
+                    or elapsed >= self._interval_seconds
+                    or _total_tokens(current_delta) >= self._token_threshold
+                ):
+                    await self._checkpoint_locked(current)
+                return
             current = self._usage.snapshot()
             projected = self._usage.preview(direction, frame)
             current_delta = _usage_delta(current.usage, self._settled_usage)
@@ -280,6 +333,7 @@ class WebSocketBillingCycle:
                     available=self._reservation.amount,
                 )
             self._usage.observe(direction, frame)
+            await self._update_recovery_locked(self._usage.snapshot())
 
     async def finalize(self) -> None:
         for attempt in range(3):
@@ -288,6 +342,7 @@ class WebSocketBillingCycle:
                     if self._finalized:
                         return
                     if self._reservation is not None:
+                        await self._update_recovery_locked(self._usage.snapshot())
                         await self._checkpoint_locked(self._usage.snapshot(), final=True)
                     self._finalized = True
                 return
@@ -313,6 +368,7 @@ class WebSocketBillingCycle:
             ),
             idempotency_key=f"{self._billing_key}:reserve:{sequence}",
             request_id=uuid4(),
+            recovery=self._recovery(CanonicalUsage(0, 0), UsageSource.ESTIMATED, sequence),
         )
 
     async def _checkpoint_locked(
@@ -324,10 +380,21 @@ class WebSocketBillingCycle:
     ) -> None:
         if self._reservation is None:
             return
+        if await self._reconcile_locked(current):
+            if final:
+                current = self._usage.snapshot()
+            else:
+                return
         delta = _usage_delta(current.usage, self._settled_usage)
-        settlement = await self._settle(self._reservation, delta, current.usage_source)
+        settled_reservation = self._reservation
+        if settled_reservation is None:
+            return
+        settlement = await self._settle(settled_reservation, delta, current.usage_source)
         self._reservation = None
         self.actual_cost += settlement.actual_cost
+        self.charged_cost += settlement.charged_amount
+        self.uncollected_cost += settlement.uncollected_amount
+        self._last_settled_request_id = settled_reservation.request_id
         self._settled_usage = current.usage
         self._last_checkpoint = monotonic()
         if settlement.exhausted and not final:
@@ -338,6 +405,55 @@ class WebSocketBillingCycle:
                 required.input_tokens,
                 max_output_tokens=max(self._max_output_tokens, required.output_tokens),
             )
+
+    async def _reconcile_locked(self, current: UsageResult) -> bool:
+        settled_cost = calculate_cost(self._model, self._settled_usage)
+        current_cost = calculate_cost(self._model, current.usage)
+        if current_cost >= settled_cost:
+            return False
+        actual_reduction = settled_cost - current_cost
+        refund = max(Decimal("0"), self.charged_cost - current_cost)
+        request_id = self._last_settled_request_id
+        if request_id is None:
+            return False
+        if refund > 0:
+            sequence = self._reconciliation_sequence
+            await self._billing.reconcile_charge(
+                user_id=self._user_id,
+                request_id=request_id,
+                amount=refund,
+                idempotency_key=f"{self._billing_key}:reconcile:{sequence}",
+            )
+            self._reconciliation_sequence += 1
+        self.actual_cost = max(Decimal("0"), self.actual_cost - actual_reduction)
+        self.charged_cost = max(Decimal("0"), self.charged_cost - refund)
+        self.uncollected_cost = max(Decimal("0"), self.actual_cost - self.charged_cost)
+        self._settled_usage = current.usage
+        await self._update_recovery_locked(current)
+        return True
+
+    async def _update_recovery_locked(self, current: UsageResult) -> None:
+        if self._reservation is None:
+            return
+        delta = _usage_delta(current.usage, self._settled_usage)
+        await self._billing.update_reservation_recovery(
+            reservation_id=self._reservation.ledger_entry_id,
+            recovery=self._recovery(delta, current.usage_source, self._sequence - 1),
+        )
+
+    def _recovery(
+        self,
+        usage: CanonicalUsage,
+        usage_source: UsageSource,
+        sequence: int,
+    ) -> ReservationRecovery:
+        return ReservationRecovery(
+            settlement_key=f"{self._billing_key}:settle:{sequence}",
+            usage=usage,
+            usage_source=usage_source,
+            expires_at=datetime.now(UTC).replace(tzinfo=None)
+            + timedelta(seconds=self._reservation_ttl_seconds),
+        )
 
     async def _settle(
         self,
@@ -439,6 +555,11 @@ class WebSocketGatewayService:
                 billing_key=billing_key,
                 usage=usage,
                 max_output_tokens=self._billing.default_max_output_tokens,
+                reservation_ttl_seconds=getattr(
+                    self._settings,
+                    "billing_reservation_ttl_seconds",
+                    300,
+                ),
             )
             await billing_cycle.reserve_initial(
                 estimated_input_tokens=estimate_websocket_frame_tokens(initial_request)
@@ -535,7 +656,9 @@ class WebSocketGatewayService:
             with anyio.CancelScope(shield=True):
                 if audit_id is not None:
                     usage_result = usage.snapshot()
-                    cost = billing_cycle.actual_cost if billing_cycle is not None else Decimal("0")
+                    cost = (
+                        billing_cycle.incurred_cost if billing_cycle is not None else Decimal("0")
+                    )
                     if result is not None and (
                         result.client_disconnected
                         or result.exception is not None
@@ -554,6 +677,7 @@ class WebSocketGatewayService:
                                 usage_source=usage_result.usage_source,
                                 cost=cost,
                                 latency_ms=_elapsed_ms(started_at),
+                                metadata=_billing_audit_metadata(billing_cycle),
                             ),
                         )
                     else:
@@ -568,6 +692,7 @@ class WebSocketGatewayService:
                                 usage_source=usage_result.usage_source,
                                 cost=cost,
                                 latency_ms=_elapsed_ms(started_at),
+                                metadata=_billing_audit_metadata(billing_cycle),
                             ),
                         )
 
@@ -818,6 +943,8 @@ async def _safe_health(operation: Any) -> None:
 
 
 def _result_error_code(result: RelayResult) -> str:
+    if result.close_reason == "billing cleanup failed":
+        return "billing_cleanup_failed"
     if isinstance(result.exception, RelayAbort):
         try:
             payload = orjson.loads(result.close_reason)
@@ -826,6 +953,16 @@ def _result_error_code(result: RelayResult) -> str:
         if isinstance(payload, Mapping) and isinstance(payload.get("code"), str):
             return cast(str, payload["code"])
     return "client_disconnected" if result.client_disconnected else "upstream_error"
+
+
+def _billing_audit_metadata(cycle: WebSocketBillingCycle | None) -> dict[str, str]:
+    if cycle is None:
+        return {}
+    return {
+        "charged_cost": str(cycle.charged_cost),
+        "uncollected_cost": str(cycle.reported_uncollected_cost),
+        "billing_recovery_pending": str(cycle.has_open_reservation).lower(),
+    }
 
 
 def _elapsed_ms(started_at: float) -> int:

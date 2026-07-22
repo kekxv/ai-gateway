@@ -357,6 +357,7 @@ async def test_fastapi_lifespan_publishes_and_closes_the_factory_once(
 
     factories: list[StubHttpClientFactory] = []
     schedulers: list[StubModelSyncScheduler] = []
+    recovery_schedulers: list[StubBillingRecoveryScheduler] = []
 
     class StubHttpClientFactory:
         def __init__(self, settings: Settings) -> None:
@@ -385,18 +386,41 @@ async def test_fastapi_lifespan_publishes_and_closes_the_factory_once(
             self.stop_calls += 1
             self.stopped.set()
 
+    class StubBillingRecoveryScheduler:
+        def __init__(self, *_: object, **kwargs: object) -> None:
+            self.kwargs = kwargs
+            self.started = asyncio.Event()
+            self.stopped = asyncio.Event()
+            self.stop_calls = 0
+            self.completed = False
+            recovery_schedulers.append(self)
+
+        async def run(self) -> None:
+            self.started.set()
+            await self.stopped.wait()
+            self.completed = True
+
+        def stop(self) -> None:
+            self.stop_calls += 1
+            self.stopped.set()
+
     monkeypatch.setattr(main, "HttpClientFactory", StubHttpClientFactory)
     monkeypatch.setattr(main, "ModelSyncScheduler", StubModelSyncScheduler)
+    monkeypatch.setattr(main, "BillingRecoveryScheduler", StubBillingRecoveryScheduler)
     settings = proxy_settings()
     app = main.create_app(settings=settings)
 
     async with app.router.lifespan_context(app):
         await asyncio.wait_for(schedulers[0].started.wait(), timeout=1)
+        await asyncio.wait_for(recovery_schedulers[0].started.wait(), timeout=1)
         assert app.state.http_client_factory is factories[0]
         assert app.state.model_sync_scheduler is schedulers[0]
+        assert app.state.billing_recovery_scheduler is recovery_schedulers[0]
         assert factories[0].settings is settings
         assert factories[0].close_calls == 0
 
     assert factories[0].close_calls == 1
     assert schedulers[0].stop_calls == 1
     assert schedulers[0].completed is True
+    assert recovery_schedulers[0].stop_calls == 1
+    assert recovery_schedulers[0].completed is True
