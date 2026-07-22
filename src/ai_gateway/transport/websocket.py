@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 Frame = str | bytes
 FrameObserver = Callable[[str, Frame], Awaitable[None]]
+FrameCommitter = Callable[[str, Frame], Awaitable[None]]
 IntervalCallback = Callable[[], Awaitable[None]]
 Connector = Callable[..., Any]
 
@@ -83,6 +84,7 @@ class RelayHealthOutcome(StrEnum):
 class RelayResult:
     client_disconnected: bool = False
     upstream_failed: bool = False
+    internal_failed: bool = False
     close_code: int = 1000
     close_reason: str = ""
     exception: BaseException | None = None
@@ -196,6 +198,7 @@ class _TerminalCoordinator:
         return RelayResult(
             client_disconnected=client_disconnected,
             upstream_failed=health_outcome is RelayHealthOutcome.FAILURE,
+            internal_failed=terminal.kind is _TerminalKind.INTERNAL,
             close_code=terminal.code,
             close_reason=terminal.reason,
             exception=terminal.exception,
@@ -232,6 +235,7 @@ async def relay_websocket(
     settings: Settings | None = None,
     query_string: str = "",
     observe_frame: FrameObserver | None = None,
+    commit_frame: FrameCommitter | None = None,
     on_interval: IntervalCallback | None = None,
     interval_seconds: float = 60.0,
     subprotocols: Sequence[str] = (),
@@ -276,11 +280,16 @@ async def relay_websocket(
     coordinator = _TerminalCoordinator()
     client_close = _CloseOnce()
     upstream_close = _CloseOnce()
+    accounting_lock = anyio.Lock()
     setup_rewrite_pending = _query_has_model(query_string)
 
     async def observe(direction: str, frame: Frame) -> None:
         if observe_frame is not None:
             await observe_frame(direction, frame)
+
+    async def commit(direction: str, frame: Frame) -> None:
+        if commit_frame is not None:
+            await commit_frame(direction, frame)
 
     async def finish_exception(
         exc: BaseException,
@@ -312,23 +321,46 @@ async def relay_websocket(
                 task_group,
             )
 
-    async def client_to_upstream(task_group: anyio.abc.TaskGroup) -> None:
-        nonlocal setup_rewrite_pending
-        if initial_request is not None:
+    async def send_client_frame(
+        frame: Frame,
+        outbound: Frame,
+        task_group: anyio.abc.TaskGroup,
+    ) -> bool:
+        async with accounting_lock:
             try:
-                await observe("client", initial_request)
-                outbound_initial = rewrite_initial_request(
-                    initial_request,
-                    route.protocol,
-                    route.upstream_model,
-                )
-                if _is_setup_frame(initial_request, route.protocol):
-                    setup_rewrite_pending = False
-                await upstream.send(outbound_initial)
+                await observe("client", frame)
+            except anyio.get_cancelled_exc_class():
+                raise
+            except BaseException as exc:
+                await finish_exception(exc, task_group, upstream_operation=False)
+                return False
+            try:
+                await upstream.send(outbound)
             except anyio.get_cancelled_exc_class():
                 raise
             except BaseException as exc:
                 await finish_exception(exc, task_group, upstream_operation=True)
+                return False
+            try:
+                await commit("client", frame)
+            except anyio.get_cancelled_exc_class():
+                raise
+            except BaseException as exc:
+                await finish_exception(exc, task_group, upstream_operation=False)
+                return False
+        return True
+
+    async def client_to_upstream(task_group: anyio.abc.TaskGroup) -> None:
+        nonlocal setup_rewrite_pending
+        if initial_request is not None:
+            outbound_initial = rewrite_initial_request(
+                initial_request,
+                route.protocol,
+                route.upstream_model,
+            )
+            if _is_setup_frame(initial_request, route.protocol):
+                setup_rewrite_pending = False
+            if not await send_client_frame(initial_request, outbound_initial, task_group):
                 return
         while True:
             try:
@@ -354,22 +386,16 @@ async def relay_websocket(
                 await finish_exception(exc, task_group, upstream_operation=False)
                 return
 
-            try:
-                await observe("client", frame)
-                outbound = frame
-                if setup_rewrite_pending and _is_setup_frame(frame, route.protocol):
-                    if _has_setup_model(frame, route.protocol):
-                        outbound = rewrite_initial_request(
-                            frame,
-                            route.protocol,
-                            route.upstream_model,
-                        )
-                    setup_rewrite_pending = False
-                await upstream.send(outbound)
-            except anyio.get_cancelled_exc_class():
-                raise
-            except BaseException as exc:
-                await finish_exception(exc, task_group, upstream_operation=True)
+            outbound = frame
+            if setup_rewrite_pending and _is_setup_frame(frame, route.protocol):
+                if _has_setup_model(frame, route.protocol):
+                    outbound = rewrite_initial_request(
+                        frame,
+                        route.protocol,
+                        route.upstream_model,
+                    )
+                setup_rewrite_pending = False
+            if not await send_client_frame(frame, outbound, task_group):
                 return
 
     async def upstream_to_client(task_group: anyio.abc.TaskGroup) -> None:
@@ -386,16 +412,20 @@ async def relay_websocket(
                 return
             await coordinator.mark_provider_observed()
             try:
-                await observe("upstream", frame)
+                async with accounting_lock:
+                    await observe("upstream", frame)
+            except anyio.get_cancelled_exc_class():
+                raise
+            except BaseException as exc:
+                await finish_exception(exc, task_group, upstream_operation=False)
+                return
+            try:
                 if isinstance(frame, str):
                     await client_ws.send_text(frame)
                 else:
                     await client_ws.send_bytes(frame)
             except anyio.get_cancelled_exc_class():
                 raise
-            except RelayAbort as exc:
-                await finish_exception(exc, task_group, upstream_operation=False)
-                return
             except BaseException as exc:
                 await coordinator.finish(
                     _Terminal(_TerminalKind.CLIENT_DISCONNECT, 1001, "client disconnected", exc),

@@ -294,25 +294,14 @@ class WebSocketBillingCycle:
                 raise RuntimeError("WebSocket billing authorization is not active")
             if direction == "upstream":
                 self._usage.observe(direction, frame)
-                current = self._usage.snapshot()
-                await self._update_recovery_locked(current)
-                if await self._reconcile_locked(current):
-                    return
-                current_delta = _usage_delta(current.usage, self._settled_usage)
-                elapsed = monotonic() - self._last_checkpoint
-                if (
-                    calculate_cost(self._model, current_delta) > self._reservation.amount
-                    or elapsed >= self._interval_seconds
-                    or _total_tokens(current_delta) >= self._token_threshold
-                ):
-                    await self._checkpoint_locked(current)
+                await self._commit_incurred_locked()
                 return
             current = self._usage.snapshot()
             projected = self._usage.preview(direction, frame)
             current_delta = _usage_delta(current.usage, self._settled_usage)
             projected_delta = _usage_delta(projected.usage, self._settled_usage)
             frame_delta = _usage_delta(projected.usage, current.usage)
-            projected_cost = calculate_cost(self._model, projected_delta)
+            projected_cost = self._pending_cost(projected)
             elapsed = monotonic() - self._last_checkpoint
             checkpoint_due = (
                 projected_cost > self._reservation.amount
@@ -326,14 +315,37 @@ class WebSocketBillingCycle:
                 await self._checkpoint_locked(current, required_next=frame_delta)
             if self._reservation is None:
                 raise RuntimeError("WebSocket billing reservation disappeared")
-            next_delta = _usage_delta(projected.usage, self._settled_usage)
-            if calculate_cost(self._model, next_delta) > self._reservation.amount:
+            next_cost = self._pending_cost(projected)
+            if next_cost > self._reservation.amount:
                 raise InsufficientBalance(
-                    required=calculate_cost(self._model, next_delta),
+                    required=next_cost,
                     available=self._reservation.amount,
                 )
+
+    async def commit_frame(self, direction: str, frame: Frame) -> None:
+        if direction != "client":
+            return
+        async with self._lock:
+            if self._finalized or self._reservation is None:
+                raise RuntimeError("WebSocket billing commit is not active")
             self._usage.observe(direction, frame)
-            await self._update_recovery_locked(self._usage.snapshot())
+            await self._commit_incurred_locked()
+
+    async def _commit_incurred_locked(self) -> None:
+        current = self._usage.snapshot()
+        await self._update_recovery_locked(current)
+        if await self._reconcile_locked(current):
+            return
+        current_delta = _usage_delta(current.usage, self._settled_usage)
+        elapsed = monotonic() - self._last_checkpoint
+        if self._reservation is None:
+            raise RuntimeError("WebSocket billing reservation disappeared")
+        if (
+            self._pending_cost(current) > self._reservation.amount
+            or elapsed >= self._interval_seconds
+            or _total_tokens(current_delta) >= self._token_threshold
+        ):
+            await self._checkpoint_locked(current)
 
     async def finalize(self) -> None:
         for attempt in range(3):
@@ -385,15 +397,22 @@ class WebSocketBillingCycle:
                 current = self._usage.snapshot()
             else:
                 return
-        delta = _usage_delta(current.usage, self._settled_usage)
+        usage_delta = _usage_delta(current.usage, self._settled_usage)
+        target_cost = calculate_cost(self._model, current.usage)
+        monetary_delta = max(Decimal("0"), target_cost - self.charged_cost)
         settled_reservation = self._reservation
         if settled_reservation is None:
             return
-        settlement = await self._settle(settled_reservation, delta, current.usage_source)
+        settlement = await self._settle(
+            settled_reservation,
+            usage_delta,
+            current.usage_source,
+            monetary_delta,
+        )
         self._reservation = None
-        self.actual_cost += settlement.actual_cost
+        self.actual_cost = target_cost
         self.charged_cost += settlement.charged_amount
-        self.uncollected_cost += settlement.uncollected_amount
+        self.uncollected_cost = max(Decimal("0"), target_cost - self.charged_cost)
         self._last_settled_request_id = settled_reservation.request_id
         self._settled_usage = current.usage
         self._last_checkpoint = monotonic()
@@ -405,14 +424,13 @@ class WebSocketBillingCycle:
                 required.input_tokens,
                 max_output_tokens=max(self._max_output_tokens, required.output_tokens),
             )
+            await self._update_recovery_locked(current)
 
     async def _reconcile_locked(self, current: UsageResult) -> bool:
-        settled_cost = calculate_cost(self._model, self._settled_usage)
-        current_cost = calculate_cost(self._model, current.usage)
-        if current_cost >= settled_cost:
+        target_cost = calculate_cost(self._model, current.usage)
+        if target_cost >= self.charged_cost:
             return False
-        actual_reduction = settled_cost - current_cost
-        refund = max(Decimal("0"), self.charged_cost - current_cost)
+        refund = self.charged_cost - target_cost
         request_id = self._last_settled_request_id
         if request_id is None:
             return False
@@ -425,9 +443,9 @@ class WebSocketBillingCycle:
                 idempotency_key=f"{self._billing_key}:reconcile:{sequence}",
             )
             self._reconciliation_sequence += 1
-        self.actual_cost = max(Decimal("0"), self.actual_cost - actual_reduction)
-        self.charged_cost = max(Decimal("0"), self.charged_cost - refund)
-        self.uncollected_cost = max(Decimal("0"), self.actual_cost - self.charged_cost)
+        self.actual_cost = target_cost
+        self.charged_cost = target_cost
+        self.uncollected_cost = Decimal("0")
         self._settled_usage = current.usage
         await self._update_recovery_locked(current)
         return True
@@ -438,7 +456,12 @@ class WebSocketBillingCycle:
         delta = _usage_delta(current.usage, self._settled_usage)
         await self._billing.update_reservation_recovery(
             reservation_id=self._reservation.ledger_entry_id,
-            recovery=self._recovery(delta, current.usage_source, self._sequence - 1),
+            recovery=self._recovery(
+                delta,
+                current.usage_source,
+                self._sequence - 1,
+                cost=self._pending_cost(current),
+            ),
         )
 
     def _recovery(
@@ -446,6 +469,8 @@ class WebSocketBillingCycle:
         usage: CanonicalUsage,
         usage_source: UsageSource,
         sequence: int,
+        *,
+        cost: Decimal = Decimal("0"),
     ) -> ReservationRecovery:
         return ReservationRecovery(
             settlement_key=f"{self._billing_key}:settle:{sequence}",
@@ -453,19 +478,24 @@ class WebSocketBillingCycle:
             usage_source=usage_source,
             expires_at=datetime.now(UTC).replace(tzinfo=None)
             + timedelta(seconds=self._reservation_ttl_seconds),
+            cost=cost,
         )
+
+    def _pending_cost(self, current: UsageResult) -> Decimal:
+        return max(Decimal("0"), calculate_cost(self._model, current.usage) - self.charged_cost)
 
     async def _settle(
         self,
         reservation: BalanceReservation,
         usage: CanonicalUsage,
         usage_source: UsageSource,
+        cost: Decimal,
     ) -> SettlementResult:
         return await self._billing.settle_request(
             reservation_id=reservation.ledger_entry_id,
             idempotency_key=f"{self._billing_key}:settle:{self._sequence - 1}",
-            model=self._model,
             usage=usage,
+            cost=cost,
             usage_source=usage_source,
         )
 
@@ -571,6 +601,12 @@ class WebSocketGatewayService:
                 except InsufficientBalance:
                     raise RelayAbort(4402, _close_reason("insufficient_balance")) from None
 
+            async def commit(direction: str, frame: Frame) -> None:
+                try:
+                    await billing_cycle.commit_frame(direction, frame)
+                except InsufficientBalance:
+                    raise RelayAbort(4402, _close_reason("insufficient_balance")) from None
+
             async def interval() -> None:
                 try:
                     await billing_cycle.checkpoint(force_time=True)
@@ -584,6 +620,7 @@ class WebSocketGatewayService:
                 settings=self._settings,
                 query_string=websocket.url.query,
                 observe_frame=observe,
+                commit_frame=commit,
                 on_interval=interval,
                 subprotocols=upstream_subprotocols,
             )
@@ -952,6 +989,8 @@ def _result_error_code(result: RelayResult) -> str:
             return "websocket_closed"
         if isinstance(payload, Mapping) and isinstance(payload.get("code"), str):
             return cast(str, payload["code"])
+    if result.internal_failed:
+        return "internal_error"
     return "client_disconnected" if result.client_disconnected else "upstream_error"
 
 

@@ -178,6 +178,7 @@ async def test_authorization_checkpoints_before_frame_exceeds_reserved_cost() ->
     )
     await cycle.reserve_initial(estimated_input_tokens=0)
     await cycle.authorize_frame("client", '{"text":"a"}')
+    await cycle.commit_frame("client", '{"text":"a"}')
 
     with pytest.raises(InsufficientBalance):
         await cycle.authorize_frame("client", '{"text":"many tokens beyond the window"}')
@@ -186,6 +187,32 @@ async def test_authorization_checkpoints_before_frame_exceeds_reserved_cost() ->
     assert billing.settlements[0]["usage"] == CanonicalUsage(1, 0)
     assert usage.snapshot().usage == CanonicalUsage(1, 0)
     assert cycle.has_open_reservation is False
+
+
+@pytest.mark.asyncio
+async def test_client_authorization_does_not_commit_usage_or_recovery() -> None:
+    billing = FakeBilling()
+    usage = WebSocketUsage(Protocol.OPENAI)
+    cycle = WebSocketBillingCycle(
+        billing=billing,  # type: ignore[arg-type]
+        user_id=7,
+        model=PricedModel(),  # type: ignore[arg-type]
+        billing_key="websocket:client-commit",
+        usage=usage,
+        max_output_tokens=2,
+    )
+    frame = '{"text":"a"}'
+    await cycle.reserve_initial(estimated_input_tokens=0)
+
+    await cycle.authorize_frame("client", frame)
+
+    assert usage.snapshot().usage == CanonicalUsage(0, 0)
+    assert billing.recovery_updates == []
+
+    await cycle.commit_frame("client", frame)
+
+    assert usage.snapshot().usage == CanonicalUsage(1, 0)
+    assert billing.recovery_updates[-1]["recovery"].usage == CanonicalUsage(1, 0)
 
 
 @pytest.mark.asyncio
@@ -298,3 +325,72 @@ async def test_higher_later_native_usage_is_charged_as_authorized_delta() -> Non
 
     assert billing.settlements[-1]["usage"] == CanonicalUsage(0, 10)
     assert len(billing.reservations) == 3
+
+
+@pytest.mark.asyncio
+async def test_mixed_usage_dimensions_reconcile_by_cumulative_cost() -> None:
+    billing = FakeBilling()
+    usage = WebSocketUsage(Protocol.OPENAI)
+    model = PricedModel()
+    cycle = WebSocketBillingCycle(
+        billing=billing,  # type: ignore[arg-type]
+        user_id=7,
+        model=model,  # type: ignore[arg-type]
+        billing_key="websocket:mixed-money",
+        usage=usage,
+        max_output_tokens=1,
+    )
+    await cycle.reserve_initial(estimated_input_tokens=0)
+    for _ in range(10):
+        usage.observe_client('{"text":"a"}')
+        usage.observe_upstream('{"text":"a"}')
+    assert usage.snapshot().usage == CanonicalUsage(10, 10)
+    assert await cycle.checkpoint(force_time=True) is True
+
+    native = (
+        '{"type":"response.done","response":{"id":"mixed-1","usage":'
+        '{"input_tokens":5,"output_tokens":15}}}'
+    )
+    await cycle.authorize_frame("upstream", native)
+    assert await cycle.checkpoint(force_time=True) is True
+    await cycle.authorize_frame("upstream", native)
+    await cycle.finalize()
+
+    assert [call["cost"] for call in billing.settlements[:2]] == [
+        Decimal("0.00003000"),
+        Decimal("0.00000500"),
+    ]
+    assert sum(result["cost"] for result in billing.settlements) == Decimal("0.00003500")
+    assert billing.reconciliations == []
+    assert cycle.actual_cost == Decimal("0.00003500")
+    assert cycle.charged_cost == Decimal("0.00003500")
+
+
+@pytest.mark.asyncio
+async def test_mixed_usage_dimensions_refund_exact_monetary_difference_once() -> None:
+    billing = FakeBilling()
+    usage = WebSocketUsage(Protocol.OPENAI)
+    cycle = WebSocketBillingCycle(
+        billing=billing,  # type: ignore[arg-type]
+        user_id=7,
+        model=PricedModel(),  # type: ignore[arg-type]
+        billing_key="websocket:mixed-refund",
+        usage=usage,
+        max_output_tokens=1,
+    )
+    await cycle.reserve_initial(estimated_input_tokens=0)
+    for _ in range(10):
+        usage.observe_client('{"text":"a"}')
+        usage.observe_upstream('{"text":"a"}')
+    assert await cycle.checkpoint(force_time=True) is True
+
+    native = (
+        '{"type":"response.done","response":{"id":"mixed-lower","usage":'
+        '{"input_tokens":15,"output_tokens":5}}}'
+    )
+    await cycle.authorize_frame("upstream", native)
+    await cycle.authorize_frame("upstream", native)
+
+    assert [call["amount"] for call in billing.reconciliations] == [Decimal("0.00000500")]
+    assert cycle.actual_cost == Decimal("0.00002500")
+    assert cycle.charged_cost == Decimal("0.00002500")

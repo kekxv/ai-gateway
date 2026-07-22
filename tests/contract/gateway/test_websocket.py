@@ -64,20 +64,30 @@ class FakeUpstreamConnection:
         close_code: int = 4100,
         close_reason: str = "provider-race",
         close_delay: float = 0,
+        send_error: BaseException | None = None,
+        recv_frame: str | bytes | None = None,
     ) -> None:
         self.barrier = barrier
         self.close_code = close_code
         self.close_reason = close_reason
         self.close_delay = close_delay
+        self.send_error = send_error
+        self.recv_frame = recv_frame
         self.close_calls: list[tuple[int, str]] = []
         self.sent: list[str | bytes] = []
         self.started = anyio.Event()
 
     async def send(self, frame: str | bytes) -> None:
+        if self.send_error is not None:
+            raise self.send_error
         self.sent.append(frame)
 
-    async def recv(self) -> str:
+    async def recv(self) -> str | bytes:
         self.started.set()
+        if self.recv_frame is not None:
+            frame = self.recv_frame
+            self.recv_frame = None
+            return frame
         if self.barrier is not None:
             await self.barrier.wait()
             raise ConnectionClosedError(
@@ -538,6 +548,132 @@ async def test_query_model_rewrites_only_first_gemini_setup_frame() -> None:
 
 
 @pytest.mark.asyncio
+async def test_client_frame_is_committed_only_after_upstream_send_succeeds() -> None:
+    settings = _settings()
+    frame = '{"type":"input_audio_buffer.append","audio":"abc"}'
+    client = FakeClientWebSocket(
+        [{"type": "websocket.receive", "text": frame}],
+        {},
+    )
+    upstream = FakeUpstreamConnection(send_error=RuntimeError("send failed"))
+    authorized: list[tuple[str, str | bytes]] = []
+    committed: list[tuple[str, str | bytes]] = []
+
+    async def connector(*_: Any, **__: Any) -> FakeUpstreamConnection:
+        return upstream
+
+    async def authorize(direction: str, observed: str | bytes) -> None:
+        authorized.append((direction, observed))
+
+    async def commit(direction: str, observed: str | bytes) -> None:
+        committed.append((direction, observed))
+
+    result = await relay_websocket(
+        client,  # type: ignore[arg-type]
+        _route("ws://provider.example/realtime", settings),
+        None,
+        settings=settings,
+        connector=connector,
+        observe_frame=authorize,
+        commit_frame=commit,
+    )
+
+    assert authorized == [("client", frame)]
+    assert committed == []
+    assert result.close_code == 1011
+
+
+@pytest.mark.asyncio
+async def test_client_commit_precedes_concurrent_upstream_observation() -> None:
+    settings = _settings()
+    order: list[str] = []
+
+    class ConcurrentUpstream(FakeUpstreamConnection):
+        def __init__(self) -> None:
+            super().__init__()
+            self.send_started = anyio.Event()
+            self.frame_ready = anyio.Event()
+            self.received_once = False
+
+        async def send(self, frame: str | bytes) -> None:
+            order.append("send")
+            self.send_started.set()
+            await self.frame_ready.wait()
+            await anyio.sleep(0)
+            self.sent.append(frame)
+
+        async def recv(self) -> str:
+            if self.received_once:
+                raise ConnectionClosedError(Close(1000, "ok"), None)
+            self.received_once = True
+            await self.send_started.wait()
+            self.frame_ready.set()
+            return "provider-frame"
+
+    client = FakeClientWebSocket(
+        [{"type": "websocket.receive", "text": "client-frame"}],
+        {},
+    )
+    upstream = ConcurrentUpstream()
+
+    async def connector(*_: Any, **__: Any) -> ConcurrentUpstream:
+        return upstream
+
+    async def authorize(direction: str, _: str | bytes) -> None:
+        order.append(f"authorize:{direction}")
+
+    async def commit(direction: str, _: str | bytes) -> None:
+        order.append(f"commit:{direction}")
+
+    await relay_websocket(
+        client,  # type: ignore[arg-type]
+        _route("ws://provider.example/realtime", settings),
+        None,
+        settings=settings,
+        connector=connector,
+        observe_frame=authorize,
+        commit_frame=commit,
+    )
+
+    assert order == [
+        "authorize:client",
+        "send",
+        "commit:client",
+        "authorize:upstream",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_upstream_observer_failure_is_internal_not_client_disconnect() -> None:
+    settings = _settings()
+    client = FakeClientWebSocket([], {})
+    upstream = FakeUpstreamConnection(recv_frame="provider-frame")
+
+    async def connector(*_: Any, **__: Any) -> FakeUpstreamConnection:
+        return upstream
+
+    async def observe(direction: str, _: str | bytes) -> None:
+        if direction == "upstream":
+            raise RuntimeError("billing observer failed")
+
+    result = await relay_websocket(
+        client,  # type: ignore[arg-type]
+        _route("ws://provider.example/realtime", settings),
+        None,
+        settings=settings,
+        connector=connector,
+        observe_frame=observe,
+    )
+
+    assert result.close_code == 1011
+    assert result.client_disconnected is False
+    assert result.internal_failed is True
+    assert result.upstream_failed is False
+    assert isinstance(result.exception, RuntimeError)
+    assert client.sent == []
+
+
+@pytest.mark.asyncio
 async def test_cancellation_shields_both_slow_peer_closes() -> None:
     settings = _settings()
     client = RacingClientWebSocket(close_delay=0.01)
@@ -734,6 +870,47 @@ async def test_client_disconnect_is_health_neutral_and_final_audit_is_disconnect
     assert audit.failed is not None
     assert audit.failed.client_disconnected is True
     assert audit.completed is None
+
+
+@pytest.mark.asyncio
+async def test_internal_relay_failure_audits_internal_error_not_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_gateway.gateway.websocket as gateway_module
+
+    async def authenticated(*_: Any, **__: Any) -> ApiKeyPrincipal:
+        return ApiKeyPrincipal(1, 7, ApiKeyScope.ALL)
+
+    async def resolved(*_: Any, **__: Any) -> ResolvedModel:
+        return ResolvedModel(2, "friendly-alias", "canonical-model")
+
+    failure = RuntimeError("billing observer failed")
+
+    async def failed(*_: Any, **__: Any) -> RelayResult:
+        return RelayResult(
+            internal_failed=True,
+            close_code=1011,
+            close_reason="relay failed",
+            exception=failure,
+        )
+
+    monkeypatch.setattr(gateway_module, "authenticate_api_key", authenticated)
+    monkeypatch.setattr(gateway_module.CatalogRepository, "resolve_model", resolved)
+    monkeypatch.setattr(gateway_module, "relay_websocket", failed)
+    audit = FakeAudit()
+    service = WebSocketGatewayService(
+        session=FakeSession(),  # type: ignore[arg-type]
+        settings=_settings(),
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        router_factory=lambda _: FakeRouter(_route("ws://provider.example/realtime", _settings())),  # type: ignore[arg-type]
+    )
+
+    await service.handle(FakeGatewayWebSocket(), Protocol.OPENAI)  # type: ignore[arg-type]
+
+    assert audit.failed is not None
+    assert audit.failed.error_code == "internal_error"
+    assert audit.failed.client_disconnected is False
 
 
 @pytest.mark.asyncio

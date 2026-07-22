@@ -619,6 +619,154 @@ async def test_expired_websocket_reservation_recovery_is_exact_once(
     assert account.total_spent == Decimal("0.30000000")
 
 
+async def test_active_refresh_invalidates_expired_recovery_claim(
+    test_engine: AsyncEngine,
+    billing_service: BillingService,
+    committed_identity: BillingIdentity,
+    priced_model: Model,
+) -> None:
+    settlement_key = f"recover-race-settle-{uuid4().hex}"
+    reservation = await billing_service.reserve_balance(
+        user_id=committed_identity.user_id,
+        model=priced_model,
+        estimated_input_tokens=0,
+        max_output_tokens=2,
+        idempotency_key=f"recover-race-reserve-{uuid4().hex}",
+        recovery=ReservationRecovery(
+            settlement_key=settlement_key,
+            usage=CanonicalUsage(1, 0),
+            usage_source=UsageSource.ESTIMATED,
+            expires_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=1),
+            cost=Decimal("0.10000000"),
+        ),
+    )
+
+    async def refresh(claimed_id: int) -> None:
+        assert claimed_id == reservation.ledger_entry_id
+        assert await billing_service.update_reservation_recovery(
+            reservation_id=claimed_id,
+            recovery=ReservationRecovery(
+                settlement_key=settlement_key,
+                usage=CanonicalUsage(2, 0),
+                usage_source=UsageSource.ESTIMATED,
+                expires_at=datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=5),
+                cost=Decimal("0.20000000"),
+            ),
+        )
+
+    assert await billing_service.recover_orphaned_reservations(before_settle=refresh) == 0
+    async with AsyncSession(test_engine, expire_on_commit=False) as check:
+        kinds = list(
+            await check.scalars(
+                select(LedgerEntry.kind).where(LedgerEntry.request_id == reservation.request_id)
+            )
+        )
+    assert kinds == [LedgerKind.RESERVATION]
+
+    assert await billing_service.update_reservation_recovery(
+        reservation_id=reservation.ledger_entry_id,
+        recovery=ReservationRecovery(
+            settlement_key=settlement_key,
+            usage=CanonicalUsage(2, 0),
+            usage_source=UsageSource.ESTIMATED,
+            expires_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=1),
+            cost=Decimal("0.20000000"),
+        ),
+    )
+    assert await billing_service.recover_orphaned_reservations() == 1
+    assert await billing_service.recover_orphaned_reservations() == 0
+
+
+async def test_concurrent_recovery_workers_settle_claim_once(
+    test_engine: AsyncEngine,
+    billing_service: BillingService,
+    committed_identity: BillingIdentity,
+    priced_model: Model,
+) -> None:
+    reservation = await billing_service.reserve_balance(
+        user_id=committed_identity.user_id,
+        model=priced_model,
+        estimated_input_tokens=0,
+        max_output_tokens=2,
+        idempotency_key=f"recover-concurrent-reserve-{uuid4().hex}",
+        recovery=ReservationRecovery(
+            settlement_key=f"recover-concurrent-settle-{uuid4().hex}",
+            usage=CanonicalUsage(1, 0),
+            usage_source=UsageSource.ESTIMATED,
+            expires_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=1),
+            cost=Decimal("0.10000000"),
+        ),
+    )
+    arrivals = 0
+    arrival_lock = asyncio.Lock()
+    both_claimed = asyncio.Event()
+
+    async def synchronize(_: int) -> None:
+        nonlocal arrivals
+        async with arrival_lock:
+            arrivals += 1
+            if arrivals == 2:
+                both_claimed.set()
+        await asyncio.wait_for(both_claimed.wait(), timeout=2)
+
+    second_worker = BillingService(
+        async_sessionmaker(test_engine, expire_on_commit=False),
+        default_max_output_tokens=2,
+    )
+    results = await asyncio.gather(
+        billing_service.recover_orphaned_reservations(before_settle=synchronize),
+        second_worker.recover_orphaned_reservations(before_settle=synchronize),
+    )
+
+    assert sorted(results) == [0, 1]
+    async with AsyncSession(test_engine, expire_on_commit=False) as check:
+        entries = list(
+            await check.scalars(
+                select(LedgerEntry).where(LedgerEntry.request_id == reservation.request_id)
+            )
+        )
+    assert sum(entry.kind is LedgerKind.RESERVATION_RELEASE for entry in entries) == 1
+    assert sum(entry.kind is LedgerKind.USAGE for entry in entries) == 1
+
+
+async def test_recovery_scan_honors_limit_across_bounded_pages(
+    test_engine: AsyncEngine,
+    billing_service: BillingService,
+    committed_identity: BillingIdentity,
+    priced_model: Model,
+) -> None:
+    reservations: list[BalanceReservation] = []
+    for index in range(3):
+        reservations.append(
+            await billing_service.reserve_balance(
+                user_id=committed_identity.user_id,
+                model=priced_model,
+                estimated_input_tokens=0,
+                max_output_tokens=1,
+                idempotency_key=f"recover-limit-reserve-{index}-{uuid4().hex}",
+                recovery=ReservationRecovery(
+                    settlement_key=f"recover-limit-settle-{index}-{uuid4().hex}",
+                    usage=CanonicalUsage(1, 0),
+                    usage_source=UsageSource.ESTIMATED,
+                    expires_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=1),
+                    cost=Decimal("0.10000000"),
+                ),
+            )
+        )
+
+    assert await billing_service.recover_orphaned_reservations(limit=2) == 2
+    assert await billing_service.recover_orphaned_reservations(limit=2) == 1
+    assert await billing_service.recover_orphaned_reservations(limit=2) == 0
+
+    request_ids = [reservation.request_id for reservation in reservations]
+    async with AsyncSession(test_engine, expire_on_commit=False) as check:
+        entries = list(
+            await check.scalars(select(LedgerEntry).where(LedgerEntry.request_id.in_(request_ids)))
+        )
+    assert sum(entry.kind is LedgerKind.RESERVATION_RELEASE for entry in entries) == 3
+    assert sum(entry.kind is LedgerKind.USAGE for entry in entries) == 3
+
+
 async def test_internal_usage_reconciliation_refunds_exactly_once(
     test_engine: AsyncEngine,
     billing_service: BillingService,
