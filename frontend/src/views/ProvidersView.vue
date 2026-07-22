@@ -166,6 +166,18 @@ function finishProviderOperation(providerId: number, operation: ProviderOperatio
   providerOperations.value = next
 }
 
+function isCurrentProviderOperation(
+  controller: AbortController,
+  providerId: number,
+  operation: ProviderOperation,
+): boolean {
+  return (
+    mounted &&
+    !controller.signal.aborted &&
+    providerOperations.value.get(providerId) === operation
+  )
+}
+
 function operationController(): AbortController {
   const controller = new AbortController()
   operationControllers.add(controller)
@@ -257,6 +269,7 @@ async function syncModels(provider: ProviderResponse): Promise<void> {
 async function removeProvider(provider: ProviderResponse): Promise<void> {
   if (nonDeletableIds.value.has(provider.id)) return
   if (!beginProviderOperation(provider.id, 'delete')) return
+  const controller = operationController()
   try {
     await ElMessageBox.confirm(
       `确定删除供应商“${provider.name}”吗？此操作无法撤销。`,
@@ -264,20 +277,26 @@ async function removeProvider(provider: ProviderResponse): Promise<void> {
       { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' },
     )
   } catch {
-    finishProviderOperation(provider.id, 'delete')
+    operationControllers.delete(controller)
+    if (isCurrentProviderOperation(controller, provider.id, 'delete')) {
+      finishProviderOperation(provider.id, 'delete')
+    }
+    return
+  }
+  if (!isCurrentProviderOperation(controller, provider.id, 'delete')) {
+    operationControllers.delete(controller)
     return
   }
 
-  const controller = operationController()
   try {
     await deleteProvider(provider.id, controller.signal)
-    if (!mounted || controller.signal.aborted) return
+    if (!isCurrentProviderOperation(controller, provider.id, 'delete')) return
     stateRevision += 1
     deletedIds.add(provider.id)
     providers.value = providers.value.filter((item) => item.id !== provider.id)
     notice.value = { type: 'success', text: `供应商“${provider.name}”已删除` }
   } catch (error: unknown) {
-    if (!mounted || controller.signal.aborted) return
+    if (!isCurrentProviderOperation(controller, provider.id, 'delete')) return
     if (error instanceof ApiError && error.code === 'provider_has_history') {
       const next = new Set(nonDeletableIds.value)
       next.add(provider.id)
@@ -288,7 +307,9 @@ async function removeProvider(provider: ProviderResponse): Promise<void> {
     }
   } finally {
     operationControllers.delete(controller)
-    if (mounted) finishProviderOperation(provider.id, 'delete')
+    if (isCurrentProviderOperation(controller, provider.id, 'delete')) {
+      finishProviderOperation(provider.id, 'delete')
+    }
   }
 }
 

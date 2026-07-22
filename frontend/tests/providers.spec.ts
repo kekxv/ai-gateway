@@ -467,6 +467,28 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('组件卸载后即使删除确认成功也不发送请求或发布消息', async () => {
+    const confirmResult = deferred<MessageBoxData>()
+    let deleteRequests = 0
+    vi.spyOn(ElMessageBox, 'confirm').mockReturnValue(confirmResult.promise)
+    server.use(
+      http.delete('/admin/providers/1', () => {
+        deleteRequests += 1
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+    const wrapper = await mountProviders()
+
+    await wrapper.get('[data-test="delete-provider-1"]').trigger('click')
+    wrapper.unmount()
+    confirmResult.resolve({ value: '', action: 'confirm' } as MessageBoxData)
+    await flushPromises()
+
+    expect(deleteRequests).toBe(0)
+    expect(document.querySelector('[data-test="provider-notice"]')).toBeNull()
+    expect(document.body.textContent).not.toContain('已删除')
+  })
+
   it('删除成功后保留本地删除结果，不允许较早的列表响应恢复该行', async () => {
     const staleList = deferred<ProviderResponse[]>()
     let listRequests = 0
