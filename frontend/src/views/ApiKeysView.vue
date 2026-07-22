@@ -134,7 +134,7 @@ async function load(): Promise<void> {
     models.value = loadedModels
     loadError.value = ''
   } catch (error: unknown) {
-    if (!isCurrentLoadRequest(controller, generation)) return
+    if (!isCurrentLoad(controller, generation, startingRevision)) return
     loadError.value = errorText(error, '接口密钥列表加载失败')
   } finally {
     if (isCurrentLoadRequest(controller, generation)) loading.value = false

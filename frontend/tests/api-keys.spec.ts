@@ -647,6 +647,39 @@ describe('接口密钥作用域与一次性明文', () => {
     wrapper.unmount()
   })
 
+  it('本地编辑成功后忽略较早列表的迟到失败并继续显示有效列表', async () => {
+    const staleList = deferred<Response>()
+    let listCalls = 0
+    server.use(
+      http.get('/admin/api-keys', () => {
+        listCalls += 1
+        if (listCalls === 1) return HttpResponse.json([activeKey])
+        return staleList.promise
+      }),
+      http.get('/admin/users', () => HttpResponse.json(users)),
+      http.get('/admin/providers', () => HttpResponse.json(providers)),
+      http.get('/admin/models', () => HttpResponse.json(models)),
+      http.patch('/admin/api-keys/31', () =>
+        HttpResponse.json({ ...activeKey, name: '本地已更新名称' }),
+      ),
+    )
+    const wrapper = mount(ApiKeysView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="refresh-api-keys"]').trigger('click')
+    await wrapper.get('[data-test="edit-api-key-31"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="api-key-name"]').setValue('本地已更新名称')
+    await wrapper.get('[data-test="api-key-submit"]').trigger('click')
+    await flushPromises()
+    staleList.resolve(HttpResponse.json(null, { status: 500 }))
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="api-key-row-31"]').text()).toContain('本地已更新名称')
+    expect(wrapper.text()).not.toContain('接口密钥列表加载失败')
+    wrapper.unmount()
+  })
+
   it('创建请求进行中卸载会 abort，迟到 secret 响应不能进入 DOM', async () => {
     const createGate = deferred<Response>()
     const abortSpy = vi.spyOn(AbortController.prototype, 'abort')

@@ -9,9 +9,13 @@ import type {
   TotpSetupResponse,
 } from './types'
 
-export async function login(credentials: LoginRequest): Promise<TokenPair> {
+export async function login(credentials: LoginRequest, signal?: AbortSignal): Promise<TokenPair> {
   try {
-    const { data } = await rawClient.post<TokenPair>('/auth/login', credentials)
+    const { data } = await rawClient.post<TokenPair>(
+      '/auth/login',
+      credentials,
+      signalConfig(signal),
+    )
     return data
   } catch (error: unknown) {
     throw normalizeApiError(error)

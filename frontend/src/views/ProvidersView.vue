@@ -112,7 +112,14 @@ async function load(): Promise<void> {
     providers.value = loadedProviders.filter((provider) => !deletedIds.has(provider.id))
     loadError.value = ''
   } catch (error: unknown) {
-    if (!mounted || controller.signal.aborted || generation !== loadGeneration) return
+    if (
+      !mounted ||
+      controller.signal.aborted ||
+      generation !== loadGeneration ||
+      startingRevision !== stateRevision
+    ) {
+      return
+    }
     loadError.value = errorText(error, '供应商列表加载失败')
   } finally {
     if (mounted && generation === loadGeneration) loading.value = false

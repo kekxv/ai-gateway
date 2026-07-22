@@ -53,6 +53,7 @@ afterAll(() => {
 })
 
 beforeEach(() => {
+  sessionStorage.clear()
   setActivePinia(createPinia())
 })
 
@@ -103,6 +104,137 @@ describe('authentication store', () => {
     expect(store.user).toEqual(adminUser)
     expect(sessionStorage.getItem('gateway.access_token')).toBe('access')
     expect(sessionStorage.getItem('gateway.refresh_token')).toBe('refresh')
+  })
+
+  it('does not let a login response restore the session after logout', async () => {
+    const loginStarted = createDeferred()
+    const releaseLogin = createDeferred()
+    server.use(
+      http.post('/auth/login', async () => {
+        loginStarted.resolve()
+        await releaseLogin.promise
+        return HttpResponse.json({
+          access_token: 'stale-access',
+          refresh_token: 'stale-refresh',
+          token_type: 'bearer',
+        })
+      }),
+      http.get('/auth/me', () => HttpResponse.json(adminUser)),
+    )
+    const store = useAuthStore()
+
+    const outcome = store
+      .login({ email: adminUser.email, password: 'secret' })
+      .catch((error: unknown) => error)
+    await loginStarted.promise
+    store.logout()
+    releaseLogin.resolve()
+
+    expect(await outcome).toEqual(expect.objectContaining({ code: 'session_changed' }))
+    expect(sessionStorage.length).toBe(0)
+    expect(store.user).toBeNull()
+    expect(store.ready).toBe(true)
+  })
+
+  it('does not let an older successful login overwrite a newer login', async () => {
+    const oldUserStarted = createDeferred()
+    const releaseOldUser = createDeferred()
+    server.use(
+      http.post('/auth/login', async ({ request }) => {
+        const body = (await request.json()) as { email: string }
+        const prefix = body.email === adminUser.email ? 'old' : 'new'
+        return HttpResponse.json({
+          access_token: `${prefix}-access`,
+          refresh_token: `${prefix}-refresh`,
+          token_type: 'bearer',
+        })
+      }),
+      http.get('/auth/me', async ({ request }) => {
+        if (request.headers.get('Authorization') === 'Bearer old-access') {
+          oldUserStarted.resolve()
+          await releaseOldUser.promise
+          return HttpResponse.json(adminUser)
+        }
+        return HttpResponse.json(replacementAdmin)
+      }),
+    )
+    const store = useAuthStore()
+
+    const oldOutcome = store
+      .login({ email: adminUser.email, password: 'old-secret' })
+      .catch((error: unknown) => error)
+    await oldUserStarted.promise
+    await store.login({ email: replacementAdmin.email, password: 'new-secret' })
+    releaseOldUser.resolve()
+
+    expect(await oldOutcome).toEqual(expect.objectContaining({ code: 'session_changed' }))
+    expect(sessionStorage.getItem('gateway.access_token')).toBe('new-access')
+    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('new-refresh')
+    expect(store.user).toEqual(replacementAdmin)
+    expect(store.ready).toBe(true)
+  })
+
+  it('does not let an older failed login clear a newer login', async () => {
+    const oldLoginStarted = createDeferred()
+    const releaseOldLogin = createDeferred()
+    server.use(
+      http.post('/auth/login', async ({ request }) => {
+        const body = (await request.json()) as { email: string }
+        if (body.email === adminUser.email) {
+          oldLoginStarted.resolve()
+          await releaseOldLogin.promise
+          return HttpResponse.json(
+            { detail: { code: 'invalid_credentials', message: 'Invalid credentials' } },
+            { status: 401 },
+          )
+        }
+        return HttpResponse.json({
+          access_token: 'new-access',
+          refresh_token: 'new-refresh',
+          token_type: 'bearer',
+        })
+      }),
+      http.get('/auth/me', () => HttpResponse.json(replacementAdmin)),
+    )
+    const store = useAuthStore()
+
+    const oldOutcome = store
+      .login({ email: adminUser.email, password: 'wrong-secret' })
+      .catch((error: unknown) => error)
+    await oldLoginStarted.promise
+    await store.login({ email: replacementAdmin.email, password: 'new-secret' })
+    releaseOldLogin.resolve()
+
+    expect(await oldOutcome).toEqual(expect.objectContaining({ code: 'session_changed' }))
+    expect(sessionStorage.getItem('gateway.access_token')).toBe('new-access')
+    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('new-refresh')
+    expect(store.user).toEqual(replacementAdmin)
+    expect(store.ready).toBe(true)
+  })
+
+  it('does not let restore complete after logout', async () => {
+    sessionStorage.setItem('gateway.access_token', 'old-access')
+    sessionStorage.setItem('gateway.refresh_token', 'old-refresh')
+    const restoreStarted = createDeferred()
+    const releaseRestore = createDeferred()
+    server.use(
+      http.get('/auth/me', async () => {
+        restoreStarted.resolve()
+        await releaseRestore.promise
+        return HttpResponse.json(adminUser)
+      }),
+    )
+    const store = useAuthStore()
+
+    const outcome = store.restore().catch((error: unknown) => error)
+    await restoreStarted.promise
+    store.logout()
+    releaseRestore.resolve()
+
+    expect(await outcome).toEqual(expect.objectContaining({ code: 'session_changed' }))
+    expect(sessionStorage.length).toBe(0)
+    expect(store.user).toBeNull()
+    expect(store.ready).toBe(true)
   })
 
   it('stores no tokens when login fails and uses a Chinese safe message', async () => {

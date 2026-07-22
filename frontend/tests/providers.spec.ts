@@ -530,6 +530,47 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('本地删除成功后忽略较早列表的迟到失败并继续显示有效列表', async () => {
+    const staleList = deferred<Response>()
+    let listRequests = 0
+    server.use(
+      http.get('/admin/providers', () => {
+        listRequests += 1
+        if (listRequests === 1) return HttpResponse.json([providerFixture, geminiFixture])
+        return staleList.promise
+      }),
+      http.post('/admin/providers/1/sync-models', () =>
+        HttpResponse.json({
+          provider_id: 1,
+          discovered_models: 2,
+          created_models: 0,
+          created_routes: 0,
+          updated_routes: 0,
+          disabled_routes: 0,
+        }),
+      ),
+      http.delete('/admin/providers/2', () => new HttpResponse(null, { status: 204 })),
+    )
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
+      value: '',
+      action: 'confirm',
+    } as MessageBoxData)
+    const wrapper = mount(ProvidersView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="delete-provider-2"]').trigger('click')
+    await flushPromises()
+    staleList.resolve(HttpResponse.json(null, { status: 500 }))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('OpenAI 主线路')
+    expect(wrapper.find('[data-test="delete-provider-2"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('供应商列表加载失败')
+    wrapper.unmount()
+  })
+
   it('同步间隔必须是大于等于 1 的整数，清空后聚焦该字段且不提交 null', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(ProviderFormDrawer, {

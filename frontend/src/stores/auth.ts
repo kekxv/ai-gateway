@@ -12,24 +12,79 @@ import {
 } from '@/api/client'
 import type { CurrentUser, LoginRequest } from '@/api/types'
 
+interface AuthOperation {
+  revision: number
+  controller: AbortController
+}
+
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<CurrentUser | null>(null)
   const ready = ref(false)
   const authenticated = computed(() => user.value !== null)
   const isAdmin = computed(() => user.value?.role === 'admin')
   let sessionRevision = 0
+  let activeAuthOperation: AuthOperation | undefined
+  let operationInvalidatedBySessionFailure: AuthOperation | undefined
+
+  function invalidateAuthOperation(): void {
+    sessionRevision += 1
+    activeAuthOperation?.controller.abort()
+    activeAuthOperation = undefined
+  }
 
   const stopSessionInvalidatedListener = onSessionInvalidated(() => {
-    sessionRevision += 1
+    operationInvalidatedBySessionFailure = activeAuthOperation
+    invalidateAuthOperation()
     user.value = null
     ready.value = true
   })
   onScopeDispose(stopSessionInvalidatedListener)
 
   function clearSession(): void {
-    sessionRevision += 1
+    invalidateAuthOperation()
     user.value = null
     clearSessionTokens()
+  }
+
+  function beginAuthOperation(): AuthOperation {
+    invalidateAuthOperation()
+    operationInvalidatedBySessionFailure = undefined
+    const operation = {
+      revision: sessionRevision,
+      controller: new AbortController(),
+    }
+    activeAuthOperation = operation
+    return operation
+  }
+
+  function isCurrentAuthOperation(operation: AuthOperation): boolean {
+    return (
+      activeAuthOperation === operation &&
+      operation.revision === sessionRevision &&
+      !operation.controller.signal.aborted
+    )
+  }
+
+  function sessionChangedError(): ApiError {
+    return new ApiError(401, 'session_changed', '登录状态已变更，请重试')
+  }
+
+  function isOwnAuthenticationFailure(operation: AuthOperation, error: unknown): boolean {
+    return (
+      operationInvalidatedBySessionFailure === operation &&
+      error instanceof ApiError &&
+      (error.code === 'authentication_required' || error.code === 'invalid_token')
+    )
+  }
+
+  function requireCurrentAuthOperation(operation: AuthOperation): void {
+    if (!isCurrentAuthOperation(operation)) throw sessionChangedError()
+  }
+
+  function finishAuthOperation(operation: AuthOperation): void {
+    requireCurrentAuthOperation(operation)
+    ready.value = true
+    activeAuthOperation = undefined
   }
 
   function requireAdmin(currentUser: CurrentUser): void {
@@ -45,40 +100,51 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(credentials: LoginRequest): Promise<void> {
     clearSession()
+    const operation = beginAuthOperation()
     try {
-      const tokens = await loginRequest(credentials)
+      const tokens = await loginRequest(credentials, operation.controller.signal)
+      requireCurrentAuthOperation(operation)
       replaceSessionTokens(tokens.access_token, tokens.refresh_token)
 
-      const currentUser = await getCurrentUser()
-      requireAdmin(currentUser)
+      const currentUser = await getCurrentUser(operation.controller.signal)
+      requireCurrentAuthOperation(operation)
+      if (currentUser.role !== 'admin') {
+        throw new ApiError(403, 'admin_required', '仅管理员可以访问管理控制台')
+      }
       user.value = currentUser
     } catch (error: unknown) {
+      requireCurrentAuthOperation(operation)
       clearSession()
       throw error
     } finally {
-      ready.value = true
+      if (isCurrentAuthOperation(operation)) finishAuthOperation(operation)
     }
   }
 
   async function restore(): Promise<void> {
-    sessionRevision += 1
+    const operation = beginAuthOperation()
     ready.value = false
     user.value = null
     const hasAccessToken = sessionStorage.getItem(ACCESS_TOKEN_KEY) !== null
     const hasRefreshToken = sessionStorage.getItem(REFRESH_TOKEN_KEY) !== null
     if (!hasAccessToken && !hasRefreshToken) {
-      ready.value = true
+      finishAuthOperation(operation)
       return
     }
 
     try {
-      const currentUser = await getCurrentUser()
-      requireAdmin(currentUser)
+      const currentUser = await getCurrentUser(operation.controller.signal)
+      requireCurrentAuthOperation(operation)
+      if (currentUser.role !== 'admin') {
+        throw new ApiError(403, 'admin_required', '仅管理员可以访问管理控制台')
+      }
       user.value = currentUser
-    } catch {
+    } catch (error: unknown) {
+      if (isOwnAuthenticationFailure(operation, error)) return
+      requireCurrentAuthOperation(operation)
       clearSession()
     } finally {
-      ready.value = true
+      if (isCurrentAuthOperation(operation)) finishAuthOperation(operation)
     }
   }
 
