@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 
 import type { ModelResponse, ModelRouteResponse, ProviderResponse } from '@/api/types'
 import ModelFormDrawer from '@/components/models/ModelFormDrawer.vue'
+import RouteFormDrawer from '@/components/models/RouteFormDrawer.vue'
 import { routes } from '@/router'
 import ModelsView from '@/views/ModelsView.vue'
 
@@ -187,6 +188,35 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
+  it('用纯字符串展开非负 Decimal 科学计数价格', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ModelFormDrawer, {
+      props: {
+        modelValue: true,
+        model: {
+          ...modelFixture,
+          input_price_per_million: '+1E-8',
+          output_price_per_million: '1.23E+2',
+        },
+        submitting: false,
+        onSubmit,
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="model-input-price"]').element).toHaveProperty(
+      'value',
+      '0.00000001',
+    )
+    expect(wrapper.get('[data-test="model-output-price"]').element).toHaveProperty('value', '123')
+    await wrapper.get('[data-test="model-display-name"]').setValue('科学计数价格')
+    await wrapper.get('[data-test="model-submit"]').trigger('click')
+
+    expect(onSubmit).toHaveBeenCalledWith({ display_name: '科学计数价格' })
+    wrapper.unmount()
+  })
+
   it('拒绝重复别名和与规范名称相同的别名，并聚焦第一条错误', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(ModelFormDrawer, {
@@ -310,5 +340,147 @@ describe('模型与别名管理', () => {
     response.resolve({ ...modelFixture, display_name: '延迟保存模型' })
     await flushPromises()
     expect(document.body.textContent).not.toContain('模型设置已保存')
+  })
+
+  it('初始目录加载期间禁止创建和模型操作', async () => {
+    const response = deferred<ModelResponse[]>()
+    server.use(
+      http.get('/admin/models', async () => HttpResponse.json(await response.promise)),
+      http.get('/admin/providers', () => HttpResponse.json([providerFixture])),
+      http.get('/admin/model-routes', () => HttpResponse.json([routeFixture])),
+    )
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="create-model"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="create-model"]').trigger('click')
+    expect(wrapper.findComponent(ModelFormDrawer).props('modelValue')).toBe(false)
+
+    response.resolve([modelFixture])
+    await flushPromises()
+    expect(wrapper.get('[data-test="create-model"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('在没有模型的目录中显示空状态', async () => {
+    useCatalog([], [])
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('暂无模型')
+    expect(wrapper.text()).toContain('尚未选择模型')
+    expect(wrapper.get('[data-test="create-route"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('成功删除模型并从选择上下文移除它', async () => {
+    useCatalog([modelFixture, scientificZeroFixture])
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
+      value: '',
+      action: 'confirm',
+    } as MessageBoxData)
+    server.use(http.delete('/admin/models/1', () => new HttpResponse(null, { status: 204 })))
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="delete-model-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="select-model-1"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="route-panel"]').text()).toContain('零价格模型')
+    expect(wrapper.get('[data-test="model-notice"]').text()).toContain('已删除')
+    wrapper.unmount()
+  })
+
+  it('忽略本地修订后才返回的过期目录失败', async () => {
+    useCatalog()
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    const reloadGate = deferred<undefined>()
+    server.use(
+      http.get('/admin/models', async () => {
+        await reloadGate.promise
+        return HttpResponse.json({ detail: 'stale catalog failure' }, { status: 500 })
+      }),
+      http.post('/admin/models', async ({ request }) => {
+        const payload = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json({
+          ...modelFixture,
+          ...payload,
+          id: 3,
+          aliases: [],
+        })
+      }),
+    )
+    const view = wrapper.vm as unknown as { load: () => Promise<void> }
+    const reload = view.load()
+    await flushPromises()
+    await wrapper.get('[data-test="create-model"]').trigger('click')
+    const drawer = wrapper.getComponent(ModelFormDrawer)
+    await drawer.get('[data-test="model-canonical-name"]').setValue('local-model')
+    await drawer.get('[data-test="model-display-name"]').setValue('本地模型')
+    await drawer.get('[data-test="model-submit"]').trigger('click')
+    await flushPromises()
+    reloadGate.resolve(undefined)
+    await reload
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('本地模型')
+    expect(wrapper.text()).not.toContain('stale catalog failure')
+    wrapper.unmount()
+  })
+
+  it('合并过期目录成功中的提供商且不覆盖本地模型和路由数', async () => {
+    useCatalog()
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    const reloadGate = deferred<undefined>()
+    const originalProtocol = providerFixture.protocols[0]
+    if (originalProtocol === undefined) throw new Error('缺少测试协议')
+    const replacementProvider: ProviderResponse = {
+      ...providerFixture,
+      id: 12,
+      name: '刷新后的提供商',
+      protocols: [{ ...originalProtocol, id: 121 }],
+    }
+    server.use(
+      http.get('/admin/models', async () => {
+        await reloadGate.promise
+        return HttpResponse.json([modelFixture])
+      }),
+      http.get('/admin/providers', () => HttpResponse.json([replacementProvider])),
+      http.get('/admin/model-routes', ({ request }) =>
+        HttpResponse.json(new URL(request.url).searchParams.has('model_id') ? [routeFixture] : []),
+      ),
+      http.post('/admin/models', async ({ request }) => {
+        const payload = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json({
+          ...modelFixture,
+          ...payload,
+          id: 3,
+          aliases: [],
+        })
+      }),
+    )
+    const view = wrapper.vm as unknown as { load: () => Promise<void> }
+    const reload = view.load()
+    await flushPromises()
+    await wrapper.get('[data-test="create-model"]').trigger('click')
+    const modelDrawer = wrapper.getComponent(ModelFormDrawer)
+    await modelDrawer.get('[data-test="model-canonical-name"]').setValue('local-during-success')
+    await modelDrawer.get('[data-test="model-display-name"]').setValue('保留的本地模型')
+    await modelDrawer.get('[data-test="model-submit"]').trigger('click')
+    await flushPromises()
+
+    reloadGate.resolve(undefined)
+    await reload
+    await flushPromises()
+    expect(wrapper.text()).toContain('保留的本地模型')
+    expect(wrapper.get('[data-test="route-count-1"]').text()).toBe('1')
+    await wrapper.get('[data-test="create-route"]').trigger('click')
+    expect(wrapper.getComponent(RouteFormDrawer).text()).toContain('刷新后的提供商')
+    wrapper.unmount()
   })
 })

@@ -96,6 +96,7 @@ function resetForm(): void {
 watch(
   () => [props.modelValue, props.route?.id, props.model?.id] as const,
   ([open]) => {
+    if (props.submitting) return
     if (open) resetForm()
     else clearDraft()
   },
@@ -109,7 +110,9 @@ watch(providerId, () => {
   }
 })
 
-onBeforeUnmount(clearDraft)
+onBeforeUnmount(() => {
+  if (!props.submitting) clearDraft()
+})
 
 function requestClose(): void {
   if (props.submitting) return
@@ -214,7 +217,6 @@ function submitForm(): void {
     :show-close="!submitting"
     :before-close="handleBeforeClose"
     destroy-on-close
-    @closed="clearDraft"
     @update:model-value="handleModelValueUpdate"
   >
     <template #header>
@@ -234,7 +236,12 @@ function submitForm(): void {
             label="供应商"
             :error="providerError"
           >
-            <select v-model.number="providerId" data-test="route-provider" :disabled="submitting">
+            <select
+              v-model.number="providerId"
+              data-test="route-provider"
+              aria-label="供应商"
+              :disabled="submitting"
+            >
               <option v-for="provider in providers" :key="provider.id" :value="provider.id">
                 {{ provider.name }}
               </option>
@@ -245,7 +252,12 @@ function submitForm(): void {
             label="供应商协议"
             :error="protocolError"
           >
-            <select v-model.number="protocolId" data-test="route-protocol" :disabled="submitting">
+            <select
+              v-model.number="protocolId"
+              data-test="route-protocol"
+              aria-label="供应商协议"
+              :disabled="submitting"
+            >
               <option v-for="protocol in availableProtocols" :key="protocol.id" :value="protocol.id">
                 {{ protocolLabels[protocol.protocol] }} · #{{ protocol.id }}
               </option>

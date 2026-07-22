@@ -39,7 +39,7 @@ const emit = defineEmits<{
 }>()
 
 const decimalPattern = /^\d{1,12}(\.\d{1,8})?$/
-const scientificZeroPattern = /^[+-]?0+(?:\.0+)?[eE][+-]?\d+$/
+const scientificDecimalPattern = /^\+?(\d+)(?:\.(\d+))?[eE]([+-]?)(\d+)$/
 const canonicalName = ref('')
 const displayName = ref('')
 const inputPrice = ref('0')
@@ -57,7 +57,50 @@ const editing = computed(() => props.model !== null)
 const drawerTitle = computed(() => (editing.value ? '编辑模型' : '新建模型'))
 
 function normalizeDecimalInput(value: string): string {
-  return scientificZeroPattern.test(value.trim()) ? '0' : value
+  const trimmed = value.trim()
+  const match = scientificDecimalPattern.exec(trimmed)
+  if (match === null) return value
+
+  let integer = match[1] ?? ''
+  let fraction = match[2] ?? ''
+  if (/^0+$/.test(`${integer}${fraction}`)) return '0'
+
+  let remaining = (match[4] ?? '').replace(/^0+/, '')
+  if (remaining.length > 3 || (remaining.length === 3 && remaining > '100')) return trimmed
+  const decrement = (): void => {
+    const digits = '0123456789'
+    let next = ''
+    let borrow = true
+    for (let index = remaining.length - 1; index >= 0; index -= 1) {
+      const digit = remaining[index] ?? '0'
+      if (!borrow) {
+        next = `${digit}${next}`
+        continue
+      }
+      if (digit === '0') next = `9${next}`
+      else {
+        next = `${digits.charAt(digits.indexOf(digit) - 1)}${next}`
+        borrow = false
+      }
+    }
+    remaining = next.replace(/^0+/, '')
+  }
+
+  while (remaining !== '') {
+    if (match[3] === '-') {
+      const moved = integer.slice(-1)
+      integer = integer.slice(0, -1)
+      fraction = `${moved === '' ? '0' : moved}${fraction}`
+    } else {
+      const moved = fraction.slice(0, 1)
+      integer = `${integer}${moved === '' ? '0' : moved}`
+      fraction = fraction.slice(1)
+    }
+    decrement()
+  }
+
+  const normalizedInteger = integer.replace(/^0+(?=\d)/, '') || '0'
+  return fraction === '' ? normalizedInteger : `${normalizedInteger}.${fraction}`
 }
 
 function resetErrors(): void {
@@ -98,13 +141,16 @@ function resetForm(): void {
 watch(
   () => [props.modelValue, props.model?.id] as const,
   ([open]) => {
+    if (props.submitting) return
     if (open) resetForm()
     else clearDraft()
   },
   { immediate: true, flush: 'sync' },
 )
 
-onBeforeUnmount(clearDraft)
+onBeforeUnmount(() => {
+  if (!props.submitting) clearDraft()
+})
 
 function addAlias(): void {
   aliases.value.push({ key: nextAliasKey++, alias: '', enabled: true, error: '' })
@@ -234,7 +280,6 @@ function submitForm(): void {
     :show-close="!submitting"
     :before-close="handleBeforeClose"
     destroy-on-close
-    @closed="clearDraft"
     @update:model-value="handleModelValueUpdate"
   >
     <template #header>

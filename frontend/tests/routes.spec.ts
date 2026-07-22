@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
+import { listModelRoutes } from '@/api/models'
 import type { ModelResponse, ModelRouteResponse, ProviderResponse } from '@/api/types'
 import RouteFormDrawer from '@/components/models/RouteFormDrawer.vue'
 import ModelsView from '@/views/ModelsView.vue'
@@ -127,6 +128,19 @@ const openRoute: ModelRouteResponse = {
   runtime_state: 'open',
 }
 
+interface Deferred<T> {
+  promise: Promise<T>
+  resolve: (value: T) => void
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolver) => {
+    resolve = resolver
+  })
+  return { promise, resolve }
+}
+
 const server = setupServer()
 
 beforeAll(() => {
@@ -204,6 +218,8 @@ describe('加权模型路由管理', () => {
 
     const providerSelect = wrapper.get('[data-test="route-provider"]')
     const protocolSelect = wrapper.get('[data-test="route-protocol"]')
+    expect(providerSelect.attributes('aria-label')).toBe('供应商')
+    expect(protocolSelect.attributes('aria-label')).toBe('供应商协议')
     expect(protocolSelect.findAll('option').map((option) => option.attributes('value'))).toEqual([
       '111',
       '112',
@@ -226,6 +242,74 @@ describe('加权模型路由管理', () => {
       enabled: true,
     })
     wrapper.unmount()
+  })
+
+  it('编辑时同步更新提供商与它的协议关系', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(RouteFormDrawer, {
+      props: {
+        modelValue: true,
+        model: models[0] ?? null,
+        route: routeFixture,
+        providers,
+        submitting: false,
+        onSubmit,
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="route-provider"]').setValue('12')
+    await wrapper.get('[data-test="route-submit"]').trigger('click')
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      provider_id: 12,
+      provider_protocol_id: 121,
+    })
+    wrapper.unmount()
+  })
+
+  it('原生选择框有可访问名称，无提供商时显示校验空状态', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(RouteFormDrawer, {
+      props: {
+        modelValue: true,
+        model: models[0] ?? null,
+        route: null,
+        providers: [],
+        submitting: false,
+        onSubmit,
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="route-provider"]').attributes('aria-label')).toBe('供应商')
+    expect(wrapper.get('[data-test="route-protocol"]').attributes('aria-label')).toBe('供应商协议')
+    await wrapper.get('[data-test="route-upstream-model"]').setValue('native-name')
+    await wrapper.get('[data-test="route-submit"]').trigger('click')
+    await waitForFormErrors()
+
+    expect(wrapper.text()).toContain('请选择供应商')
+    expect(wrapper.text()).toContain('请选择当前供应商的协议')
+    expect(onSubmit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('序列化 model_id 和 provider_id 路由筛选参数', async () => {
+    const requests: URL[] = []
+    server.use(
+      http.get('/admin/model-routes', ({ request }) => {
+        requests.push(new URL(request.url))
+        return HttpResponse.json([])
+      }),
+    )
+
+    await listModelRoutes({ model_id: 2, provider_id: 12 })
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.searchParams.get('model_id')).toBe('2')
+    expect(requests[0]?.searchParams.get('provider_id')).toBe('12')
   })
 
   it('权重只接受 1 到 10000 的整数并聚焦错误字段', async () => {
@@ -343,6 +427,236 @@ describe('加权模型路由管理', () => {
     await flushPromises()
     expect(patchBodies).toEqual([{ enabled: false }])
     expect(wrapper.get('[data-test="route-status-201"]').text()).toContain('已停用')
+    wrapper.unmount()
+  })
+
+  it('路由草稿在提交时不因父级上下文变化而重置', async () => {
+    const wrapper = mount(RouteFormDrawer, {
+      props: {
+        modelValue: true,
+        model: models[0] ?? null,
+        route: routeFixture,
+        providers,
+        submitting: false,
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    await wrapper.get('[data-test="route-upstream-model"]').setValue('pending-draft')
+
+    await wrapper.setProps({ submitting: true })
+    await wrapper.setProps({ model: models[1] ?? null, route: closedRoute })
+    await wrapper.setProps({ modelValue: false })
+
+    expect(wrapper.get('[data-test="route-upstream-model"]').element).toHaveProperty(
+      'value',
+      'pending-draft',
+    )
+    wrapper.unmount()
+  })
+
+  it('路由保存时锁定模型上下文并在卸载时废弃结果', async () => {
+    const response = deferred<ModelRouteResponse>()
+    useCatalog()
+    server.use(
+      http.patch('/admin/model-routes/201', async () => HttpResponse.json(await response.promise)),
+    )
+    const confirm = vi.spyOn(ElMessageBox, 'confirm')
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="edit-route-201"]').trigger('click')
+    const drawer = wrapper.getComponent(RouteFormDrawer)
+    await drawer.get('[data-test="route-weight"] input').setValue('901')
+    await drawer.get('[data-test="route-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="select-model-2"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="edit-model-1"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="delete-model-1"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="delete-model-1"]').trigger('click')
+    expect(confirm).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+    response.resolve({ ...routeFixture, weight: 901 })
+    await flushPromises()
+    expect(document.body.textContent).not.toContain('模型路由已保存')
+  })
+
+  it('待确认的模型删除锁定选择与路由草稿', async () => {
+    useCatalog()
+    const confirmation = deferred<MessageBoxData>()
+    vi.spyOn(ElMessageBox, 'confirm').mockReturnValue(confirmation.promise)
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="delete-model-1"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="select-model-2"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="create-route"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="select-model-2"]').trigger('click')
+    await wrapper.get('[data-test="create-route"]').trigger('click')
+
+    expect(wrapper.get('[data-test="route-panel"]').text()).toContain('GPT 4.1')
+    expect(wrapper.findComponent(RouteFormDrawer).props('modelValue')).toBe(false)
+    wrapper.unmount()
+    confirmation.resolve({ value: '', action: 'confirm' } as MessageBoxData)
+  })
+
+  it('路由删除期间锁定模型选择和模型操作', async () => {
+    useCatalog()
+    const deletion = deferred<undefined>()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
+      value: '',
+      action: 'confirm',
+    } as MessageBoxData)
+    server.use(
+      http.delete('/admin/model-routes/201', async () => {
+        await deletion.promise
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="delete-route-201"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="select-model-2"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="edit-model-1"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="delete-model-1"]').attributes('disabled')).toBeDefined()
+
+    deletion.resolve(undefined)
+    await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('创建和删除路由后更新模型的路由数', async () => {
+    useCatalog()
+    const createdRoute: ModelRouteResponse = {
+      ...routeFixture,
+      id: 204,
+      upstream_model: 'new-native-model',
+    }
+    server.use(
+      http.post('/admin/model-routes', () => HttpResponse.json(createdRoute)),
+      http.delete('/admin/model-routes/204', () => new HttpResponse(null, { status: 204 })),
+    )
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
+      value: '',
+      action: 'confirm',
+    } as MessageBoxData)
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="route-count-1"]').text()).toBe('2')
+    await wrapper.get('[data-test="create-route"]').trigger('click')
+    const drawer = wrapper.getComponent(RouteFormDrawer)
+    await drawer.get('[data-test="route-upstream-model"]').setValue('new-native-model')
+    await drawer.get('[data-test="route-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="route-count-1"]').text()).toBe('3')
+
+    await wrapper.get('[data-test="delete-route-204"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="route-count-1"]').text()).toBe('2')
+    wrapper.unmount()
+  })
+
+  it('成功删除路由并保留当前模型上下文', async () => {
+    useCatalog()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
+      value: '',
+      action: 'confirm',
+    } as MessageBoxData)
+    server.use(http.delete('/admin/model-routes/201', () => new HttpResponse(null, { status: 204 })))
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="delete-route-201"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="edit-route-201"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="route-panel"]').text()).toContain('GPT 4.1')
+    expect(wrapper.get('[data-test="route-notice"]').text()).toContain('已删除')
+    wrapper.unmount()
+  })
+
+  it('忽略选择或本地修订后才返回的过期路由失败', async () => {
+    const staleModelOne = deferred<undefined>()
+    let modelOneRequests = 0
+    useCatalog((url) => {
+      const modelId = url.searchParams.get('model_id')
+      return modelId === '2' ? [openRoute] : [routeFixture, closedRoute]
+    })
+    server.use(
+      http.get('/admin/model-routes', async ({ request }) => {
+        const modelId = new URL(request.url).searchParams.get('model_id')
+        if (modelId === '1' && modelOneRequests++ > 0) {
+          await staleModelOne.promise
+          return HttpResponse.json({ detail: 'stale route failure' }, { status: 500 })
+        }
+        const routes = [routeFixture, closedRoute, openRoute]
+        return HttpResponse.json(
+          modelId === null
+            ? routes
+            : routes.filter((route) => route.model_id === Number(modelId)),
+        )
+      }),
+    )
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    const view = wrapper.vm as unknown as { loadRoutes: (modelId: number) => Promise<void> }
+    const staleLoad = view.loadRoutes(1)
+    await flushPromises()
+    await wrapper.get('[data-test="select-model-2"]').trigger('click')
+    await flushPromises()
+    staleModelOne.resolve(undefined)
+    await staleLoad
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="route-panel"]').text()).toContain('claude-opus-4-1')
+    expect(wrapper.text()).not.toContain('stale route failure')
+    wrapper.unmount()
+  })
+
+  it('本地创建后不让过期路由成功覆盖详情和路由数', async () => {
+    useCatalog()
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    const staleResponse = deferred<undefined>()
+    server.use(
+      http.get('/admin/model-routes', async ({ request }) => {
+        const modelId = new URL(request.url).searchParams.get('model_id')
+        if (modelId === '1') {
+          await staleResponse.promise
+          return HttpResponse.json([routeFixture])
+        }
+        return HttpResponse.json([])
+      }),
+      http.post('/admin/model-routes', () =>
+        HttpResponse.json({
+          ...routeFixture,
+          id: 204,
+          upstream_model: 'locally-created-route',
+        }),
+      ),
+    )
+    const view = wrapper.vm as unknown as { loadRoutes: (modelId: number) => Promise<void> }
+    const staleLoad = view.loadRoutes(1)
+    await flushPromises()
+    await wrapper.get('[data-test="create-route"]').trigger('click')
+    const drawer = wrapper.getComponent(RouteFormDrawer)
+    await drawer.get('[data-test="route-upstream-model"]').setValue('locally-created-route')
+    await drawer.get('[data-test="route-submit"]').trigger('click')
+    await flushPromises()
+
+    staleResponse.resolve(undefined)
+    await staleLoad
+    await flushPromises()
+    expect(wrapper.text()).toContain('locally-created-route')
+    expect(wrapper.get('[data-test="route-count-1"]').text()).toBe('3')
     wrapper.unmount()
   })
 })
