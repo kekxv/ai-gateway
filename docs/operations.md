@@ -11,6 +11,12 @@
 - Run `alembic upgrade head` as a separate release job before starting the matching image.
 - Keep `.env`, provider credentials, API keys, JWT secrets, database passwords, and proxy URLs in a
   secret manager; never bake them into the image.
+- `compose.yaml` is the canonical Compose definition. It interpolates `MYSQL_DATABASE`,
+  `MYSQL_USER`, `MYSQL_PASSWORD`, and `MYSQL_ROOT_PASSWORD`; its checked-in fallbacks are only for
+  disposable local development. Use URL-safe characters in `MYSQL_PASSWORD` because the same
+  value is embedded in `GATEWAY_DATABASE_URL` for the gateway container.
+- The Compose MySQL port is bound only to `127.0.0.1:3306`. Use private networking rather than
+  widening that host binding for remote access.
 
 ## Gateway API-key rotation
 
@@ -73,7 +79,7 @@ a coordinated maintenance operation, not a normal rolling restart.
 ```bash
 export OLD_GATEWAY_ENCRYPTION_KEY='from-secret-manager'
 export NEW_GATEWAY_ENCRYPTION_KEY='from-secret-manager'
-export GATEWAY_DATABASE_URL='mysql+asyncmy://gateway:gateway@mysql:3306/gateway'
+export GATEWAY_DATABASE_URL='mysql+asyncmy://gateway:URL_SAFE_PASSWORD@mysql:3306/gateway'
 
 uv run python - <<'PY'
 import asyncio
@@ -125,7 +131,8 @@ Create a transactionally consistent logical backup from the Compose MySQL servic
 ```bash
 mkdir -p backups
 docker compose exec -T mysql sh -c \
-  'exec mysqldump --single-transaction --routines --triggers -uroot -p"$MYSQL_ROOT_PASSWORD" gateway' \
+  'exec mysqldump --single-transaction --routines --triggers -uroot \
+   -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
   | gzip -9 > "backups/gateway-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
 gzip -t backups/gateway-*.sql.gz
 ```
@@ -142,7 +149,7 @@ Restores are destructive. Restore into a new database/volume first whenever poss
 docker compose stop gateway
 gunzip -c backups/gateway-YYYYMMDDTHHMMSSZ.sql.gz \
   | docker compose exec -T mysql sh -c \
-    'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" gateway'
+    'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
 docker compose run --rm gateway alembic current
 docker compose run --rm gateway alembic upgrade head
 docker compose up -d gateway
@@ -160,13 +167,13 @@ then delete in bounded batches to avoid a long transaction:
 ```bash
 # Replace this literal UTC cutoff only after approval.
 docker compose exec -T mysql sh -c \
-  'mysql -ugateway -p"$MYSQL_PASSWORD" gateway -e \
+  'mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" -e \
   "SELECT COUNT(*) AS rows_to_delete FROM request_logs \
    WHERE created_at < '\''2026-04-01 00:00:00'\'';"'
 
 while :; do
   deleted="$(docker compose exec -T mysql sh -c \
-    'mysql -N -ugateway -p"$MYSQL_PASSWORD" gateway -e \
+    'mysql -N -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" -e \
     "DELETE FROM request_logs WHERE created_at < '\''2026-04-01 00:00:00'\'' \
      LIMIT 10000; SELECT ROW_COUNT();"')"
   [ "$deleted" = 0 ] && break

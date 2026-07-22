@@ -49,13 +49,16 @@ from ai_gateway.main import create_app
 ADMIN_PASSWORD = "e2e-admin-password"
 USER_PASSWORD = "e2e-user-password"
 INITIAL_CREDIT = Decimal("10.00000000")
-EXPECTED_USAGE_COST = Decimal("0.03700000")
+EXPECTED_RESERVATION_TOTAL = Decimal("0.09200000")
+EXPECTED_USAGE_COST = Decimal("0.07000000")
 
 
 @dataclass(slots=True)
 class FakeProviderState:
     provider_secret: str
-    http_requests: list[dict[str, Any]] = field(default_factory=list)
+    openai_requests: list[dict[str, Any]] = field(default_factory=list)
+    claude_requests: list[dict[str, Any]] = field(default_factory=list)
+    gemini_requests: list[dict[str, Any]] = field(default_factory=list)
     websocket_authorization: str | None = None
     websocket_model: str | None = None
     websocket_frame: dict[str, Any] | None = None
@@ -73,6 +76,14 @@ class ProvisionedGateway:
     api_key: str
     alias: str
     upstream_model: str
+    claude_model_id: int
+    claude_route_id: int
+    claude_alias: str
+    claude_upstream_model: str
+    gemini_model_id: int
+    gemini_route_id: int
+    gemini_alias: str
+    gemini_upstream_model: str
     body_secret: str
 
 
@@ -116,7 +127,7 @@ def fake_provider_app(state: FakeProviderState) -> FastAPI:
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request) -> Response:
         payload = await request.json()
-        state.http_requests.append(
+        state.openai_requests.append(
             {
                 "path": request.url.path,
                 "authorization": request.headers.get("authorization"),
@@ -201,6 +212,60 @@ def fake_provider_app(state: FakeProviderState) -> FastAPI:
             }
         )
 
+    @app.post("/v1/messages")
+    async def messages(request: Request) -> Response:
+        payload = await request.json()
+        state.claude_requests.append(
+            {
+                "path": request.url.path,
+                "api_key": request.headers.get("x-api-key"),
+                "anthropic_version": request.headers.get("anthropic-version"),
+                "payload": payload,
+            }
+        )
+        return JSONResponse(
+            {
+                "id": "msg-e2e-native",
+                "type": "message",
+                "role": "assistant",
+                "model": payload["model"],
+                "content": [{"type": "text", "text": "native Claude reply"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 6, "output_tokens": 4},
+                "secret": state.provider_secret,
+            }
+        )
+
+    @app.post("/v1beta/models/{model}:generateContent")
+    async def generate_content(model: str, request: Request) -> Response:
+        payload = await request.json()
+        state.gemini_requests.append(
+            {
+                "path": request.url.path,
+                "api_key": request.headers.get("x-goog-api-key"),
+                "payload": payload,
+            }
+        )
+        return JSONResponse(
+            {
+                "modelVersion": model,
+                "responseId": "response-e2e-native",
+                "candidates": [
+                    {
+                        "index": 0,
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": "native Gemini reply"}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 6},
+                "secret": state.provider_secret,
+            }
+        )
+
     @app.websocket("/realtime")
     async def realtime(websocket: WebSocket) -> None:
         state.websocket_authorization = websocket.headers.get("authorization")
@@ -215,6 +280,7 @@ def fake_provider_app(state: FakeProviderState) -> FastAPI:
                 "response": {
                     "id": "response-e2e-websocket",
                     "usage": {"input_tokens": 3, "output_tokens": 2},
+                    "secret": state.provider_secret,
                 },
             }
         )
@@ -288,39 +354,52 @@ async def provision_gateway(
     assert provider_secret not in provider.text
     provider_body = provider.json()
     provider_id = int(provider_body["id"])
-    protocol_id = next(
-        int(item["id"]) for item in provider_body["protocols"] if item["protocol"] == "openai"
-    )
+    protocol_ids = {str(item["protocol"]): int(item["id"]) for item in provider_body["protocols"]}
 
-    alias = f"friendly-{suffix}"
-    upstream_model = f"native-{suffix}"
-    model = await client.post(
-        "/admin/models",
-        headers=admin_headers,
-        json={
-            "canonical_name": f"canonical-{suffix}",
-            "display_name": "E2E model",
-            "input_price_per_million": "1000.00000000",
-            "output_price_per_million": "2000.00000000",
-            "aliases": [alias],
-        },
-    )
-    assert model.status_code == 201, model.text
-    model_id = int(model.json()["id"])
+    async def create_model_route(protocol: str) -> tuple[int, int, str, str]:
+        qualifier = "" if protocol == "openai" else f"-{protocol}"
+        alias = f"friendly{qualifier}-{suffix}"
+        upstream_model = f"native{qualifier}-{suffix}"
+        model = await client.post(
+            "/admin/models",
+            headers=admin_headers,
+            json={
+                "canonical_name": f"canonical{qualifier}-{suffix}",
+                "display_name": f"E2E {protocol} model",
+                "input_price_per_million": "1000.00000000",
+                "output_price_per_million": "2000.00000000",
+                "aliases": [alias],
+            },
+        )
+        assert model.status_code == 201, model.text
+        model_id = int(model.json()["id"])
+        route = await client.post(
+            "/admin/model-routes",
+            headers=admin_headers,
+            json={
+                "model_id": model_id,
+                "provider_id": provider_id,
+                "provider_protocol_id": protocol_ids[protocol],
+                "upstream_model": upstream_model,
+                "weight": 100,
+            },
+        )
+        assert route.status_code == 201, route.text
+        return model_id, int(route.json()["id"]), alias, upstream_model
 
-    route = await client.post(
-        "/admin/model-routes",
-        headers=admin_headers,
-        json={
-            "model_id": model_id,
-            "provider_id": provider_id,
-            "provider_protocol_id": protocol_id,
-            "upstream_model": upstream_model,
-            "weight": 100,
-        },
-    )
-    assert route.status_code == 201, route.text
-    route_id = int(route.json()["id"])
+    model_id, route_id, alias, upstream_model = await create_model_route("openai")
+    (
+        claude_model_id,
+        claude_route_id,
+        claude_alias,
+        claude_upstream_model,
+    ) = await create_model_route("claude")
+    (
+        gemini_model_id,
+        gemini_route_id,
+        gemini_alias,
+        gemini_upstream_model,
+    ) = await create_model_route("gemini")
 
     api_key = await client.post(
         "/admin/api-keys",
@@ -330,7 +409,7 @@ async def provision_gateway(
             "name": "e2e-key",
             "scope": "providers_and_models",
             "provider_ids": [provider_id],
-            "model_ids": [model_id],
+            "model_ids": [model_id, claude_model_id, gemini_model_id],
         },
     )
     assert api_key.status_code == 201, api_key.text
@@ -358,6 +437,14 @@ async def provision_gateway(
         api_key=str(api_key.json()["key"]),
         alias=alias,
         upstream_model=upstream_model,
+        claude_model_id=claude_model_id,
+        claude_route_id=claude_route_id,
+        claude_alias=claude_alias,
+        claude_upstream_model=claude_upstream_model,
+        gemini_model_id=gemini_model_id,
+        gemini_route_id=gemini_route_id,
+        gemini_alias=gemini_alias,
+        gemini_upstream_model=gemini_upstream_model,
         body_secret=f"request-body-secret-{suffix}",
     )
 
@@ -531,7 +618,11 @@ async def exercise_admin_and_auth_regression(
             "scope": "providers_and_models",
             "is_active": True,
             "provider_ids": [state.provider_id],
-            "model_ids": [state.model_id],
+            "model_ids": [
+                state.model_id,
+                state.claude_model_id,
+                state.gemini_model_id,
+            ],
         },
     )
     assert updated_key.status_code == 200, updated_key.text
@@ -659,6 +750,38 @@ async def exercise_http_protocols(
     assert '"promptTokenCount":4' in stream.text
     assert '"candidatesTokenCount":3' in stream.text
 
+    native_claude = await client.post(
+        "/v1/messages",
+        headers={"x-api-key": state.api_key, "x-request-id": "e2e-native-claude"},
+        json={
+            "model": state.claude_alias,
+            "messages": [{"role": "user", "content": "hello native Claude"}],
+            "max_tokens": 8,
+            "secret": state.body_secret,
+        },
+    )
+    assert native_claude.status_code == 200, native_claude.text
+    assert native_claude.json()["content"] == [{"type": "text", "text": "native Claude reply"}]
+    assert native_claude.json()["usage"] == {"input_tokens": 6, "output_tokens": 4}
+
+    native_gemini = await client.post(
+        f"/v1beta/models/{state.gemini_alias}:generateContent",
+        headers={"x-goog-api-key": state.api_key, "x-request-id": "e2e-native-gemini"},
+        json={
+            "contents": [{"role": "user", "parts": [{"text": "hello native Gemini"}]}],
+            "generationConfig": {"maxOutputTokens": 8},
+            "secret": state.body_secret,
+        },
+    )
+    assert native_gemini.status_code == 200, native_gemini.text
+    assert native_gemini.json()["candidates"][0]["content"]["parts"] == [
+        {"text": "native Gemini reply"}
+    ]
+    assert native_gemini.json()["usageMetadata"] == {
+        "promptTokenCount": 7,
+        "candidatesTokenCount": 6,
+    }
+
 
 async def exercise_websocket(base_url: str, state: ProvisionedGateway) -> dict[str, Any]:
     websocket_url = base_url.replace("http://", "ws://") + (
@@ -675,6 +798,7 @@ async def exercise_websocket(base_url: str, state: ProvisionedGateway) -> dict[s
                 {
                     "type": "session.update",
                     "session": {"model": state.alias, "input_text": "websocket hello"},
+                    "secret": state.body_secret,
                 }
             ).decode()
         )
@@ -702,30 +826,41 @@ async def assert_durable_results(
         "canonical_model": f"canonical-{state.alias.removeprefix('friendly-')}"
     }
 
-    route = await client.get(f"/admin/model-routes/{state.route_id}", headers=state.admin_headers)
-    assert route.status_code == 200, route.text
-    assert route.json()["runtime_state"] == "closed"
-    assert route.json()["consecutive_failures"] == 0
-    assert route.json()["last_error_code"] is None
+    for route_id in (state.route_id, state.claude_route_id, state.gemini_route_id):
+        route = await client.get(f"/admin/model-routes/{route_id}", headers=state.admin_headers)
+        assert route.status_code == 200, route.text
+        assert route.json()["runtime_state"] == "closed"
+        assert route.json()["consecutive_failures"] == 0
+        assert route.json()["last_error_code"] is None
 
     ledger = await client.get(f"/admin/users/{state.user_id}/ledger", headers=state.admin_headers)
     assert ledger.status_code == 200, ledger.text
     entries = ledger.json()
-    assert len(entries) == 10
+    assert len(entries) == 16
     totals: dict[str, Decimal] = defaultdict(Decimal)
     counts: dict[str, int] = defaultdict(int)
+    entries_by_request: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for entry in entries:
         totals[entry["kind"]] += Decimal(str(entry["amount"]))
         counts[entry["kind"]] += 1
+        if entry["request_id"] is not None:
+            entries_by_request[str(entry["request_id"])].append(entry)
     assert counts == {
         "adjustment": 1,
-        "reservation": 3,
-        "reservation_release": 3,
-        "usage": 3,
+        "reservation": 5,
+        "reservation_release": 5,
+        "usage": 5,
     }
     assert totals["adjustment"] == INITIAL_CREDIT
+    assert totals["reservation"] == -EXPECTED_RESERVATION_TOTAL
+    assert totals["reservation_release"] == EXPECTED_RESERVATION_TOTAL
     assert totals["usage"] == -EXPECTED_USAGE_COST
-    assert totals["reservation"] == -totals["reservation_release"]
+    assert len(entries_by_request) == 5
+    for request_entries in entries_by_request.values():
+        paired = {entry["kind"]: Decimal(str(entry["amount"])) for entry in request_entries}
+        assert set(paired) == {"reservation", "reservation_release", "usage"}
+        assert paired["reservation"] == -paired["reservation_release"]
+        assert paired["usage"] < 0
     assert sum(totals.values(), Decimal("0")) == INITIAL_CREDIT - EXPECTED_USAGE_COST
 
     user_login = await client.post(
@@ -750,15 +885,17 @@ async def assert_durable_results(
                     .order_by(RequestLog.created_at, RequestLog.id)
                 )
             )
-        if len(request_logs) == 3 and all(
+        if len(request_logs) == 5 and all(
             item.status.value == "completed" for item in request_logs
         ):
             break
         await asyncio.sleep(0.02)
-    assert len(request_logs) == 3
+    assert len(request_logs) == 5
     assert sorted(item.cost for item in request_logs) == [
         Decimal("0.00700000"),
         Decimal("0.01000000"),
+        Decimal("0.01400000"),
+        Decimal("0.01900000"),
         Decimal("0.02000000"),
     ]
     assert {item.transport for item in request_logs} == {"http", "websocket"}
@@ -767,29 +904,51 @@ async def assert_durable_results(
         "gemini",
         "openai",
     }
+    assert {item.outbound_protocol.value for item in request_logs} == {
+        "claude",
+        "gemini",
+        "openai",
+    }
     assert all(item.provider_id == state.provider_id for item in request_logs)
-    assert all(item.model_route_id == state.route_id for item in request_logs)
+    assert {item.model_route_id for item in request_logs} == {
+        state.route_id,
+        state.claude_route_id,
+        state.gemini_route_id,
+    }
 
-    redacted_details: list[dict[str, Any]] = []
+    request_details: list[dict[str, Any]] = []
+    response_details: list[dict[str, Any]] = []
     for item in request_logs:
         assert item.request_detail_gzip is not None
-        detail = orjson.loads(gzip.decompress(item.request_detail_gzip))
-        assert isinstance(detail, dict)
-        serialized = orjson.dumps(detail)
-        assert state.api_key.encode() not in serialized
-        assert state.body_secret.encode() not in serialized
-        assert fake.provider_secret.encode() not in serialized
-        assert "x-api-key" not in detail.get("headers", {})
-        assert "x-goog-api-key" not in detail.get("headers", {})
-        assert "authorization" not in detail.get("headers", {})
-        redacted_details.append(detail)
-    assert any(detail.get("body", {}).get("secret") == "[REDACTED]" for detail in redacted_details)
+        assert item.response_detail_gzip is not None
+        request_detail = orjson.loads(gzip.decompress(item.request_detail_gzip))
+        response_detail = orjson.loads(gzip.decompress(item.response_detail_gzip))
+        assert isinstance(request_detail, dict)
+        assert isinstance(response_detail, dict)
+        for detail in (request_detail, response_detail):
+            serialized = orjson.dumps(detail)
+            assert state.api_key.encode() not in serialized
+            assert state.body_secret.encode() not in serialized
+            assert fake.provider_secret.encode() not in serialized
+            assert "x-api-key" not in detail.get("headers", {})
+            assert "x-goog-api-key" not in detail.get("headers", {})
+            assert "authorization" not in detail.get("headers", {})
+        if item.transport == "http":
+            assert request_detail.get("body", {}).get("secret") == "[REDACTED]"
+        request_details.append(request_detail)
+        response_details.append(response_detail)
 
-    detail_response = await client.get(
-        f"/admin/request-logs/{request_logs[0].id}", headers=state.admin_headers
-    )
-    assert detail_response.status_code == 200, detail_response.text
-    assert detail_response.json()["request_detail"] == redacted_details[0]
+    assert any(b'"secret":"[REDACTED]"' in orjson.dumps(item) for item in response_details)
+
+    for request_log, request_detail, response_detail in zip(
+        request_logs, request_details, response_details, strict=True
+    ):
+        detail_response = await client.get(
+            f"/admin/request-logs/{request_log.id}", headers=state.admin_headers
+        )
+        assert detail_response.status_code == 200, detail_response.text
+        assert detail_response.json()["request_detail"] == request_detail
+        assert detail_response.json()["response_detail"] == response_detail
 
     filtered_logs = await client.get(
         "/admin/request-logs",
@@ -820,19 +979,49 @@ async def assert_durable_results(
         route_delete.status_code == model_delete.status_code == provider_delete.status_code == 409
     )
 
-    assert len(fake.http_requests) == 2
+    assert len(fake.openai_requests) == 2
     assert all(
         request["authorization"] == f"Bearer {fake.provider_secret}"
-        for request in fake.http_requests
+        for request in fake.openai_requests
     )
     assert all(
-        request["payload"]["model"] == state.upstream_model for request in fake.http_requests
+        request["payload"]["model"] == state.upstream_model for request in fake.openai_requests
     )
-    assert {bool(request["payload"]["stream"]) for request in fake.http_requests} == {False, True}
+    assert {request["path"] for request in fake.openai_requests} == {"/v1/chat/completions"}
+    assert {bool(request["payload"]["stream"]) for request in fake.openai_requests} == {
+        False,
+        True,
+    }
+
+    assert fake.claude_requests == [
+        {
+            "path": "/v1/messages",
+            "api_key": fake.provider_secret,
+            "anthropic_version": "2023-06-01",
+            "payload": {
+                "model": state.claude_upstream_model,
+                "messages": [{"role": "user", "content": "hello native Claude"}],
+                "max_tokens": 8,
+                "secret": state.body_secret,
+            },
+        }
+    ]
+    assert fake.gemini_requests == [
+        {
+            "path": f"/v1beta/models/{state.gemini_upstream_model}:generateContent",
+            "api_key": fake.provider_secret,
+            "payload": {
+                "contents": [{"role": "user", "parts": [{"text": "hello native Gemini"}]}],
+                "generationConfig": {"maxOutputTokens": 8},
+                "secret": state.body_secret,
+            },
+        }
+    ]
     assert fake.websocket_authorization == f"Bearer {fake.provider_secret}"
     assert fake.websocket_model == state.upstream_model
     assert fake.websocket_frame is not None
     assert fake.websocket_frame["session"]["model"] == state.upstream_model
+    assert fake.websocket_frame["secret"] == state.body_secret
 
 
 async def cleanup_e2e_records(engine: AsyncEngine, suffix: str) -> None:
@@ -860,7 +1049,14 @@ async def cleanup_e2e_records(engine: AsyncEngine, suffix: str) -> None:
         model_ids = list(
             await session.scalars(
                 select(Model.id).where(
-                    Model.canonical_name.in_([f"canonical-{suffix}", f"aux-model-{suffix}"])
+                    Model.canonical_name.in_(
+                        [
+                            f"canonical-{suffix}",
+                            f"canonical-claude-{suffix}",
+                            f"canonical-gemini-{suffix}",
+                            f"aux-model-{suffix}",
+                        ]
+                    )
                 )
             )
         )

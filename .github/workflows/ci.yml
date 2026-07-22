@@ -32,6 +32,10 @@ jobs:
       GATEWAY_JWT_SECRET: ci-jwt-secret-at-least-32-bytes-long
       GATEWAY_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
       GATEWAY_NO_PROXY: 127.0.0.1,localhost
+      MYSQL_DATABASE: gateway
+      MYSQL_PASSWORD: gateway
+      MYSQL_ROOT_PASSWORD: gateway-root
+      MYSQL_USER: gateway
 
     steps:
       - uses: actions/checkout@v4
@@ -52,13 +56,13 @@ jobs:
         run: uv run alembic upgrade head
 
       - name: Lint
-        run: uv run ruff check src tests
+        run: uv run ruff check src tests scripts
 
       - name: Check formatting
-        run: uv run ruff format --check src tests
+        run: uv run ruff format --check src tests scripts
 
       - name: Type-check
-        run: uv run mypy src
+        run: uv run mypy src scripts
 
       - name: Test with coverage
         run: >-

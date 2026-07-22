@@ -6,49 +6,7 @@ import getpass
 import os
 import sys
 
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
-
-from ai_gateway.core.config import get_settings
-from ai_gateway.core.security import hash_password
-from ai_gateway.db.models import Account, User
-from ai_gateway.db.session import get_engine_for_url, get_session_factory_for_engine
-
-
-class AdminAlreadyExistsError(ValueError):
-    pass
-
-
-async def create_admin(email: str, password: str) -> User:
-    normalized_email = email.strip()
-    if len(normalized_email) < 3 or len(normalized_email) > 320:
-        raise ValueError("email must contain between 3 and 320 characters")
-    if not password:
-        raise ValueError("password must not be empty")
-
-    settings = get_settings()
-    engine = get_engine_for_url(settings.database_url)
-    session_factory = get_session_factory_for_engine(engine)
-    try:
-        async with session_factory() as session:
-            if await session.scalar(select(User.id).where(User.email == normalized_email)):
-                raise AdminAlreadyExistsError(f"user {normalized_email!r} already exists")
-            admin = User(
-                email=normalized_email,
-                password_hash=hash_password(password),
-                role="admin",
-            )
-            admin.account = Account()
-            session.add(admin)
-            try:
-                await session.commit()
-            except IntegrityError:
-                await session.rollback()
-                raise AdminAlreadyExistsError(f"user {normalized_email!r} already exists") from None
-            await session.refresh(admin)
-            return admin
-    finally:
-        await engine.dispose()
+from ai_gateway.admin.bootstrap import AdminEmailConflictError, create_admin
 
 
 def parse_args() -> argparse.Namespace:
@@ -79,11 +37,14 @@ def main() -> int:
     args = parse_args()
     try:
         password = password_from_args(args)
-        admin = asyncio.run(create_admin(args.email, password))
-    except (AdminAlreadyExistsError, ValueError) as exc:
+        result = asyncio.run(create_admin(args.email, password))
+    except (AdminEmailConflictError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(f"created administrator {admin.email} (id={admin.id})")
+    if result.created:
+        print(f"created administrator {result.user.email} (id={result.user.id})")
+    else:
+        print(f"administrator {result.user.email} already exists; no changes made")
     return 0
 
 

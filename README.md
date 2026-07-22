@@ -17,7 +17,7 @@ scale containers horizontally.
 
 ## Local startup
 
-Create a local environment file and replace both example secrets:
+Create a local environment file and replace the gateway secrets:
 
 ```bash
 cp .env.example .env
@@ -30,8 +30,16 @@ print("GATEWAY_ENCRYPTION_KEY=" + Fernet.generate_key().decode())
 PY
 ```
 
-Paste the generated values into `.env`. Never commit `.env`. For local host execution, keep
-`GATEWAY_DATABASE_URL=mysql+asyncmy://gateway:gateway@127.0.0.1:3306/gateway`.
+Paste the generated values into `.env`. Never commit `.env`. Compose reads `MYSQL_DATABASE`,
+`MYSQL_USER`, `MYSQL_PASSWORD`, and `MYSQL_ROOT_PASSWORD` from that file and uses the same values
+for the gateway database URL. The checked-in values are local-development defaults only; replace
+both MySQL passwords outside a disposable workstation. Because Compose embeds `MYSQL_PASSWORD`
+in a SQLAlchemy URL, use URL-safe password characters (`A-Z`, `a-z`, `0-9`, `.`, `_`, `~`, `-`).
+For local host execution, keep `GATEWAY_DATABASE_URL` aligned with those values and
+`127.0.0.1:3306`.
+
+MySQL is published only on `127.0.0.1:3306`; it is not exposed on external host interfaces.
+`compose.yaml` is the canonical and only Compose file.
 
 Start MySQL, install the frozen dependency set, and migrate before starting the app:
 
@@ -54,8 +62,9 @@ database that is not at migration head `0004`.
 
 ## Docker deployment
 
-For container deployment, set `GATEWAY_ENVIRONMENT=production` in `.env`, use non-example JWT and
-Fernet secrets, and leave the database hostname to the `compose.yaml` override (`mysql`). Then:
+For container deployment, set `GATEWAY_ENVIRONMENT=production` in `.env`, use non-example JWT,
+Fernet, and MySQL secrets, and leave the database hostname to the `compose.yaml` override
+(`mysql`). Then:
 
 ```bash
 docker compose build gateway
