@@ -167,6 +167,7 @@ describe('登录页面', () => {
           { status: 401 },
         ),
       ),
+      http.get('/admin/providers', () => HttpResponse.json([])),
     )
     const pinia = createPinia()
     setActivePinia(pinia)

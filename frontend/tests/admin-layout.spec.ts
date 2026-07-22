@@ -25,6 +25,14 @@ vi.mock('@/api/dashboard', () => ({
   }),
 }))
 
+vi.mock('@/api/providers', () => ({
+  listProviders: () => Promise.resolve([]),
+  createProvider: vi.fn(),
+  updateProvider: vi.fn(),
+  deleteProvider: vi.fn(),
+  syncProviderModels: vi.fn(),
+}))
+
 const adminUser = {
   id: 1,
   email: 'admin@example.com',
@@ -127,7 +135,7 @@ describe('管理控制台外壳', () => {
       expect(router.currentRoute.value.name).toBe('providers')
     })
     expect((layout.vm as unknown as { drawerOpen: boolean }).drawerOpen).toBe(false)
-    expect(wrapper.get('main#main-content').text()).toContain('功能正在建设中。')
+    expect(wrapper.get('main#main-content').text()).toContain('供应商列表')
   })
 
   it('提供跳转主内容、可聚焦主区域和路由页面内容', async () => {
@@ -147,7 +155,9 @@ describe('管理控制台外壳', () => {
     expect(security).toBeDefined()
     await security?.trigger('click')
     await flushPromises()
-    expect(router.currentRoute.value.name).toBe('security')
+    await vi.waitFor(() => {
+      expect(router.currentRoute.value.name).toBe('security')
+    })
 
     const logout = vi.spyOn(auth, 'logout')
     const logoutButton = wrapper

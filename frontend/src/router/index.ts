@@ -30,7 +30,7 @@ export const routes: RouteRecordRaw[] = [
       {
         path: 'providers',
         name: 'providers',
-        component: () => import('@/views/FutureView.vue'),
+        component: () => import('@/views/ProvidersView.vue'),
         meta: { title: '供应商管理' },
       },
       {

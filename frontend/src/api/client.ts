@@ -105,6 +105,7 @@ const apiErrorMessages: Readonly<Record<string, string>> = {
   invalid_credentials: '邮箱或密码错误',
   invalid_token: '登录状态已失效',
   invalid_totp: '双重验证验证码无效',
+  provider_has_history: '供应商已有请求历史，不能直接删除',
   session_changed: '登录状态已变更，请重试',
   totp_required: '请输入双重验证验证码',
 }
