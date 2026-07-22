@@ -111,74 +111,189 @@ async function deleteOrDisable(page: Page, path: string, fallbackBody: Record<st
     method: 'PATCH',
     path,
   })
-  expect(fallbackStatus, `Cleanup failed for ${path}`).toBeGreaterThanOrEqual(200)
-  expect(fallbackStatus, `Cleanup failed for ${path}`).toBeLessThan(300)
+  if (fallbackStatus < 200 || fallbackStatus >= 300) throw new Error('cleanup request failed')
 }
 
-async function closeSecretDialogIfOpen(page: Page): Promise<void> {
-  const secret = page.getByTestId('one-time-secret')
-  if (!(await secret.isVisible().catch(() => false))) return
+async function expectSafeCondition(
+  check: () => Promise<boolean>,
+  message: string,
+): Promise<void> {
+  await expect.poll(check, { message }).toBe(true)
+}
+
+async function secretIsVisibleAndNonEmpty(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const element = document.querySelector<HTMLElement>('[data-test="one-time-secret"]')
+    if (element === null || element.textContent.trim() === '') return false
+    const style = window.getComputedStyle(element)
+    return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0
+  })
+}
+
+async function secretNodeIsAbsent(page: Page): Promise<boolean> {
+  return page.evaluate(
+    () => document.querySelector('[data-test="one-time-secret"]') === null,
+  )
+}
+
+async function localStorageIsEmpty(page: Page): Promise<boolean> {
+  return page.evaluate(() => window.localStorage.length === 0)
+}
+
+async function sessionStorageHasOnlyTokens(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const keys = Object.keys(window.sessionStorage).sort()
+    return (
+      keys.length === 2 &&
+      keys[0] === 'gateway.access_token' &&
+      keys[1] === 'gateway.refresh_token'
+    )
+  })
+}
+
+async function closeSecretDialogIfPresent(page: Page): Promise<void> {
+  const present = await page.evaluate(
+    () => document.querySelector('[data-test="one-time-secret"]') !== null,
+  )
+  if (!present) return
   await page.getByTestId('secret-acknowledged').click()
   await page.getByTestId('secret-confirm-close').click()
-  await expect(secret).toBeHidden()
+}
+
+async function attemptCleanup(
+  failures: string[],
+  stage: string,
+  operation: () => Promise<void>,
+): Promise<void> {
+  try {
+    await operation()
+  } catch {
+    failures.push(stage)
+  }
+}
+
+async function recoverEntityId(
+  failures: string[],
+  stage: string,
+  operation: () => Promise<number | undefined>,
+  assign: (id: number) => void,
+): Promise<void> {
+  try {
+    const id = await operation()
+    if (id !== undefined) assign(id)
+  } catch {
+    failures.push(stage)
+  }
 }
 
 async function cleanup(page: Page, entities: CreatedEntities, names: EntityNames): Promise<void> {
-  await closeSecretDialogIfOpen(page)
+  const failures: string[] = []
+  await attemptCleanup(failures, 'secret dialog close', () => closeSecretDialogIfPresent(page))
+  await attemptCleanup(failures, 'secret DOM removal verification', async () => {
+    await expectSafeCondition(() => secretNodeIsAbsent(page), 'Secret node was not removed')
+  })
+  await attemptCleanup(failures, 'local storage verification', async () => {
+    await expectSafeCondition(() => localStorageIsEmpty(page), 'Local storage was not empty')
+  })
+  await attemptCleanup(failures, 'session storage verification', async () => {
+    await expectSafeCondition(
+      () => sessionStorageHasOnlyTokens(page),
+      'Session storage keys were not the exact allowlist',
+    )
+  })
   if (entities.apiKeyId === undefined) {
-    const id = await lookupEntityId(page, '/admin/api-keys', 'name', names.apiKey)
-    if (id !== undefined) entities.apiKeyId = id
+    await recoverEntityId(
+      failures,
+      'API key ID recovery',
+      () => lookupEntityId(page, '/admin/api-keys', 'name', names.apiKey),
+      (id) => {
+        entities.apiKeyId = id
+      },
+    )
   }
   if (entities.modelId === undefined) {
-    const id = await lookupEntityId(page, '/admin/models', 'canonical_name', names.model)
-    if (id !== undefined) entities.modelId = id
+    await recoverEntityId(
+      failures,
+      'model ID recovery',
+      () => lookupEntityId(page, '/admin/models', 'canonical_name', names.model),
+      (id) => {
+        entities.modelId = id
+      },
+    )
   }
   if (entities.providerId === undefined) {
-    const id = await lookupEntityId(page, '/admin/providers', 'name', names.provider)
-    if (id !== undefined) entities.providerId = id
+    await recoverEntityId(
+      failures,
+      'provider ID recovery',
+      () => lookupEntityId(page, '/admin/providers', 'name', names.provider),
+      (id) => {
+        entities.providerId = id
+      },
+    )
   }
   if (entities.userId === undefined) {
-    const id = await lookupEntityId(page, '/admin/users', 'email', names.user)
-    if (id !== undefined) entities.userId = id
+    await recoverEntityId(
+      failures,
+      'user ID recovery',
+      () => lookupEntityId(page, '/admin/users', 'email', names.user),
+      (id) => {
+        entities.userId = id
+      },
+    )
   }
-  if (entities.modelId !== undefined) {
-    if (entities.routeId === undefined) {
-      const id = await lookupEntityId(
-        page,
-        `/admin/model-routes?model_id=${String(entities.modelId)}`,
-        'upstream_model',
-        'e2e-original-model',
-      )
-      if (id !== undefined) entities.routeId = id
-    }
+  if (entities.modelId !== undefined && entities.routeId === undefined) {
+    await recoverEntityId(
+      failures,
+      'route ID recovery',
+      () =>
+        lookupEntityId(
+          page,
+          `/admin/model-routes?model_id=${String(entities.modelId)}`,
+          'upstream_model',
+          'e2e-original-model',
+        ),
+      (id) => {
+        entities.routeId = id
+      },
+    )
   }
   if (entities.apiKeyId !== undefined) {
-    await deleteOrDisable(page, `/admin/api-keys/${String(entities.apiKeyId)}`, {
-      is_active: false,
-    })
+    await attemptCleanup(failures, 'API key cleanup', () =>
+      deleteOrDisable(page, `/admin/api-keys/${String(entities.apiKeyId)}`, {
+        is_active: false,
+      }),
+    )
   }
   if (entities.routeId !== undefined) {
-    await deleteOrDisable(page, `/admin/model-routes/${String(entities.routeId)}`, {
-      enabled: false,
-    })
+    await attemptCleanup(failures, 'route cleanup', () =>
+      deleteOrDisable(page, `/admin/model-routes/${String(entities.routeId)}`, {
+        enabled: false,
+      }),
+    )
   }
   if (entities.modelId !== undefined) {
-    await deleteOrDisable(page, `/admin/models/${String(entities.modelId)}`, { enabled: false })
+    await attemptCleanup(failures, 'model cleanup', () =>
+      deleteOrDisable(page, `/admin/models/${String(entities.modelId)}`, { enabled: false }),
+    )
   }
   if (entities.providerId !== undefined) {
-    await deleteOrDisable(page, `/admin/providers/${String(entities.providerId)}`, {
-      enabled: false,
-    })
+    await attemptCleanup(failures, 'provider cleanup', () =>
+      deleteOrDisable(page, `/admin/providers/${String(entities.providerId)}`, {
+        enabled: false,
+      }),
+    )
   }
   if (entities.userId !== undefined) {
-    const status = await cleanupRequest(page, {
-      body: { is_active: false },
-      method: 'PATCH',
-      path: `/admin/users/${String(entities.userId)}`,
+    await attemptCleanup(failures, 'user disable', async () => {
+      const status = await cleanupRequest(page, {
+        body: { is_active: false },
+        method: 'PATCH',
+        path: `/admin/users/${String(entities.userId)}`,
+      })
+      if (status < 200 || status >= 300) throw new Error('cleanup request failed')
     })
-    expect(status, 'Created user must be disabled because its ledger is immutable').toBeGreaterThanOrEqual(200)
-    expect(status, 'Created user must be disabled because its ledger is immutable').toBeLessThan(300)
   }
+  if (failures.length > 0) throw new Error(`E2E cleanup failed at: ${failures.join(', ')}`)
 }
 
 async function expectNoSeriousAxeViolations(page: Page, pageName: string): Promise<void> {
@@ -352,19 +467,18 @@ test('creates, verifies, and safely cleans up console records', async ({ page })
       await page.getByTestId('api-key-scope').selectOption('models')
       await page.getByTestId('model-ids').selectOption({ label: `${modelDisplayName}（${modelCanonicalName}）` })
       await page.getByTestId('api-key-submit').click()
-      const oneTimeSecret = page.getByTestId('one-time-secret')
-      await expect(oneTimeSecret).toBeVisible()
-      expect(await oneTimeSecret.evaluate((element) => element.textContent.trim().length > 0)).toBe(true)
+      await expectSafeCondition(
+        () => secretIsVisibleAndNonEmpty(page),
+        'One-time secret was not visible and non-empty',
+      )
       await page.getByTestId('secret-acknowledged').click()
       await page.getByTestId('secret-confirm-close').click()
-      await expect(oneTimeSecret).toBeHidden()
-      expect(
-        await page.evaluate(() =>
-          Object.keys(window.sessionStorage).every((key) =>
-            ['gateway.access_token', 'gateway.refresh_token'].includes(key),
-          ),
-        ),
-      ).toBe(true)
+      await expectSafeCondition(() => secretNodeIsAbsent(page), 'Secret node was not removed')
+      await expectSafeCondition(() => localStorageIsEmpty(page), 'Local storage was not empty')
+      await expectSafeCondition(
+        () => sessionStorageHasOnlyTokens(page),
+        'Session storage keys were not the exact allowlist',
+      )
       await page.getByTestId('api-key-search').fill(apiKeyName)
       const apiKeyRow = page.getByRole('row').filter({ hasText: apiKeyName })
       entities.apiKeyId = await numericId(
