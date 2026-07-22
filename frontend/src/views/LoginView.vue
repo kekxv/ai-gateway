@@ -10,6 +10,7 @@ import 'element-plus/theme-chalk/el-form-item.css'
 import 'element-plus/theme-chalk/el-input.css'
 
 import { ApiError } from '@/api/client'
+import { resolveLoginRedirect } from '@/router/redirect'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -29,14 +30,6 @@ function clearSecrets(): void {
   totpCode.value = ''
 }
 
-function safeRedirect(): string {
-  const redirect = route.query.redirect
-  if (typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')) {
-    return redirect
-  }
-  return '/'
-}
-
 async function submit(): Promise<void> {
   if (submitting.value) return
   errorMessage.value = ''
@@ -48,13 +41,14 @@ async function submit(): Promise<void> {
       password: password.value,
       ...(needsTotp.value ? { totp_code: totpCode.value } : {}),
     })
-    const destination = safeRedirect()
+    const destination = resolveLoginRedirect(route.query.redirect)
     clearSecrets()
     await router.replace(destination)
   } catch (error: unknown) {
     if (error instanceof ApiError && error.code === 'totp_required') {
       needsTotp.value = true
       totpCode.value = ''
+      submitting.value = false
       await nextTick()
       totpInput.value?.focus()
     } else {

@@ -27,6 +27,7 @@ import 'element-plus/theme-chalk/el-text.css'
 import 'element-plus/theme-chalk/el-tooltip.css'
 import {
   Connection,
+  Close,
   DataAnalysis,
   Document,
   Key,
@@ -108,7 +109,18 @@ onBeforeUnmount(() => {
       </ElMenu>
     </ElAside>
 
-    <ElDrawer v-model="drawerOpen" direction="ltr" size="min(82vw, 19rem)" title="控制台导航">
+    <ElDrawer
+      v-model="drawerOpen"
+      direction="ltr"
+      size="min(82vw, 19rem)"
+      :show-close="false"
+    >
+      <template #header="{ titleId, titleClass }">
+        <h2 :id="titleId" :class="[titleClass, 'drawer-title']">控制台导航</h2>
+        <ElButton text aria-label="关闭导航菜单" @click="drawerOpen = false">
+          <Close />
+        </ElButton>
+      </template>
       <ElMenu class="admin-menu admin-menu--drawer" :default-active="route.path" @select="navigate">
         <ElMenuItem v-for="item in navigation" :key="item.route" :index="item.route">
           <ElIcon><component :is="item.icon" /></ElIcon>
@@ -199,6 +211,13 @@ onBeforeUnmount(() => {
 
 .admin-menu--drawer {
   margin: 0 -1.25rem;
+}
+
+.drawer-title {
+  margin: 0;
+  color: var(--gateway-text);
+  font-size: 1.125rem;
+  font-weight: 700;
 }
 
 .admin-workspace {

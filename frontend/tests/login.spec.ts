@@ -6,8 +6,10 @@ import { createMemoryHistory } from 'vue-router'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { CurrentUser } from '@/api/types'
+import App from '@/App.vue'
 import LoginView from '@/views/LoginView.vue'
 import { createAppRouter } from '@/router'
+import { useAuthStore } from '@/stores/auth'
 
 const adminUser: CurrentUser = {
   id: 1,
@@ -54,6 +56,13 @@ async function mountLogin(redirect?: string) {
 describe('登录页面', () => {
   it('仅在服务端要求双重验证后显示验证码输入框', async () => {
     const requests: unknown[] = []
+    const totpFocusDisabledStates: boolean[] = []
+    vi.spyOn(HTMLInputElement.prototype, 'focus').mockImplementation(function (
+      this: HTMLInputElement,
+    ) {
+      if (this.name === 'totp_code') totpFocusDisabledStates.push(this.disabled)
+      HTMLElement.prototype.focus.call(this)
+    })
     server.use(
       http.post('/auth/login', async ({ request }) => {
         requests.push(await request.json())
@@ -73,6 +82,7 @@ describe('登录页面', () => {
 
     expect(requests).toEqual([{ email: 'admin@example.com', password: 'secret-pass' }])
     expect(wrapper.find('[data-test="totp-code"]').exists()).toBe(true)
+    expect(totpFocusDisabledStates).toEqual([false])
     expect(document.activeElement).toBe(wrapper.get('[data-test="totp-code"]').element)
     expect((wrapper.get('[data-test="password"]').element as HTMLInputElement).value).toBe(
       'secret-pass',
@@ -147,5 +157,42 @@ describe('登录页面', () => {
     await flushPromises()
 
     expect((wrapper.get('[data-test="password"]').element as HTMLInputElement).value).toBe('')
+  })
+
+  it('通过 RouterView 离开登录页时清空已填写的密码和验证码', async () => {
+    server.use(
+      http.post('/auth/login', () =>
+        HttpResponse.json(
+          { detail: { code: 'totp_required', message: 'TOTP code is required' } },
+          { status: 401 },
+        ),
+      ),
+    )
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = createAppRouter(createMemoryHistory())
+    await router.push({ name: 'login' })
+    await router.isReady()
+    const app = mount(App, {
+      attachTo: document.body,
+      global: { plugins: [pinia, router] },
+    })
+
+    const login = app.getComponent(LoginView)
+    await login.get('[data-test="email"]').setValue('admin@example.com')
+    await login.get('[data-test="password"]').setValue('secret-pass')
+    await login.get('form').trigger('submit')
+    await flushPromises()
+    await login.get('[data-test="totp-code"]').setValue('123456')
+    expect((login.vm as unknown as { password: string }).password).toBe('secret-pass')
+    expect((login.vm as unknown as { totpCode: string }).totpCode).toBe('123456')
+
+    useAuthStore().user = adminUser
+    await router.push('/providers')
+    await flushPromises()
+
+    expect(app.findComponent(LoginView).exists()).toBe(false)
+    expect((login.vm as unknown as { password: string }).password).toBe('')
+    expect((login.vm as unknown as { totpCode: string }).totpCode).toBe('')
   })
 })

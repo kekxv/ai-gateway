@@ -8,6 +8,8 @@ import {
 
 import { useAuthStore } from '@/stores/auth'
 
+export { resolveLoginRedirect } from './redirect'
+
 export const routes: RouteRecordRaw[] = [
   {
     path: '/login',
@@ -67,7 +69,6 @@ export const routes: RouteRecordRaw[] = [
     path: '/:pathMatch(.*)*',
     name: 'not-found',
     component: () => import('@/views/NotFoundView.vue'),
-    meta: { public: true },
   },
 ]
 
