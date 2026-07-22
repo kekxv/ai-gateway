@@ -1,0 +1,30 @@
+import { fileURLToPath, URL } from 'node:url'
+
+import vue from '@vitejs/plugin-vue'
+import { defineConfig } from 'vitest/config'
+
+export default defineConfig({
+  base: '/console/',
+  plugins: [vue()],
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
+  server: {
+    proxy: Object.fromEntries(
+      ['/auth', '/admin', '/me', '/health'].map((path) => [
+        path,
+        {
+          target: process.env.GATEWAY_DEV_URL ?? 'http://127.0.0.1:8000',
+          changeOrigin: true,
+        },
+      ]),
+    ),
+  },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+    restoreMocks: true,
+  },
+})
