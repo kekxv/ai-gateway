@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from collections.abc import AsyncIterator
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from uuid import uuid4
 
 import pytest_asyncio
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ai_gateway.admin.dashboard import dashboard_now
+from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import Protocol, RequestStatus, RouteRuntimeState
+from ai_gateway.core.security import issue_access_token
 from ai_gateway.db.models import (
     ApiKey,
     Model,
@@ -19,6 +23,58 @@ from ai_gateway.db.models import (
     RequestLog,
     User,
 )
+from ai_gateway.db.session import get_session
+from ai_gateway.main import create_app
+
+FIXED_NOW = datetime(2026, 7, 22, 12, 0, 0)
+
+
+@pytest_asyncio.fixture
+async def dashboard_admin_client(
+    session: AsyncSession,
+    admin_settings: Settings,
+    admin_user_record: User,
+) -> AsyncIterator[AsyncClient]:
+    app = create_app()
+
+    async def override_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_settings] = lambda: admin_settings
+    app.dependency_overrides[dashboard_now] = lambda: FIXED_NOW
+    token = issue_access_token(user_id=admin_user_record.id, settings=admin_settings)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as client:
+        yield client
+
+
+def _request_log(
+    *,
+    user_id: int,
+    created_at: datetime,
+    status: RequestStatus,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cost: str,
+    latency_ms: int | None,
+) -> RequestLog:
+    return RequestLog(
+        id=str(uuid4()),
+        user_id=user_id,
+        inbound_protocol=Protocol.OPENAI,
+        transport="http",
+        stream=False,
+        status=status,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cost=Decimal(cost),
+        latency_ms=latency_ms,
+        created_at=created_at,
+    )
 
 
 @pytest_asyncio.fixture
@@ -26,20 +82,21 @@ async def seeded_dashboard_data(
     session: AsyncSession,
     regular_user_record: User,
 ) -> None:
-    now = datetime.now(UTC).replace(tzinfo=None)
-    active_key = ApiKey(
+    expired_but_active_key = ApiKey(
         user_id=regular_user_record.id,
-        name="active-dashboard-key",
+        name="expired-but-active-dashboard-key",
         key_prefix="sk-gw-dash-a",
         key_hash=sha256(b"active-dashboard-key").digest(),
         is_active=True,
+        expires_at=FIXED_NOW - timedelta(days=1),
     )
-    inactive_key = ApiKey(
+    unexpired_but_inactive_key = ApiKey(
         user_id=regular_user_record.id,
-        name="inactive-dashboard-key",
+        name="unexpired-but-inactive-dashboard-key",
         key_prefix="sk-gw-dash-i",
         key_hash=sha256(b"inactive-dashboard-key").digest(),
         is_active=False,
+        expires_at=FIXED_NOW + timedelta(days=1),
     )
     providers = [
         Provider(name="dashboard-enabled", credential_encrypted=b"one", enabled=True),
@@ -49,7 +106,7 @@ async def seeded_dashboard_data(
         Model(canonical_name="dashboard-model-a", display_name="Dashboard A", enabled=True),
         Model(canonical_name="dashboard-model-b", display_name="Dashboard B", enabled=False),
     ]
-    session.add_all([active_key, inactive_key, *providers, *models])
+    session.add_all([expired_but_active_key, unexpired_but_inactive_key, *providers, *models])
     await session.flush()
 
     protocols = [
@@ -67,103 +124,134 @@ async def seeded_dashboard_data(
     session.add_all(protocols)
     await session.flush()
 
-    routes = [
-        ModelRoute(
-            model_id=models[0].id,
-            provider_id=providers[0].id,
-            provider_protocol_id=protocols[0].id,
-            upstream_model="dashboard-upstream-a",
-            enabled=True,
-            runtime_state=RouteRuntimeState.CLOSED,
-        ),
-        ModelRoute(
-            model_id=models[0].id,
-            provider_id=providers[1].id,
-            provider_protocol_id=protocols[1].id,
-            upstream_model="dashboard-upstream-b",
-            enabled=True,
-            runtime_state=RouteRuntimeState.OPEN,
-        ),
-        ModelRoute(
-            model_id=models[1].id,
-            provider_id=providers[0].id,
-            provider_protocol_id=protocols[0].id,
-            upstream_model="dashboard-upstream-c",
-            enabled=False,
-            runtime_state=RouteRuntimeState.HALF_OPEN,
-        ),
-    ]
-    session.add_all(routes)
-    await session.flush()
+    session.add_all(
+        [
+            ModelRoute(
+                model_id=models[0].id,
+                provider_id=providers[0].id,
+                provider_protocol_id=protocols[0].id,
+                upstream_model="dashboard-upstream-a",
+                enabled=True,
+                runtime_state=RouteRuntimeState.CLOSED,
+            ),
+            ModelRoute(
+                model_id=models[0].id,
+                provider_id=providers[1].id,
+                provider_protocol_id=protocols[1].id,
+                upstream_model="dashboard-upstream-b",
+                enabled=True,
+                runtime_state=RouteRuntimeState.OPEN,
+            ),
+            ModelRoute(
+                model_id=models[1].id,
+                provider_id=providers[0].id,
+                provider_protocol_id=protocols[0].id,
+                upstream_model="dashboard-upstream-c",
+                enabled=False,
+                runtime_state=RouteRuntimeState.HALF_OPEN,
+            ),
+        ]
+    )
 
-    recent_requests = [
-        RequestLog(
-            id=str(uuid4()),
-            user_id=regular_user_record.id,
-            inbound_protocol=Protocol.OPENAI,
-            transport="http",
-            stream=False,
-            status=RequestStatus.COMPLETED,
-            prompt_tokens=100,
-            completion_tokens=10,
-            cost=Decimal("0.02500000"),
-            latency_ms=100,
-            created_at=now - timedelta(minutes=30),
-        ),
-        RequestLog(
-            id=str(uuid4()),
-            user_id=regular_user_record.id,
-            inbound_protocol=Protocol.CLAUDE,
-            transport="http",
-            stream=True,
-            status=RequestStatus.FAILED,
-            prompt_tokens=200,
-            completion_tokens=20,
-            cost=Decimal("0.10000000"),
-            latency_ms=300,
-            created_at=now - timedelta(minutes=20),
-        ),
-        RequestLog(
-            id=str(uuid4()),
-            user_id=regular_user_record.id,
-            inbound_protocol=Protocol.GEMINI,
-            transport="http",
-            stream=False,
-            status=RequestStatus.CLIENT_DISCONNECTED,
-            prompt_tokens=300,
-            completion_tokens=30,
-            cost=Decimal("0.00000000"),
-            latency_ms=None,
-            created_at=now - timedelta(minutes=10),
-        ),
-    ]
-    older_daily_request = RequestLog(
-        id=str(uuid4()),
-        user_id=regular_user_record.id,
-        inbound_protocol=Protocol.OPENAI,
-        transport="http",
-        stream=False,
-        status=RequestStatus.FAILED,
-        prompt_tokens=999,
-        completion_tokens=999,
-        cost=Decimal("9.00000000"),
-        latency_ms=999,
-        created_at=now - timedelta(days=2),
+    cutoff_24h = FIXED_NOW - timedelta(hours=24)
+    first_daily_midnight = datetime.combine(
+        FIXED_NOW.date() - timedelta(days=6),
+        time.min,
     )
-    outside_daily_window = RequestLog(
-        id=str(uuid4()),
-        user_id=regular_user_record.id,
-        inbound_protocol=Protocol.OPENAI,
-        transport="http",
-        stream=False,
-        status=RequestStatus.FAILED,
-        prompt_tokens=999,
-        completion_tokens=999,
-        cost=Decimal("9.00000000"),
-        latency_ms=999,
-        created_at=now - timedelta(days=8),
+    session.add_all(
+        [
+            _request_log(
+                user_id=regular_user_record.id,
+                created_at=cutoff_24h,
+                status=RequestStatus.COMPLETED,
+                prompt_tokens=10,
+                completion_tokens=1,
+                cost="0.01000000",
+                latency_ms=100,
+            ),
+            _request_log(
+                user_id=regular_user_record.id,
+                created_at=cutoff_24h + timedelta(seconds=1),
+                status=RequestStatus.FAILED,
+                prompt_tokens=20,
+                completion_tokens=2,
+                cost="0.02000000",
+                latency_ms=200,
+            ),
+            _request_log(
+                user_id=regular_user_record.id,
+                created_at=cutoff_24h - timedelta(seconds=1),
+                status=RequestStatus.FAILED,
+                prompt_tokens=40,
+                completion_tokens=4,
+                cost="0.04000000",
+                latency_ms=400,
+            ),
+            _request_log(
+                user_id=regular_user_record.id,
+                created_at=FIXED_NOW - timedelta(minutes=30),
+                status=RequestStatus.COMPLETED,
+                prompt_tokens=100,
+                completion_tokens=10,
+                cost="0.02500000",
+                latency_ms=100,
+            ),
+            _request_log(
+                user_id=regular_user_record.id,
+                created_at=FIXED_NOW - timedelta(minutes=20),
+                status=RequestStatus.FAILED,
+                prompt_tokens=200,
+                completion_tokens=20,
+                cost="0.10000000",
+                latency_ms=300,
+            ),
+            _request_log(
+                user_id=regular_user_record.id,
+                created_at=FIXED_NOW - timedelta(minutes=10),
+                status=RequestStatus.CLIENT_DISCONNECTED,
+                prompt_tokens=300,
+                completion_tokens=30,
+                cost="0.00000000",
+                latency_ms=None,
+            ),
+            _request_log(
+                user_id=regular_user_record.id,
+                created_at=FIXED_NOW,
+                status=RequestStatus.COMPLETED,
+                prompt_tokens=5,
+                completion_tokens=5,
+                cost="0.00500000",
+                latency_ms=500,
+            ),
+            _request_log(
+                user_id=regular_user_record.id,
+                created_at=FIXED_NOW + timedelta(seconds=1),
+                status=RequestStatus.FAILED,
+                prompt_tokens=1000,
+                completion_tokens=1000,
+                cost="10.00000000",
+                latency_ms=1000,
+            ),
+            _request_log(
+                user_id=regular_user_record.id,
+                created_at=first_daily_midnight,
+                status=RequestStatus.COMPLETED,
+                prompt_tokens=500,
+                completion_tokens=500,
+                cost="0.50000000",
+                latency_ms=500,
+            ),
+            _request_log(
+                user_id=regular_user_record.id,
+                created_at=first_daily_midnight - timedelta(seconds=1),
+                status=RequestStatus.FAILED,
+                prompt_tokens=1000,
+                completion_tokens=1000,
+                cost="10.00000000",
+                latency_ms=1000,
+            ),
+        ]
     )
-    session.add_all([*recent_requests, older_daily_request, outside_daily_window])
     await session.flush()
 
 
@@ -174,50 +262,88 @@ async def test_dashboard_summary_requires_admin(non_admin_client: AsyncClient) -
     assert response.json()["detail"]["code"] == "admin_required"
 
 
-async def test_dashboard_summary_returns_counts_and_seven_utc_days(
-    admin_client: AsyncClient,
+async def test_dashboard_summary_returns_counts_and_exact_seven_utc_days(
+    dashboard_admin_client: AsyncClient,
     seeded_dashboard_data: None,
 ) -> None:
-    response = await admin_client.get("/admin/dashboard/summary")
+    response = await dashboard_admin_client.get("/admin/dashboard/summary")
 
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["users_total"] == 2
+    # The brief defines active API keys by the persisted is_active flag only.
     assert payload["active_api_keys"] == 1
     assert payload["providers"] == {"total": 2, "enabled": 1}
     assert payload["models"] == {"total": 2, "enabled": 1}
     assert payload["routes"] == {"total": 3, "enabled": 2, "unavailable": 1}
-    assert payload["requests_24h"] == 3
-    assert payload["failed_requests_24h"] == 1
-    assert payload["prompt_tokens_24h"] == 600
-    assert payload["completion_tokens_24h"] == 60
-    assert payload["cost_24h"] == "0.12500000"
-    assert payload["average_latency_ms_24h"] == 200
+
+    # Exact cutoff and exact now are included; one second outside either bound is excluded.
+    assert payload["requests_24h"] == 6
+    assert payload["failed_requests_24h"] == 2
+    assert payload["prompt_tokens_24h"] == 635
+    assert payload["completion_tokens_24h"] == 68
+    assert payload["cost_24h"] == "0.16000000"
+    assert payload["average_latency_ms_24h"] == 240
 
     daily_usage = payload["daily_usage"]
-    assert len(daily_usage) == 7
-    assert [point["date"] for point in daily_usage] == sorted(
-        point["date"] for point in daily_usage
+    expected_dates = [
+        (FIXED_NOW.date() - timedelta(days=6) + timedelta(days=offset)).isoformat()
+        for offset in range(7)
+    ]
+    assert [point["date"] for point in daily_usage] == expected_dates
+    # Midnight on today-6 is included, while the record one second before it is excluded.
+    assert daily_usage[0] == {
+        "date": expected_dates[0],
+        "requests": 1,
+        "failures": 0,
+        "cost": "0.50000000",
+    }
+    assert daily_usage[-2] == {
+        "date": expected_dates[-2],
+        "requests": 3,
+        "failures": 2,
+        "cost": "0.07000000",
+    }
+    assert daily_usage[-1] == {
+        "date": expected_dates[-1],
+        "requests": 4,
+        "failures": 1,
+        "cost": "0.13000000",
+    }
+    assert all(
+        point["requests"] == point["failures"] == 0 and point["cost"] == "0"
+        for point in daily_usage[1:-2]
     )
-    assert daily_usage[-1]["requests"] == 3
-    assert daily_usage[-1]["failures"] == 1
-    assert daily_usage[-1]["cost"] == "0.12500000"
-    assert sum(point["requests"] for point in daily_usage) == 4
-    assert sum(point["failures"] for point in daily_usage) == 2
-    assert any(
-        point
-        == {
-            "date": point["date"],
-            "requests": 0,
-            "failures": 0,
-            "cost": "0",
-        }
-        for point in daily_usage
-    )
+    assert sum(point["requests"] for point in daily_usage) == 8
+    assert sum(point["failures"] for point in daily_usage) == 3
 
 
-async def test_dashboard_summary_is_in_openapi(admin_client: AsyncClient) -> None:
-    response = await admin_client.get("/openapi.json")
+async def test_dashboard_summary_openapi_contract(
+    dashboard_admin_client: AsyncClient,
+) -> None:
+    response = await dashboard_admin_client.get("/openapi.json")
 
     assert response.status_code == 200
-    assert "/admin/dashboard/summary" in response.json()["paths"]
+    document = response.json()
+    success_schema = document["paths"]["/admin/dashboard/summary"]["get"]["responses"]["200"][
+        "content"
+    ]["application/json"]["schema"]
+    assert success_schema == {"$ref": "#/components/schemas/DashboardSummary"}
+
+    summary_schema = document["components"]["schemas"]["DashboardSummary"]
+    required_fields = {
+        "users_total",
+        "active_api_keys",
+        "providers",
+        "models",
+        "routes",
+        "requests_24h",
+        "failed_requests_24h",
+        "prompt_tokens_24h",
+        "completion_tokens_24h",
+        "cost_24h",
+        "average_latency_ms_24h",
+        "daily_usage",
+    }
+    assert required_fields <= set(summary_schema["properties"])
+    assert required_fields <= set(summary_schema["required"])

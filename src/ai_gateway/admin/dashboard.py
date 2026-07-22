@@ -20,6 +20,13 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 AdminUser = Annotated[User, Depends(admin_user)]
 
 
+def dashboard_now() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+DashboardNow = Annotated[datetime, Depends(dashboard_now)]
+
+
 class ResourceCount(BaseModel):
     total: int
     enabled: int
@@ -52,8 +59,11 @@ class DashboardSummary(BaseModel):
 
 
 @router.get("/summary", response_model=DashboardSummary)
-async def get_dashboard_summary(session: Session, _: AdminUser) -> DashboardSummary:
-    now = datetime.now(UTC).replace(tzinfo=None)
+async def get_dashboard_summary(
+    session: Session,
+    _: AdminUser,
+    now: DashboardNow,
+) -> DashboardSummary:
     cutoff_24h = now - timedelta(hours=24)
     first_daily_date = now.date() - timedelta(days=6)
     first_daily_midnight = datetime.combine(first_daily_date, time.min)
