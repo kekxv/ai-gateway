@@ -45,6 +45,7 @@ const name = ref('')
 const scope = ref<ApiKeyScope>('all')
 const isActive = ref(true)
 const expiry = ref('')
+const expiryDirty = ref(false)
 const providerIds = ref<number[]>([])
 const modelIds = ref<number[]>([])
 const ownerError = ref('')
@@ -76,6 +77,7 @@ function clearDraft(): void {
   scope.value = 'all'
   isActive.value = true
   expiry.value = ''
+  expiryDirty.value = false
   providerIds.value = []
   modelIds.value = []
   clearErrors()
@@ -96,6 +98,7 @@ function resetForm(): void {
   scope.value = apiKey?.scope ?? 'all'
   isActive.value = apiKey?.is_active ?? true
   expiry.value = localDateTime(apiKey?.expires_at ?? null)
+  expiryDirty.value = false
   providerIds.value = [...(apiKey?.provider_ids ?? [])]
   modelIds.value = [...(apiKey?.model_ids ?? [])]
   normalizeSelections()
@@ -219,7 +222,9 @@ function submitForm(): void {
   if (name.value.trim() !== apiKey.name) payload.name = name.value.trim()
   if (scope.value !== apiKey.scope) payload.scope = scope.value
   if (isActive.value !== apiKey.is_active) payload.is_active = isActive.value
-  if (!sameExpiry(expiresAt, apiKey.expires_at)) payload.expires_at = expiresAt
+  if (expiryDirty.value && !sameExpiry(expiresAt, apiKey.expires_at)) {
+    payload.expires_at = expiresAt
+  }
   if (
     scope.value !== apiKey.scope ||
     normalizedProviders.join(',') !== apiKey.provider_ids.join(',')
@@ -319,6 +324,7 @@ function submitForm(): void {
           class="field-input"
           type="datetime-local"
           :disabled="submitting"
+          @input="expiryDirty = true"
         />
       </ElFormItem>
 

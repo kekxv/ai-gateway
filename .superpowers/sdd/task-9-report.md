@@ -101,3 +101,56 @@ The production build reports existing Rollup advisory warnings for third-party `
 - Clipboard writes require a secure browser context and permission. On failure the dialog retains the visible secret and gives fixed guidance to copy manually.
 - Browser download behavior is covered with DOM/URL unit tests; no cross-browser end-to-end download assertion was added in this task.
 - No backend contract change was required; the implementation follows the existing `/admin/api-keys` response and error-code contract.
+
+## Independent review fixes
+
+### RED
+
+Added regression coverage for the Critical/Important findings, then ran:
+
+```text
+npm --prefix frontend run test -- api-keys.spec.ts
+```
+
+The expected pre-fix result was `3 failed, 17 passed`:
+
+- a create request did not disable a concurrent rotation;
+- a rotation of one key did not disable rotation of a different key;
+- an untouched `2026-12-31T16:00:37.789Z` expiry emitted the truncated `2026-12-31T16:00:00.000Z`.
+
+### Fix: globally exclusive secret lifecycle
+
+- Added a single component-local secret lifecycle lease shared by create and rotate.
+- Create acquires the lease immediately before starting the create request. Rotate acquires it before opening the destructive confirmation.
+- While held, all create entry points and every rotate button are disabled, and handler-level acquisition rejects programmatic/interleaved starts.
+- A successful create/rotate transfers lease ownership to the one-time dialog. The lease remains held while the secret is visible and is released only after acknowledged close clears the raw secret.
+- Confirmation cancellation, request errors (including inactive rotation), stale continuations, and teardown release the lease. Teardown also clears both the dialog lease reference and raw secret.
+- Added explicit tests for create-versus-rotate interleaving, two different key rotations, cancellation release, request-failure release, and post-acknowledgement release.
+
+### Fix: expiry edit precision
+
+- Added a local `expiryDirty` flag reset on every drawer session.
+- Edit payloads evaluate/send `expires_at` only when the user actually fires an input event for that field.
+- Therefore rendering into a minute-granularity `datetime-local` control cannot silently truncate untouched seconds/milliseconds.
+- Clearing still emits `expires_at: null`; a real change still emits an ISO timestamp. Both paths have regression assertions.
+
+### GREEN and complete results
+
+```text
+npm --prefix frontend run test -- api-keys.spec.ts
+PASS — 21/21 tests
+
+npm --prefix frontend run typecheck
+PASS
+
+npm --prefix frontend run lint
+PASS — 0 errors, 0 warnings
+
+npm --prefix frontend run test
+PASS — 130/130 tests across 11 files
+
+git diff --check
+PASS
+```
+
+No new concern was introduced by these fixes. The global lease stores only opaque `symbol` ownership tokens and a boolean UI flag; it never stores or duplicates the raw secret.

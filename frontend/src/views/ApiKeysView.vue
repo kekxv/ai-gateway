@@ -66,6 +66,7 @@ const editingApiKey = ref<ApiKeyResponse | null>(null)
 const formSubmitting = ref(false)
 const secretOpen = ref(false)
 const oneTimeSecret = ref<string | null>(null)
+const secretOperationActive = ref(false)
 const keyOperations = ref(new Map<number, KeyOperation>())
 
 const deletedIds = new Set<number>()
@@ -77,6 +78,8 @@ let loadGeneration = 0
 let stateRevision = 0
 let formSession = 0
 let activeSaveToken: symbol | undefined
+let activeSecretLifecycle: symbol | undefined
+let dialogSecretLifecycle: symbol | undefined
 
 const scopeLabels: Readonly<Record<ApiKeyScope, string>> = {
   all: '全部',
@@ -200,8 +203,27 @@ function isCurrentOperation(
   )
 }
 
+function acquireSecretLifecycle(): symbol | undefined {
+  if (activeSecretLifecycle !== undefined) return undefined
+  const token = Symbol('secret-lifecycle')
+  activeSecretLifecycle = token
+  secretOperationActive.value = true
+  return token
+}
+
+function releaseSecretLifecycle(token: symbol): void {
+  if (activeSecretLifecycle !== token) return
+  activeSecretLifecycle = undefined
+  secretOperationActive.value = false
+}
+
 function openCreate(): void {
-  if (formSubmitting.value || formOpen.value || secretOpen.value) return
+  if (
+    formSubmitting.value ||
+    formOpen.value ||
+    secretOpen.value ||
+    secretOperationActive.value
+  ) return
   formSession += 1
   editingApiKey.value = null
   formOpen.value = true
@@ -252,6 +274,11 @@ async function saveApiKey(payload: ApiKeyCreate | ApiKeyUpdate): Promise<void> {
     setFormOpen(false)
     return
   }
+  const secretLifecycle = isCreate ? acquireSecretLifecycle() : undefined
+  if (isCreate && secretLifecycle === undefined) {
+    notice.value = { type: 'warning', text: '请先完成当前密钥创建或轮换操作' }
+    return
+  }
   const session = formSession
   const token = Symbol('api-key-save')
   const controller = new AbortController()
@@ -259,6 +286,7 @@ async function saveApiKey(payload: ApiKeyCreate | ApiKeyUpdate): Promise<void> {
   saveController = controller
   activeSaveToken = token
   formSubmitting.value = true
+  let keepSecretLifecycleForDialog = false
   try {
     if (isCreate) {
       const created = await createApiKey(payload as ApiKeyCreate, controller.signal)
@@ -269,7 +297,9 @@ async function saveApiKey(payload: ApiKeyCreate | ApiKeyUpdate): Promise<void> {
       formOpen.value = false
       editingApiKey.value = null
       oneTimeSecret.value = key
+      dialogSecretLifecycle = secretLifecycle
       secretOpen.value = true
+      keepSecretLifecycleForDialog = true
       notice.value = { type: 'success', text: '接口密钥已创建，请立即安全保存' }
     } else {
       const updated = await updateApiKey(apiKeyId, payload, controller.signal)
@@ -291,16 +321,28 @@ async function saveApiKey(payload: ApiKeyCreate | ApiKeyUpdate): Promise<void> {
       saveController = undefined
       if (mounted) formSubmitting.value = false
     }
+    if (secretLifecycle !== undefined && !keepSecretLifecycleForDialog) {
+      releaseSecretLifecycle(secretLifecycle)
+    }
   }
 }
 
 function closeSecret(): void {
+  const secretLifecycle = dialogSecretLifecycle
   oneTimeSecret.value = null
   secretOpen.value = false
+  dialogSecretLifecycle = undefined
+  if (secretLifecycle !== undefined) releaseSecretLifecycle(secretLifecycle)
 }
 
 async function rotate(apiKey: ApiKeyResponse): Promise<void> {
-  if (secretOpen.value || !beginKeyOperation(apiKey.id, 'rotate')) return
+  if (secretOpen.value || secretOperationActive.value) return
+  const secretLifecycle = acquireSecretLifecycle()
+  if (secretLifecycle === undefined) return
+  if (!beginKeyOperation(apiKey.id, 'rotate')) {
+    releaseSecretLifecycle(secretLifecycle)
+    return
+  }
   const controller = operationController()
   try {
     await ElMessageBox.confirm(
@@ -313,20 +355,25 @@ async function rotate(apiKey: ApiKeyResponse): Promise<void> {
     if (isCurrentOperation(controller, apiKey.id, 'rotate')) {
       finishKeyOperation(apiKey.id, 'rotate')
     }
+    releaseSecretLifecycle(secretLifecycle)
     return
   }
   if (!isCurrentOperation(controller, apiKey.id, 'rotate')) {
     operationControllers.delete(controller)
+    releaseSecretLifecycle(secretLifecycle)
     return
   }
 
+  let keepSecretLifecycleForDialog = false
   try {
     const rotated = await rotateApiKey(apiKey.id, controller.signal)
     if (!isCurrentOperation(controller, apiKey.id, 'rotate')) return
     const { key, ...metadata } = rotated
     replaceRotatedApiKey(apiKey.id, metadata)
     oneTimeSecret.value = key
+    dialogSecretLifecycle = secretLifecycle
     secretOpen.value = true
+    keepSecretLifecycleForDialog = true
     notice.value = { type: 'success', text: '密钥已轮换，旧密钥已停用，请立即保存新密钥' }
   } catch (error: unknown) {
     if (!isCurrentOperation(controller, apiKey.id, 'rotate')) return
@@ -343,6 +390,7 @@ async function rotate(apiKey: ApiKeyResponse): Promise<void> {
     if (isCurrentOperation(controller, apiKey.id, 'rotate')) {
       finishKeyOperation(apiKey.id, 'rotate')
     }
+    if (!keepSecretLifecycleForDialog) releaseSecretLifecycle(secretLifecycle)
   }
 }
 
@@ -396,6 +444,9 @@ onBeforeUnmount(() => {
   formSession += 1
   oneTimeSecret.value = null
   secretOpen.value = false
+  dialogSecretLifecycle = undefined
+  activeSecretLifecycle = undefined
+  secretOperationActive.value = false
   loadController?.abort()
   saveController?.abort()
   for (const controller of operationControllers) controller.abort()
@@ -409,7 +460,7 @@ onBeforeUnmount(() => {
       <ElButton
         data-test="create-api-key"
         type="primary"
-        :disabled="secretOpen"
+        :disabled="secretOpen || secretOperationActive"
         @click="openCreate"
       >
         <ElIcon><Plus /></ElIcon>
@@ -503,7 +554,7 @@ onBeforeUnmount(() => {
                 <ElButton
                   :data-test="`rotate-api-key-${String(apiKey.id)}`"
                   size="small"
-                  :disabled="secretOpen || keyOperations.has(apiKey.id)"
+                  :disabled="secretOpen || secretOperationActive || keyOperations.has(apiKey.id)"
                   @click="rotate(apiKey)"
                 ><ElIcon><Key /></ElIcon>轮换</ElButton>
                 <ElButton

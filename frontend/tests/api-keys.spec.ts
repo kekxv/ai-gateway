@@ -119,6 +119,13 @@ const activeKey: ApiKeyResponse = {
   model_ids: [],
 }
 
+const secondActiveKey: ApiKeyResponse = {
+  ...activeKey,
+  id: 32,
+  name: '测试调用',
+  key_prefix: 'sk-gw-test12',
+}
+
 const server = setupServer()
 
 beforeAll(() => {
@@ -279,6 +286,29 @@ describe('接口密钥作用域与一次性明文', () => {
     wrapper.unmount()
   })
 
+  it('未编辑非整分钟过期时间时保留秒和毫秒精度，清空或真实修改仍发送', async () => {
+    const preciseExpiryKey: ApiKeyResponse = {
+      ...activeKey,
+      expires_at: '2026-12-31T16:00:37.789Z',
+    }
+    const { wrapper, onSubmit } = mountForm(preciseExpiryKey)
+    await flushPromises()
+
+    await wrapper.get('[data-test="api-key-submit"]').trigger('click')
+    expect(onSubmit).toHaveBeenLastCalledWith({})
+
+    await wrapper.get('[data-test="api-key-expiry"]').setValue('')
+    await wrapper.get('[data-test="api-key-submit"]').trigger('click')
+    expect(onSubmit).toHaveBeenLastCalledWith({ expires_at: null })
+
+    await wrapper.get('[data-test="api-key-expiry"]').setValue('2030-05-06T07:08')
+    await wrapper.get('[data-test="api-key-submit"]').trigger('click')
+    expect(onSubmit).toHaveBeenLastCalledWith({
+      expires_at: new Date('2030-05-06T07:08').toISOString(),
+    })
+    wrapper.unmount()
+  })
+
   it('表格按 user_id 精确显示 owner email，而非数组位置', async () => {
     const wrapper = await mountKeys()
     expect(wrapper.get('[data-test="api-key-row-31"]').text()).toContain('member@example.com')
@@ -422,6 +452,136 @@ describe('接口密钥作用域与一次性明文', () => {
     expect(wrapper.find('[data-test="api-key-row-31"]').exists()).toBe(false)
     expect(wrapper.get('[data-test="api-key-row-41"]').text()).toContain('sk-gw-rot123')
     expect(wrapper.text()).toContain('sk-gw-rotated-once')
+    wrapper.unmount()
+  })
+
+  it('创建开始后全局独占明文生命周期，轮换不能交错覆盖创建结果', async () => {
+    const createGate = deferred<Response>()
+    let rotateCalls = 0
+    useCatalog([activeKey])
+    server.use(
+      http.post('/admin/api-keys', () => createGate.promise),
+      http.post('/admin/api-keys/31/rotate', () => {
+        rotateCalls += 1
+        return HttpResponse.json(
+          { ...activeKey, id: 41, key: 'sk-gw-must-not-overwrite-create' },
+          { status: 201 },
+        )
+      }),
+    )
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({} as MessageBoxData)
+    const wrapper = mount(ApiKeysView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="create-api-key"]').trigger('click')
+    await wrapper.get('[data-test="api-key-owner"]').setValue('2')
+    await wrapper.get('[data-test="api-key-name"]').setValue('创建独占')
+    await wrapper.get('[data-test="api-key-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="rotate-api-key-31"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="rotate-api-key-31"]').trigger('click')
+    expect(confirm).not.toHaveBeenCalled()
+    expect(rotateCalls).toBe(0)
+
+    createGate.resolve(
+      HttpResponse.json(
+        { ...activeKey, id: 42, key: 'sk-gw-created-exclusive' },
+        { status: 201 },
+      ),
+    )
+    await flushPromises()
+    expect(wrapper.text()).toContain('sk-gw-created-exclusive')
+    await wrapper.get('[data-test="rotate-api-key-31"]').trigger('click')
+    expect(rotateCalls).toBe(0)
+    expect(wrapper.text()).not.toContain('sk-gw-must-not-overwrite-create')
+
+    await wrapper.get('[data-test="secret-acknowledged"] input').setValue(true)
+    await wrapper.get('[data-test="secret-confirm-close"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="rotate-api-key-31"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('一个 key 开始轮换后全局独占，不同 key 的轮换不能交错覆盖结果', async () => {
+    const firstRotateGate = deferred<Response>()
+    let firstCalls = 0
+    let secondCalls = 0
+    useCatalog([activeKey, secondActiveKey])
+    server.use(
+      http.post('/admin/api-keys/31/rotate', () => {
+        firstCalls += 1
+        return firstRotateGate.promise
+      }),
+      http.post('/admin/api-keys/32/rotate', () => {
+        secondCalls += 1
+        return HttpResponse.json(
+          { ...secondActiveKey, id: 52, key: 'sk-gw-second-must-not-render' },
+          { status: 201 },
+        )
+      }),
+    )
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({} as MessageBoxData)
+    const wrapper = mount(ApiKeysView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="rotate-api-key-31"]').trigger('click')
+    await flushPromises()
+    expect(firstCalls).toBe(1)
+    expect(wrapper.get('[data-test="rotate-api-key-32"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="rotate-api-key-32"]').trigger('click')
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(secondCalls).toBe(0)
+
+    firstRotateGate.resolve(
+      HttpResponse.json(
+        { ...activeKey, id: 51, key: 'sk-gw-first-exclusive' },
+        { status: 201 },
+      ),
+    )
+    await flushPromises()
+    expect(wrapper.text()).toContain('sk-gw-first-exclusive')
+    await wrapper.get('[data-test="rotate-api-key-32"]').trigger('click')
+    expect(secondCalls).toBe(0)
+    expect(wrapper.text()).not.toContain('sk-gw-second-must-not-render')
+
+    await wrapper.get('[data-test="secret-acknowledged"] input').setValue(true)
+    await wrapper.get('[data-test="secret-confirm-close"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="rotate-api-key-32"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('轮换确认取消和请求失败都会释放全局明文租约', async () => {
+    let rotateCalls = 0
+    useCatalog([activeKey, secondActiveKey])
+    server.use(
+      http.post('/admin/api-keys/31/rotate', () => {
+        rotateCalls += 1
+        return HttpResponse.json(
+          { detail: { code: 'temporary_failure', message: 'retry later' } },
+          { status: 500 },
+        )
+      }),
+    )
+    vi.spyOn(ElMessageBox, 'confirm')
+      .mockRejectedValueOnce(new Error('cancelled'))
+      .mockResolvedValueOnce({} as MessageBoxData)
+    const wrapper = mount(ApiKeysView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="rotate-api-key-31"]').trigger('click')
+    await flushPromises()
+    expect(rotateCalls).toBe(0)
+    expect(wrapper.get('[data-test="create-api-key"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-test="rotate-api-key-32"]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[data-test="rotate-api-key-31"]').trigger('click')
+    await flushPromises()
+    expect(rotateCalls).toBe(1)
+    expect(wrapper.text()).toContain('服务暂时不可用')
+    expect(wrapper.get('[data-test="create-api-key"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-test="rotate-api-key-32"]').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 
