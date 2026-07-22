@@ -39,6 +39,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      mysql-test-setup:
+        condition: service_completed_successfully
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
@@ -59,6 +61,28 @@ services:
       retries: 6
       start_period: 15s
     restart: unless-stopped
+
+  mysql-test-setup:
+    image: mysql:8.4
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gateway}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-gateway-root}
+      MYSQL_TEST_DATABASE: ${MYSQL_TEST_DATABASE:-gateway_test}
+      MYSQL_USER: ${MYSQL_USER:-gateway}
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - >-
+        mysql --protocol=TCP --host=mysql --user=root
+        --password="$$MYSQL_ROOT_PASSWORD"
+        --execute="CREATE DATABASE IF NOT EXISTS \`$$MYSQL_TEST_DATABASE\`;
+        GRANT ALL PRIVILEGES ON \`$$MYSQL_TEST_DATABASE\`.* TO '$$MYSQL_USER'@'%';
+        FLUSH PRIVILEGES;"
+    restart: "no"
 
 volumes:
   mysql-data:

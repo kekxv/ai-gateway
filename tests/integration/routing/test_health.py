@@ -16,10 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from ai_gateway.auth.api_key import ApiKeyPrincipal
 from ai_gateway.catalog.schemas import ResolvedModel
+from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import ApiKeyScope, Protocol, RouteRuntimeState
 from ai_gateway.db.models import Model, ModelRoute, Provider, ProviderProtocol
+from ai_gateway.gateway.service import GatewayService
+from ai_gateway.gateway.websocket import WebSocketGatewayService
 from ai_gateway.routing.health import RouteHealth, health_failure_code, is_health_failure
-from ai_gateway.routing.service import Router
+from ai_gateway.routing.service import Router, router_for_settings
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFailure
 
 
@@ -359,6 +362,67 @@ async def test_health_mutation_does_not_flush_or_commit_caller_writes(
 
     async with mutation_sessions() as observer:
         assert await _provider_count(observer, unrelated_name) == 0
+
+
+async def test_runtime_route_threshold_and_cooldown_are_applied(
+    test_engine: AsyncEngine,
+    committed_route: tuple[ResolvedModel, int],
+) -> None:
+    _, route_id = committed_route
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        jwt_secret="route-settings-secret-at-least-32-bytes",
+        encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+        route_failure_threshold=1,
+        route_cooldown_seconds=7,
+    )
+    before = utcnow()
+    async with AsyncSession(test_engine, expire_on_commit=False) as caller:
+        changed = await router_for_settings(caller, settings).record_failure(route_id, 500)
+    assert changed
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as observer:
+        route = await _load_route(observer, route_id)
+    assert route.runtime_state is RouteRuntimeState.OPEN
+    assert route.consecutive_failures == 1
+    assert route.disabled_until is not None
+    assert before + timedelta(seconds=6) <= route.disabled_until <= utcnow() + timedelta(seconds=8)
+
+
+async def test_http_sse_and_websocket_services_own_configured_router_health(
+    test_engine: AsyncEngine,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        jwt_secret="route-settings-secret-at-least-32-bytes",
+        encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+        route_failure_threshold=2,
+        route_cooldown_seconds=11,
+    )
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        http_and_sse = GatewayService(
+            session=session,
+            settings=settings,
+            billing_service=object(),  # type: ignore[arg-type]
+            audit_service=object(),  # type: ignore[arg-type]
+            http_client_factory=object(),  # type: ignore[arg-type]
+        )
+        websocket = WebSocketGatewayService(
+            session=session,
+            settings=settings,
+            billing_service=object(),  # type: ignore[arg-type]
+            audit_service=object(),  # type: ignore[arg-type]
+        )
+
+        for route_router in (
+            http_and_sse._router_factory(session),
+            websocket._router_factory(session),
+        ):
+            assert isinstance(route_router, Router)
+            assert route_router._failure_threshold == 2
+            assert route_router._cooldown == timedelta(seconds=11)
 
 
 async def test_half_open_claim_isolated_from_caller_transaction_and_returns_fresh_state(

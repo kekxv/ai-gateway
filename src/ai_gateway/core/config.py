@@ -19,9 +19,9 @@ class Settings(BaseSettings):
     http_proxy: str | None = Field(default=None, repr=False)
     https_proxy: str | None = Field(default=None, repr=False)
     no_proxy: str = "127.0.0.1,localhost"
-    route_failure_threshold: int = 3
-    route_cooldown_seconds: int = 60
-    model_sync_interval_seconds: int = 3600
+    route_failure_threshold: int = Field(default=3, ge=1)
+    route_cooldown_seconds: int = Field(default=60, ge=1)
+    model_sync_interval_seconds: int = Field(default=3600, ge=1)
     audit_body_limit_bytes: int = 1_048_576
     billing_default_max_output_tokens: int = Field(default=4096, ge=1)
     billing_recovery_interval_seconds: int = Field(default=60, ge=1)

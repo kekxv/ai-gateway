@@ -175,7 +175,11 @@ class GatewayContext:
     def observe_passthrough(self, event: SSEEvent) -> None:
         """Collect metrics without making exact same-protocol forwarding depend on adapters."""
 
-        if event.is_heartbeat or event.data == b"[DONE]":
+        if event.is_heartbeat:
+            return
+        if self.source_protocol is Protocol.OPENAI and event.data == b"[DONE]":
+            self.semantic_finish_observed = True
+            self.terminal_done_observed = True
             return
         try:
             payload = orjson.loads(event.data)
@@ -217,6 +221,9 @@ class GatewayContext:
                                         content += function[key]
         elif self.source_protocol is Protocol.CLAUDE:
             event_type = payload.get("type")
+            if event_type == "message_stop":
+                self.semantic_finish_observed = True
+                self.terminal_done_observed = True
             if event_type == "message_start" and isinstance(payload.get("message"), dict):
                 native_usage = payload["message"].get("usage")
                 if isinstance(native_usage, dict) and isinstance(
@@ -252,6 +259,13 @@ class GatewayContext:
             candidates = payload.get("candidates")
             if isinstance(candidates, list):
                 for candidate in candidates:
+                    if isinstance(candidate, dict) and isinstance(
+                        candidate.get("finishReason"), str
+                    ):
+                        finish_reason = candidate["finishReason"]
+                        if finish_reason and finish_reason != "FINISH_REASON_UNSPECIFIED":
+                            self.semantic_finish_observed = True
+                            self.terminal_done_observed = True
                     native_content = (
                         candidate.get("content") if isinstance(candidate, dict) else None
                     )
@@ -374,6 +388,10 @@ async def stream_gateway_response(
                     continue
                 terminal_frames.extend(encode_canonical(canonical_event))
         if context.source_protocol is context.target_protocol:
+            if not context.semantic_finish_observed:
+                raise IncompleteStreamError(
+                    "The upstream provider reached EOF without its native terminal event"
+                )
             return
         if not context.semantic_finish_observed:
             raise IncompleteStreamError(

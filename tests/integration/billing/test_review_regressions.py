@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 import ai_gateway.billing.service as billing_module
 from ai_gateway.billing.service import (
     BalanceReservation,
+    BillingAmountOutOfRange,
     BillingService,
     IdempotencyConflict,
     InsufficientBalance,
@@ -485,6 +486,100 @@ async def test_adjustment_rejects_values_outside_numeric_20_8(
         )
 
 
+async def test_adjustment_rejects_balance_after_overflow(
+    test_engine: AsyncEngine,
+    billing_service: BillingService,
+    committed_identity: BillingIdentity,
+) -> None:
+    async with AsyncSession(test_engine, expire_on_commit=False) as setup:
+        account = await setup.get(Account, committed_identity.account_id)
+        assert account is not None
+        account.balance = Decimal("0.00000001")
+        await setup.commit()
+
+    with pytest.raises(BillingAmountOutOfRange, match="adjustment balance_after"):
+        await billing_service.adjust_balance(
+            user_id=committed_identity.user_id,
+            amount=Decimal("999999999999.99999999"),
+            reason="overflow",
+            idempotency_key=f"overflow-adjustment-{uuid4().hex}",
+        )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as check:
+        account = await check.get(Account, committed_identity.account_id)
+    assert account is not None
+    assert account.balance == Decimal("0.00000001")
+
+
+async def test_settlement_rejects_total_spent_overflow_without_negative_balance(
+    test_engine: AsyncEngine,
+    billing_service: BillingService,
+    committed_identity: BillingIdentity,
+    priced_model: Model,
+) -> None:
+    async with AsyncSession(test_engine, expire_on_commit=False) as setup:
+        account = await setup.get(Account, committed_identity.account_id)
+        assert account is not None
+        account.total_spent = Decimal("999999999999.99999999")
+        await setup.commit()
+    reservation = await billing_service.reserve_balance(
+        user_id=committed_identity.user_id,
+        model=priced_model,
+        estimated_input_tokens=1,
+        max_output_tokens=0,
+        idempotency_key=f"overflow-reserve-{uuid4().hex}",
+    )
+
+    with pytest.raises(BillingAmountOutOfRange, match="settlement total_spent"):
+        await billing_service.settle_request(
+            reservation_id=reservation.ledger_entry_id,
+            idempotency_key=f"overflow-settle-{uuid4().hex}",
+            cost=Decimal("0.10000000"),
+        )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as check:
+        account = await check.get(Account, committed_identity.account_id)
+    assert account is not None
+    assert account.balance == Decimal("0.90000000")
+    assert account.balance >= 0
+    assert account.total_spent == Decimal("999999999999.99999999")
+
+
+async def test_reconciliation_allows_exact_max_and_rejects_overflow(
+    test_engine: AsyncEngine,
+    billing_service: BillingService,
+    committed_identity: BillingIdentity,
+) -> None:
+    async with AsyncSession(test_engine, expire_on_commit=False) as setup:
+        account = await setup.get(Account, committed_identity.account_id)
+        assert account is not None
+        account.balance = Decimal("999999999998.99999999")
+        account.total_spent = Decimal("1.00000000")
+        await setup.commit()
+
+    result = await billing_service.reconcile_charge(
+        user_id=committed_identity.user_id,
+        request_id=str(uuid4()),
+        amount=Decimal("1.00000000"),
+        idempotency_key=f"boundary-reconcile-{uuid4().hex}",
+    )
+    assert result.balance == Decimal("999999999999.99999999")
+    assert result.total_spent == Decimal("0.00000000")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as setup:
+        account = await setup.get(Account, committed_identity.account_id)
+        assert account is not None
+        account.total_spent = Decimal("0.00000001")
+        await setup.commit()
+    with pytest.raises(BillingAmountOutOfRange, match="reconciliation balance_after"):
+        await billing_service.reconcile_charge(
+            user_id=committed_identity.user_id,
+            request_id=str(uuid4()),
+            amount=Decimal("0.00000001"),
+            idempotency_key=f"overflow-reconcile-{uuid4().hex}",
+        )
+
+
 async def test_app_scoped_billing_service_and_whitespace_validation(
     test_engine: AsyncEngine,
 ) -> None:
@@ -617,6 +712,49 @@ async def test_expired_websocket_reservation_recovery_is_exact_once(
     assert entries[-1].metadata_json["output_tokens"] == 1
     assert account.balance == Decimal("0.70000000")
     assert account.total_spent == Decimal("0.30000000")
+
+
+async def test_expired_http_reservation_before_upstream_releases_without_charge(
+    test_engine: AsyncEngine,
+    billing_service: BillingService,
+    committed_identity: BillingIdentity,
+    priced_model: Model,
+) -> None:
+    reservation = await billing_service.reserve_balance(
+        user_id=committed_identity.user_id,
+        model=priced_model,
+        estimated_input_tokens=1,
+        max_output_tokens=1,
+        idempotency_key=f"http-crash-reserve-{uuid4().hex}",
+        recovery=ReservationRecovery(
+            settlement_key=f"http-crash-settle-{uuid4().hex}",
+            usage=CanonicalUsage(0, 0),
+            usage_source=UsageSource.ESTIMATED,
+            expires_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=1),
+            cost=Decimal("0"),
+        ),
+    )
+
+    assert await billing_service.recover_orphaned_reservations() == 1
+    assert await billing_service.recover_orphaned_reservations() == 0
+    async with AsyncSession(test_engine, expire_on_commit=False) as check:
+        account = await check.get(Account, committed_identity.account_id)
+        entries = list(
+            await check.scalars(
+                select(LedgerEntry).where(LedgerEntry.request_id == reservation.request_id)
+            )
+        )
+    assert account is not None
+    assert account.balance == Decimal("1.00000000")
+    assert account.total_spent == Decimal("0.00000000")
+    assert {entry.kind for entry in entries} == {
+        LedgerKind.RESERVATION,
+        LedgerKind.RESERVATION_RELEASE,
+        LedgerKind.USAGE,
+    }
+    assert next(entry for entry in entries if entry.kind is LedgerKind.USAGE).amount == Decimal(
+        "0.00000000"
+    )
 
 
 async def test_active_refresh_invalidates_expired_recovery_claim(

@@ -17,7 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.audit.service import RequestContext, RequestFailure, RequestResult
 from ai_gateway.auth.api_key import ApiKeyPrincipal
-from ai_gateway.billing.service import BalanceReservation, InsufficientBalance, SettlementResult
+from ai_gateway.billing.service import (
+    BalanceReservation,
+    InsufficientBalance,
+    ReservationRecovery,
+    SettlementResult,
+)
 from ai_gateway.catalog.repository import ModelNotFound
 from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import ApiKeyScope, Protocol
@@ -55,10 +60,17 @@ class FakeBilling:
     )
     settlements: int = 0
     reservation_keys: list[str] = field(default_factory=list)
+    reservation_recoveries: list[ReservationRecovery] = field(default_factory=list)
+    recovery_updates: list[ReservationRecovery] = field(default_factory=list)
 
     async def reserve_balance(self, **kwargs: Any) -> BalanceReservation:
         self.reservation_keys.append(kwargs["idempotency_key"])
+        self.reservation_recoveries.append(kwargs["recovery"])
         return self.reservation
+
+    async def update_reservation_recovery(self, **kwargs: Any) -> bool:
+        self.recovery_updates.append(kwargs["recovery"])
+        return True
 
     async def settle_request(self, **kwargs: Any) -> SettlementResult:
         self.settlements += 1
@@ -801,6 +813,64 @@ async def test_cleanup_failures_do_not_replace_original_cancellation(
     await upstream_client.aclose()
 
     assert caught.value is original
+
+
+async def test_nonstream_completed_usage_is_recoverable_when_settlement_fails(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    alias = model.aliases[0].alias
+    upstream_model = "native-recovery"
+    route = RouteCandidate(
+        route_id=121,
+        model_id=model.id,
+        provider_id=221,
+        provider_protocol_id=321,
+        protocol=Protocol.OPENAI,
+        base_url="https://provider.example/v1",
+        websocket_url=None,
+        upstream_model=upstream_model,
+        weight=100,
+        provider_credential_encrypted=encrypt_secret(
+            orjson.dumps({"api_key": "provider-secret"}).decode(),
+            settings=settings,
+        ),
+    )
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_response(Protocol.OPENAI, upstream_model))
+
+    class FailingSettlementBilling(FakeBilling):
+        async def settle_request(self, **_: Any) -> SettlementResult:
+            self.settlements += 1
+            raise RuntimeError("database unavailable")
+
+    billing = FailingSettlementBilling()
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=billing,  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([route]),
+    )
+    path, body = _request(Protocol.OPENAI, alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service), raise_app_exceptions=False),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 500
+    assert billing.reservation_recoveries[0].cost == Decimal("0")
+    assert billing.recovery_updates[-1].usage.input_tokens == 3
+    assert billing.recovery_updates[-1].usage.output_tokens == 2
+    assert billing.recovery_updates[-1].cost == Decimal("0.00000070")
+    assert billing.settlements == 2
 
 
 @pytest.mark.parametrize("failure_kind", ["network", "status"])

@@ -281,7 +281,6 @@ async def relay_websocket(
     client_close = _CloseOnce()
     upstream_close = _CloseOnce()
     accounting_lock = anyio.Lock()
-    setup_rewrite_pending = _query_has_model(query_string)
 
     async def observe(direction: str, frame: Frame) -> None:
         if observe_frame is not None:
@@ -351,15 +350,12 @@ async def relay_websocket(
         return True
 
     async def client_to_upstream(task_group: anyio.abc.TaskGroup) -> None:
-        nonlocal setup_rewrite_pending
         if initial_request is not None:
             outbound_initial = rewrite_initial_request(
                 initial_request,
                 route.protocol,
                 route.upstream_model,
             )
-            if _is_setup_frame(initial_request, route.protocol):
-                setup_rewrite_pending = False
             if not await send_client_frame(initial_request, outbound_initial, task_group):
                 return
         while True:
@@ -386,15 +382,7 @@ async def relay_websocket(
                 await finish_exception(exc, task_group, upstream_operation=False)
                 return
 
-            outbound = frame
-            if setup_rewrite_pending and _is_setup_frame(frame, route.protocol):
-                if _has_setup_model(frame, route.protocol):
-                    outbound = rewrite_initial_request(
-                        frame,
-                        route.protocol,
-                        route.upstream_model,
-                    )
-                setup_rewrite_pending = False
+            outbound = rewrite_initial_request(frame, route.protocol, route.upstream_model)
             if not await send_client_frame(frame, outbound, task_group):
                 return
 
@@ -649,46 +637,6 @@ def _is_penalizing_close(code: int) -> bool:
 
 def _wire_close_code(code: int) -> int:
     return 1011 if code in {1005, 1006, 1015} else code
-
-
-def _query_has_model(query_string: str) -> bool:
-    return any(name == "model" for name, _ in parse_qsl(query_string, keep_blank_values=True))
-
-
-def _has_setup_model(frame: Frame, protocol: Protocol) -> bool:
-    try:
-        payload = orjson.loads(frame)
-    except (orjson.JSONDecodeError, UnicodeDecodeError):
-        return False
-    if not isinstance(payload, Mapping):
-        return False
-    if protocol is Protocol.OPENAI:
-        session = payload.get("session")
-        return (isinstance(session, Mapping) and isinstance(session.get("model"), str)) or (
-            isinstance(payload.get("model"), str)
-        )
-    if protocol is Protocol.GEMINI:
-        setup = payload.get("setup")
-        return isinstance(setup, Mapping) and isinstance(setup.get("model"), str)
-    return False
-
-
-def _is_setup_frame(frame: Frame, protocol: Protocol) -> bool:
-    try:
-        payload = orjson.loads(frame)
-    except (orjson.JSONDecodeError, UnicodeDecodeError):
-        return False
-    if not isinstance(payload, Mapping):
-        return False
-    if protocol is Protocol.OPENAI:
-        return (
-            isinstance(payload.get("session"), Mapping)
-            or isinstance(payload.get("model"), str)
-            or payload.get("type") in {"session.update", "session.create"}
-        )
-    if protocol is Protocol.GEMINI:
-        return isinstance(payload.get("setup"), Mapping)
-    return False
 
 
 def _is_credential_subprotocol(value: str) -> bool:

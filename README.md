@@ -220,11 +220,16 @@ are propagated; client credentials are removed and provider credentials are inje
 
 ## Quality gates
 
+Tests require the dedicated `gateway_test` schema. `docker compose up -d mysql mysql-test-setup`
+creates/grants it even when upgrading an existing persistent MySQL volume. The fixture refuses a
+URL without `test` in the database name, refuses the application schema, and removes only gateway
+tables plus `alembic_version` from that isolated schema.
+
 ```bash
 uv run ruff check src tests
 uv run ruff format --check src tests
 uv run mypy src
-GATEWAY_TEST_DATABASE_URL='mysql+asyncmy://gateway:gateway@127.0.0.1:3306/gateway' \
+GATEWAY_TEST_DATABASE_URL='mysql+asyncmy://gateway:gateway@127.0.0.1:3306/gateway_test' \
   uv run pytest -W error --cov=ai_gateway --cov-report=term-missing --cov-fail-under=90
 docker build -t lean-ai-gateway:test .
 docker compose config --quiet

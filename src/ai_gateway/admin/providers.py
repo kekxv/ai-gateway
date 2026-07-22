@@ -50,7 +50,11 @@ async def create_provider(
         credential_encrypted=_encrypt_json(payload.credential, settings),
         enabled=payload.enabled,
         auto_load_models=payload.auto_load_models,
-        model_sync_interval_seconds=payload.model_sync_interval_seconds,
+        model_sync_interval_seconds=(
+            payload.model_sync_interval_seconds
+            if payload.model_sync_interval_seconds is not None
+            else settings.model_sync_interval_seconds
+        ),
         protocols=[_new_protocol(item, settings) for item in payload.protocols],
     )
     session.add(provider)

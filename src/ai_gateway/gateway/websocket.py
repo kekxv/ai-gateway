@@ -29,12 +29,13 @@ from ai_gateway.billing.service import (
 )
 from ai_gateway.billing.usage import UsageResult, estimate_text_tokens
 from ai_gateway.catalog.repository import CatalogRepository
+from ai_gateway.catalog.schemas import ResolvedModel
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import Protocol, UsageSource
 from ai_gateway.db.models import Model
 from ai_gateway.db.session import get_session
 from ai_gateway.protocols.types import CanonicalUsage
-from ai_gateway.routing.service import Router
+from ai_gateway.routing.service import router_for_settings
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFailure
 from ai_gateway.transport.websocket import (
     Frame,
@@ -97,7 +98,7 @@ class BillingBackend(TypingProtocol):
 class RouteSelector(TypingProtocol):
     async def select_route(
         self,
-        model: object,
+        model: ResolvedModel | int,
         principal: ApiKeyPrincipal,
         required_protocol: Protocol | str | None = None,
         *,
@@ -508,15 +509,18 @@ class WebSocketGatewayService:
         settings: Settings,
         billing_service: BillingBackend,
         audit_service: AuditService,
-        router_factory: Callable[[AsyncSession], RouteSelector] = cast(
-            Callable[[AsyncSession], RouteSelector], Router
-        ),
+        router_factory: Callable[[AsyncSession], RouteSelector] | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
         self._billing = billing_service
         self._audit = audit_service
-        self._router_factory = router_factory
+        if router_factory is None:
+            self._router_factory: Callable[[AsyncSession], RouteSelector] = lambda active_session: (
+                router_for_settings(active_session, settings)
+            )
+        else:
+            self._router_factory = router_factory
 
     async def handle(self, websocket: WebSocket, protocol: Protocol) -> None:
         started_at = monotonic()

@@ -95,6 +95,21 @@ async def test_provider_crud_supports_multiple_protocols_and_hides_secrets(
         == '{"a-header":"first","z-header":"last"}'
     )
 
+
+async def test_provider_uses_runtime_model_sync_interval_default(
+    admin_client: AsyncClient,
+    admin_settings,
+    session: AsyncSession,
+) -> None:
+    admin_settings.model_sync_interval_seconds = 73
+
+    body = await _create_provider(admin_client, name=f"runtime-sync-{uuid4().hex}")
+
+    assert body["model_sync_interval_seconds"] == 73
+    provider = await session.get(Provider, body["id"])
+    assert provider is not None
+    assert provider.model_sync_interval_seconds == 73
+
     listing = await admin_client.get("/admin/providers")
     detail = await admin_client.get(f"/admin/providers/{body['id']}")
     updated = await admin_client.patch(

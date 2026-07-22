@@ -4,6 +4,7 @@ from ai_gateway.billing.pricing import calculate_cost
 from ai_gateway.billing.service import (
     AdjustmentResult,
     BalanceReservation,
+    BillingAmountOutOfRange,
     BillingService,
     InsufficientBalance,
     ReservationRecovery,
@@ -24,6 +25,7 @@ __all__ = [
     "BalanceReservation",
     "AdjustmentResult",
     "BillingService",
+    "BillingAmountOutOfRange",
     "InsufficientBalance",
     "ReservationRecovery",
     "SettlementResult",

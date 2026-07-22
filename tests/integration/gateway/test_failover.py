@@ -514,7 +514,7 @@ async def test_cancellation_after_reservation_is_shielded_and_terminal(
             LedgerKind.USAGE,
         }
         assert len(entries) == 3
-        if stage not in {"audit_completion", "settlement_post_commit"}:
+        if stage not in {"settlement", "audit_completion", "settlement_post_commit"}:
             assert account.balance == initial_balance
             assert entries[-1].amount == Decimal("0E-8")
         else:

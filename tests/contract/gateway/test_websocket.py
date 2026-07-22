@@ -339,7 +339,7 @@ async def test_transparent_relay_rewrites_model_injects_auth_and_propagates_fram
         "subprotocol_header": "realtime",
         "initial": '{"type":"session.update","session":{"voice":"alloy"}}',
         "binary": b"client-bytes",
-        "later_model": '{"session":{"model":"later-alias"}}',
+        "later_model": '{"session":{"model":"native-realtime-model"}}',
     }
     assert client.sent == ["provider-text", b"provider-bytes"]
     assert client.close_calls == [(4100, "provider-finished")]
@@ -472,7 +472,7 @@ async def test_simultaneous_peer_close_uses_deterministic_provider_outcome_and_c
 
 
 @pytest.mark.asyncio
-async def test_query_model_rewrites_only_first_protocol_setup_frame() -> None:
+async def test_query_model_rewrites_every_protocol_model_frame() -> None:
     settings = _settings()
     client = FakeClientWebSocket(
         [
@@ -508,12 +508,12 @@ async def test_query_model_rewrites_only_first_protocol_setup_frame() -> None:
     }
     assert orjson.loads(upstream.sent[1]) == {
         "type": "session.update",
-        "session": {"model": "later-alias"},
+        "session": {"model": "native-realtime-model"},
     }
 
 
 @pytest.mark.asyncio
-async def test_query_model_rewrites_only_first_gemini_setup_frame() -> None:
+async def test_query_model_rewrites_every_gemini_setup_frame() -> None:
     settings = _settings()
     client = FakeClientWebSocket(
         [
@@ -544,7 +544,7 @@ async def test_query_model_rewrites_only_first_gemini_setup_frame() -> None:
     )
 
     assert orjson.loads(upstream.sent[0]) == {"setup": {"model": "native-realtime-model"}}
-    assert orjson.loads(upstream.sent[1]) == {"setup": {"model": "models/later-alias"}}
+    assert orjson.loads(upstream.sent[1]) == {"setup": {"model": "native-realtime-model"}}
 
 
 @pytest.mark.asyncio

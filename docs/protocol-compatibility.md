@@ -9,8 +9,10 @@ protocol as the endpoint.
 
 When inbound and outbound HTTP protocols match, the native JSON is passed through with the model
 rewritten to `ModelRoute.upstream_model`; native provider errors can also be returned in their
-original shape. Cross-protocol requests/responses and every cross-protocol stream are mapped as
-described below.
+original shape. This is semantic JSON pass-through: all parsed fields are preserved except the
+model rewrite, but whitespace, object-key order, and duplicate-key behavior are not byte-preserved.
+The gateway deliberately parses and re-encodes JSON instead of doing unsafe byte replacement.
+Cross-protocol requests/responses and every cross-protocol stream are mapped as described below.
 
 ## Request field mapping
 
@@ -73,7 +75,8 @@ the source provides them.
 
 For both endpoints:
 
-- Query/setup model aliases are rewritten to `upstream_model`.
+- Every query/setup/session-update model value is rewritten to `upstream_model`; a later client
+  frame cannot switch the selected route or leak an alias/other canonical model upstream.
 - Gateway API credentials in headers, query keys, and credential-like subprotocols are stripped.
 - Provider auth and configured extra headers are injected.
 - Text/binary frames and normal close code/reason are relayed; ping/pong is handled by the
@@ -89,3 +92,5 @@ provider-specific session configuration between WebSocket protocols.
 `GET /v1/models` returns canonical names and enabled aliases that have an eligible OpenAI route.
 `GET /v1beta/models` does the same for eligible Gemini routes. Alias entries include their
 canonical model in gateway metadata. API-key provider/model scopes are applied before listing.
+Listings intentionally correlate with the entry protocol for discoverability; an HTTP request may
+still route to and convert for another provider protocol after selecting one of the listed names.

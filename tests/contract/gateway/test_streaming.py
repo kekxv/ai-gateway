@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from hashlib import sha256
 from typing import Any
@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.audit.service import RequestContext, RequestFailure, RequestResult
 from ai_gateway.auth.api_key import ApiKeyPrincipal
-from ai_gateway.billing.service import BalanceReservation, SettlementResult
+from ai_gateway.billing.service import BalanceReservation, ReservationRecovery, SettlementResult
 from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import ApiKeyScope, Protocol
 from ai_gateway.core.security import encrypt_secret
@@ -48,9 +48,16 @@ class FakeBilling:
         Decimal("9"),
     )
     settlements: int = 0
+    reservation_recoveries: list[ReservationRecovery] = field(default_factory=list)
+    recovery_updates: list[ReservationRecovery] = field(default_factory=list)
 
-    async def reserve_balance(self, **_: Any) -> BalanceReservation:
+    async def reserve_balance(self, **kwargs: Any) -> BalanceReservation:
+        self.reservation_recoveries.append(kwargs["recovery"])
         return self.reservation
+
+    async def update_reservation_recovery(self, **kwargs: Any) -> bool:
+        self.recovery_updates.append(kwargs["recovery"])
+        return True
 
     async def settle_request(self, **kwargs: Any) -> SettlementResult:
         self.settlements += 1
@@ -155,10 +162,15 @@ def _request(protocol: Protocol, model: str) -> tuple[str, dict[str, Any]]:
             "messages": [{"role": "user", "content": "hello"}],
             "max_tokens": 8,
         }
-    return "/v1/messages", {
-        "model": model,
-        "messages": [{"role": "user", "content": "hello"}],
-        "max_tokens": 8,
+    if protocol is Protocol.CLAUDE:
+        return "/v1/messages", {
+            "model": model,
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 8,
+        }
+    return f"/v1beta/models/{model}:streamGenerateContent", {
+        "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+        "generationConfig": {"maxOutputTokens": 8},
     }
 
 
@@ -434,7 +446,8 @@ async def test_gemini_eof_terminal_is_not_confused_with_encoder_no_output() -> N
 async def test_same_protocol_forwards_opaque_heartbeat_and_vendor_frames_exactly() -> None:
     heartbeat = b": provider-heartbeat\r\n\r\n"
     opaque = b"event: vendor_extension\r\ndata: not-json\r\n\r\n"
-    stream = ChunkStream((heartbeat, opaque))
+    terminal = b"data: [DONE]\n\n"
+    stream = ChunkStream((heartbeat, opaque, terminal))
     response = httpx.Response(200, stream=stream)
     context = GatewayContext(Protocol.OPENAI, Protocol.OPENAI)
     body = stream_gateway_response(context, response)
@@ -442,10 +455,11 @@ async def test_same_protocol_forwards_opaque_heartbeat_and_vendor_frames_exactly
     assert await anext(body) == heartbeat
     assert context.first_token_ms is None
     assert await anext(body) == opaque
+    assert await anext(body) == terminal
     with pytest.raises(StopAsyncIteration):
         await anext(body)
 
-    assert context.audit_preview == heartbeat + opaque
+    assert context.audit_preview == heartbeat + opaque + terminal
     assert stream.closed
 
 
@@ -510,7 +524,10 @@ async def test_cross_protocol_eof_synthesizes_done_after_semantic_finish(
 
 async def test_large_stream_retains_only_bounded_preview_and_incremental_count() -> None:
     frame = _sse({"model": "m", "choices": [{"index": 0, "delta": {"content": "abcdefgh"}}]})
-    response = httpx.Response(200, stream=ChunkStream((frame,) * 10_000))
+    response = httpx.Response(
+        200,
+        stream=ChunkStream((*((frame,) * 10_000), b"data: [DONE]\n\n")),
+    )
     context = GatewayContext(
         Protocol.OPENAI,
         Protocol.OPENAI,
@@ -552,7 +569,13 @@ def test_provider_usage_never_regresses_component_wise() -> None:
     assert context.provider_usage_complete
 
 
-def _route(model_id: int, route_id: int, host: str, settings: object) -> object:
+def _route(
+    model_id: int,
+    route_id: int,
+    host: str,
+    settings: object,
+    protocol: Protocol = Protocol.OPENAI,
+) -> object:
     from ai_gateway.routing.types import RouteCandidate
 
     return RouteCandidate(
@@ -560,7 +583,7 @@ def _route(model_id: int, route_id: int, host: str, settings: object) -> object:
         model_id=model_id,
         provider_id=route_id + 100,
         provider_protocol_id=route_id + 200,
-        protocol=Protocol.OPENAI,
+        protocol=protocol,
         base_url=f"https://{host}.example/v1",
         websocket_url=None,
         upstream_model=f"native-{route_id}",
@@ -802,3 +825,104 @@ async def test_incomplete_cross_protocol_eof_after_prefetch_records_failure(
     assert router.successes == []
     assert audit.completed is None
     assert audit.failed is not None
+
+
+@pytest.mark.parametrize("protocol", list(Protocol))
+async def test_same_protocol_truncated_eof_records_upstream_failure(
+    session: AsyncSession,
+    protocol: Protocol,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    alias = model.aliases[0].alias
+    route = _route(model.id, 100 + list(Protocol).index(protocol), "truncated", settings, protocol)
+    complete_frames = _source_frames(protocol)
+    stream = ChunkStream(complete_frames[:-1])
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=stream, headers={"content-type": "text/event-stream"})
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    audit = FakeAudit()
+    route_router = FakeRouter([route])  # type: ignore[list-item]
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: route_router,
+    )
+    path, body = _request(protocol, alias)
+    body["stream"] = True
+    headers = {
+        Protocol.OPENAI: {"authorization": f"Bearer {RAW_KEY}"},
+        Protocol.CLAUDE: {"x-api-key": RAW_KEY},
+        Protocol.GEMINI: {"x-goog-api-key": RAW_KEY},
+    }[protocol]
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service), raise_app_exceptions=False),
+        base_url="http://test",
+        headers=headers,
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200
+    assert response.content == b"".join(complete_frames[:-1])
+    assert stream.closed
+    assert route_router.successes == []
+    assert route_router.failures == [route.route_id]
+    assert audit.completed is None
+    assert audit.failed is not None
+
+
+async def test_complete_stream_retains_recovery_snapshot_when_final_settlement_fails(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    alias = model.aliases[0].alias
+    route = _route(model.id, 110, "settlement-fails", settings)
+    frames = _source_frames(Protocol.OPENAI)
+    stream = ChunkStream(frames)
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=stream, headers={"content-type": "text/event-stream"})
+
+    class FailingSettlementBilling(FakeBilling):
+        async def settle_request(self, **_: Any) -> SettlementResult:
+            self.settlements += 1
+            raise RuntimeError("database unavailable")
+
+    billing = FailingSettlementBilling()
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    audit = FakeAudit()
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=billing,  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([route]),  # type: ignore[list-item]
+    )
+    path, body = _request(Protocol.OPENAI, alias)
+    body["stream"] = True
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service), raise_app_exceptions=False),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200
+    assert response.content == b"".join(frames)
+    assert billing.reservation_recoveries[0].cost == Decimal("0")
+    assert billing.recovery_updates[0].usage.output_tokens == 0
+    assert billing.recovery_updates[0].cost == Decimal("0.00000010")
+    assert billing.recovery_updates[-1].usage == CanonicalUsage(2, 3)
+    assert billing.recovery_updates[-1].cost == Decimal("0.00000080")
+    assert billing.settlements == 1
+    assert audit.completed is not None
+    assert audit.completed.metadata["billing_recovery_pending"] is True

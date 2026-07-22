@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from hashlib import sha256
 from typing import Any
 from uuid import UUID, uuid4
@@ -23,12 +23,20 @@ from ai_gateway.protocols.types import CanonicalUsage
 from ai_gateway.routing.sessions import mutation_session_factory_for
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
-MAX_MONEY_MAGNITUDE = Decimal("1000000000000")
+MAX_MONEY = Decimal("999999999999.99999999")
 SessionFactory = Callable[[], AsyncSession]
 
 
 class BillingError(GatewayError):
     """Base error for a balance mutation that cannot be completed."""
+
+
+class BillingAmountOutOfRange(BillingError, ValueError):
+    code = "billing_amount_out_of_range"
+    status_code = 422
+
+    def __init__(self, field: str = "billing value") -> None:
+        super().__init__(f"{field} must fit DECIMAL(20,8) with at most 20 total digits")
 
 
 class InsufficientBalance(BillingError):
@@ -158,6 +166,7 @@ class BillingService:
             model,
             CanonicalUsage(estimated_input_tokens, selected_max_output),
         )
+        _validate_money_magnitude(reserved_amount, "reservation amount")
 
         try:
             async with self._session_factory() as session:
@@ -217,7 +226,10 @@ class BillingService:
                             available=account.balance,
                         )
 
-                    account.balance = _money(account.balance - reserved_amount)
+                    account.balance = _money(
+                        account.balance - reserved_amount,
+                        "reservation balance_after",
+                    )
                     account.version += 1
                     metadata = {
                         "estimated_input_tokens": estimated_input_tokens,
@@ -344,10 +356,21 @@ class BillingService:
                         raise IdempotencyConflict
 
                     reserved_amount = _money(-reservation.amount)
-                    balance_after_release = _money(account.balance + reserved_amount)
+                    balance_after_release = _money(
+                        account.balance + reserved_amount,
+                        "settlement release balance_after",
+                    )
                     charged_amount = min(actual_cost, balance_after_release)
-                    final_balance = _money(balance_after_release - charged_amount)
-                    total_spent = _money(account.total_spent + charged_amount)
+                    final_balance = _money(
+                        balance_after_release - charged_amount,
+                        "settlement balance_after",
+                    )
+                    total_spent = _money(
+                        account.total_spent + charged_amount,
+                        "settlement total_spent",
+                    )
+                    if final_balance < 0:
+                        raise BillingAmountOutOfRange("settlement balance_after")
                     exhausted = final_balance == 0
                     uncollected = _money(actual_cost - charged_amount)
                     common_metadata: dict[str, Any] = {
@@ -392,6 +415,13 @@ class BillingService:
                     account.balance = final_balance
                     account.total_spent = total_spent
                     account.version += 1
+                    reservation.metadata_json = {
+                        **reservation.metadata_json,
+                        "recovery_pending": False,
+                        "recovery_claimed_version": None,
+                        "recovery_claim_token": None,
+                        "recovery_claimed_at": None,
+                    }
                     session.add_all((release, usage_entry))
                     await session.flush()
                     return SettlementResult(
@@ -416,8 +446,8 @@ class BillingService:
         reason: str,
         idempotency_key: str,
     ) -> AdjustmentResult:
-        _validate_money_magnitude(amount)
-        normalized_amount = _money(amount)
+        _validate_money_magnitude(amount, "adjustment amount")
+        normalized_amount = _money(amount, "adjustment amount")
         if amount != normalized_amount:
             raise ValueError("adjustment amount has more than eight decimal places")
         if normalized_amount == 0:
@@ -458,7 +488,10 @@ class BillingService:
                             available=account.balance,
                         )
 
-                    account.balance = _money(account.balance + normalized_amount)
+                    account.balance = _money(
+                        account.balance + normalized_amount,
+                        "adjustment balance_after",
+                    )
                     account.version += 1
                     entry = LedgerEntry(
                         account_id=account.id,
@@ -641,7 +674,7 @@ class BillingService:
         idempotency_key: str,
         reason: str = "provider_usage_reconciliation",
     ) -> AdjustmentResult:
-        normalized_amount = _money(amount)
+        normalized_amount = _money(amount, "reconciliation amount")
         if normalized_amount <= 0 or amount != normalized_amount:
             raise ValueError("reconciliation amount must be positive with at most eight decimals")
         normalized_key = _normalize_idempotency_key(idempotency_key)
@@ -674,8 +707,16 @@ class BillingService:
                         )
                     if account.total_spent < normalized_amount:
                         raise ValueError("reconciliation exceeds total spent")
-                    account.balance = _money(account.balance + normalized_amount)
-                    account.total_spent = _money(account.total_spent - normalized_amount)
+                    account.balance = _money(
+                        account.balance + normalized_amount,
+                        "reconciliation balance_after",
+                    )
+                    account.total_spent = _money(
+                        account.total_spent - normalized_amount,
+                        "reconciliation total_spent",
+                    )
+                    if account.total_spent < 0:
+                        raise BillingAmountOutOfRange("reconciliation total_spent")
                     account.version += 1
                     entry = LedgerEntry(
                         account_id=account.id,
@@ -892,7 +933,7 @@ def _settlement_cost(
         return _money(cost)
     if model is None or usage is None:
         raise TypeError("model and usage are required when cost is omitted")
-    return calculate_cost(model, usage)
+    return _money(calculate_cost(model, usage), "settlement cost")
 
 
 def _reservation_from_entry(entry: LedgerEntry, *, user_id: int) -> BalanceReservation:
@@ -1051,10 +1092,16 @@ def _normalize_idempotency_key(value: str, *, suffix_length: int = 0) -> str:
     return normalized
 
 
-def _validate_money_magnitude(value: Decimal) -> None:
-    if not value.is_finite() or abs(value) >= MAX_MONEY_MAGNITUDE:
-        raise ValueError("adjustment amount must have at most 20 total digits")
+def _validate_money_magnitude(value: Decimal, field: str = "billing value") -> None:
+    if not value.is_finite() or abs(value) > MAX_MONEY:
+        raise BillingAmountOutOfRange(field)
 
 
-def _money(value: Decimal) -> Decimal:
-    return value.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+def _money(value: Decimal, field: str = "billing value") -> Decimal:
+    _validate_money_magnitude(value, field)
+    try:
+        normalized = value.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        raise BillingAmountOutOfRange(field) from None
+    _validate_money_magnitude(normalized, field)
+    return normalized

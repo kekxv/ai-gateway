@@ -2,7 +2,9 @@ from decimal import Decimal
 
 import pytest
 from sqlalchemy import inspect
+from sqlalchemy.dialects.mysql import BINARY, CHAR, DECIMAL, LONGBLOB
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from ai_gateway.core.enums import (
     ApiKeyScope,
@@ -144,6 +146,57 @@ def test_schema_contains_exact_tables_and_columns() -> None:
     assert set(Base.metadata.tables) == set(expected)
     for table_name, column_names in expected.items():
         assert set(Base.metadata.tables[table_name].columns.keys()) == column_names
+
+
+async def test_mysql_reflection_preserves_security_and_decimal_column_types(
+    test_engine: AsyncEngine,
+) -> None:
+    async with test_engine.connect() as connection:
+        reflected = await connection.run_sync(
+            lambda sync: {
+                table: {
+                    column["name"]: column["type"] for column in inspect(sync).get_columns(table)
+                }
+                for table in (
+                    "accounts",
+                    "api_keys",
+                    "ledger_entries",
+                    "models",
+                    "providers",
+                    "provider_protocols",
+                    "request_logs",
+                )
+            }
+        )
+
+    for table, column in (
+        ("accounts", "balance"),
+        ("accounts", "total_spent"),
+        ("ledger_entries", "amount"),
+        ("ledger_entries", "balance_after"),
+        ("models", "input_price_per_million"),
+        ("models", "output_price_per_million"),
+        ("request_logs", "cost"),
+    ):
+        column_type = reflected[table][column]
+        assert isinstance(column_type, DECIMAL)
+        assert (column_type.precision, column_type.scale) == (20, 8)
+
+    for table, column in (
+        ("providers", "credential_encrypted"),
+        ("provider_protocols", "extra_headers_encrypted"),
+        ("request_logs", "request_detail_gzip"),
+        ("request_logs", "response_detail_gzip"),
+    ):
+        assert isinstance(reflected[table][column], LONGBLOB)
+
+    api_key_hash = reflected["api_keys"]["key_hash"]
+    assert isinstance(api_key_hash, BINARY)
+    assert api_key_hash.length == 32
+    for table, column in (("ledger_entries", "request_id"), ("request_logs", "id")):
+        uuid_type = reflected[table][column]
+        assert isinstance(uuid_type, CHAR)
+        assert uuid_type.length == 36
 
 
 def test_schema_exposes_required_enums() -> None:

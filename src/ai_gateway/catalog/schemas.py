@@ -51,7 +51,7 @@ class ProviderCreate(BaseModel):
     credential: JsonObject
     enabled: bool = True
     auto_load_models: bool = False
-    model_sync_interval_seconds: int = Field(default=3600, ge=1)
+    model_sync_interval_seconds: int | None = Field(default=None, ge=1)
     protocols: list[ProviderProtocolInput] = Field(default_factory=list)
 
 

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 from ai_gateway.core.config import get_settings
 
@@ -28,7 +29,10 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 def get_session_factory_for_url(database_url: str) -> async_sessionmaker[AsyncSession]:
-    return async_sessionmaker(get_engine_for_url(database_url), expire_on_commit=False)
+    # This compatibility helper has no async owner that can dispose a pooled engine.
+    # NullPool makes every session close its connection instead of leaking a hidden pool.
+    engine = create_async_engine(database_url, pool_pre_ping=True, poolclass=NullPool)
+    return async_sessionmaker(engine, expire_on_commit=False)
 
 
 def get_session_factory_for_engine(

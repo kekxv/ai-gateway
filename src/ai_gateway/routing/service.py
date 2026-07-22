@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from sqlalchemy import Select, and_, exists, false, literal, not_, or_, select, true, update
@@ -13,6 +13,7 @@ from sqlalchemy.orm import aliased
 
 from ai_gateway.auth.api_key import ApiKeyPrincipal
 from ai_gateway.catalog.schemas import ResolvedModel
+from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import ApiKeyScope, Protocol, RouteRuntimeState
 from ai_gateway.db.models import Model, ModelRoute, Provider, ProviderProtocol
 from ai_gateway.routing.sessions import MutationSessionFactory, mutation_session_factory_for
@@ -52,6 +53,8 @@ class Router:
         rng: random.Random | None = None,
         clock: Clock = _utcnow,
         mutation_session_factory: MutationSessionFactory | None = None,
+        failure_threshold: int = 3,
+        cooldown: timedelta = timedelta(seconds=60),
     ) -> None:
         self._session = session
         self._rng = rng if rng is not None else random.Random()
@@ -61,6 +64,8 @@ class Router:
             if mutation_session_factory is not None
             else mutation_session_factory_for(session)
         )
+        self._failure_threshold = failure_threshold
+        self._cooldown = cooldown
 
     async def select_route(
         self,
@@ -140,6 +145,8 @@ class Router:
 
         return await RouteHealth(
             self._session,
+            failure_threshold=self._failure_threshold,
+            cooldown=self._cooldown,
             mutation_session_factory=self._mutation_session_factory,
         ).record_success(route_id)
 
@@ -148,11 +155,21 @@ class Router:
 
         return await RouteHealth(
             self._session,
+            failure_threshold=self._failure_threshold,
+            cooldown=self._cooldown,
             mutation_session_factory=self._mutation_session_factory,
         ).record_failure(route_id, failure)
 
 
 RoutingService = Router
+
+
+def router_for_settings(session: AsyncSession, settings: Settings) -> Router:
+    return Router(
+        session,
+        failure_threshold=settings.route_failure_threshold,
+        cooldown=timedelta(seconds=settings.route_cooldown_seconds),
+    )
 
 
 async def select_route(
