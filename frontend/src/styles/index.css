@@ -1,0 +1,65 @@
+@import 'element-plus/theme-chalk/base.css';
+
+:root {
+  color-scheme: light;
+  --gateway-bg: #f4f7fb;
+  --gateway-panel: #ffffff;
+  --gateway-border: #dfe7f1;
+  --gateway-text: #172033;
+  --gateway-muted: #667085;
+  --gateway-brand: #2563eb;
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizelegibility;
+}
+
+html {
+  background: var(--gateway-bg);
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  color: var(--gateway-text);
+  background: var(--gateway-bg);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.page-card {
+  background: var(--gateway-panel);
+  border: 1px solid var(--gateway-border);
+  border-radius: 12px;
+}
+
+.skip-link {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 3000;
+  padding: 0.65rem 0.9rem;
+  color: #fff;
+  text-decoration: none;
+  background: var(--gateway-brand);
+  border-radius: 0.5rem;
+  transform: translateY(-200%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 35%);
+  outline-offset: 2px;
+}
