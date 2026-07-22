@@ -8,15 +8,14 @@ from starlette.staticfiles import StaticFiles
 def mount_console(app: FastAPI, dist_dir: Path) -> None:
     index = dist_dir / "index.html"
     assets = dist_dir / "assets"
-    if not index.is_file():
+    if not index.is_file() or not assets.is_dir():
         return
 
-    if assets.is_dir():
-        app.mount(
-            "/console/assets",
-            StaticFiles(directory=assets),
-            name="console-assets",
-        )
+    app.mount(
+        "/console/assets",
+        StaticFiles(directory=assets),
+        name="console-assets",
+    )
 
     async def console_index() -> FileResponse:
         return FileResponse(index, headers={"Cache-Control": "no-cache"})

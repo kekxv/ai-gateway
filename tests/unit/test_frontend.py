@@ -56,6 +56,22 @@ def test_console_is_not_registered_without_index(tmp_path: Path) -> None:
         assert client.get("/console/assets/app.js").status_code == 404
 
 
+def test_console_is_not_registered_without_assets_directory(tmp_path: Path) -> None:
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>console</html>", encoding="utf-8")
+    app = FastAPI()
+
+    mount_console(app, dist)
+
+    with TestClient(app) as client:
+        assert client.get("/console/").status_code == 404
+        response = client.get("/console/assets/missing.js")
+
+    assert response.status_code == 404
+    assert response.text != "<html>console</html>"
+
+
 def test_missing_asset_does_not_fall_back_to_index(tmp_path: Path) -> None:
     dist = tmp_path / "dist"
     _write_dist(dist)
