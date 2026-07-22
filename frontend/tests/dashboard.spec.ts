@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
+import * as dashboardApi from '@/api/dashboard'
 import type { DashboardSummary } from '@/api/types'
 import { routes } from '@/router'
 import { formatDuration, formatInteger, formatMoney, formatPercent } from '@/utils/format'
@@ -49,13 +50,13 @@ const zeroSummary: DashboardSummary = {
   failed_requests_24h: 0,
   prompt_tokens_24h: 0,
   completion_tokens_24h: 0,
-  cost_24h: '0',
+  cost_24h: '0E-8',
   average_latency_ms_24h: null,
   daily_usage: summaryFixture.daily_usage.map((point) => ({
     ...point,
     requests: 0,
     failures: 0,
-    cost: '0',
+    cost: '-0E-8',
   })),
 }
 
@@ -66,6 +67,7 @@ beforeAll(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   server.resetHandlers()
   document.body.innerHTML = ''
 })
@@ -88,8 +90,20 @@ describe('控制台概览', () => {
   })
 
   it('渲染资源、24 小时指标、精确金额与熔断路由告警', async () => {
+    const exactSummary: DashboardSummary = {
+      ...summaryFixture,
+      daily_usage: summaryFixture.daily_usage.map((point, index) => ({
+        ...point,
+        cost:
+          index === 0
+            ? '9007199254740993.12345678'
+            : index === 1
+              ? '1E-8'
+              : point.cost,
+      })),
+    }
     server.use(
-      http.get('/admin/dashboard/summary', () => HttpResponse.json(summaryFixture)),
+      http.get('/admin/dashboard/summary', () => HttpResponse.json(exactSummary)),
     )
 
     const wrapper = mount(DashboardView)
@@ -107,14 +121,40 @@ describe('控制台概览', () => {
 
     const chart = wrapper.getComponent({ name: 'VChartStub' })
     expect(chart.props('autoresize')).toBe(true)
+    expect(chart.attributes('aria-label')).toBeUndefined()
     const option = chart.props('option') as {
+      aria: { description?: string }
       series: Array<{ data: unknown[]; type: string; yAxisIndex?: number }>
       yAxis: unknown[]
     }
+    expect(option.aria.description).toBeUndefined()
     expect(option.yAxis).toHaveLength(2)
     expect(option.series.map((series) => series.type)).toEqual(['bar', 'bar', 'line'])
     expect(option.series[2]?.yAxisIndex).toBe(1)
-    expect(option.series[2]?.data).toEqual(summaryFixture.daily_usage.map(({ cost }) => cost))
+    expect(option.series[2]?.data).toEqual(exactSummary.daily_usage.map(({ cost }) => cost))
+
+    const tooltip = (chart.props('option') as {
+      tooltip: {
+        formatter: (params: Array<{ dataIndex: number; value: number }>) => string
+      }
+    }).tooltip.formatter
+    expect(tooltip([{ dataIndex: 0, value: 9_007_199_254_740_994 }])).toContain(
+      '¥9007199254740993.12345678',
+    )
+    expect(tooltip([{ dataIndex: 1, value: 0.00000001 }])).toContain('¥0.00000001')
+
+    const accessibleTable = wrapper.get('[data-test="daily-usage-table"]')
+    expect(accessibleTable.classes()).toContain('visually-hidden')
+    expect(accessibleTable.get('caption').text()).toBe('近 7 天每日请求、失败与费用明细')
+    const accessibleRows = accessibleTable.findAll('tbody tr')
+    expect(accessibleRows).toHaveLength(7)
+    exactSummary.daily_usage.forEach((point, index) => {
+      const rowText = accessibleRows[index]?.text() ?? ''
+      expect(rowText).toContain(point.date)
+      expect(rowText).toContain(String(point.requests))
+      expect(rowText).toContain(String(point.failures))
+      expect(rowText).toContain(formatMoney(point.cost))
+    })
 
     wrapper.unmount()
   })
@@ -143,6 +183,7 @@ describe('控制台概览', () => {
       '近 7 天暂无请求与费用数据',
     )
     expect(wrapper.findComponent({ name: 'VChartStub' }).exists()).toBe(false)
+    expect(wrapper.text()).toContain('24 小时费用 ¥0.00000000')
     expect(wrapper.text()).toContain('平均延迟 —')
 
     wrapper.unmount()
@@ -180,13 +221,89 @@ describe('控制台概览', () => {
 
     wrapper.unmount()
   })
+
+  it('快速重试时取消旧请求，且只渲染最新响应', async () => {
+    const latestSummary: DashboardSummary = {
+      ...summaryFixture,
+      cost_24h: '2.00000000',
+    }
+    const signals: Array<AbortSignal | undefined> = []
+    let releaseSecond!: () => void
+    let attempts = 0
+    vi.spyOn(dashboardApi, 'getDashboardSummary').mockImplementation((signal) => {
+      signals.push(signal)
+      attempts += 1
+      if (attempts === 1) return Promise.reject(new Error('暂时失败'))
+      if (attempts === 2) {
+        return new Promise<DashboardSummary>((resolve) => {
+          releaseSecond = () => {
+            resolve({ ...summaryFixture, cost_24h: '1.00000000' })
+          }
+        })
+      }
+      return Promise.resolve(latestSummary)
+    })
+
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    const loadSummary = (
+      wrapper.vm as unknown as {
+        $: { setupState: { loadSummary: () => Promise<void> } }
+      }
+    ).$.setupState.loadSummary
+    void loadSummary()
+    await vi.waitFor(() => {
+      expect(attempts).toBe(2)
+      expect(releaseSecond).toBeTypeOf('function')
+    })
+
+    await loadSummary()
+    await vi.waitFor(() => {
+      expect(attempts).toBe(3)
+      expect(signals[1]?.aborted).toBe(true)
+    })
+    releaseSecond()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('24 小时费用 ¥2.00000000')
+    expect(wrapper.text()).not.toContain('24 小时费用 ¥1.00000000')
+    wrapper.unmount()
+  })
+
+  it('组件卸载时取消尚未完成的概览请求', async () => {
+    let activeSignal: AbortSignal | undefined
+    vi.spyOn(dashboardApi, 'getDashboardSummary').mockImplementation((signal) => {
+      activeSignal = signal
+      return new Promise<DashboardSummary>(() => {})
+    })
+
+    const wrapper = mount(DashboardView)
+    await vi.waitFor(() => {
+      expect(activeSignal).toBeDefined()
+    })
+    expect(activeSignal?.aborted).toBe(false)
+
+    wrapper.unmount()
+
+    await vi.waitFor(() => {
+      expect(activeSignal?.aborted).toBe(true)
+    })
+  })
 })
 
 describe('控制台格式化工具', () => {
-  it('通过字符串补齐金额精度，不经过浮点数转换', () => {
+  it('仅通过字符串精确格式化普通与科学计数金额', () => {
     expect(formatMoney('0.125')).toBe('¥0.12500000')
     expect(formatMoney('9007199254740993.1')).toBe('¥9007199254740993.10000000')
     expect(formatMoney('-12')).toBe('¥-12.00000000')
+    expect(formatMoney('+12.5')).toBe('¥+12.50000000')
+    expect(formatMoney('1E-8')).toBe('¥0.00000001')
+    expect(formatMoney('0E-8')).toBe('¥0.00000000')
+    expect(formatMoney('-0E-8')).toBe('¥0.00000000')
+    expect(formatMoney('-1.25E+3')).toBe('¥-1250.00000000')
+    expect(formatMoney('9.00719925474099312345678E+15')).toBe(
+      '¥9007199254740993.12345678',
+    )
   })
 
   it('格式化整数、时长与零分母百分比', () => {

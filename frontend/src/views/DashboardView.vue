@@ -99,7 +99,7 @@ const usageCards = computed(() => {
 })
 
 function isZeroDecimal(value: string): boolean {
-  return /^[+-]?0*(?:\.0*)?$/.test(value.trim())
+  return /^[+-]?0+(?:\.0*)?(?:[eE][+-]?\d+)?$/.test(value.trim())
 }
 
 const chartEmpty = computed(() => {
@@ -115,12 +115,11 @@ const chartOption = computed<DashboardChartOption>(() => {
     aria: {
       enabled: true,
       decal: { show: true },
-      description: '近七天请求数、失败数与费用趋势图',
     },
     color: ['#2563eb', '#dc2626', '#0f766e'],
     grid: { top: 64, right: 70, bottom: 36, left: 56 },
     legend: { top: 12, data: ['请求数', '失败数', '费用'] },
-    tooltip: { trigger: 'axis' },
+    tooltip: { trigger: 'axis', formatter: formatChartTooltip },
     xAxis: {
       type: 'category',
       axisTick: { alignWithLabel: true },
@@ -164,6 +163,40 @@ const chartOption = computed<DashboardChartOption>(() => {
     ],
   }
 })
+
+function escapeTooltipHtml(value: string): string {
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      })[character] ?? character,
+  )
+}
+
+function formatChartTooltip(params: unknown): string {
+  const items: unknown[] = Array.isArray(params) ? (params as unknown[]) : [params]
+  const item = items.find(
+    (candidate): candidate is { dataIndex: number } =>
+      typeof candidate === 'object' &&
+      candidate !== null &&
+      'dataIndex' in candidate &&
+      typeof candidate.dataIndex === 'number',
+  )
+  const point = item === undefined ? undefined : summary.value?.daily_usage[item.dataIndex]
+  if (point === undefined) return ''
+
+  return [
+    `<strong>${escapeTooltipHtml(point.date)}</strong>`,
+    `请求数：${formatInteger(point.requests)}`,
+    `失败数：${formatInteger(point.failures)}`,
+    `费用：${escapeTooltipHtml(formatMoney(point.cost))}`,
+  ].join('<br />')
+}
 
 async function loadSummary(): Promise<void> {
   const firstRequest = !hasRequested
@@ -296,8 +329,28 @@ onBeforeUnmount(() => {
         class="usage-chart"
         :option="chartOption"
         :autoresize="true"
-        aria-label="近七天请求、失败与费用趋势"
       />
+      <table class="visually-hidden" data-test="daily-usage-table">
+        <caption>
+          近 7 天每日请求、失败与费用明细
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">日期</th>
+            <th scope="col">请求数</th>
+            <th scope="col">失败数</th>
+            <th scope="col">费用</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="point in summary.daily_usage" :key="point.date">
+            <td>{{ point.date }}</td>
+            <td>{{ formatInteger(point.requests) }}</td>
+            <td>{{ formatInteger(point.failures) }}</td>
+            <td>{{ formatMoney(point.cost) }}</td>
+          </tr>
+        </tbody>
+      </table>
     </section>
   </template>
 </template>
@@ -392,6 +445,19 @@ h2 {
 .usage-chart {
   width: 100%;
   height: 24rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  white-space: nowrap;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
 }
 
 .chart-empty {
