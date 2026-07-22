@@ -17,14 +17,17 @@ export const useAuthStore = defineStore('auth', () => {
   const ready = ref(false)
   const authenticated = computed(() => user.value !== null)
   const isAdmin = computed(() => user.value?.role === 'admin')
+  let sessionRevision = 0
 
   const stopSessionInvalidatedListener = onSessionInvalidated(() => {
+    sessionRevision += 1
     user.value = null
     ready.value = true
   })
   onScopeDispose(stopSessionInvalidatedListener)
 
   function clearSession(): void {
+    sessionRevision += 1
     user.value = null
     clearSessionTokens()
   }
@@ -34,6 +37,10 @@ export const useAuthStore = defineStore('auth', () => {
       clearSession()
       throw new ApiError(403, 'admin_required', '仅管理员可以访问管理控制台')
     }
+  }
+
+  function currentUserId(): number | null {
+    return user.value?.id ?? null
   }
 
   async function login(credentials: LoginRequest): Promise<void> {
@@ -54,6 +61,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function restore(): Promise<void> {
+    sessionRevision += 1
     ready.value = false
     user.value = null
     const hasAccessToken = sessionStorage.getItem(ACCESS_TOKEN_KEY) !== null
@@ -74,10 +82,28 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  async function refreshCurrentUser(signal?: AbortSignal): Promise<void> {
+    if (user.value === null) {
+      throw new ApiError(401, 'authentication_required', '登录状态已失效')
+    }
+    const startingUserId = user.value.id
+    const startingRevision = ++sessionRevision
+    const currentUser = await getCurrentUser(signal)
+    if (
+      signal?.aborted === true ||
+      startingRevision !== sessionRevision ||
+      currentUserId() !== startingUserId
+    ) {
+      throw new ApiError(401, 'session_changed', '登录状态已变更，请重试')
+    }
+    requireAdmin(currentUser)
+    user.value = currentUser
+  }
+
   function logout(): void {
     clearSession()
     ready.value = true
   }
 
-  return { user, ready, authenticated, isAdmin, login, restore, logout }
+  return { user, ready, authenticated, isAdmin, login, restore, refreshCurrentUser, logout }
 })

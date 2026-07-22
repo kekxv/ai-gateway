@@ -1,0 +1,307 @@
+import { createPinia, setActivePinia } from 'pinia'
+import { flushPromises, mount } from '@vue/test-utils'
+import { http, HttpResponse } from 'msw'
+import { setupServer } from 'msw/node'
+import QrcodeVue from 'qrcode.vue'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+
+import type { CurrentUser } from '@/api/types'
+import { routes } from '@/router'
+import { useAuthStore } from '@/stores/auth'
+import SecurityView from '@/views/SecurityView.vue'
+
+interface Deferred {
+  promise: Promise<void>
+  resolve: () => void
+}
+
+function deferred(): Deferred {
+  let resolve!: () => void
+  const promise = new Promise<void>((resolver) => {
+    resolve = resolver
+  })
+  return { promise, resolve }
+}
+
+const disabledAdmin: CurrentUser = {
+  id: 1,
+  email: 'admin@example.com',
+  role: 'admin',
+  is_active: true,
+  totp_enabled: false,
+  created_at: '2026-07-22T00:00:00Z',
+  updated_at: '2026-07-22T00:00:00Z',
+}
+
+const enabledAdmin: CurrentUser = {
+  ...disabledAdmin,
+  totp_enabled: true,
+  updated_at: '2026-07-22T01:00:00Z',
+}
+
+const server = setupServer()
+
+beforeAll(() => {
+  server.listen({ onUnhandledRequest: 'error' })
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  server.resetHandlers()
+  document.body.innerHTML = ''
+})
+
+afterAll(() => {
+  server.close()
+})
+
+function mountSecurity(user: CurrentUser = disabledAdmin) {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const auth = useAuthStore()
+  auth.user = user
+  const wrapper = mount(SecurityView, {
+    attachTo: document.body,
+    global: { plugins: [pinia] },
+  })
+  return { auth, wrapper }
+}
+
+function apiError(code: string, status = 400) {
+  return HttpResponse.json(
+    { detail: { code, message: 'The server message must not be displayed' } },
+    { status },
+  )
+}
+
+describe('TOTP 安全设置', () => {
+  it('通过独立懒加载路由提供安全设置页面', async () => {
+    const shellRoute = routes.find((route) => route.path === '/')
+    const securityRoute = shellRoute?.children?.find((route) => route.name === 'security')
+    if (typeof securityRoute?.component !== 'function') throw new Error('安全路由不是懒加载组件')
+
+    const loadSecurity = securityRoute.component as () => Promise<{ default: unknown }>
+    const loadedModule = await loadSecurity()
+
+    expect(loadedModule.default).toBe(SecurityView)
+  })
+
+  it('首次启用发送空对象，setup 成功后才显示二维码，并以 /auth/me 刷新状态', async () => {
+    const setupBodies: unknown[] = []
+    const confirmBodies: unknown[] = []
+    let confirmed = false
+    server.use(
+      http.post('/auth/totp/setup', async ({ request }) => {
+        setupBodies.push(await request.json())
+        return HttpResponse.json({ otpauth_uri: 'otpauth://totp/example?secret=setup-secret' })
+      }),
+      http.post('/auth/totp/confirm', async ({ request }) => {
+        confirmBodies.push(await request.json())
+        confirmed = true
+        return HttpResponse.json({ totp_enabled: true })
+      }),
+      http.get('/auth/me', () => HttpResponse.json(confirmed ? enabledAdmin : disabledAdmin)),
+    )
+    const { auth, wrapper } = mountSecurity()
+
+    expect(wrapper.findComponent(QrcodeVue).exists()).toBe(false)
+    await wrapper.get('[data-test="start-totp"]').trigger('click')
+    await flushPromises()
+
+    expect(setupBodies).toEqual([{}])
+    expect(wrapper.getComponent(QrcodeVue).props('value')).toBe(
+      'otpauth://totp/example?secret=setup-secret',
+    )
+    expect((wrapper.get('[data-test="manual-uri"]').element as HTMLInputElement).value).toBe(
+      'otpauth://totp/example?secret=setup-secret',
+    )
+
+    await wrapper.get('[data-test="confirm-code"]').setValue('12a34 56')
+    expect((wrapper.get('[data-test="confirm-code"]').element as HTMLInputElement).value).toBe(
+      '123456',
+    )
+    await wrapper.get('[data-test="confirm-totp"]').trigger('click')
+    await flushPromises()
+
+    expect(confirmBodies).toEqual([{ code: '123456' }])
+    expect(auth.user).toEqual(enabledAdmin)
+    expect(wrapper.findComponent(QrcodeVue).exists()).toBe(false)
+    expect(wrapper.find('[data-test="manual-uri"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('双重验证已启用')
+    wrapper.unmount()
+  })
+
+  it('重新绑定要求当前六位验证码，发送正确字段并在请求期间防止重复提交', async () => {
+    const setupBodies: unknown[] = []
+    const requestStarted = deferred()
+    const releaseRequest = deferred()
+    server.use(
+      http.post('/auth/totp/setup', async ({ request }) => {
+        setupBodies.push(await request.json())
+        requestStarted.resolve()
+        await releaseRequest.promise
+        return HttpResponse.json({ otpauth_uri: 'otpauth://totp/replacement?secret=new-secret' })
+      }),
+    )
+    const { wrapper } = mountSecurity(enabledAdmin)
+
+    expect(wrapper.get('[data-test="start-totp"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="current-code"]').setValue('65x43 21')
+    expect((wrapper.get('[data-test="current-code"]').element as HTMLInputElement).value).toBe(
+      '654321',
+    )
+
+    await wrapper.get('[data-test="start-totp"]').trigger('click')
+    await requestStarted.promise
+    await wrapper.get('[data-test="start-totp"]').trigger('click')
+
+    expect(setupBodies).toEqual([{ current_totp_code: '654321' }])
+    expect(wrapper.get('[data-test="start-totp"]').attributes('disabled')).toBeDefined()
+    releaseRequest.resolve()
+    await flushPromises()
+    expect(wrapper.findComponent(QrcodeVue).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['current_totp_required', '请输入当前六位验证码'],
+    ['invalid_totp', '当前验证码无效，请重新输入'],
+    ['totp_not_configured', '服务器未找到当前双重验证配置，请刷新后重试'],
+  ])('将 setup 阶段的 %s 映射到当前验证码字段', async (code, message) => {
+    server.use(http.post('/auth/totp/setup', () => apiError(code)))
+    const { wrapper } = mountSecurity(enabledAdmin)
+
+    await wrapper.get('[data-test="current-code"]').setValue('123456')
+    await wrapper.get('[data-test="start-totp"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="current-code-error"]').text()).toBe(message)
+    expect(wrapper.text()).not.toContain('The server message')
+    expect((wrapper.get('[data-test="current-code"]').element as HTMLInputElement).value).toBe('')
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['invalid_totp', '新验证码无效，请重新输入'],
+    ['totp_not_configured', '双重验证配置已失效，请重新开始设置'],
+    ['current_totp_required', '请重新验证当前验证码并开始设置'],
+  ])('将 confirm 阶段的 %s 映射到新验证码字段', async (code, message) => {
+    server.use(
+      http.post('/auth/totp/setup', () =>
+        HttpResponse.json({ otpauth_uri: 'otpauth://totp/example?secret=setup-secret' }),
+      ),
+      http.post('/auth/totp/confirm', () => apiError(code)),
+    )
+    const { wrapper } = mountSecurity()
+
+    await wrapper.get('[data-test="start-totp"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="confirm-code"]').setValue('123456')
+    await wrapper.get('[data-test="confirm-totp"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="confirm-code-error"]').text()).toBe(message)
+    expect(wrapper.text()).not.toContain('The server message')
+    expect((wrapper.get('[data-test="confirm-code"]').element as HTMLInputElement).value).toBe('')
+    expect(wrapper.get('[data-test="confirm-totp"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="confirm-code"]').setValue('654321')
+    expect(wrapper.get('[data-test="confirm-totp"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('取消、退出登录和组件卸载时同步清除 URI 与两个验证码', async () => {
+    server.use(
+      http.post('/auth/totp/setup', () =>
+        HttpResponse.json({ otpauth_uri: 'otpauth://totp/replacement?secret=never-retain' }),
+      ),
+    )
+    const first = mountSecurity(enabledAdmin)
+    await first.wrapper.get('[data-test="current-code"]').setValue('654321')
+    await first.wrapper.get('[data-test="start-totp"]').trigger('click')
+    await flushPromises()
+    await first.wrapper.get('[data-test="confirm-code"]').setValue('123456')
+    await first.wrapper.get('[data-test="cancel-totp"]').trigger('click')
+
+    expect(first.wrapper.findComponent(QrcodeVue).exists()).toBe(false)
+    expect((first.wrapper.get('[data-test="current-code"]').element as HTMLInputElement).value).toBe(
+      '',
+    )
+
+    await first.wrapper.get('[data-test="current-code"]').setValue('111111')
+    await first.wrapper.get('[data-test="start-totp"]').trigger('click')
+    await flushPromises()
+    await first.wrapper.get('[data-test="confirm-code"]').setValue('222222')
+    first.auth.logout()
+
+    expect((first.wrapper.vm as unknown as { setupUri: string }).setupUri).toBe('')
+    expect((first.wrapper.vm as unknown as { currentCode: string }).currentCode).toBe('')
+    expect((first.wrapper.vm as unknown as { confirmCode: string }).confirmCode).toBe('')
+    first.wrapper.unmount()
+
+    const second = mountSecurity(enabledAdmin)
+    await second.wrapper.get('[data-test="current-code"]').setValue('333333')
+    await second.wrapper.get('[data-test="start-totp"]').trigger('click')
+    await flushPromises()
+    await second.wrapper.get('[data-test="confirm-code"]').setValue('444444')
+    second.wrapper.unmount()
+
+    expect((second.wrapper.vm as unknown as { setupUri: string }).setupUri).toBe('')
+    expect((second.wrapper.vm as unknown as { currentCode: string }).currentCode).toBe('')
+    expect((second.wrapper.vm as unknown as { confirmCode: string }).confirmCode).toBe('')
+  })
+
+  it('取消后忽略迟到的 setup 响应，不重新写入 URI', async () => {
+    const requestStarted = deferred()
+    const releaseRequest = deferred()
+    server.use(
+      http.post('/auth/totp/setup', async () => {
+        requestStarted.resolve()
+        await releaseRequest.promise
+        return HttpResponse.json({ otpauth_uri: 'otpauth://totp/late?secret=late-secret' })
+      }),
+    )
+    const { wrapper } = mountSecurity()
+
+    await wrapper.get('[data-test="start-totp"]').trigger('click')
+    await requestStarted.promise
+    await wrapper.get('[data-test="cancel-setup"]').trigger('click')
+    releaseRequest.resolve()
+    await flushPromises()
+
+    expect(wrapper.findComponent(QrcodeVue).exists()).toBe(false)
+    expect((wrapper.vm as unknown as { setupUri: string }).setupUri).toBe('')
+    wrapper.unmount()
+  })
+
+  it('确认后的 /auth/me 迟到响应不能在退出后恢复会话或敏感状态', async () => {
+    const refreshStarted = deferred()
+    const releaseRefresh = deferred()
+    server.use(
+      http.post('/auth/totp/setup', () =>
+        HttpResponse.json({ otpauth_uri: 'otpauth://totp/example?secret=setup-secret' }),
+      ),
+      http.post('/auth/totp/confirm', () => HttpResponse.json({ totp_enabled: true })),
+      http.get('/auth/me', async () => {
+        refreshStarted.resolve()
+        await releaseRefresh.promise
+        return HttpResponse.json(enabledAdmin)
+      }),
+    )
+    const { auth, wrapper } = mountSecurity()
+    await wrapper.get('[data-test="start-totp"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="confirm-code"]').setValue('123456')
+    await wrapper.get('[data-test="confirm-totp"]').trigger('click')
+    await refreshStarted.promise
+
+    auth.logout()
+    releaseRefresh.resolve()
+    await flushPromises()
+
+    expect(auth.user).toBeNull()
+    expect((wrapper.vm as unknown as { setupUri: string }).setupUri).toBe('')
+    expect((wrapper.vm as unknown as { confirmCode: string }).confirmCode).toBe('')
+    expect(wrapper.text()).not.toContain('双重验证已启用')
+    wrapper.unmount()
+  })
+})

@@ -60,7 +60,7 @@ export const routes: RouteRecordRaw[] = [
       {
         path: 'security',
         name: 'security',
-        component: () => import('@/views/FutureView.vue'),
+        component: () => import('@/views/SecurityView.vue'),
         meta: { title: '安全设置' },
       },
     ],
