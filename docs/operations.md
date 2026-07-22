@@ -15,8 +15,37 @@
   `MYSQL_USER`, `MYSQL_PASSWORD`, and `MYSQL_ROOT_PASSWORD`; its checked-in fallbacks are only for
   disposable local development. Use URL-safe characters in `MYSQL_PASSWORD` because the same
   value is embedded in `GATEWAY_DATABASE_URL` for the gateway container.
+- Set strong MySQL passwords before the first startup that initializes a durable volume. Changing
+  `MYSQL_PASSWORD` or `MYSQL_ROOT_PASSWORD` later does not alter users stored in that volume.
 - The Compose MySQL port is bound only to `127.0.0.1:3306`. Use private networking rather than
   widening that host binding for remote access.
+
+## MySQL password rotation for an existing volume
+
+Do not edit the deployment environment first: the running database still knows only the old
+credentials. Take and verify a backup, then connect with the old root password while disabling
+client history:
+
+```bash
+docker compose exec mysql sh -c 'MYSQL_HISTFILE=/dev/null exec mysql -uroot -p'
+```
+
+At the MySQL prompt, enter the old root password interactively and replace both placeholders with
+new URL-safe secrets from the secret manager:
+
+```sql
+ALTER USER
+  'gateway'@'%' IDENTIFIED BY 'NEW_GATEWAY_PASSWORD',
+  'root'@'localhost' IDENTIFIED BY 'NEW_ROOT_PASSWORD';
+```
+
+Only after that statement succeeds, update `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`,
+`GATEWAY_DATABASE_URL`, and `GATEWAY_TEST_DATABASE_URL` where applicable. Recreate the MySQL
+container so its authenticated healthcheck uses the new application password, then roll gateway
+replicas onto the matching database URL. Verify `docker compose ps`, `/health`, an Alembic current
+check, administrator login, and one low-cost provider request before retiring the old deployment
+configuration. If `ALTER USER` fails, leave the environment unchanged and restore/test access with
+the old credentials before retrying.
 
 ## Gateway API-key rotation
 

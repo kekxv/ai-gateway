@@ -3,8 +3,8 @@ services:
     image: mysql:8.4
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-gateway}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gateway-local-password}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-gateway-local-root-password}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gateway}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-gateway-root}
       MYSQL_USER: ${MYSQL_USER:-gateway}
     ports:
       - "127.0.0.1:3306:3306"
@@ -14,8 +14,10 @@ services:
       test:
         - CMD-SHELL
         - >-
-          mysqladmin ping -h 127.0.0.1
-          -u"$$MYSQL_USER" -p"$$MYSQL_PASSWORD"
+          MYSQL_PWD="$$MYSQL_PASSWORD"
+          mysql --protocol=TCP --host=127.0.0.1 --connect-timeout=3
+          --user="$$MYSQL_USER" --database="$$MYSQL_DATABASE"
+          --batch --skip-column-names --execute="SELECT 1" >/dev/null
       interval: 5s
       timeout: 5s
       retries: 20
@@ -31,7 +33,7 @@ services:
         required: false
     environment:
       GATEWAY_DATABASE_URL: >-
-        mysql+asyncmy://${MYSQL_USER:-gateway}:${MYSQL_PASSWORD:-gateway-local-password}@mysql:3306/${MYSQL_DATABASE:-gateway}
+        mysql+asyncmy://${MYSQL_USER:-gateway}:${MYSQL_PASSWORD:-gateway}@mysql:3306/${MYSQL_DATABASE:-gateway}
     ports:
       - "8000:8000"
     depends_on:

@@ -33,10 +33,13 @@ PY
 Paste the generated values into `.env`. Never commit `.env`. Compose reads `MYSQL_DATABASE`,
 `MYSQL_USER`, `MYSQL_PASSWORD`, and `MYSQL_ROOT_PASSWORD` from that file and uses the same values
 for the gateway database URL. The checked-in values are local-development defaults only; replace
-both MySQL passwords outside a disposable workstation. Because Compose embeds `MYSQL_PASSWORD`
-in a SQLAlchemy URL, use URL-safe password characters (`A-Z`, `a-z`, `0-9`, `.`, `_`, `~`, `-`).
-For local host execution, keep `GATEWAY_DATABASE_URL` aligned with those values and
-`127.0.0.1:3306`.
+both MySQL passwords before the first `docker compose up` that initializes a non-disposable
+volume. MySQL initialization variables do not change passwords in an existing volume. To rotate
+an existing deployment, authenticate with the old credential, run `ALTER USER`, then update the
+environment and roll the gateway; see the operations runbook. Because Compose embeds
+`MYSQL_PASSWORD` in a SQLAlchemy URL, use URL-safe password characters (`A-Z`, `a-z`, `0-9`, `.`,
+`_`, `~`, `-`). For local host execution, keep `GATEWAY_DATABASE_URL` aligned with those values
+and `127.0.0.1:3306`.
 
 MySQL is published only on `127.0.0.1:3306`; it is not exposed on external host interfaces.
 `compose.yaml` is the canonical and only Compose file.
