@@ -9,6 +9,24 @@ import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
 import { routes } from '@/router'
 import ProvidersView from '@/views/ProvidersView.vue'
 
+interface Deferred<T> {
+  promise: Promise<T>
+  resolve: (value: T) => void
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolver) => {
+    resolve = resolver
+  })
+  return { promise, resolve }
+}
+
+async function waitForFormErrors(): Promise<void> {
+  await new Promise((resolve) => window.setTimeout(resolve, 120))
+  await flushPromises()
+}
+
 const providerFixture: ProviderResponse = {
   id: 1,
   name: 'OpenAI 主线路',
@@ -223,10 +241,12 @@ describe('供应商与协议管理', () => {
     await wrapper.get('[data-test="protocol-base-url-0"]').setValue('https://api.example.com')
     await wrapper.get('[data-test="protocol-extra-headers-0"]').setValue('"token"')
     await wrapper.get('[data-test="provider-submit"]').trigger('click')
-    await flushPromises()
+    await waitForFormErrors()
 
-    expect(wrapper.get('[data-test="credential-error"]').text()).toContain('必须是 JSON 对象')
-    expect(wrapper.get('[data-test="protocol-extra-error-0"]').text()).toContain(
+    expect(wrapper.get('[data-validation="credential"] .el-form-item__error').text()).toContain(
+      '必须是 JSON 对象',
+    )
+    expect(wrapper.get('[data-test="protocol-extra-field-0"] .el-form-item__error').text()).toContain(
       '必须是 JSON 对象',
     )
     expect(onSubmit).not.toHaveBeenCalled()
@@ -258,13 +278,25 @@ describe('供应商与协议管理', () => {
   })
 
   it('供应商已有历史记录时保留列表项并引导改为停用', async () => {
+    let deleteRequests = 0
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
       value: '',
       action: 'confirm',
     } as MessageBoxData)
     server.use(
-      http.delete('/admin/providers/1', () =>
-        HttpResponse.json(
+      http.post('/admin/providers/1/sync-models', () =>
+        HttpResponse.json({
+          provider_id: 1,
+          discovered_models: 1,
+          created_models: 0,
+          created_routes: 0,
+          updated_routes: 0,
+          disabled_routes: 0,
+        }),
+      ),
+      http.delete('/admin/providers/1', () => {
+        deleteRequests += 1
+        return HttpResponse.json(
           {
             detail: {
               code: 'provider_has_history',
@@ -272,8 +304,8 @@ describe('供应商与协议管理', () => {
             },
           },
           { status: 409 },
-        ),
-      ),
+        )
+      }),
     )
     const wrapper = await mountProviders()
 
@@ -283,6 +315,338 @@ describe('供应商与协议管理', () => {
     expect(wrapper.text()).toContain('OpenAI 主线路')
     expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('请求历史')
     expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('停用')
+    expect(wrapper.get('[data-test="delete-provider-1"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="delete-provider-1"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-test="delete-provider-1"]').trigger('click')
+    await flushPromises()
+    expect(deleteRequests).toBe(1)
     wrapper.unmount()
+  })
+
+  it('提交期间阻止关闭、取消和替换草稿，并让卸载后的响应失效', async () => {
+    const patchResponse = deferred<ProviderResponse>()
+    server.use(
+      http.patch('/admin/providers/1', async () => HttpResponse.json(await patchResponse.promise)),
+    )
+    const wrapper = await mountProviders([providerFixture, geminiFixture])
+
+    await wrapper.get('[data-test="edit-provider-1"]').trigger('click')
+    const drawer = wrapper.getComponent(ProviderFormDrawer)
+    await drawer.get('[data-test="provider-name"]').setValue('延迟保存线路')
+    await drawer.get('[data-test="provider-credential"]').setValue('{"api_key":"delayed"}')
+    await drawer.get('[data-test="provider-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(drawer.get('[data-test="provider-cancel"]').attributes('disabled')).toBeDefined()
+    expect(drawer.find('.el-drawer__close-btn').exists()).toBe(false)
+    await drawer.get('[data-test="provider-cancel"]').trigger('click')
+    await wrapper.get('[data-test="create-provider"]').trigger('click')
+    expect(drawer.text()).toContain('编辑供应商')
+    expect(drawer.get('[data-test="provider-name"]').element).toHaveProperty(
+      'value',
+      '延迟保存线路',
+    )
+
+    wrapper.unmount()
+    const replacement = await mountProviders([])
+    await replacement.get('[data-test="create-provider"]').trigger('click')
+    patchResponse.resolve({ ...providerFixture, name: '延迟保存线路' })
+    await flushPromises()
+
+    expect(replacement.getComponent(ProviderFormDrawer).text()).toContain('新建供应商')
+    expect(replacement.find('[data-test="provider-notice"]').exists()).toBe(false)
+    replacement.unmount()
+  })
+
+  it('同一供应商的编辑、同步和删除互斥，并拦截重复同步', async () => {
+    const syncResponse = deferred<{
+      provider_id: number
+      discovered_models: number
+      created_models: number
+      created_routes: number
+      updated_routes: number
+      disabled_routes: number
+    }>()
+    let syncRequests = 0
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
+      value: '',
+      action: 'confirm',
+    } as MessageBoxData)
+    server.use(
+      http.post('/admin/providers/1/sync-models', async () => {
+        syncRequests += 1
+        return HttpResponse.json(await syncResponse.promise)
+      }),
+    )
+    const wrapper = await mountProviders()
+
+    await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
+    await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
+    await wrapper.get('[data-test="edit-provider-1"]').trigger('click')
+    await wrapper.get('[data-test="delete-provider-1"]').trigger('click')
+    await flushPromises()
+
+    expect(syncRequests).toBe(1)
+    expect(confirm).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(ProviderFormDrawer).props('modelValue')).toBe(false)
+    expect(wrapper.get('[data-test="edit-provider-1"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="delete-provider-1"]').attributes('disabled')).toBeDefined()
+
+    syncResponse.resolve({
+      provider_id: 1,
+      discovered_models: 1,
+      created_models: 0,
+      created_routes: 0,
+      updated_routes: 0,
+      disabled_routes: 0,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="edit-provider-1"]').trigger('click')
+    expect(wrapper.get('[data-test="sync-provider-1"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="delete-provider-1"]').attributes('disabled')).toBeDefined()
+    await wrapper
+      .getComponent(ProviderFormDrawer)
+      .get('[data-test="provider-cancel"]')
+      .trigger('click')
+    wrapper.unmount()
+  })
+
+  it('删除确认和请求期间拦截重复点击及其他行操作', async () => {
+    const confirmResult = deferred<MessageBoxData>()
+    const deleteResponse = deferred<null>()
+    let deleteRequests = 0
+    let syncRequests = 0
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockReturnValue(confirmResult.promise)
+    server.use(
+      http.delete('/admin/providers/1', async () => {
+        deleteRequests += 1
+        await deleteResponse.promise
+        return new HttpResponse(null, { status: 204 })
+      }),
+      http.post('/admin/providers/1/sync-models', () => {
+        syncRequests += 1
+        return HttpResponse.json({
+          provider_id: 1,
+          discovered_models: 0,
+          created_models: 0,
+          created_routes: 0,
+          updated_routes: 0,
+          disabled_routes: 0,
+        })
+      }),
+    )
+    const wrapper = await mountProviders()
+
+    const deleteButton = wrapper.get('[data-test="delete-provider-1"]')
+    await Promise.all([deleteButton.trigger('click'), deleteButton.trigger('click')])
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-test="sync-provider-1"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="edit-provider-1"]').attributes('disabled')).toBeDefined()
+
+    confirmResult.resolve({ value: '', action: 'confirm' } as MessageBoxData)
+    await flushPromises()
+    await wrapper.get('[data-test="delete-provider-1"]').trigger('click')
+    await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
+    await wrapper.get('[data-test="edit-provider-1"]').trigger('click')
+    await flushPromises()
+
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(deleteRequests).toBe(1)
+    expect(syncRequests).toBe(0)
+    expect(wrapper.findComponent(ProviderFormDrawer).props('modelValue')).toBe(false)
+
+    deleteResponse.resolve(null)
+    await flushPromises()
+    expect(wrapper.find('[data-test="delete-provider-1"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('已删除')
+    wrapper.unmount()
+  })
+
+  it('删除成功后保留本地删除结果，不允许较早的列表响应恢复该行', async () => {
+    const staleList = deferred<ProviderResponse[]>()
+    let listRequests = 0
+    server.use(
+      http.get('/admin/providers', async () => {
+        listRequests += 1
+        if (listRequests === 1) return HttpResponse.json([providerFixture, geminiFixture])
+        return HttpResponse.json(await staleList.promise)
+      }),
+      http.post('/admin/providers/1/sync-models', () =>
+        HttpResponse.json({
+          provider_id: 1,
+          discovered_models: 2,
+          created_models: 0,
+          created_routes: 0,
+          updated_routes: 0,
+          disabled_routes: 0,
+        }),
+      ),
+      http.delete('/admin/providers/2', () => new HttpResponse(null, { status: 204 })),
+    )
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
+      value: '',
+      action: 'confirm',
+    } as MessageBoxData)
+    const wrapper = mount(ProvidersView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="delete-provider-2"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="delete-provider-2"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('已删除')
+
+    staleList.resolve([providerFixture, geminiFixture])
+    await flushPromises()
+    expect(wrapper.find('[data-test="delete-provider-2"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('同步间隔必须是大于等于 1 的整数，清空后聚焦该字段且不提交 null', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: providerFixture, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const intervalInput = wrapper.get('[data-test="provider-sync-interval"] input')
+    await intervalInput.setValue('')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+    await waitForFormErrors()
+
+    expect(wrapper.get('[data-test="sync-interval-field"] .el-form-item__error').text()).toContain(
+      '请输入大于等于 1 的整数',
+    )
+    expect(document.activeElement).toBe(intervalInput.element)
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    await intervalInput.setValue('1.5')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+    await waitForFormErrors()
+    expect(onSubmit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('仅显示一份错误，并将第二条协议的行内错误聚焦到对应输入框', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: null, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-name"]').setValue('行内校验')
+    await wrapper.get('[data-test="provider-credential"]').setValue('{"api_key":"secret"}')
+    await wrapper.get('[data-test="protocol-base-url-0"]').setValue('https://one.example.com')
+    await wrapper.get('[data-test="add-protocol"]').trigger('click')
+    await wrapper.get('[data-test="protocol-base-url-1"]').setValue('https://two.example.com')
+    const secondHeaders = wrapper.get('[data-test="protocol-extra-headers-1"]')
+    await secondHeaders.setValue('[]')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+    await waitForFormErrors()
+
+    const matchingErrors = wrapper
+      .findAll('.el-form-item__error')
+      .filter((item) => item.text().includes('必须是 JSON 对象'))
+    expect(matchingErrors).toHaveLength(1)
+    expect(wrapper.get('[data-test="protocol-extra-field-1"]').text()).toContain(
+      '必须是 JSON 对象',
+    )
+    expect(document.activeElement).toBe(secondHeaders.element)
+    expect(onSubmit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('取消时立即清除凭据和额外请求头草稿', async () => {
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: null, submitting: false },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const credential = wrapper.get('[data-test="provider-credential"]')
+    const headers = wrapper.get('[data-test="protocol-extra-headers-0"]')
+    await credential.setValue('{"api_key":"never-retain"}')
+    await headers.setValue('{"Authorization":"never-retain"}')
+    await wrapper.get('[data-test="provider-cancel"]').trigger('click')
+    await flushPromises()
+
+    expect(credential.element).toHaveProperty('value', '')
+    expect(headers.element).toHaveProperty('value', '')
+    wrapper.unmount()
+  })
+
+  it('编辑时发送有效的替换凭据与替换请求头', async () => {
+    const requests: unknown[] = []
+    server.use(
+      http.patch('/admin/providers/1', async ({ request }) => {
+        requests.push(await request.json())
+        return HttpResponse.json(providerFixture)
+      }),
+    )
+    const wrapper = await mountProviders()
+
+    await wrapper.get('[data-test="edit-provider-1"]').trigger('click')
+    const drawer = wrapper.getComponent(ProviderFormDrawer)
+    const credential = drawer.get('[data-test="provider-credential"]')
+    const headers = drawer.get('[data-test="protocol-extra-headers-0"]')
+    await credential.setValue('{"api_key":"replacement"}')
+    await headers.setValue('{"Authorization":"replacement"}')
+    await drawer.get('[data-test="provider-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(requests[0]).toMatchObject({
+      credential: { api_key: 'replacement' },
+      protocols: [
+        { id: 11, extra_headers: { Authorization: 'replacement' } },
+        { id: 12 },
+      ],
+    })
+    expect(credential.element).toHaveProperty('value', '')
+    expect(headers.element).toHaveProperty('value', '')
+    wrapper.unmount()
+  })
+
+  it('创建和编辑都允许删除最后一条协议并提交空列表', async () => {
+    const createSubmit = vi.fn()
+    const createDrawer = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: null, submitting: false, onSubmit: createSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    await createDrawer.get('[data-test="provider-name"]').setValue('无协议供应商')
+    await createDrawer.get('[data-test="provider-credential"]').setValue('{"api_key":"secret"}')
+    await createDrawer.get('[data-test="remove-protocol-0"]').trigger('click')
+    await createDrawer.get('[data-test="provider-submit"]').trigger('click')
+    await flushPromises()
+    expect(createSubmit).toHaveBeenCalledWith(expect.objectContaining({ protocols: [] }))
+    createDrawer.unmount()
+
+    const editSubmit = vi.fn()
+    const firstProtocol = providerFixture.protocols[0]
+    if (firstProtocol === undefined) throw new Error('测试供应商缺少协议')
+    const oneProtocolProvider = { ...providerFixture, protocols: [firstProtocol] }
+    const editDrawer = mount(ProviderFormDrawer, {
+      props: {
+        modelValue: true,
+        provider: oneProtocolProvider,
+        submitting: false,
+        onSubmit: editSubmit,
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    await editDrawer.get('[data-test="remove-protocol-0"]').trigger('click')
+    await editDrawer.get('[data-test="provider-submit"]').trigger('click')
+    await flushPromises()
+    expect(editSubmit).toHaveBeenCalledWith({ protocols: [] })
+    editDrawer.unmount()
   })
 })

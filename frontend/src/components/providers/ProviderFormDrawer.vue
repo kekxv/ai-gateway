@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { Delete, Plus } from '@element-plus/icons-vue'
 import {
   ElButton,
@@ -56,10 +56,12 @@ const name = ref('')
 const credentialText = ref('')
 const enabled = ref(true)
 const autoLoadModels = ref(false)
-const syncInterval = ref(3600)
+const syncInterval = ref<number | null>(3600)
 const protocols = ref<ProtocolRow[]>([])
 const nameError = ref('')
 const credentialError = ref('')
+const syncIntervalError = ref('')
+const formContent = ref<HTMLElement | null>(null)
 let nextProtocolKey = 1
 
 const editing = computed(() => props.provider !== null)
@@ -101,15 +103,24 @@ function resetForm(): void {
         }))
   nameError.value = ''
   credentialError.value = ''
+  syncIntervalError.value = ''
+}
+
+function clearSensitiveState(): void {
+  credentialText.value = ''
+  for (const row of protocols.value) row.extraHeadersText = ''
 }
 
 watch(
   () => [props.modelValue, props.provider] as const,
   ([open]) => {
     if (open) resetForm()
+    else clearSensitiveState()
   },
-  { immediate: true },
+  { immediate: true, flush: 'sync' },
 )
+
+onBeforeUnmount(clearSensitiveState)
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -154,6 +165,36 @@ function addProtocol(): void {
 
 function removeProtocol(index: number): void {
   protocols.value.splice(index, 1)
+}
+
+function requestClose(): void {
+  if (props.submitting) return
+  clearSensitiveState()
+  emit('update:modelValue', false)
+}
+
+function handleModelValueUpdate(value: boolean): void {
+  if (!value) {
+    if (props.submitting) return
+    clearSensitiveState()
+  }
+  emit('update:modelValue', value)
+}
+
+function handleBeforeClose(done: () => void): void {
+  if (props.submitting) return
+  clearSensitiveState()
+  done()
+}
+
+async function focusInvalidField(selector: string): Promise<void> {
+  await nextTick()
+  const target = formContent.value?.querySelector<HTMLElement>(selector)
+  if (target === undefined || target === null) return
+  if (typeof target.scrollIntoView === 'function') {
+    target.scrollIntoView({ block: 'center' })
+  }
+  target.focus()
 }
 
 function normalizedProtocol(row: ProtocolRow): ProviderProtocolInput {
@@ -203,18 +244,54 @@ function buildProtocols(): ProviderProtocolInput[] | undefined {
 }
 
 function submitForm(): void {
+  if (props.submitting) return
   nameError.value = ''
   credentialError.value = ''
+  syncIntervalError.value = ''
   if (name.value.trim() === '') nameError.value = '请输入供应商名称'
+  const interval = syncInterval.value
+  if (typeof interval !== 'number' || !Number.isInteger(interval) || interval < 1) {
+    syncIntervalError.value = '请输入大于等于 1 的整数'
+  }
 
   const protocolPayload = buildProtocols()
   let credential: JsonObject | undefined
   if (!editing.value || credentialText.value.trim() !== '') {
     credential = parseObject(credentialText.value, '请输入凭据 JSON')
   }
-  if (nameError.value !== '' || credentialError.value !== '' || protocolPayload === undefined) {
+  if (
+    nameError.value !== '' ||
+    credentialError.value !== '' ||
+    syncIntervalError.value !== '' ||
+    protocolPayload === undefined
+  ) {
+    let selector = '[data-validation="name"] input'
+    if (nameError.value === '' && syncIntervalError.value !== '') {
+      selector = '[data-validation="sync-interval"] input'
+    } else if (
+      nameError.value === '' &&
+      syncIntervalError.value === '' &&
+      credentialError.value !== ''
+    ) {
+      selector = '[data-validation="credential"] textarea'
+    } else if (
+      nameError.value === '' &&
+      syncIntervalError.value === '' &&
+      credentialError.value === ''
+    ) {
+      const invalidIndex = protocols.value.findIndex(
+        (row) => row.baseUrlError !== '' || row.extraHeadersError !== '',
+      )
+      const invalidRow = protocols.value[invalidIndex]
+      selector =
+        invalidRow?.baseUrlError !== ''
+          ? `[data-validation="protocol-base-${String(invalidIndex)}"] input`
+          : `[data-validation="protocol-extra-${String(invalidIndex)}"] textarea`
+    }
+    void focusInvalidField(selector)
     return
   }
+  if (interval === null) return
 
   if (!editing.value) {
     if (credential === undefined) return
@@ -223,7 +300,7 @@ function submitForm(): void {
       credential,
       enabled: enabled.value,
       auto_load_models: autoLoadModels.value,
-      model_sync_interval_seconds: syncInterval.value,
+      model_sync_interval_seconds: interval,
       protocols: protocolPayload,
     })
     return
@@ -238,8 +315,8 @@ function submitForm(): void {
   if (autoLoadModels.value !== provider.auto_load_models) {
     payload.auto_load_models = autoLoadModels.value
   }
-  if (syncInterval.value !== provider.model_sync_interval_seconds) {
-    payload.model_sync_interval_seconds = syncInterval.value
+  if (interval !== provider.model_sync_interval_seconds) {
+    payload.model_sync_interval_seconds = interval
   }
   if (protocolsChanged()) payload.protocols = protocolPayload
   emit('submit', payload)
@@ -251,7 +328,12 @@ function submitForm(): void {
     :model-value="modelValue"
     size="min(94vw, 52rem)"
     :close-on-click-modal="false"
-    @update:model-value="emit('update:modelValue', $event)"
+    :close-on-press-escape="!submitting"
+    :show-close="!submitting"
+    :before-close="handleBeforeClose"
+    destroy-on-close
+    @closed="clearSensitiveState"
+    @update:model-value="handleModelValueUpdate"
   >
     <template #header>
       <div>
@@ -260,57 +342,61 @@ function submitForm(): void {
       </div>
     </template>
 
-    <ElForm label-position="top" @submit.prevent="submitForm">
-      <div class="form-grid">
-        <ElFormItem label="供应商名称" :error="nameError">
-          <ElInput v-model="name" data-test="provider-name" maxlength="255" />
-        </ElFormItem>
-        <ElFormItem label="模型同步间隔（秒）">
-          <ElInputNumber
-            v-model="syncInterval"
-            data-test="provider-sync-interval"
-            :min="1"
-            :step="60"
-            controls-position="right"
+    <ElForm :disabled="submitting" label-position="top" @submit.prevent="submitForm">
+      <div ref="formContent">
+        <div class="form-grid">
+          <ElFormItem data-validation="name" label="供应商名称" :error="nameError">
+            <ElInput v-model="name" data-test="provider-name" maxlength="255" />
+          </ElFormItem>
+          <ElFormItem
+            data-test="sync-interval-field"
+            data-validation="sync-interval"
+            label="模型同步间隔（秒）"
+            :error="syncIntervalError"
+          >
+            <ElInputNumber
+              v-model="syncInterval"
+              data-test="provider-sync-interval"
+              :min="1"
+              :step="60"
+              controls-position="right"
+            />
+          </ElFormItem>
+        </div>
+
+        <ElFormItem
+          data-validation="credential"
+          :label="editing ? '替换凭据 JSON（留空则保持原值）' : '凭据 JSON'"
+          :error="credentialError"
+        >
+          <ElInput
+            v-model="credentialText"
+            data-test="provider-credential"
+            type="textarea"
+            :rows="4"
+            spellcheck="false"
+            placeholder='例如：{"api_key":"..."}'
           />
         </ElFormItem>
-      </div>
 
-      <ElFormItem
-        :label="editing ? '替换凭据 JSON（留空则保持原值）' : '凭据 JSON'"
-        :error="credentialError"
-      >
-        <ElInput
-          v-model="credentialText"
-          data-test="provider-credential"
-          type="textarea"
-          :rows="4"
-          spellcheck="false"
-          placeholder='例如：{"api_key":"..."}'
-        />
-        <p v-if="credentialError" data-test="credential-error" class="field-error">
-          {{ credentialError }}
-        </p>
-      </ElFormItem>
+        <div class="switch-row">
+          <label>
+            <span>启用供应商</span>
+            <ElSwitch v-model="enabled" data-test="provider-enabled" />
+          </label>
+          <label>
+            <span>自动同步模型</span>
+            <ElSwitch v-model="autoLoadModels" data-test="provider-auto-load" />
+          </label>
+        </div>
 
-      <div class="switch-row">
-        <label>
-          <span>启用供应商</span>
-          <ElSwitch v-model="enabled" data-test="provider-enabled" />
-        </label>
-        <label>
-          <span>自动同步模型</span>
-          <ElSwitch v-model="autoLoadModels" data-test="provider-auto-load" />
-        </label>
-      </div>
-
-      <section class="protocol-section" aria-labelledby="protocol-heading">
+        <section class="protocol-section" aria-labelledby="protocol-heading">
         <div class="protocol-heading-row">
           <div>
             <h3 id="protocol-heading">协议入口</h3>
             <p>同一供应商可以配置多个上游协议与地址。</p>
           </div>
-          <ElButton data-test="add-protocol" plain @click="addProtocol">
+          <ElButton data-test="add-protocol" plain :disabled="submitting" @click="addProtocol">
             <ElIcon><Plus /></ElIcon>
             添加协议
           </ElButton>
@@ -328,7 +414,7 @@ function submitForm(): void {
               :data-test="`remove-protocol-${String(index)}`"
               text
               type="danger"
-              :disabled="protocols.length === 1"
+              :disabled="submitting"
               :aria-label="`移除协议 ${String(index + 1)}`"
               @click="removeProtocol(index)"
             >
@@ -339,7 +425,11 @@ function submitForm(): void {
 
           <div class="protocol-grid">
             <ElFormItem label="协议类型">
-              <select v-model="row.protocol" :data-test="`protocol-type-${String(index)}`">
+              <select
+                v-model="row.protocol"
+                :data-test="`protocol-type-${String(index)}`"
+                :disabled="submitting"
+              >
                 <option value="openai">OpenAI 兼容协议</option>
                 <option value="claude">Claude 兼容协议</option>
                 <option value="gemini">Gemini 兼容协议</option>
@@ -350,7 +440,11 @@ function submitForm(): void {
             </ElFormItem>
           </div>
 
-          <ElFormItem label="HTTP 基础地址" :error="row.baseUrlError">
+          <ElFormItem
+            :data-validation="`protocol-base-${String(index)}`"
+            label="HTTP 基础地址"
+            :error="row.baseUrlError"
+          >
             <ElInput
               v-model="row.baseUrl"
               :data-test="`protocol-base-url-${String(index)}`"
@@ -365,6 +459,8 @@ function submitForm(): void {
             />
           </ElFormItem>
           <ElFormItem
+            :data-test="`protocol-extra-field-${String(index)}`"
+            :data-validation="`protocol-extra-${String(index)}`"
             :label="row.id === undefined ? '额外请求头 JSON（可选）' : '替换额外请求头 JSON（留空则保持原值）'"
             :error="row.extraHeadersError"
           >
@@ -376,25 +472,22 @@ function submitForm(): void {
               spellcheck="false"
               placeholder='例如：{"X-Tenant":"team-a"}'
             />
-            <p
-              v-if="row.extraHeadersError"
-              :data-test="`protocol-extra-error-${String(index)}`"
-              class="field-error"
-            >
-              {{ row.extraHeadersError }}
-            </p>
           </ElFormItem>
         </div>
-      </section>
+        </section>
+      </div>
     </ElForm>
 
     <template #footer>
       <div class="drawer-actions">
-        <ElButton @click="emit('update:modelValue', false)">取消</ElButton>
+        <ElButton data-test="provider-cancel" :disabled="submitting" @click="requestClose">
+          取消
+        </ElButton>
         <ElButton
           data-test="provider-submit"
           type="primary"
           :loading="submitting"
+          :disabled="submitting"
           @click="submitForm"
         >
           保存供应商
