@@ -64,6 +64,11 @@ def is_health_failure(failure: object) -> bool:
     if status_code is not None:
         return status_code in PENALIZING_HTTP_STATUSES
     exception = _exception(failure)
+    if isinstance(failure, RouteFailure) and failure.error_code is not None:
+        if failure.error_code.startswith(("websocket_close_", "websocket_connect")):
+            return True
+        if failure.error_code == "websocket_network_error":
+            return True
     if isinstance(exception, (httpx.ConnectTimeout, httpx.ReadTimeout)):
         return True
     if isinstance(exception, (socket.gaierror, ssl.SSLError)):

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import socket
-from collections.abc import Awaitable, Callable, Mapping, MutableMapping
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 from typing import Protocol as TypingProtocol
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -16,9 +18,11 @@ from websockets.exceptions import ConnectionClosed
 
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import Protocol
-from ai_gateway.routing.types import RouteCandidate
+from ai_gateway.routing.types import RouteCandidate, RouteFailure
 from ai_gateway.transport.proxy import NoProxyMatcher
 from ai_gateway.transport.upstream import build_upstream_headers
+
+logger = logging.getLogger(__name__)
 
 Frame = str | bytes
 FrameObserver = Callable[[str, Frame], Awaitable[None]]
@@ -38,6 +42,21 @@ _HANDSHAKE_HEADERS = frozenset(
         "sec-websocket-version",
     }
 )
+_ALLOWED_SUBPROTOCOLS: Mapping[Protocol, frozenset[str]] = {
+    Protocol.OPENAI: frozenset({"realtime", "openai-realtime-v1"}),
+    Protocol.GEMINI: frozenset({"gemini-live"}),
+    Protocol.CLAUDE: frozenset(),
+}
+_CREDENTIAL_SUBPROTOCOL_MARKERS = (
+    "api-key",
+    "apikey",
+    "authorization",
+    "bearer",
+    "credential",
+    "insecure-api-key",
+    "secret",
+    "token",
+)
 
 
 class ClientWebSocket(TypingProtocol):
@@ -53,6 +72,12 @@ class ClientWebSocket(TypingProtocol):
     async def close(self, code: int = 1000, reason: str | None = None) -> None: ...
 
 
+class RelayHealthOutcome(StrEnum):
+    NEUTRAL = "neutral"
+    SUCCESS = "success"
+    FAILURE = "failure"
+
+
 @dataclass(frozen=True, slots=True)
 class RelayResult:
     client_disconnected: bool = False
@@ -60,10 +85,15 @@ class RelayResult:
     close_code: int = 1000
     close_reason: str = ""
     exception: BaseException | None = None
+    health_outcome: RelayHealthOutcome = RelayHealthOutcome.NEUTRAL
+    provider_observed: bool = False
+    route_failure: RouteFailure | None = None
 
 
 class UpstreamWebSocketError(ConnectionError):
-    pass
+    def __init__(self, message: str, failure: RouteFailure) -> None:
+        self.failure = failure
+        super().__init__(message)
 
 
 class RelayAbort(Exception):
@@ -79,6 +109,102 @@ class _ClientClosed(Exception):
         self.reason = reason
 
 
+class _TerminalKind(StrEnum):
+    CANCELLATION = "cancellation"
+    INTERNAL = "internal"
+    CLIENT_DISCONNECT = "client_disconnect"
+    UPSTREAM_CLOSE = "upstream_close"
+    UPSTREAM_FAILURE = "upstream_failure"
+    RELAY_ABORT = "relay_abort"
+
+
+_TERMINAL_PRIORITY = {
+    _TerminalKind.CANCELLATION: 0,
+    _TerminalKind.INTERNAL: 10,
+    _TerminalKind.CLIENT_DISCONNECT: 20,
+    _TerminalKind.UPSTREAM_CLOSE: 30,
+    _TerminalKind.UPSTREAM_FAILURE: 40,
+    _TerminalKind.RELAY_ABORT: 50,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _Terminal:
+    kind: _TerminalKind
+    code: int
+    reason: str
+    exception: BaseException | None = None
+    route_failure: RouteFailure | None = None
+
+
+class _TerminalCoordinator:
+    def __init__(self) -> None:
+        self._lock = anyio.Lock()
+        self._terminal: _Terminal | None = None
+        self._provider_observed = False
+
+    async def mark_provider_observed(self) -> None:
+        async with self._lock:
+            self._provider_observed = True
+
+    async def finish(self, terminal: _Terminal, task_group: anyio.abc.TaskGroup) -> None:
+        with anyio.CancelScope(shield=True):
+            async with self._lock:
+                if (
+                    self._terminal is None
+                    or _TERMINAL_PRIORITY[terminal.kind] > _TERMINAL_PRIORITY[self._terminal.kind]
+                ):
+                    self._terminal = terminal
+        task_group.cancel_scope.cancel()
+
+    async def ensure_terminal(self, terminal: _Terminal) -> _Terminal:
+        async with self._lock:
+            if self._terminal is None:
+                self._terminal = terminal
+            return self._terminal
+
+    async def result(self) -> RelayResult:
+        async with self._lock:
+            terminal = self._terminal or _Terminal(
+                _TerminalKind.INTERNAL,
+                1011,
+                "relay terminated",
+            )
+            provider_observed = self._provider_observed
+        if terminal.kind is _TerminalKind.UPSTREAM_FAILURE:
+            health_outcome = RelayHealthOutcome.FAILURE
+        elif terminal.kind is _TerminalKind.UPSTREAM_CLOSE:
+            health_outcome = (
+                RelayHealthOutcome.FAILURE
+                if _is_abnormal_close(terminal.code)
+                else (
+                    RelayHealthOutcome.SUCCESS if provider_observed else RelayHealthOutcome.NEUTRAL
+                )
+            )
+        else:
+            health_outcome = RelayHealthOutcome.NEUTRAL
+        client_disconnected = terminal.kind in {
+            _TerminalKind.CLIENT_DISCONNECT,
+            _TerminalKind.CANCELLATION,
+        }
+        route_failure = terminal.route_failure
+        if health_outcome is RelayHealthOutcome.FAILURE and route_failure is None:
+            route_failure = RouteFailure(
+                error_code=f"websocket_close_{terminal.code}",
+                exception=terminal.exception,
+            )
+        return RelayResult(
+            client_disconnected=client_disconnected,
+            upstream_failed=health_outcome is RelayHealthOutcome.FAILURE,
+            close_code=terminal.code,
+            close_reason=terminal.reason,
+            exception=terminal.exception,
+            health_outcome=health_outcome,
+            provider_observed=provider_observed,
+            route_failure=route_failure,
+        )
+
+
 class _CloseOnce:
     def __init__(self) -> None:
         self._lock = anyio.Lock()
@@ -88,11 +214,14 @@ class _CloseOnce:
         async with self._lock:
             if self._closed:
                 return
-            self._closed = True
             try:
                 await operation()
-            except (ConnectionClosed, OSError, RuntimeError):
-                pass
+            except ConnectionClosed:
+                self._closed = True
+            except RuntimeError:
+                self._closed = True
+            else:
+                self._closed = True
 
 
 async def relay_websocket(
@@ -105,6 +234,7 @@ async def relay_websocket(
     observe_frame: FrameObserver | None = None,
     on_interval: IntervalCallback | None = None,
     interval_seconds: float = 60.0,
+    subprotocols: Sequence[str] = (),
     connector: Connector = connect,
 ) -> RelayResult:
     """Connect one provider socket and relay frames until either peer terminates."""
@@ -120,18 +250,17 @@ async def relay_websocket(
         for name, value in upstream_headers.multi_items()
         if name.lower() not in _HANDSHAKE_HEADERS
     ]
-    subprotocol_header = _header_value(client_ws.headers, "sec-websocket-protocol")
-    subprotocols = (
-        [value.strip() for value in subprotocol_header.split(",") if value.strip()]
-        if subprotocol_header
-        else None
+    safe_subprotocols = tuple(
+        value
+        for value in subprotocols
+        if value in _ALLOWED_SUBPROTOCOLS[route.protocol] and not _is_credential_subprotocol(value)
     )
 
     try:
         upstream = await connector(
             url,
             additional_headers=additional_headers,
-            subprotocols=subprotocols,
+            subprotocols=list(safe_subprotocols) or None,
             proxy=proxy,
             ping_interval=20,
             ping_timeout=20,
@@ -139,26 +268,70 @@ async def relay_websocket(
             max_size=None,
         )
     except Exception as exc:
-        raise UpstreamWebSocketError("Unable to connect to upstream WebSocket") from exc
+        raise UpstreamWebSocketError(
+            "Unable to connect to upstream WebSocket",
+            _connect_route_failure(exc),
+        ) from exc
 
+    coordinator = _TerminalCoordinator()
     client_close = _CloseOnce()
     upstream_close = _CloseOnce()
-    result = RelayResult()
-
-    async def close_client(code: int, reason: str) -> None:
-        await client_close.run(lambda: client_ws.close(code=_wire_close_code(code), reason=reason))
-
-    async def close_upstream(code: int, reason: str) -> None:
-        await upstream_close.run(lambda: upstream.close(code=_wire_close_code(code), reason=reason))
 
     async def observe(direction: str, frame: Frame) -> None:
         if observe_frame is not None:
             await observe_frame(direction, frame)
 
+    async def finish_exception(
+        exc: BaseException,
+        task_group: anyio.abc.TaskGroup,
+        *,
+        upstream_operation: bool,
+    ) -> None:
+        if isinstance(exc, RelayAbort):
+            await coordinator.finish(
+                _Terminal(_TerminalKind.RELAY_ABORT, exc.code, exc.reason, exc),
+                task_group,
+            )
+        elif isinstance(exc, ConnectionClosed):
+            await coordinator.finish(_connection_terminal(exc, upstream), task_group)
+        elif upstream_operation and isinstance(exc, (ConnectionError, OSError, TimeoutError)):
+            await coordinator.finish(
+                _Terminal(
+                    _TerminalKind.UPSTREAM_FAILURE,
+                    1011,
+                    "upstream connection failed",
+                    exc,
+                    RouteFailure(error_code="websocket_network_error", exception=exc),
+                ),
+                task_group,
+            )
+        else:
+            await coordinator.finish(
+                _Terminal(_TerminalKind.INTERNAL, 1011, "relay failed", exc),
+                task_group,
+            )
+
     async def client_to_upstream(task_group: anyio.abc.TaskGroup) -> None:
-        nonlocal result
-        try:
-            while True:
+        if initial_request is not None:
+            try:
+                await observe("client", initial_request)
+                outbound_initial = (
+                    initial_request
+                    if _query_has_model(query_string)
+                    else rewrite_initial_request(
+                        initial_request,
+                        route.protocol,
+                        route.upstream_model,
+                    )
+                )
+                await upstream.send(outbound_initial)
+            except anyio.get_cancelled_exc_class():
+                raise
+            except BaseException as exc:
+                await finish_exception(exc, task_group, upstream_operation=True)
+                return
+        while True:
+            try:
                 event: MutableMapping[str, Any] | None = None
                 if on_interval is None:
                     event = await client_ws.receive()
@@ -169,77 +342,105 @@ async def relay_websocket(
                         await on_interval()
                         continue
                 frame = _client_frame(event)
-                await observe("client", frame)
-                await upstream.send(
-                    rewrite_initial_request(frame, route.protocol, route.upstream_model)
+            except anyio.get_cancelled_exc_class():
+                raise
+            except _ClientClosed as exc:
+                await coordinator.finish(
+                    _Terminal(_TerminalKind.CLIENT_DISCONNECT, exc.code, exc.reason, exc),
+                    task_group,
                 )
-        except _ClientClosed as exc:
-            result = RelayResult(True, False, exc.code, exc.reason)
-            await close_upstream(exc.code, exc.reason)
-        except RelayAbort as exc:
-            result = RelayResult(False, False, exc.code, exc.reason, exc)
-            await close_client(exc.code, exc.reason)
-            await close_upstream(exc.code, exc.reason)
-        except BaseException as exc:
-            if isinstance(exc, anyio.get_cancelled_exc_class()):
                 return
-            upstream_failure = isinstance(exc, (ConnectionClosed, ConnectionError, OSError))
-            result = RelayResult(not upstream_failure, upstream_failure, 1011, "relay failed", exc)
-            if upstream_failure:
-                await close_client(1011, "upstream connection failed")
-            else:
-                await close_client(1011, "relay failed")
-                await close_upstream(1001, "client disconnected")
-        finally:
-            task_group.cancel_scope.cancel()
+            except BaseException as exc:
+                await finish_exception(exc, task_group, upstream_operation=False)
+                return
+
+            try:
+                await observe("client", frame)
+                await upstream.send(frame)
+            except anyio.get_cancelled_exc_class():
+                raise
+            except BaseException as exc:
+                await finish_exception(exc, task_group, upstream_operation=True)
+                return
 
     async def upstream_to_client(task_group: anyio.abc.TaskGroup) -> None:
-        nonlocal result
-        try:
-            while True:
+        while True:
+            try:
                 frame = await upstream.recv()
+            except anyio.get_cancelled_exc_class():
+                raise
+            except ConnectionClosed as exc:
+                await coordinator.finish(_connection_terminal(exc, upstream), task_group)
+                return
+            except BaseException as exc:
+                await finish_exception(exc, task_group, upstream_operation=True)
+                return
+            await coordinator.mark_provider_observed()
+            try:
                 await observe("upstream", frame)
                 if isinstance(frame, str):
                     await client_ws.send_text(frame)
                 else:
                     await client_ws.send_bytes(frame)
-        except ConnectionClosed as exc:
-            code, reason = _connection_close_detail(exc, upstream)
-            upstream_failed = _is_network_close(code)
-            result = RelayResult(
-                False,
-                upstream_failed,
-                code,
-                reason,
-                exc if upstream_failed else None,
-            )
-            await close_client(code, reason)
-        except RelayAbort as exc:
-            result = RelayResult(False, False, exc.code, exc.reason, exc)
-            await close_client(exc.code, exc.reason)
-            await close_upstream(exc.code, exc.reason)
-        except BaseException as exc:
-            if isinstance(exc, anyio.get_cancelled_exc_class()):
+            except anyio.get_cancelled_exc_class():
+                raise
+            except RelayAbort as exc:
+                await finish_exception(exc, task_group, upstream_operation=False)
                 return
-            upstream_failure = isinstance(exc, (ConnectionError, OSError))
-            result = RelayResult(not upstream_failure, upstream_failure, 1011, "relay failed", exc)
-            await close_client(1011 if upstream_failure else 1001, "upstream connection failed")
-        finally:
-            task_group.cancel_scope.cancel()
+            except BaseException as exc:
+                await coordinator.finish(
+                    _Terminal(_TerminalKind.CLIENT_DISCONNECT, 1001, "client disconnected", exc),
+                    task_group,
+                )
+                return
 
     try:
-        if initial_request is not None:
-            await observe("client", initial_request)
-            await upstream.send(
-                rewrite_initial_request(initial_request, route.protocol, route.upstream_model)
-            )
         async with anyio.create_task_group() as task_group:
             task_group.start_soon(client_to_upstream, task_group)
             task_group.start_soon(upstream_to_client, task_group)
+    except anyio.get_cancelled_exc_class():
+        with anyio.CancelScope(shield=True):
+            await coordinator.ensure_terminal(
+                _Terminal(_TerminalKind.CANCELLATION, 1001, "client disconnected")
+            )
+        raise
     finally:
         with anyio.CancelScope(shield=True):
-            await close_upstream(result.close_code, result.close_reason)
-    return result
+            terminal = await coordinator.ensure_terminal(
+                _Terminal(_TerminalKind.INTERNAL, 1011, "relay terminated")
+            )
+        with anyio.CancelScope(shield=True):
+            await _close_peer(
+                client_close,
+                lambda: client_ws.close(
+                    code=_wire_close_code(terminal.code),
+                    reason=terminal.reason,
+                ),
+                "client",
+            )
+        with anyio.CancelScope(shield=True):
+            await _close_peer(
+                upstream_close,
+                lambda: upstream.close(
+                    code=_wire_close_code(terminal.code),
+                    reason=terminal.reason,
+                ),
+                "upstream",
+            )
+    return await coordinator.result()
+
+
+def select_websocket_subprotocols(
+    protocol: Protocol,
+    raw_header: str | None,
+) -> tuple[tuple[str, ...], str | None]:
+    offered = tuple(
+        value.strip()
+        for value in (raw_header or "").split(",")
+        if value.strip() and not _is_credential_subprotocol(value.strip())
+    )
+    allowed = tuple(value for value in offered if value in _ALLOWED_SUBPROTOCOLS[protocol])
+    return allowed, allowed[0] if allowed else None
 
 
 def rewrite_upstream_url(base_url: str, query_string: str, upstream_model: str) -> str:
@@ -329,11 +530,53 @@ async def _resolve_host(host: str) -> tuple[str, ...]:
     return tuple({str(address[0]) for *_, address in results if address})
 
 
-def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    try:
-        return ipaddress.ip_address(host)
-    except ValueError:
-        return None
+async def _close_peer(
+    close_once: _CloseOnce,
+    operation: Callable[[], Awaitable[None]],
+    peer: str,
+) -> None:
+    for attempt in range(2):
+        try:
+            await close_once.run(operation)
+            return
+        except OSError as exc:
+            if attempt == 1:
+                logger.warning(
+                    "WebSocket close failed peer=%s exception_type=%s",
+                    peer,
+                    type(exc).__name__,
+                )
+            else:
+                await anyio.sleep(0)
+
+
+def _connect_route_failure(exc: BaseException) -> RouteFailure:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    return RouteFailure(
+        status_code=status_code if isinstance(status_code, int) else None,
+        error_code="websocket_handshake" if isinstance(status_code, int) else "websocket_connect",
+        exception=exc,
+    )
+
+
+def _connection_terminal(exc: ConnectionClosed, upstream: ClientConnection) -> _Terminal:
+    code, reason = _connection_close_detail(exc, upstream)
+    route_failure = (
+        RouteFailure(
+            error_code=f"websocket_close_{code}",
+            exception=exc,
+        )
+        if _is_abnormal_close(code)
+        else None
+    )
+    return _Terminal(
+        _TerminalKind.UPSTREAM_CLOSE,
+        code,
+        reason,
+        exc if route_failure is not None else None,
+        route_failure,
+    )
 
 
 def _client_frame(event: Mapping[str, Any] | None) -> Frame:
@@ -361,16 +604,27 @@ def _connection_close_detail(exc: ConnectionClosed, upstream: ClientConnection) 
     return code, reason
 
 
-def _is_network_close(code: int) -> bool:
-    return code in {1002, 1006, 1011, 1012, 1013, 1014, 1015}
+def _is_abnormal_close(code: int) -> bool:
+    return code not in {1000, 1001}
 
 
 def _wire_close_code(code: int) -> int:
     return 1011 if code in {1005, 1006, 1015} else code
 
 
-def _header_value(headers: Mapping[str, str], name: str) -> str | None:
-    for header_name, value in headers.items():
-        if header_name.lower() == name:
-            return value
-    return None
+def _query_has_model(query_string: str) -> bool:
+    return any(name == "model" for name, _ in parse_qsl(query_string, keep_blank_values=True))
+
+
+def _is_credential_subprotocol(value: str) -> bool:
+    normalized = value.lower()
+    return normalized.startswith("sk-") or any(
+        marker in normalized for marker in _CREDENTIAL_SUBPROTOCOL_MARKERS
+    )
+
+
+def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None

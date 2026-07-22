@@ -4,6 +4,7 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
+from hashlib import sha256
 from time import monotonic
 from typing import Annotated, Any, cast
 from typing import Protocol as TypingProtocol
@@ -16,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.audit.service import AuditService, RequestContext, RequestFailure, RequestResult
 from ai_gateway.auth.api_key import ApiKeyPrincipal, authenticate_api_key, extract_api_key
-from ai_gateway.billing.pricing import PricedModel
+from ai_gateway.billing.pricing import PricedModel, calculate_cost
 from ai_gateway.billing.service import (
     BalanceReservation,
     BillingService,
@@ -35,9 +36,11 @@ from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFail
 from ai_gateway.transport.websocket import (
     Frame,
     RelayAbort,
+    RelayHealthOutcome,
     RelayResult,
     UpstreamWebSocketError,
     relay_websocket,
+    select_websocket_subprotocols,
 )
 
 logger = logging.getLogger(__name__)
@@ -100,29 +103,97 @@ class WebSocketUsage:
         self.protocol = protocol
         self._estimated_input = 0
         self._estimated_output = 0
-        self._native_input: int | None = None
-        self._native_output: int | None = None
+        self._native_input = 0
+        self._native_output = 0
+        self._native_estimated_input = 0
+        self._native_estimated_output = 0
+        self._has_native = False
+        self._openai_response_ids: set[str] = set()
+        self._gemini_last = CanonicalUsage(0, 0)
 
     def observe_client(self, frame: Frame) -> None:
-        self._estimated_input += estimate_websocket_frame_tokens(frame)
+        self.observe("client", frame)
 
     def observe_upstream(self, frame: Frame) -> None:
-        self._estimated_output += estimate_websocket_frame_tokens(frame)
-        native = _native_usage(self.protocol, frame)
-        if native is not None:
-            self._native_input = max(self._native_input or 0, native.input_tokens)
-            self._native_output = max(self._native_output or 0, native.output_tokens)
+        self.observe("upstream", frame)
+
+    def observe(self, direction: str, frame: Frame) -> None:
+        estimated = estimate_websocket_frame_tokens(frame)
+        if direction == "client":
+            self._estimated_input += estimated
+            return
+        self._estimated_output += estimated
+        native = _native_usage_event(self.protocol, frame)
+        if native is not None and self._apply_native(native):
+            self._native_estimated_input = self._estimated_input
+            self._native_estimated_output = self._estimated_output
+
+    def preview(self, direction: str, frame: Frame) -> UsageResult:
+        projected = self._copy()
+        projected.observe(direction, frame)
+        return projected.snapshot()
 
     def snapshot(self) -> UsageResult:
-        if self._native_input is not None and self._native_output is not None:
+        if self._has_native:
+            estimated_tail = CanonicalUsage(
+                max(0, self._estimated_input - self._native_estimated_input),
+                max(0, self._estimated_output - self._native_estimated_output),
+            )
+            source = (
+                UsageSource.ESTIMATED if _total_tokens(estimated_tail) > 0 else UsageSource.PROVIDER
+            )
             return UsageResult(
-                CanonicalUsage(self._native_input, self._native_output),
-                UsageSource.PROVIDER,
+                CanonicalUsage(
+                    self._native_input + estimated_tail.input_tokens,
+                    self._native_output + estimated_tail.output_tokens,
+                ),
+                source,
             )
         return UsageResult(
             CanonicalUsage(self._estimated_input, self._estimated_output),
             UsageSource.ESTIMATED,
         )
+
+    def _apply_native(self, event: _NativeUsageEvent) -> bool:
+        if event.cumulative:
+            input_delta = _counter_delta(event.usage.input_tokens, self._gemini_last.input_tokens)
+            output_delta = _counter_delta(
+                event.usage.output_tokens,
+                self._gemini_last.output_tokens,
+            )
+            if input_delta == 0 and output_delta == 0:
+                return False
+            self._gemini_last = event.usage
+        else:
+            if event.identity in self._openai_response_ids:
+                return False
+            self._openai_response_ids.add(event.identity)
+            input_delta = event.usage.input_tokens
+            output_delta = event.usage.output_tokens
+        self._native_input += input_delta
+        self._native_output += output_delta
+        self._has_native = True
+        return True
+
+    def _copy(self) -> WebSocketUsage:
+        copied = WebSocketUsage(self.protocol)
+        copied._estimated_input = self._estimated_input
+        copied._estimated_output = self._estimated_output
+        copied._native_input = self._native_input
+        copied._native_output = self._native_output
+        copied._native_estimated_input = self._native_estimated_input
+        copied._native_estimated_output = self._native_estimated_output
+        copied._has_native = self._has_native
+        copied._openai_response_ids = self._openai_response_ids.copy()
+        copied._gemini_last = self._gemini_last
+        return copied
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeUsageEvent:
+    usage: CanonicalUsage
+    identity: str
+    cumulative: bool
 
 
 class WebSocketBillingCycle:
@@ -176,44 +247,97 @@ class WebSocketBillingCycle:
             if not force_time and _total_tokens(delta) < self._token_threshold:
                 if elapsed < self._interval_seconds:
                     return False
-            settlement = await self._settle(self._reservation, delta, current.usage_source)
-            self._reservation = None
-            self.actual_cost += settlement.actual_cost
-            self._settled_usage = current.usage
-            self._last_checkpoint = monotonic()
-            if settlement.exhausted:
-                raise InsufficientBalance(required=Decimal("0.00000001"), available=Decimal("0"))
-            self._reservation = await self._reserve(0)
+            await self._checkpoint_locked(current)
             return True
 
-    async def finalize(self) -> None:
+    async def authorize_frame(self, direction: str, frame: Frame) -> None:
         async with self._lock:
-            if self._finalized:
-                return
-            if self._reservation is not None:
-                current = self._usage.snapshot()
-                delta = _usage_delta(current.usage, self._settled_usage)
-                settlement = await self._settle(
-                    self._reservation,
-                    delta,
-                    current.usage_source,
+            if self._finalized or self._reservation is None:
+                raise RuntimeError("WebSocket billing authorization is not active")
+            current = self._usage.snapshot()
+            projected = self._usage.preview(direction, frame)
+            current_delta = _usage_delta(current.usage, self._settled_usage)
+            projected_delta = _usage_delta(projected.usage, self._settled_usage)
+            frame_delta = _usage_delta(projected.usage, current.usage)
+            projected_cost = calculate_cost(self._model, projected_delta)
+            elapsed = monotonic() - self._last_checkpoint
+            checkpoint_due = (
+                projected_cost > self._reservation.amount
+                or elapsed >= self._interval_seconds
+                or (
+                    _total_tokens(projected_delta) >= self._token_threshold
+                    and _total_tokens(current_delta) > 0
                 )
-                self.actual_cost += settlement.actual_cost
-                self._reservation = None
-                self._settled_usage = current.usage
-            self._finalized = True
+            )
+            if checkpoint_due:
+                await self._checkpoint_locked(current, required_next=frame_delta)
+            if self._reservation is None:
+                raise RuntimeError("WebSocket billing reservation disappeared")
+            next_delta = _usage_delta(projected.usage, self._settled_usage)
+            if calculate_cost(self._model, next_delta) > self._reservation.amount:
+                raise InsufficientBalance(
+                    required=calculate_cost(self._model, next_delta),
+                    available=self._reservation.amount,
+                )
+            self._usage.observe(direction, frame)
 
-    async def _reserve(self, estimated_input_tokens: int) -> BalanceReservation:
+    async def finalize(self) -> None:
+        for attempt in range(3):
+            try:
+                async with self._lock:
+                    if self._finalized:
+                        return
+                    if self._reservation is not None:
+                        await self._checkpoint_locked(self._usage.snapshot(), final=True)
+                    self._finalized = True
+                return
+            except Exception:
+                if attempt == 2:
+                    raise
+                await anyio.sleep(0)
+
+    async def _reserve(
+        self,
+        estimated_input_tokens: int,
+        *,
+        max_output_tokens: int | None = None,
+    ) -> BalanceReservation:
         sequence = self._sequence
         self._sequence += 1
         return await self._billing.reserve_balance(
             user_id=self._user_id,
             model=self._model,
             estimated_input_tokens=estimated_input_tokens,
-            max_output_tokens=self._max_output_tokens,
+            max_output_tokens=(
+                self._max_output_tokens if max_output_tokens is None else max_output_tokens
+            ),
             idempotency_key=f"{self._billing_key}:reserve:{sequence}",
             request_id=uuid4(),
         )
+
+    async def _checkpoint_locked(
+        self,
+        current: UsageResult,
+        *,
+        required_next: CanonicalUsage | None = None,
+        final: bool = False,
+    ) -> None:
+        if self._reservation is None:
+            return
+        delta = _usage_delta(current.usage, self._settled_usage)
+        settlement = await self._settle(self._reservation, delta, current.usage_source)
+        self._reservation = None
+        self.actual_cost += settlement.actual_cost
+        self._settled_usage = current.usage
+        self._last_checkpoint = monotonic()
+        if settlement.exhausted and not final:
+            raise InsufficientBalance(required=Decimal("0.00000001"), available=Decimal("0"))
+        if not final:
+            required = required_next or CanonicalUsage(0, 0)
+            self._reservation = await self._reserve(
+                required.input_tokens,
+                max_output_tokens=max(self._max_output_tokens, required.output_tokens),
+            )
 
     async def _settle(
         self,
@@ -249,7 +373,6 @@ class WebSocketGatewayService:
         self._router_factory = router_factory
 
     async def handle(self, websocket: WebSocket, protocol: Protocol) -> None:
-        await websocket.accept()
         started_at = monotonic()
         audit_id: UUID | None = None
         route: RouteCandidate | None = None
@@ -262,6 +385,20 @@ class WebSocketGatewayService:
                 extract_api_key(cast(Any, websocket)),
                 self._session,
             )
+        except BaseException as exc:
+            if isinstance(exc, anyio.get_cancelled_exc_class()):
+                raise
+            close = _gateway_close(exc)
+            await _reject_websocket(websocket, close.code, _close_reason(close.error_code))
+            return
+
+        raw_subprotocols = websocket.headers.get("sec-websocket-protocol")
+        upstream_subprotocols, selected_subprotocol = select_websocket_subprotocols(
+            protocol,
+            raw_subprotocols,
+        )
+        await websocket.accept(subprotocol=selected_subprotocol)
+        try:
             initial_request, requested_model = await _initial_request_and_model(websocket, protocol)
             resolved = await CatalogRepository(self._session).resolve_model(requested_model)
             route_router = self._router_factory(self._session)
@@ -308,12 +445,8 @@ class WebSocketGatewayService:
             )
 
             async def observe(direction: str, frame: Frame) -> None:
-                if direction == "client":
-                    usage.observe_client(frame)
-                else:
-                    usage.observe_upstream(frame)
                 try:
-                    await billing_cycle.checkpoint()
+                    await billing_cycle.authorize_frame(direction, frame)
                 except InsufficientBalance:
                     raise RelayAbort(4402, _close_reason("insufficient_balance")) from None
 
@@ -331,27 +464,37 @@ class WebSocketGatewayService:
                 query_string=websocket.url.query,
                 observe_frame=observe,
                 on_interval=interval,
+                subprotocols=upstream_subprotocols,
             )
-            if result.upstream_failed:
+            if result.health_outcome is RelayHealthOutcome.FAILURE:
                 await _safe_health(
                     route_router.record_failure(
                         route.route_id,
-                        RouteFailure(exception=result.exception),
+                        result.route_failure
+                        or RouteFailure(
+                            error_code="websocket_network_error",
+                            exception=result.exception,
+                        ),
                     )
                 )
-            else:
+            elif result.health_outcome is RelayHealthOutcome.SUCCESS:
                 await _safe_health(route_router.record_success(route.route_id))
         except BaseException as exc:
             if isinstance(exc, anyio.get_cancelled_exc_class()):
+                result = RelayResult(
+                    client_disconnected=True,
+                    close_code=1001,
+                    close_reason="client disconnected",
+                    exception=exc,
+                    health_outcome=RelayHealthOutcome.NEUTRAL,
+                )
                 raise
             if (
                 route is not None
                 and route_router is not None
                 and isinstance(exc, UpstreamWebSocketError)
             ):
-                await _safe_health(
-                    route_router.record_failure(route.route_id, RouteFailure(exception=exc))
-                )
+                await _safe_health(route_router.record_failure(route.route_id, exc.failure))
             close = _gateway_close(exc)
             await _safe_close(websocket, close.code, _close_reason(close.error_code))
             result = RelayResult(
@@ -360,17 +503,36 @@ class WebSocketGatewayService:
                 close_code=close.code,
                 close_reason=_close_reason(close.error_code),
                 exception=exc,
+                health_outcome=(
+                    RelayHealthOutcome.FAILURE
+                    if isinstance(exc, UpstreamWebSocketError)
+                    else RelayHealthOutcome.NEUTRAL
+                ),
+                route_failure=exc.failure if isinstance(exc, UpstreamWebSocketError) else None,
             )
         finally:
+            cleanup_error: BaseException | None = None
             with anyio.CancelScope(shield=True):
                 if billing_cycle is not None:
                     try:
                         await billing_cycle.finalize()
                     except Exception as exc:
+                        cleanup_error = exc
                         logger.error(
                             "WebSocket billing cleanup failed exception_type=%s",
                             type(exc).__name__,
                         )
+            if cleanup_error is not None:
+                result = RelayResult(
+                    client_disconnected=(
+                        result.client_disconnected if result is not None else False
+                    ),
+                    close_code=1011,
+                    close_reason="billing cleanup failed",
+                    exception=cleanup_error,
+                    health_outcome=RelayHealthOutcome.NEUTRAL,
+                )
+            with anyio.CancelScope(shield=True):
                 if audit_id is not None:
                     usage_result = usage.snapshot()
                     cost = billing_cycle.actual_cost if billing_cycle is not None else Decimal("0")
@@ -521,7 +683,7 @@ def _metadata_token_estimate(value: Any, key: str = "") -> int:
     return 0
 
 
-def _native_usage(protocol: Protocol, frame: Frame) -> CanonicalUsage | None:
+def _native_usage_event(protocol: Protocol, frame: Frame) -> _NativeUsageEvent | None:
     try:
         payload = orjson.loads(frame)
     except (orjson.JSONDecodeError, UnicodeDecodeError):
@@ -533,22 +695,32 @@ def _native_usage(protocol: Protocol, frame: Frame) -> CanonicalUsage | None:
         usage = response.get("usage") if isinstance(response, Mapping) else payload.get("usage")
         if not isinstance(usage, Mapping):
             return None
-        return _usage_from_fields(
+        parsed = _usage_from_fields(
             usage,
             ("input_tokens", "prompt_tokens"),
             ("output_tokens", "completion_tokens"),
         )
+        if parsed is None:
+            return None
+        response_id = response.get("id") if isinstance(response, Mapping) else None
+        if not isinstance(response_id, str) or not response_id:
+            raw_id = payload.get("response_id")
+            response_id = raw_id if isinstance(raw_id, str) and raw_id else _frame_digest(frame)
+        return _NativeUsageEvent(parsed, response_id, False)
     usage = payload.get("usageMetadata") or payload.get("usage_metadata")
     server_content = payload.get("serverContent") or payload.get("server_content")
     if usage is None and isinstance(server_content, Mapping):
         usage = server_content.get("usageMetadata") or server_content.get("usage_metadata")
     if not isinstance(usage, Mapping):
         return None
-    return _usage_from_fields(
+    parsed = _usage_from_fields(
         usage,
         ("promptTokenCount", "prompt_token_count", "input_tokens"),
         ("candidatesTokenCount", "candidates_token_count", "output_tokens"),
     )
+    if parsed is None:
+        return None
+    return _NativeUsageEvent(parsed, _frame_digest(frame), True)
 
 
 def _usage_from_fields(
@@ -570,6 +742,15 @@ def _usage_delta(current: CanonicalUsage, settled: CanonicalUsage) -> CanonicalU
         max(0, current.input_tokens - settled.input_tokens),
         max(0, current.output_tokens - settled.output_tokens),
     )
+
+
+def _counter_delta(current: int, previous: int) -> int:
+    return current - previous if current >= previous else current
+
+
+def _frame_digest(frame: Frame) -> str:
+    raw = frame if isinstance(frame, bytes) else frame.encode()
+    return sha256(raw).hexdigest()
 
 
 def _total_tokens(usage: CanonicalUsage) -> int:
@@ -619,6 +800,14 @@ async def _safe_close(websocket: WebSocket, code: int, reason: str) -> None:
         await websocket.close(code=code, reason=reason)
     except (OSError, RuntimeError):
         pass
+
+
+async def _reject_websocket(websocket: WebSocket, code: int, reason: str) -> None:
+    try:
+        await websocket.accept()
+    except (OSError, RuntimeError):
+        pass
+    await _safe_close(websocket, code, reason)
 
 
 async def _safe_health(operation: Any) -> None:

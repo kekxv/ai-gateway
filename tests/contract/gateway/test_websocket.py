@@ -6,12 +6,15 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, cast
 
+import anyio
 import orjson
 import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from starlette.datastructures import Headers, QueryParams
 from websockets.asyncio.server import ServerConnection, serve
+from websockets.exceptions import ConnectionClosedError
+from websockets.frames import Close
 
 from ai_gateway.audit.service import RequestContext, RequestFailure, RequestResult
 from ai_gateway.auth.api_key import ApiKeyPrincipal
@@ -21,13 +24,67 @@ from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import ApiKeyScope, Protocol
 from ai_gateway.core.security import encrypt_secret
 from ai_gateway.gateway.websocket import WebSocketGatewayService
-from ai_gateway.routing.types import RouteCandidate
+from ai_gateway.routing.types import RouteCandidate, RouteFailure
 from ai_gateway.transport.websocket import (
+    RelayHealthOutcome,
     RelayResult,
+    UpstreamWebSocketError,
     relay_websocket,
     rewrite_initial_request,
+    select_websocket_subprotocols,
     websocket_proxy_for,
 )
+
+
+class AsyncBarrier:
+    def __init__(self, parties: int) -> None:
+        self.parties = parties
+        self.arrivals = 0
+        self.event = anyio.Event()
+        self.lock = anyio.Lock()
+
+    async def wait(self) -> None:
+        async with self.lock:
+            self.arrivals += 1
+            if self.arrivals == self.parties:
+                self.event.set()
+        await self.event.wait()
+
+
+class FakeUpstreamConnection:
+    def __init__(
+        self,
+        *,
+        barrier: AsyncBarrier | None = None,
+        close_code: int = 4100,
+        close_reason: str = "provider-race",
+        close_delay: float = 0,
+    ) -> None:
+        self.barrier = barrier
+        self.close_code = close_code
+        self.close_reason = close_reason
+        self.close_delay = close_delay
+        self.close_calls: list[tuple[int, str]] = []
+        self.started = anyio.Event()
+
+    async def send(self, _: str | bytes) -> None:
+        return None
+
+    async def recv(self) -> str:
+        self.started.set()
+        if self.barrier is not None:
+            await self.barrier.wait()
+            raise ConnectionClosedError(
+                Close(self.close_code, self.close_reason),
+                None,
+            )
+        await anyio.sleep_forever()
+        raise AssertionError("unreachable")
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        self.close_calls.append((code, reason))
+        if self.close_delay:
+            await anyio.sleep(self.close_delay)
 
 
 class FakeClientWebSocket:
@@ -52,6 +109,27 @@ class FakeClientWebSocket:
         self.close_calls.append((code, reason or ""))
 
 
+class RacingClientWebSocket(FakeClientWebSocket):
+    def __init__(self, barrier: AsyncBarrier | None = None, *, close_delay: float = 0) -> None:
+        super().__init__([], {})
+        self.barrier = barrier
+        self.close_delay = close_delay
+        self.started = anyio.Event()
+
+    async def receive(self) -> dict[str, Any]:
+        self.started.set()
+        if self.barrier is not None:
+            await self.barrier.wait()
+            return {"type": "websocket.disconnect", "code": 1000, "reason": "client-race"}
+        await anyio.sleep_forever()
+        raise AssertionError("unreachable")
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        self.close_calls.append((code, reason or ""))
+        if self.close_delay:
+            await anyio.sleep(self.close_delay)
+
+
 class FakeGatewayWebSocket(FakeClientWebSocket):
     def __init__(self, *, model: str = "friendly-alias") -> None:
         super().__init__([], {})
@@ -59,9 +137,17 @@ class FakeGatewayWebSocket(FakeClientWebSocket):
         self.query_params = QueryParams({"model": model})
         self.url = SimpleNamespace(query=f"model={model}")
         self.accept_calls = 0
+        self.accepted_subprotocols: list[str | None] = []
+        self.events: list[str] = []
 
-    async def accept(self) -> None:
+    async def accept(self, subprotocol: str | None = None) -> None:
         self.accept_calls += 1
+        self.accepted_subprotocols.append(subprotocol)
+        self.events.append("accept")
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        self.events.append("close")
+        await super().close(code, reason)
 
 
 @dataclass
@@ -125,6 +211,8 @@ class FakeRouter:
         self.route = route
         self.unsupported = unsupported
         self.selection: dict[str, Any] | None = None
+        self.successes: list[int] = []
+        self.failures: list[tuple[int, object]] = []
 
     async def select_route(self, model: Any, principal: Any, protocol: Any, **kwargs: Any) -> Any:
         self.selection = {"model": model, "principal": principal, "protocol": protocol, **kwargs}
@@ -134,10 +222,12 @@ class FakeRouter:
             raise NoRouteAvailable("friendly-alias", removed_by_transport=True)
         return self.route
 
-    async def record_success(self, _: int) -> bool:
+    async def record_success(self, route_id: int) -> bool:
+        self.successes.append(route_id)
         return True
 
-    async def record_failure(self, _: int, __: object) -> bool:
+    async def record_failure(self, route_id: int, failure: object) -> bool:
+        self.failures.append((route_id, failure))
         return True
 
 
@@ -180,38 +270,60 @@ async def test_transparent_relay_rewrites_model_injects_auth_and_propagates_fram
         observed["authorization"] = connection.request.headers.get("authorization")
         observed["client_secret"] = connection.request.headers.get("x-api-key")
         observed["path"] = connection.request.path
+        observed["subprotocol"] = connection.subprotocol
+        observed["subprotocol_header"] = connection.request.headers.get("sec-websocket-protocol")
         observed["initial"] = await connection.recv()
         observed["binary"] = await connection.recv()
+        observed["later_model"] = await connection.recv()
         await connection.send("provider-text")
         await connection.send(b"provider-bytes")
         await connection.close(4100, "provider-finished")
 
-    async with serve(upstream, "127.0.0.1", 0) as server:
+    async with serve(upstream, "127.0.0.1", 0, subprotocols=["realtime"]) as server:
         port = cast(Any, server).sockets[0].getsockname()[1]
         route = _route(f"ws://127.0.0.1:{port}/realtime", settings)
         client = FakeClientWebSocket(
-            [{"type": "websocket.receive", "bytes": b"client-bytes"}],
-            {"authorization": "Bearer sk-gw-client", "x-api-key": "client-secret"},
+            [
+                {"type": "websocket.receive", "bytes": b"client-bytes"},
+                {
+                    "type": "websocket.receive",
+                    "text": '{"session":{"model":"later-alias"}}',
+                },
+            ],
+            {
+                "authorization": "Bearer sk-gw-client",
+                "x-api-key": "client-secret",
+                "sec-websocket-protocol": (
+                    "realtime, openai-insecure-api-key.sk-subprotocol-secret"
+                ),
+            },
         )
-        initial = '{"type":"session.update","session":{"model":"friendly-alias"}}'
+        initial = '{"type":"session.update","session":{"voice":"alloy"}}'
 
-        await relay_websocket(
+        result = await relay_websocket(
             client,  # type: ignore[arg-type]
             route,
             initial,
             settings=settings,
             query_string="model=friendly-alias&intent=transcription",
+            subprotocols=("realtime", "openai-insecure-api-key.sk-subprotocol-secret"),
         )
 
     assert observed == {
         "authorization": "Bearer provider-secret",
         "client_secret": None,
         "path": "/realtime?model=native-realtime-model&intent=transcription",
-        "initial": '{"type":"session.update","session":{"model":"native-realtime-model"}}',
+        "subprotocol": "realtime",
+        "subprotocol_header": "realtime",
+        "initial": '{"type":"session.update","session":{"voice":"alloy"}}',
         "binary": b"client-bytes",
+        "later_model": '{"session":{"model":"later-alias"}}',
     }
     assert client.sent == ["provider-text", b"provider-bytes"]
     assert client.close_calls == [(4100, "provider-finished")]
+    assert result.health_outcome is RelayHealthOutcome.FAILURE
+    assert result.provider_observed is True
+    assert result.route_failure is not None
 
 
 @pytest.mark.asyncio
@@ -281,18 +393,129 @@ async def test_websocket_proxy_selection_matches_http_and_no_proxy_rules() -> No
 
 
 @pytest.mark.asyncio
+async def test_websocket_proxy_honors_no_proxy_cidr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_gateway.transport.websocket as transport_module
+
+    async def resolve(_: str) -> tuple[str, ...]:
+        return ("10.20.30.40",)
+
+    monkeypatch.setattr(transport_module, "_resolve_host", resolve)
+    settings = cast(
+        Settings,
+        SimpleNamespace(
+            http_proxy="http://proxy.internal:8080",
+            https_proxy=None,
+            no_proxy="10.0.0.0/8",
+        ),
+    )
+    assert await websocket_proxy_for("ws://provider.example/live", settings) is None
+
+
+def test_subprotocol_filter_drops_credential_values_and_selects_protocol_identifier() -> None:
+    allowed, selected = select_websocket_subprotocols(
+        Protocol.OPENAI,
+        "realtime, openai-insecure-api-key.sk-secret, bearer.token, unknown",
+    )
+    assert allowed == ("realtime",)
+    assert selected == "realtime"
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_peer_close_uses_deterministic_provider_outcome_and_closes_once() -> (
+    None
+):
+    settings = _settings()
+    barrier = AsyncBarrier(2)
+    client = RacingClientWebSocket(barrier)
+    upstream = FakeUpstreamConnection(barrier=barrier)
+
+    async def connector(*_: Any, **__: Any) -> FakeUpstreamConnection:
+        return upstream
+
+    result = await relay_websocket(
+        client,  # type: ignore[arg-type]
+        _route("ws://provider.example/realtime", settings),
+        None,
+        settings=settings,
+        connector=connector,
+    )
+
+    assert result.close_code == 4100
+    assert result.close_reason == "provider-race"
+    assert result.health_outcome is RelayHealthOutcome.FAILURE
+    assert client.close_calls == [(4100, "provider-race")]
+    assert upstream.close_calls == [(4100, "provider-race")]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_shields_both_slow_peer_closes() -> None:
+    settings = _settings()
+    client = RacingClientWebSocket(close_delay=0.01)
+    upstream = FakeUpstreamConnection(close_delay=0.01)
+
+    async def connector(*_: Any, **__: Any) -> FakeUpstreamConnection:
+        return upstream
+
+    async def run() -> None:
+        await relay_websocket(
+            client,  # type: ignore[arg-type]
+            _route("ws://provider.example/realtime", settings),
+            None,
+            settings=settings,
+            connector=connector,
+        )
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(run)
+        await client.started.wait()
+        await upstream.started.wait()
+        task_group.cancel_scope.cancel()
+
+    assert client.close_calls == [(1001, "client disconnected")]
+    assert upstream.close_calls == [(1001, "client disconnected")]
+
+
+@pytest.mark.asyncio
+async def test_handshake_status_is_preserved_as_structured_route_failure() -> None:
+    settings = _settings()
+    client = FakeClientWebSocket([], {})
+
+    class HandshakeFailure(Exception):
+        response = SimpleNamespace(status_code=503)
+
+    async def connector(*_: Any, **__: Any) -> Any:
+        raise HandshakeFailure
+
+    with pytest.raises(UpstreamWebSocketError) as captured:
+        await relay_websocket(
+            client,  # type: ignore[arg-type]
+            _route("ws://provider.example/realtime", settings),
+            None,
+            settings=settings,
+            connector=connector,
+        )
+
+    assert captured.value.failure.status_code == 503
+    assert captured.value.failure.error_code == "websocket_handshake"
+
+
+@pytest.mark.asyncio
 async def test_invalid_api_key_closes_4401_before_route_or_upstream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import ai_gateway.gateway.websocket as gateway_module
 
+    websocket = FakeGatewayWebSocket()
+
     async def invalid(*_: Any, **__: Any) -> ApiKeyPrincipal:
+        assert websocket.accept_calls == 0
         raise HTTPException(401, {"code": "invalid_api_key", "message": "invalid"})
 
     monkeypatch.setattr(gateway_module, "authenticate_api_key", invalid)
     route_router = FakeRouter(unsupported=True)
     billing = FakeBilling()
-    websocket = FakeGatewayWebSocket()
     service = WebSocketGatewayService(
         session=FakeSession(),  # type: ignore[arg-type]
         settings=_settings(),
@@ -304,6 +527,7 @@ async def test_invalid_api_key_closes_4401_before_route_or_upstream(
     await service.handle(websocket, Protocol.OPENAI)  # type: ignore[arg-type]
 
     assert websocket.close_calls == [(4401, '{"code":"invalid_api_key"}')]
+    assert websocket.events == ["accept", "close"]
     assert route_router.selection is None
     assert billing.reserve_calls == 0
 
@@ -315,8 +539,10 @@ async def test_claude_only_route_closes_unsupported_transport_before_reservation
     import ai_gateway.gateway.websocket as gateway_module
 
     principal = ApiKeyPrincipal(1, 7, ApiKeyScope.PROVIDERS, provider_ids=frozenset({9}))
+    websocket = FakeGatewayWebSocket()
 
     async def authenticated(*_: Any, **__: Any) -> ApiKeyPrincipal:
+        assert websocket.accept_calls == 0
         return principal
 
     async def resolved(*_: Any, **__: Any) -> ResolvedModel:
@@ -326,7 +552,6 @@ async def test_claude_only_route_closes_unsupported_transport_before_reservation
     monkeypatch.setattr(gateway_module.CatalogRepository, "resolve_model", resolved)
     route_router = FakeRouter(unsupported=True)
     billing = FakeBilling()
-    websocket = FakeGatewayWebSocket()
     service = WebSocketGatewayService(
         session=FakeSession(),  # type: ignore[arg-type]
         settings=_settings(),
@@ -378,3 +603,137 @@ async def test_insufficient_balance_closes_4402_before_upstream_connect(
 
     assert websocket.close_calls == [(4402, '{"code":"insufficient_balance"}')]
     assert billing.reserve_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_client_disconnect_is_health_neutral_and_final_audit_is_disconnected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_gateway.gateway.websocket as gateway_module
+
+    async def authenticated(*_: Any, **__: Any) -> ApiKeyPrincipal:
+        return ApiKeyPrincipal(1, 7, ApiKeyScope.ALL)
+
+    async def resolved(*_: Any, **__: Any) -> ResolvedModel:
+        return ResolvedModel(2, "friendly-alias", "canonical-model")
+
+    async def disconnected(*_: Any, **__: Any) -> RelayResult:
+        return RelayResult(
+            client_disconnected=True,
+            close_code=1001,
+            close_reason="client disconnected",
+            health_outcome=RelayHealthOutcome.NEUTRAL,
+        )
+
+    monkeypatch.setattr(gateway_module, "authenticate_api_key", authenticated)
+    monkeypatch.setattr(gateway_module.CatalogRepository, "resolve_model", resolved)
+    monkeypatch.setattr(gateway_module, "relay_websocket", disconnected)
+    route_router = FakeRouter(_route("ws://provider.example/realtime", _settings()))
+    audit = FakeAudit()
+    websocket = FakeGatewayWebSocket()
+    service = WebSocketGatewayService(
+        session=FakeSession(),  # type: ignore[arg-type]
+        settings=_settings(),
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        router_factory=lambda _: route_router,  # type: ignore[arg-type]
+    )
+
+    await service.handle(websocket, Protocol.OPENAI)  # type: ignore[arg-type]
+
+    assert route_router.successes == []
+    assert route_router.failures == []
+    assert audit.failed is not None
+    assert audit.failed.client_disconnected is True
+    assert audit.completed is None
+
+
+@pytest.mark.asyncio
+async def test_provider_observed_success_negotiates_safe_subprotocol_and_completes_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_gateway.gateway.websocket as gateway_module
+
+    async def authenticated(*_: Any, **__: Any) -> ApiKeyPrincipal:
+        return ApiKeyPrincipal(1, 7, ApiKeyScope.ALL)
+
+    async def resolved(*_: Any, **__: Any) -> ResolvedModel:
+        return ResolvedModel(2, "friendly-alias", "canonical-model")
+
+    async def succeeded(*_: Any, **kwargs: Any) -> RelayResult:
+        assert kwargs["subprotocols"] == ("realtime",)
+        return RelayResult(
+            close_code=1000,
+            close_reason="ok",
+            health_outcome=RelayHealthOutcome.SUCCESS,
+            provider_observed=True,
+        )
+
+    monkeypatch.setattr(gateway_module, "authenticate_api_key", authenticated)
+    monkeypatch.setattr(gateway_module.CatalogRepository, "resolve_model", resolved)
+    monkeypatch.setattr(gateway_module, "relay_websocket", succeeded)
+    route_router = FakeRouter(_route("ws://provider.example/realtime", _settings()))
+    audit = FakeAudit()
+    websocket = FakeGatewayWebSocket()
+    websocket.headers = Headers(
+        {
+            "authorization": "Bearer sk-gw-client-key",
+            "sec-websocket-protocol": "realtime, openai-insecure-api-key.sk-secret",
+        }
+    )
+    service = WebSocketGatewayService(
+        session=FakeSession(),  # type: ignore[arg-type]
+        settings=_settings(),
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        router_factory=lambda _: route_router,  # type: ignore[arg-type]
+    )
+
+    await service.handle(websocket, Protocol.OPENAI)  # type: ignore[arg-type]
+
+    assert websocket.accepted_subprotocols == ["realtime"]
+    assert route_router.successes == [1]
+    assert route_router.failures == []
+    assert audit.completed is not None
+    assert audit.failed is None
+
+
+@pytest.mark.asyncio
+async def test_handshake_failure_penalizes_health_and_fails_final_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_gateway.gateway.websocket as gateway_module
+
+    async def authenticated(*_: Any, **__: Any) -> ApiKeyPrincipal:
+        return ApiKeyPrincipal(1, 7, ApiKeyScope.ALL)
+
+    async def resolved(*_: Any, **__: Any) -> ResolvedModel:
+        return ResolvedModel(2, "friendly-alias", "canonical-model")
+
+    failure = RouteFailure(status_code=503, error_code="websocket_handshake")
+
+    async def failed(*_: Any, **__: Any) -> RelayResult:
+        from ai_gateway.transport.websocket import UpstreamWebSocketError
+
+        raise UpstreamWebSocketError("handshake failed", failure)
+
+    monkeypatch.setattr(gateway_module, "authenticate_api_key", authenticated)
+    monkeypatch.setattr(gateway_module.CatalogRepository, "resolve_model", resolved)
+    monkeypatch.setattr(gateway_module, "relay_websocket", failed)
+    route_router = FakeRouter(_route("ws://provider.example/realtime", _settings()))
+    audit = FakeAudit()
+    websocket = FakeGatewayWebSocket()
+    service = WebSocketGatewayService(
+        session=FakeSession(),  # type: ignore[arg-type]
+        settings=_settings(),
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        router_factory=lambda _: route_router,  # type: ignore[arg-type]
+    )
+
+    await service.handle(websocket, Protocol.OPENAI)  # type: ignore[arg-type]
+
+    assert route_router.successes == []
+    assert route_router.failures == [(1, failure)]
+    assert audit.failed is not None
+    assert audit.completed is None
