@@ -27,7 +27,7 @@ from ai_gateway.db.models import (
     ProviderProtocol,
     User,
 )
-from ai_gateway.db.session import get_session, get_session_factory_for_url
+from ai_gateway.db.session import get_session
 from ai_gateway.main import create_app
 
 
@@ -395,7 +395,7 @@ async def test_custom_app_scopes_endpoint_and_scheduler_dependencies(
         jwt_secret="custom-app-jwt-secret-at-least-32-bytes",
         encryption_key=Fernet.generate_key().decode(),
     )
-    session_factory = get_session_factory_for_url(database_url)
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
     suffix = str(datetime.now(UTC).timestamp()).replace(".", "-")
     async with session_factory() as setup_session:
         provider = _provider(custom_settings, name=f"custom-app-provider-{suffix}")
@@ -471,10 +471,10 @@ async def test_custom_app_scopes_endpoint_and_scheduler_dependencies(
             assert response.status_code == 200, response.text
             assert response.json()["discovered_models"] == 1
             assert app.state.settings is custom_settings
-            assert app.state.session_factory is session_factory
+            assert app.state.session_factory is not session_factory
             assert factory_instances[0].settings is custom_settings
             assert scheduler_instances[0].kwargs["settings"] is custom_settings
-            assert scheduler_instances[0].kwargs["session_factory"] is session_factory
+            assert scheduler_instances[0].kwargs["session_factory"] is app.state.session_factory
             assert scheduler_instances[0].kwargs["http_client_factory"] is factory_instances[0]
     finally:
         async with session_factory() as cleanup_session:

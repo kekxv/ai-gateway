@@ -77,11 +77,14 @@ def test_json_logs_are_structured_and_sensitive_values_are_redacted() -> None:
         "request_id",
         "route_id",
         "exception_class",
+        "exception_stack",
     }
     assert payload["level"] == "ERROR"
     assert payload["logger"] == "ai_gateway.redaction-test"
     assert payload["route_id"] == 42
     assert payload["exception_class"] == "RuntimeError"
+    assert payload["exception_stack"]
+    assert set(payload["exception_stack"][-1]) == {"file", "function", "line"}
     serialized = json.dumps(payload)
     for secret in (
         "bearer-secret",

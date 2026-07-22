@@ -5,6 +5,7 @@ from typing import cast
 
 import pytest
 from cryptography.fernet import Fernet
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
@@ -54,9 +55,13 @@ class StubConnectionContext(AbstractAsyncContextManager[AsyncConnection]):
 class StubEngine:
     def __init__(self, connection: StubConnection) -> None:
         self.connection = connection
+        self.dispose_calls = 0
 
     def connect(self) -> StubConnectionContext:
         return StubConnectionContext(self.connection)
+
+    async def dispose(self) -> None:
+        self.dispose_calls += 1
 
 
 def runtime_settings(**overrides: object) -> Settings:
@@ -102,12 +107,26 @@ async def test_startup_checks_connectivity_and_required_migration_head() -> None
     with pytest.raises(RuntimeError, match="connectivity or migration"):
         await verify_database(cast(AsyncEngine, StubEngine(unavailable)))
 
-    non_production = StubConnection({"outdated-but-ignored"})
+    explicitly_bypassed = StubConnection({"outdated-but-ignored"})
     await verify_database(
-        cast(AsyncEngine, StubEngine(non_production)),
+        cast(AsyncEngine, StubEngine(explicitly_bypassed)),
         require_migration_head=False,
     )
-    assert non_production.statements == ["SELECT 1"]
+    assert explicitly_bypassed.statements == ["SELECT 1"]
+
+
+async def test_non_production_startup_still_requires_current_migration_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = StubEngine(StubConnection({"0003"}))
+    monkeypatch.setattr(main_module, "get_engine_for_url", lambda _: cast(AsyncEngine, engine))
+    app = create_app(runtime_settings(environment="development"))
+
+    with pytest.raises(RuntimeError, match="0004"):
+        async with app.router.lifespan_context(app):
+            pytest.fail("development startup accepted an outdated migration")
+
+    assert engine.dispose_calls == 1
 
 
 async def test_lifespan_starts_and_closes_shared_resources_exactly_once(
@@ -151,10 +170,13 @@ async def test_lifespan_starts_and_closes_shared_resources_exactly_once(
     schedulers: list[StubScheduler] = []
     recovery_schedulers: list[StubScheduler] = []
 
+    engine = StubEngine(StubConnection({REQUIRED_MIGRATION_HEAD}))
+
     async def verified(_: AsyncEngine, *, require_migration_head: bool) -> None:
-        assert require_migration_head is False
+        assert require_migration_head is True
         return None
 
+    monkeypatch.setattr(main_module, "get_engine_for_url", lambda _: cast(AsyncEngine, engine))
     monkeypatch.setattr(main_module, "verify_database", verified)
     monkeypatch.setattr(main_module, "HttpClientFactory", StubHttpClientFactory)
     monkeypatch.setattr(main_module, "ModelSyncScheduler", StubModelSyncScheduler)
@@ -170,6 +192,56 @@ async def test_lifespan_starts_and_closes_shared_resources_exactly_once(
     assert factories[0].close_calls == 1
     assert schedulers[0].run_calls == schedulers[0].stop_calls == 1
     assert recovery_schedulers[0].run_calls == recovery_schedulers[0].stop_calls == 1
+    assert engine.dispose_calls == 1
+
+
+def test_multiple_apps_own_distinct_engines_across_event_loops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engines: list[StubEngine] = []
+
+    def create_engine(_: str) -> AsyncEngine:
+        engine = StubEngine(StubConnection({REQUIRED_MIGRATION_HEAD}))
+        engines.append(engine)
+        return cast(AsyncEngine, engine)
+
+    async def verified(_: AsyncEngine, *, require_migration_head: bool) -> None:
+        assert require_migration_head is True
+
+    class StubHttpClientFactory:
+        def __init__(self, _: Settings) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            return None
+
+    class StubScheduler:
+        def __init__(self, *_: object, **__: object) -> None:
+            self.stopped = asyncio.Event()
+
+        async def run(self) -> None:
+            await self.stopped.wait()
+
+        def stop(self) -> None:
+            self.stopped.set()
+
+    monkeypatch.setattr(main_module, "get_engine_for_url", create_engine)
+    monkeypatch.setattr(main_module, "verify_database", verified)
+    monkeypatch.setattr(main_module, "HttpClientFactory", StubHttpClientFactory)
+    monkeypatch.setattr(main_module, "ModelSyncScheduler", StubScheduler)
+    monkeypatch.setattr(main_module, "BillingRecoveryScheduler", StubScheduler)
+    apps = [create_app(runtime_settings()), create_app(runtime_settings())]
+
+    async def start_and_stop(app: FastAPI) -> None:
+        async with app.router.lifespan_context(app):
+            await asyncio.sleep(0)
+
+    for app in apps:
+        asyncio.run(start_and_stop(app))
+
+    assert len(engines) == 2
+    assert engines[0] is not engines[1]
+    assert [engine.dispose_calls for engine in engines] == [1, 1]
 
 
 async def test_health_returns_503_when_database_is_unavailable(
@@ -188,3 +260,17 @@ async def test_health_returns_503_when_database_is_unavailable(
 
     assert response.status_code == 503
     assert response.json() == {"status": "unavailable"}
+
+
+async def test_initialized_health_returns_200(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = create_app(runtime_settings())
+
+    async def available(_: object) -> bool:
+        return True
+
+    monkeypatch.setattr(main_module, "database_is_available", available)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}

@@ -15,6 +15,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import ClientDisconnect
 from starlette.types import Receive, Scope, Send
@@ -41,6 +42,7 @@ from ai_gateway.catalog.repository import CatalogRepository
 from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import Protocol, UsageSource
 from ai_gateway.core.errors import GatewayError
+from ai_gateway.core.logging import current_request_id
 from ai_gateway.db.models import Model
 from ai_gateway.protocols.base import (
     UnsupportedFeatureError,
@@ -1337,28 +1339,62 @@ def _public_error_code(exc: BaseException) -> str:
 
 
 def native_error_response(protocol: Protocol, exc: BaseException) -> JSONResponse:
-    status_code, code, message = _error_detail(exc)
+    status_code, code, message, include_request_id = _native_error_detail(exc)
+    request_id = current_request_id() or ""
     if protocol is Protocol.OPENAI:
         error_type = (
             "authentication_error"
             if code == "invalid_api_key"
             else ("server_error" if status_code >= 500 else "invalid_request_error")
         )
-        content: dict[str, Any] = {"error": {"message": message, "type": error_type, "code": code}}
+        error: dict[str, Any] = {"message": message, "type": error_type, "code": code}
+        if include_request_id:
+            error["request_id"] = request_id
+        content: dict[str, Any] = {"error": error}
     elif protocol is Protocol.CLAUDE:
         content = {"type": "error", "error": {"type": code, "message": message}}
+        if include_request_id:
+            content["request_id"] = request_id
     else:
-        content = {
-            "error": {
-                "code": status_code,
-                "message": message,
-                "status": _gemini_status(status_code, code),
-            }
+        error = {
+            "code": status_code,
+            "message": message,
+            "status": _gemini_status(status_code, code),
         }
+        if include_request_id:
+            error["request_id"] = request_id
+        content = {"error": error}
     return JSONResponse(
         status_code=status_code,
         content=content,
         headers=_safe_native_error_headers(exc),
+    )
+
+
+def _native_error_detail(exc: BaseException) -> tuple[int, str, str, bool]:
+    if isinstance(exc, (GatewayError, HTTPException)):
+        status_code, code, message = _error_detail(exc)
+        return status_code, code, message, False
+    if isinstance(exc, SQLAlchemyError):
+        _log_native_exception("Database gateway request failed", exc)
+        return (
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "database_unavailable",
+            "Database unavailable",
+            True,
+        )
+    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+        _log_native_exception("Gateway request timed out", exc)
+        return status.HTTP_504_GATEWAY_TIMEOUT, "timeout", "Request timed out", True
+    _log_native_exception("Unhandled gateway exception", exc)
+    return status.HTTP_500_INTERNAL_SERVER_ERROR, "internal_error", "Internal server error", True
+
+
+def _log_native_exception(event: str, exc: BaseException) -> None:
+    logger.exception(
+        event,
+        exc_info=(type(exc), exc, exc.__traceback__),
+        extra={"exception_class": type(exc).__name__},
     )
 
 
@@ -1389,7 +1425,7 @@ def _error_detail(exc: BaseException) -> tuple[int, str, str]:
 
 
 def _gemini_status(status_code: int, code: str) -> str:
-    if code == "upstream_timeout":
+    if code in {"timeout", "upstream_timeout"}:
         return "DEADLINE_EXCEEDED"
     if status_code == 400:
         return "INVALID_ARGUMENT"

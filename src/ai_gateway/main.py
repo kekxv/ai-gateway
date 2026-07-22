@@ -35,7 +35,11 @@ from ai_gateway.core.errors import (
 )
 from ai_gateway.core.logging import configure_logging
 from ai_gateway.core.middleware import correlation_middleware
-from ai_gateway.db.session import get_engine_for_url, get_session, get_session_factory_for_url
+from ai_gateway.db.session import (
+    get_engine_for_url,
+    get_session,
+    get_session_factory_for_engine,
+)
 from ai_gateway.gateway.claude import router as claude_gateway_router
 from ai_gateway.gateway.gemini import router as gemini_gateway_router
 from ai_gateway.gateway.models import router as models_gateway_router
@@ -101,7 +105,7 @@ def _billing_default_max_output_tokens(settings: object) -> int:
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured_engine = get_engine_for_url(settings.database_url) if settings is not None else None
     configured_session_factory = (
-        get_session_factory_for_url(settings.database_url) if settings is not None else None
+        get_session_factory_for_engine(configured_engine) if configured_engine is not None else None
     )
     configured_audit_service = (
         AuditService(
@@ -126,59 +130,58 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         active_settings = app_settings()
-        validate_runtime_settings(active_settings)
-        configure_logging(level=getattr(active_settings, "log_level", "INFO"))
         engine = configured_engine or get_engine_for_url(active_settings.database_url)
-        await verify_database(
-            engine,
-            require_migration_head=getattr(active_settings, "environment", "development")
-            == "production",
-        )
-        session_factory = configured_session_factory or get_session_factory_for_url(
-            active_settings.database_url
-        )
-        http_client_factory = HttpClientFactory(active_settings)
-        scheduler = ModelSyncScheduler(
-            engine=engine,
-            session_factory=session_factory,
-            http_client_factory=http_client_factory,
-            settings=active_settings,
-        )
-        app.state.settings = active_settings
-        app.state.engine = engine
-        app.state.session_factory = session_factory
-        app.state.audit_service = AuditService(
-            session_factory,
-            body_limit_bytes=_audit_body_limit(active_settings),
-        )
-        billing_service = BillingService(
-            session_factory,
-            default_max_output_tokens=_billing_default_max_output_tokens(active_settings),
-        )
-        recovery_scheduler = BillingRecoveryScheduler(
-            billing_service,
-            interval_seconds=getattr(active_settings, "billing_recovery_interval_seconds", 60),
-        )
-        app.state.billing_service = billing_service
-        app.state.http_client_factory = http_client_factory
-        app.state.model_sync_scheduler = scheduler
-        app.state.billing_recovery_scheduler = recovery_scheduler
-        scheduler_task = asyncio.create_task(
-            scheduler.run(),
-            name="provider-model-sync",
-        )
-        recovery_task = asyncio.create_task(
-            recovery_scheduler.run(),
-            name="billing-reservation-recovery",
-        )
         try:
-            yield
+            validate_runtime_settings(active_settings)
+            configure_logging(level=getattr(active_settings, "log_level", "INFO"))
+            await verify_database(engine, require_migration_head=True)
+            session_factory = configured_session_factory or get_session_factory_for_engine(engine)
+            http_client_factory = HttpClientFactory(active_settings)
+            scheduler = ModelSyncScheduler(
+                engine=engine,
+                session_factory=session_factory,
+                http_client_factory=http_client_factory,
+                settings=active_settings,
+            )
+            app.state.settings = active_settings
+            app.state.engine = engine
+            app.state.session_factory = session_factory
+            app.state.audit_service = AuditService(
+                session_factory,
+                body_limit_bytes=_audit_body_limit(active_settings),
+            )
+            billing_service = BillingService(
+                session_factory,
+                default_max_output_tokens=_billing_default_max_output_tokens(active_settings),
+            )
+            recovery_scheduler = BillingRecoveryScheduler(
+                billing_service,
+                interval_seconds=getattr(active_settings, "billing_recovery_interval_seconds", 60),
+            )
+            app.state.billing_service = billing_service
+            app.state.http_client_factory = http_client_factory
+            app.state.model_sync_scheduler = scheduler
+            app.state.billing_recovery_scheduler = recovery_scheduler
+            scheduler_task = asyncio.create_task(
+                scheduler.run(),
+                name="provider-model-sync",
+            )
+            recovery_task = asyncio.create_task(
+                recovery_scheduler.run(),
+                name="billing-reservation-recovery",
+            )
+            try:
+                yield
+            finally:
+                scheduler.stop()
+                recovery_scheduler.stop()
+                await scheduler_task
+                await recovery_task
+                await http_client_factory.aclose()
         finally:
-            scheduler.stop()
-            recovery_scheduler.stop()
-            await scheduler_task
-            await recovery_task
-            await http_client_factory.aclose()
+            await engine.dispose()
+            if getattr(app.state, "engine", None) is engine:
+                app.state.engine = None
 
     app = FastAPI(title="Lean AI Gateway", version="0.1.0", lifespan=lifespan)
     configure_logging(level=(getattr(settings, "log_level", "INFO") if settings else "INFO"))
@@ -208,10 +211,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await call_next(request)
 
     async def app_session() -> AsyncIterator[AsyncSession]:
-        active_settings = app_settings()
-        session_factory = configured_session_factory or get_session_factory_for_url(
-            active_settings.database_url
-        )
+        session_factory = getattr(app.state, "session_factory", configured_session_factory)
+        if session_factory is None:
+            raise RuntimeError("application database session factory is not initialized")
         async with session_factory() as session:
             yield session
 
@@ -245,8 +247,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health", include_in_schema=False)
     async def health(request: Request) -> JSONResponse:
         engine = getattr(request.app.state, "engine", None)
-        if not isinstance(engine, AsyncEngine):
-            engine = configured_engine or get_engine_for_url(app_settings().database_url)
+        if engine is None:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"status": "unavailable"},
+            )
         if not await database_is_available(engine):
             return JSONResponse(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -97,7 +98,27 @@ class JsonLogFormatter(logging.Formatter):
             "route_id": route_id,
             "exception_class": exception_class,
         }
+        exception_stack = _safe_exception_stack(record)
+        if exception_stack is not None:
+            payload["exception_stack"] = exception_stack
         return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+
+
+def _safe_exception_stack(record: logging.LogRecord) -> list[dict[str, str | int]] | None:
+    if record.exc_info is None or record.exc_info[2] is None:
+        return None
+    try:
+        frames = traceback.extract_tb(record.exc_info[2])
+    except Exception:
+        return []
+    return [
+        {
+            "file": frame.filename.rsplit("/", maxsplit=1)[-1].rsplit("\\", maxsplit=1)[-1],
+            "function": frame.name,
+            "line": frame.lineno or 0,
+        }
+        for frame in frames
+    ]
 
 
 def install_log_context() -> None:
