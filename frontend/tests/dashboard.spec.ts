@@ -124,11 +124,17 @@ describe('控制台概览', () => {
     expect(chart.attributes('aria-label')).toBeUndefined()
     expect(chart.attributes('aria-hidden')).toBe('true')
     const option = chart.props('option') as {
-      aria: { decal?: { show?: boolean }; description?: string; enabled?: boolean }
+      aria: {
+        decal?: { show?: boolean }
+        description?: string
+        enabled?: boolean
+        label?: { enabled?: boolean }
+      }
       series: Array<{ data: unknown[]; type: string; yAxisIndex?: number }>
       yAxis: unknown[]
     }
-    expect(option.aria.enabled).toBe(false)
+    expect(option.aria.enabled).toBe(true)
+    expect(option.aria.label?.enabled).toBe(false)
     expect(option.aria.decal?.show).toBe(true)
     expect(option.aria.description).toBeUndefined()
     expect(option.yAxis).toHaveLength(2)

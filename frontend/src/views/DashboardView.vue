@@ -113,7 +113,8 @@ const chartOption = computed<DashboardChartOption>(() => {
   const points = summary.value?.daily_usage ?? []
   return {
     aria: {
-      enabled: false,
+      enabled: true,
+      label: { enabled: false },
       decal: { show: true },
     },
     color: ['#2563eb', '#dc2626', '#0f766e'],
