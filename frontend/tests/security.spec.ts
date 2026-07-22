@@ -181,6 +181,38 @@ describe('TOTP 安全设置', () => {
     wrapper.unmount()
   })
 
+  it('本地状态未启用但服务端要求当前码时切换到换绑流程并允许重试', async () => {
+    const setupBodies: unknown[] = []
+    server.use(
+      http.post('/auth/totp/setup', async ({ request }) => {
+        const body = await request.json()
+        setupBodies.push(body)
+        if (setupBodies.length === 1) return apiError('current_totp_required')
+        return HttpResponse.json({
+          otpauth_uri: 'otpauth://totp/recovered?secret=replacement-secret',
+        })
+      }),
+    )
+    const { wrapper } = mountSecurity(disabledAdmin)
+
+    expect(wrapper.find('[data-test="current-code"]').exists()).toBe(false)
+    await wrapper.get('[data-test="start-totp"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="current-code-error"]').text()).toBe(
+      '请输入当前六位验证码',
+    )
+    await wrapper.get('[data-test="current-code"]').setValue('654321')
+    await wrapper.get('[data-test="start-totp"]').trigger('click')
+    await flushPromises()
+
+    expect(setupBodies).toEqual([{}, { current_totp_code: '654321' }])
+    expect(wrapper.getComponent(QrcodeVue).props('value')).toBe(
+      'otpauth://totp/recovered?secret=replacement-secret',
+    )
+    wrapper.unmount()
+  })
+
   it.each([
     ['invalid_totp', '新验证码无效，请重新输入'],
     ['totp_not_configured', '双重验证配置已失效，请重新开始设置'],
@@ -270,6 +302,29 @@ describe('TOTP 安全设置', () => {
 
     expect(wrapper.findComponent(QrcodeVue).exists()).toBe(false)
     expect((wrapper.vm as unknown as { setupUri: string }).setupUri).toBe('')
+    wrapper.unmount()
+  })
+
+  it('取消后忽略迟到的 current_totp_required，不切换到换绑状态', async () => {
+    const requestStarted = deferred()
+    const releaseRequest = deferred()
+    server.use(
+      http.post('/auth/totp/setup', async () => {
+        requestStarted.resolve()
+        await releaseRequest.promise
+        return apiError('current_totp_required')
+      }),
+    )
+    const { wrapper } = mountSecurity(disabledAdmin)
+
+    await wrapper.get('[data-test="start-totp"]').trigger('click')
+    await requestStarted.promise
+    await wrapper.get('[data-test="cancel-setup"]').trigger('click')
+    releaseRequest.resolve()
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="current-code"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="start-totp"]').text()).toBe('启用双重验证')
     wrapper.unmount()
   })
 

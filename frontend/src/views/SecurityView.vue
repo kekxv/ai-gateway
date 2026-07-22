@@ -18,6 +18,7 @@ const auth = useAuthStore()
 const currentCode = ref('')
 const confirmCode = ref('')
 const setupUri = ref('')
+const currentCodeRequiredByServer = ref(false)
 const currentCodeError = ref('')
 const confirmCodeError = ref('')
 const statusError = ref('')
@@ -26,7 +27,9 @@ const setupSubmitting = ref(false)
 const confirmSubmitting = ref(false)
 
 const totpEnabled = computed(() => auth.user?.totp_enabled === true)
-const replacementRequiresCode = computed(() => totpEnabled.value && setupUri.value === '')
+const replacementRequiresCode = computed(
+  () => (totpEnabled.value || currentCodeRequiredByServer.value) && setupUri.value === '',
+)
 
 let mounted = true
 let operationRevision = 0
@@ -128,6 +131,9 @@ async function startSetup(): Promise<void> {
   } catch (error: unknown) {
     if (!isCurrentOperation(revision, controller)) return
     currentCode.value = ''
+    if (error instanceof ApiError && error.code === 'current_totp_required') {
+      currentCodeRequiredByServer.value = true
+    }
     const fieldError = setupFieldError(error)
     if (fieldError !== '') currentCodeError.value = fieldError
     else statusError.value = safeError(error, '双重验证设置请求失败，请稍后重试')
@@ -213,6 +219,7 @@ watch(
   () => auth.user,
   (user) => {
     if (user === null) {
+      currentCodeRequiredByServer.value = false
       invalidateOperations()
       successMessage.value = ''
     }
@@ -222,6 +229,7 @@ watch(
 
 onBeforeUnmount(() => {
   mounted = false
+  currentCodeRequiredByServer.value = false
   invalidateOperations()
   successMessage.value = ''
 })
@@ -288,7 +296,7 @@ onBeforeUnmount(() => {
           "
           @click="startSetup"
         >
-          {{ totpEnabled ? '重新绑定验证器' : '启用双重验证' }}
+          {{ replacementRequiresCode ? '重新绑定验证器' : '启用双重验证' }}
         </ElButton>
         <ElButton v-if="setupSubmitting" data-test="cancel-setup" @click="cancelSetup">
           取消
