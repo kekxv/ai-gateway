@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ai_gateway.auth.dependencies import current_user
 from ai_gateway.auth.schemas import (
     AccessToken,
+    CurrentUserResponse,
     LoginRequest,
     RefreshRequest,
     TokenPair,
@@ -61,6 +62,19 @@ async def refresh(
         settings=settings,
     )
     return AccessToken(access_token=token)
+
+
+@router.get("/me", response_model=CurrentUserResponse)
+async def get_me(user: CurrentUser) -> CurrentUserResponse:
+    return CurrentUserResponse(
+        id=user.id,
+        email=user.email,
+        role=user.role,
+        is_active=user.is_active,
+        totp_enabled=user.totp_enabled,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+    )
 
 
 @router.post("/totp/setup", response_model=TotpSetupResponse)

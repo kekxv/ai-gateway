@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, SecretStr
 
 
@@ -20,6 +22,16 @@ class TokenPair(BaseModel):
 class AccessToken(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class CurrentUserResponse(BaseModel):
+    id: int
+    email: str
+    role: str
+    is_active: bool
+    totp_enabled: bool
+    created_at: datetime
+    updated_at: datetime
 
 
 class TotpSetupResponse(BaseModel):
