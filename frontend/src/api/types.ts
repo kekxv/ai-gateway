@@ -125,6 +125,7 @@ export interface UserResponse {
   role: UserRole
   is_active: boolean
   balance: string
+  total_spent: string
   created_at: string
   updated_at: string
 }

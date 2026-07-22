@@ -42,7 +42,7 @@ export const routes: RouteRecordRaw[] = [
       {
         path: 'users',
         name: 'users',
-        component: () => import('@/views/FutureView.vue'),
+        component: () => import('@/views/UsersView.vue'),
         meta: { title: '用户管理' },
       },
       {

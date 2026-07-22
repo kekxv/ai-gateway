@@ -46,6 +46,7 @@ class UserResponse(BaseModel):
     role: str
     is_active: bool
     balance: Decimal
+    total_spent: Decimal
     created_at: datetime
     updated_at: datetime
 
@@ -93,8 +94,14 @@ async def update_user(
     user_id: int,
     payload: UserUpdate,
     session: Session,
-    _: AdminUser,
+    administrator: AdminUser,
 ) -> UserResponse:
+    if user_id == administrator.id and payload.is_active is False:
+        raise_auth_error(
+            status.HTTP_409_CONFLICT,
+            "self_disable_forbidden",
+            "Administrators cannot disable their own user",
+        )
     user = await _get_user(session, user_id)
     if payload.email is not None:
         user.email = payload.email
@@ -120,7 +127,13 @@ async def update_user(
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user(user_id: int, session: Session, _: AdminUser) -> Response:
+async def delete_user(user_id: int, session: Session, administrator: AdminUser) -> Response:
+    if user_id == administrator.id:
+        raise_auth_error(
+            status.HTTP_409_CONFLICT,
+            "self_delete_forbidden",
+            "Administrators cannot delete their own user",
+        )
     user = await _get_user(session, user_id)
     await session.delete(user)
     await session.commit()
@@ -145,6 +158,7 @@ def _user_response(user: User) -> UserResponse:
         role=user.role,
         is_active=user.is_active,
         balance=user.account.balance,
+        total_spent=user.account.total_spent,
         created_at=user.created_at,
         updated_at=user.updated_at,
     )
