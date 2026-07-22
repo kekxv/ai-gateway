@@ -5,7 +5,8 @@ import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import type { LedgerEntryResponse, UserResponse } from '@/api/types'
+import type { BalanceAdjustmentResponse, LedgerEntryResponse, UserResponse } from '@/api/types'
+import * as usersApi from '@/api/users'
 import BalanceDialog from '@/components/users/BalanceDialog.vue'
 import LedgerDrawer from '@/components/users/LedgerDrawer.vue'
 import UserFormDrawer from '@/components/users/UserFormDrawer.vue'
@@ -259,6 +260,8 @@ describe('用户、余额与账本管理', () => {
     await dialog.get('[data-test="balance-reason"]').setValue('人工充值')
     await dialog.get('[data-test="balance-submit"]').trigger('click')
     await flushPromises()
+    expect(dialog.get('[data-test="balance-amount"]').attributes('disabled')).toBeDefined()
+    expect(dialog.get('[data-test="balance-reason"]').attributes('disabled')).toBeDefined()
     await dialog.get('[data-test="balance-submit"]').trigger('click')
     await flushPromises()
 
@@ -286,6 +289,133 @@ describe('用户、余额与账本管理', () => {
     wrapper.unmount()
   })
 
+  it('确定性调账错误后仍锁定首个载荷并只允许原样重试', async () => {
+    const requests: unknown[] = []
+    vi.spyOn(crypto, 'randomUUID').mockReturnValue('33333333-3333-4333-8333-333333333333')
+    server.use(
+      http.post('/admin/users/2/balance-adjustments', async ({ request }) => {
+        requests.push(await request.json())
+        return HttpResponse.json(
+          { detail: [{ loc: ['body', 'amount'], msg: 'invalid', type: 'decimal' }] },
+          { status: 422 },
+        )
+      }),
+    )
+    const wrapper = await mountUsers()
+
+    await wrapper.get('[data-test="adjust-user-2"]').trigger('click')
+    const dialog = wrapper.getComponent(BalanceDialog)
+    await dialog.get('[data-test="balance-amount"]').setValue('3.00000000')
+    await dialog.get('[data-test="balance-reason"]').setValue('确定性失败')
+    await dialog.get('[data-test="balance-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(dialog.get('[data-test="balance-amount"]').attributes('disabled')).toBeDefined()
+    expect(dialog.get('[data-test="balance-reason"]').attributes('disabled')).toBeDefined()
+    await dialog.get('[data-test="balance-submit"]').trigger('click')
+    await flushPromises()
+    expect(requests).toHaveLength(2)
+    expect(requests[1]).toEqual(requests[0])
+    wrapper.unmount()
+  })
+
+  it('幂等冲突要求关闭并刷新核对，且禁止盲目重试', async () => {
+    let requests = 0
+    vi.spyOn(crypto, 'randomUUID').mockReturnValue('44444444-4444-4444-8444-444444444444')
+    server.use(
+      http.post('/admin/users/2/balance-adjustments', () => {
+        requests += 1
+        return HttpResponse.json(
+          { detail: { code: 'idempotency_conflict', message: 'conflict' } },
+          { status: 409 },
+        )
+      }),
+    )
+    const wrapper = await mountUsers()
+
+    await wrapper.get('[data-test="adjust-user-2"]').trigger('click')
+    const dialog = wrapper.getComponent(BalanceDialog)
+    await dialog.get('[data-test="balance-amount"]').setValue('4.00000000')
+    await dialog.get('[data-test="balance-reason"]').setValue('冲突测试')
+    await dialog.get('[data-test="balance-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(dialog.get('[data-test="balance-reconciliation"]').text()).toContain('关闭')
+    expect(dialog.get('[data-test="balance-reconciliation"]').text()).toContain('刷新')
+    expect(dialog.get('[data-test="balance-submit"]').attributes('disabled')).toBeDefined()
+    await dialog.get('[data-test="balance-submit"]').trigger('click')
+    await flushPromises()
+    expect(requests).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('调账等待期间刷新用户资料，成功时只合并返回的金额字段', async () => {
+    const adjustment = deferred<BalanceAdjustmentResponse>()
+    server.use(
+      http.post('/admin/users/2/balance-adjustments', async () =>
+        HttpResponse.json(await adjustment.promise, { status: 201 }),
+      ),
+    )
+    const wrapper = await mountUsers()
+    await wrapper.get('[data-test="adjust-user-2"]').trigger('click')
+    const dialog = wrapper.getComponent(BalanceDialog)
+    await dialog.get('[data-test="balance-amount"]').setValue('5.00000000')
+    await dialog.get('[data-test="balance-reason"]').setValue('并发刷新')
+    await dialog.get('[data-test="balance-submit"]').trigger('click')
+    await flushPromises()
+
+    const refreshedMember = {
+      ...memberUser,
+      email: 'fresh-profile@example.com',
+      role: 'admin' as const,
+      is_active: false,
+      updated_at: '2026-07-22T12:00:00Z',
+    }
+    server.use(http.get('/admin/users', () => HttpResponse.json([adminUser, refreshedMember])))
+    await wrapper.get('[aria-label="刷新用户列表"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('fresh-profile@example.com')
+
+    adjustment.resolve({
+      ledger_entry_id: 31,
+      amount: '5.00000000',
+      balance: '13.75000000',
+      total_spent: '1.25000000',
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('fresh-profile@example.com')
+    expect(wrapper.text()).not.toContain('member@example.com')
+    expect(wrapper.text()).toContain('13.75000000')
+    wrapper.unmount()
+  })
+
+  it('卸载时中止调账并抑制迟到响应', async () => {
+    const adjustment = deferred<BalanceAdjustmentResponse>()
+    let requestSignal: AbortSignal | undefined
+    vi.spyOn(usersApi, 'adjustBalance').mockImplementation((_userId, _payload, signal) => {
+      requestSignal = signal
+      return adjustment.promise
+    })
+    const wrapper = await mountUsers()
+    await wrapper.get('[data-test="adjust-user-2"]').trigger('click')
+    const dialog = wrapper.getComponent(BalanceDialog)
+    await dialog.get('[data-test="balance-amount"]').setValue('6.00000000')
+    await dialog.get('[data-test="balance-reason"]').setValue('卸载测试')
+    await dialog.get('[data-test="balance-submit"]').trigger('click')
+    await flushPromises()
+
+    wrapper.unmount()
+    expect(requestSignal?.aborted).toBe(true)
+    adjustment.resolve({
+      ledger_entry_id: 32,
+      amount: '6.00000000',
+      balance: '14.75000000',
+      total_spent: '1.25000000',
+    })
+    await flushPromises()
+    expect(document.body.textContent).not.toContain('余额调整成功')
+  })
+
   it('账本按倒序展示完整字段，并把恶意元数据作为纯文本渲染', async () => {
     const wrapper = mount(LedgerDrawer, {
       props: {
@@ -309,6 +439,94 @@ describe('用户、余额与账本管理', () => {
     expect(wrapper.text()).toContain('11111111-1111-1111-1111-111111111111')
     expect(wrapper.text()).toContain('<img src=x onerror=')
     expect(wrapper.find('img').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('打开账本时实际调用接口并渲染返回记录', async () => {
+    let requested = 0
+    server.use(
+      http.get('/admin/users/2/ledger', () => {
+        requested += 1
+        return HttpResponse.json(ledgerEntries)
+      }),
+    )
+    const wrapper = await mountUsers()
+
+    await wrapper.get('[data-test="ledger-user-2"]').trigger('click')
+    await flushPromises()
+    expect(requested).toBe(1)
+    expect(wrapper.getComponent(LedgerDrawer).text()).toContain('console-adjustment')
+    wrapper.unmount()
+  })
+
+  it('关闭与卸载账本会中止请求', async () => {
+    const firstLedger = deferred<LedgerEntryResponse[]>()
+    const secondLedger = deferred<LedgerEntryResponse[]>()
+    const signals: Array<AbortSignal | undefined> = []
+    let request = 0
+    vi.spyOn(usersApi, 'listLedger').mockImplementation((_userId, signal) => {
+      signals.push(signal)
+      request += 1
+      return request === 1 ? firstLedger.promise : secondLedger.promise
+    })
+    const wrapper = await mountUsers()
+
+    await wrapper.get('[data-test="ledger-user-2"]').trigger('click')
+    await flushPromises()
+    await wrapper.getComponent(LedgerDrawer).get('[data-test="ledger-close"]').trigger('click')
+    await flushPromises()
+    expect(signals[0]?.aborted).toBe(true)
+
+    await wrapper.get('[data-test="ledger-user-2"]').trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+    expect(signals[1]?.aborted).toBe(true)
+    firstLedger.resolve([])
+    secondLedger.resolve([])
+  })
+
+  it('切换账本用户会抑制旧会话的成功响应', async () => {
+    const staleLedger = deferred<LedgerEntryResponse[]>()
+    const currentEntry = { ...ledgerEntries[0], id: 21, idempotency_key: 'current-ledger' }
+    server.use(
+      http.get('/admin/users/2/ledger', async () => HttpResponse.json(await staleLedger.promise)),
+      http.get('/admin/users/1/ledger', () => HttpResponse.json([currentEntry])),
+    )
+    const wrapper = await mountUsers()
+
+    await wrapper.get('[data-test="ledger-user-2"]').trigger('click')
+    await flushPromises()
+    await wrapper.getComponent(LedgerDrawer).get('[data-test="ledger-close"]').trigger('click')
+    await wrapper.get('[data-test="ledger-user-1"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.getComponent(LedgerDrawer).text()).toContain('current-ledger')
+
+    staleLedger.resolve(ledgerEntries)
+    await flushPromises()
+    expect(wrapper.getComponent(LedgerDrawer).text()).toContain('current-ledger')
+    expect(wrapper.getComponent(LedgerDrawer).text()).not.toContain('usage-request')
+    wrapper.unmount()
+  })
+
+  it('切换账本用户会抑制旧会话的错误响应', async () => {
+    const staleError = deferred<Response>()
+    const currentEntry = { ...ledgerEntries[0], id: 22, idempotency_key: 'current-after-error' }
+    server.use(
+      http.get('/admin/users/2/ledger', async () => await staleError.promise),
+      http.get('/admin/users/1/ledger', () => HttpResponse.json([currentEntry])),
+    )
+    const wrapper = await mountUsers()
+
+    await wrapper.get('[data-test="ledger-user-2"]').trigger('click')
+    await flushPromises()
+    await wrapper.getComponent(LedgerDrawer).get('[data-test="ledger-close"]').trigger('click')
+    await wrapper.get('[data-test="ledger-user-1"]').trigger('click')
+    await flushPromises()
+    staleError.resolve(HttpResponse.json({ detail: { code: 'failed', message: 'stale' } }, { status: 503 }))
+    await flushPromises()
+
+    expect(wrapper.getComponent(LedgerDrawer).text()).toContain('current-after-error')
+    expect(wrapper.getComponent(LedgerDrawer).text()).not.toContain('账本加载失败')
     wrapper.unmount()
   })
 
@@ -383,6 +601,29 @@ describe('用户、余额与账本管理', () => {
 
     staleList.resolve([adminUser, memberUser])
     await flushPromises()
+    expect(wrapper.find('[data-test="delete-user-2"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('本地修改后忽略更早发出的列表失败', async () => {
+    const staleFailure = deferred<Response>()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
+      value: '',
+      action: 'confirm',
+    } as MessageBoxData)
+    server.use(http.delete('/admin/users/2', () => new HttpResponse(null, { status: 204 })))
+    const wrapper = await mountUsers()
+    server.use(http.get('/admin/users', async () => await staleFailure.promise))
+
+    await wrapper.get('[aria-label="刷新用户列表"]').trigger('click')
+    await wrapper.get('[data-test="delete-user-2"]').trigger('click')
+    await flushPromises()
+    staleFailure.resolve(
+      HttpResponse.json({ detail: { code: 'unavailable', message: 'stale' } }, { status: 503 }),
+    )
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('用户列表加载失败')
     expect(wrapper.find('[data-test="delete-user-2"]').exists()).toBe(false)
     wrapper.unmount()
   })

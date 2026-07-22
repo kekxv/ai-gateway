@@ -12,7 +12,7 @@ from sqlalchemy.orm import joinedload
 from ai_gateway.auth.dependencies import admin_user
 from ai_gateway.auth.service import raise_auth_error
 from ai_gateway.core.security import hash_password
-from ai_gateway.db.models import Account, User
+from ai_gateway.db.models import Account, LedgerEntry, RequestLog, User
 from ai_gateway.db.session import get_session
 
 router = APIRouter(prefix="/admin/users", tags=["admin-users"])
@@ -28,7 +28,12 @@ class UserCreate(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: SecretStr
     role: UserRole = "user"
-    initial_balance: Decimal = Field(default=Decimal("0"), ge=0, decimal_places=8)
+    initial_balance: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        max_digits=20,
+        decimal_places=8,
+    )
 
 
 class UserUpdate(BaseModel):
@@ -135,8 +140,14 @@ async def delete_user(user_id: int, session: Session, administrator: AdminUser) 
             "Administrators cannot delete their own user",
         )
     user = await _get_user(session, user_id)
+    if await _user_has_history(session, user):
+        _raise_user_has_history()
     await session.delete(user)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        _raise_user_has_history()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -147,6 +158,28 @@ async def _get_user(session: AsyncSession, user_id: int) -> User:
     if user is None:
         raise_auth_error(status.HTTP_404_NOT_FOUND, "user_not_found", "User not found")
     return user
+
+
+async def _user_has_history(session: AsyncSession, user: User) -> bool:
+    request_log_id = await session.scalar(
+        select(RequestLog.id).where(RequestLog.user_id == user.id).limit(1)
+    )
+    if request_log_id is not None:
+        return True
+    if user.account is None:
+        return False
+    ledger_entry_id = await session.scalar(
+        select(LedgerEntry.id).where(LedgerEntry.account_id == user.account.id).limit(1)
+    )
+    return ledger_entry_id is not None
+
+
+def _raise_user_has_history() -> None:
+    raise_auth_error(
+        status.HTTP_409_CONFLICT,
+        "user_has_history",
+        "User has audit history; disable the user instead",
+    )
 
 
 def _user_response(user: User) -> UserResponse:

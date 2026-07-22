@@ -1,13 +1,14 @@
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai_gateway.core.enums import LedgerKind
+from ai_gateway.core.enums import LedgerKind, Protocol
 from ai_gateway.core.security import verify_password
-from ai_gateway.db.models import Account, LedgerEntry, User
+from ai_gateway.db.models import Account, LedgerEntry, RequestLog, User
 
 
 async def test_admin_can_create_user_and_account_atomically(
@@ -38,6 +39,46 @@ async def test_admin_can_create_user_and_account_atomically(
     account = await session.scalar(select(Account).where(Account.user_id == user.id))
     assert account is not None
     assert account.balance == Decimal("12.34000000")
+
+
+async def test_initial_balance_accepts_numeric_20_8_boundary(
+    admin_client: AsyncClient,
+) -> None:
+    response = await admin_client.post(
+        "/admin/users",
+        json={
+            "email": "balance-boundary@example.com",
+            "password": "boundary-password",
+            "initial_balance": "999999999999.99999999",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["balance"] == "999999999999.99999999"
+
+
+@pytest.mark.parametrize(
+    "initial_balance",
+    [
+        "1000000000000.00000000",
+        "999999999999.999999999",
+        "-0.00000001",
+    ],
+)
+async def test_initial_balance_rejects_values_outside_numeric_20_8(
+    admin_client: AsyncClient,
+    initial_balance: str,
+) -> None:
+    response = await admin_client.post(
+        "/admin/users",
+        json={
+            "email": f"invalid-{initial_balance}@example.com",
+            "password": "invalid-balance-password",
+            "initial_balance": initial_balance,
+        },
+    )
+
+    assert response.status_code == 422
 
 
 async def test_admin_can_list_get_update_and_delete_users(
@@ -142,6 +183,71 @@ async def test_admin_cannot_delete_self(
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "self_delete_forbidden"
+
+
+async def test_admin_must_disable_user_with_request_history_instead_of_deleting(
+    admin_client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    created = await admin_client.post(
+        "/admin/users",
+        json={
+            "email": "audited-user@example.com",
+            "password": "audited-user-password",
+        },
+    )
+    user_id = created.json()["id"]
+    request_log = RequestLog(
+        id=str(uuid4()),
+        user_id=user_id,
+        inbound_protocol=Protocol.OPENAI,
+        transport="http",
+    )
+    session.add(request_log)
+    await session.flush()
+
+    response = await admin_client.delete(f"/admin/users/{user_id}")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "user_has_history",
+        "message": "User has audit history; disable the user instead",
+    }
+    assert await session.get(User, user_id) is not None
+    assert await session.get(RequestLog, request_log.id) is not None
+
+
+async def test_admin_must_disable_user_with_ledger_history_instead_of_deleting(
+    admin_client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    created = await admin_client.post(
+        "/admin/users",
+        json={
+            "email": "ledger-user@example.com",
+            "password": "ledger-user-password",
+        },
+    )
+    user_id = created.json()["id"]
+    account = await session.scalar(select(Account).where(Account.user_id == user_id))
+    assert account is not None
+    ledger_entry = LedgerEntry(
+        account_id=account.id,
+        idempotency_key="user-delete-ledger-history",
+        kind=LedgerKind.ADJUSTMENT,
+        amount=Decimal("1.00000000"),
+        balance_after=Decimal("1.00000000"),
+        metadata_json={"reason": "audit"},
+    )
+    session.add(ledger_entry)
+    await session.flush()
+
+    response = await admin_client.delete(f"/admin/users/{user_id}")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "user_has_history"
+    assert await session.get(User, user_id) is not None
+    assert await session.get(LedgerEntry, ledger_entry.id) is not None
 
 
 @pytest.mark.parametrize(

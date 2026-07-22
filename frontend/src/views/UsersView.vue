@@ -32,6 +32,7 @@ import {
   listUsers,
   updateUser,
 } from '@/api/users'
+import { ApiError } from '@/api/client'
 import type {
   BalanceAdjustmentCreate,
   LedgerEntryResponse,
@@ -61,6 +62,7 @@ const formSubmitting = ref(false)
 const balanceOpen = ref(false)
 const balanceUser = ref<UserResponse | null>(null)
 const balanceSubmitting = ref(false)
+const balanceRetryBlocked = ref(false)
 const ledgerOpen = ref(false)
 const ledgerUser = ref<UserResponse | null>(null)
 const ledgerEntries = ref<LedgerEntryResponse[]>([])
@@ -140,20 +142,27 @@ async function load(): Promise<void> {
   loading.value = users.value.length === 0
   try {
     const loadedUsers = await listUsers(controller.signal)
-    if (
-      !mounted ||
-      controller.signal.aborted ||
-      generation !== loadGeneration ||
-      startingRevision !== stateRevision
-    ) return
+    if (!isCurrentLoad(controller, generation, startingRevision)) return
     users.value = loadedUsers.filter((user) => !deletedIds.has(user.id))
     loadError.value = ''
   } catch (error: unknown) {
-    if (!mounted || controller.signal.aborted || generation !== loadGeneration) return
+    if (!isCurrentLoad(controller, generation, startingRevision)) return
     loadError.value = errorText(error, '用户列表加载失败')
   } finally {
-    if (mounted && generation === loadGeneration) loading.value = false
+    if (isCurrentLoadRequest(controller, generation)) loading.value = false
   }
+}
+
+function isCurrentLoadRequest(controller: AbortController, generation: number): boolean {
+  return mounted && !controller.signal.aborted && generation === loadGeneration
+}
+
+function isCurrentLoad(
+  controller: AbortController,
+  generation: number,
+  startingRevision: number,
+): boolean {
+  return isCurrentLoadRequest(controller, generation) && startingRevision === stateRevision
 }
 
 function replaceUser(updated: UserResponse): void {
@@ -247,6 +256,7 @@ async function saveUser(payload: UserCreate | UserUpdate): Promise<void> {
 function openBalance(user: UserResponse): void {
   if (balanceSubmitting.value || balanceOpen.value || !beginUserOperation(user.id, 'adjust')) return
   balanceSession += 1
+  balanceRetryBlocked.value = false
   balanceUser.value = user
   balanceOpen.value = true
 }
@@ -257,6 +267,7 @@ function setBalanceOpen(open: boolean): void {
   balanceSession += 1
   balanceOpen.value = false
   balanceUser.value = null
+  balanceRetryBlocked.value = false
   if (userId !== undefined) finishUserOperation(userId, 'adjust')
 }
 
@@ -279,7 +290,12 @@ function isCurrentBalanceSave(
 
 async function saveBalance(payload: BalanceAdjustmentCreate): Promise<void> {
   const user = balanceUser.value
-  if (balanceSubmitting.value || !balanceOpen.value || user === null) return
+  if (
+    balanceSubmitting.value ||
+    balanceRetryBlocked.value ||
+    !balanceOpen.value ||
+    user === null
+  ) return
   const userId = user.id
   const session = balanceSession
   const token = Symbol('balance-save')
@@ -291,7 +307,7 @@ async function saveBalance(payload: BalanceAdjustmentCreate): Promise<void> {
   try {
     const result = await adjustBalance(userId, payload, controller.signal)
     if (!isCurrentBalanceSave(controller, token, session, userId)) return
-    replaceUser({ ...user, balance: result.balance, total_spent: result.total_spent })
+    replaceUserMoney(userId, result.balance, result.total_spent)
     balanceSession += 1
     balanceOpen.value = false
     balanceUser.value = null
@@ -301,13 +317,16 @@ async function saveBalance(payload: BalanceAdjustmentCreate): Promise<void> {
       text: `余额调整成功：当前余额 ${result.balance}，累计消费 ${result.total_spent}`,
     }
   } catch (error: unknown) {
-    if (
-      mounted &&
-      !controller.signal.aborted &&
-      activeBalanceSave === token &&
-      balanceSession === session
-    ) {
-      notice.value = { type: 'error', text: errorText(error, '余额调整失败') }
+    if (isCurrentBalanceSave(controller, token, session, userId)) {
+      if (error instanceof ApiError && error.code === 'idempotency_conflict') {
+        balanceRetryBlocked.value = true
+        notice.value = {
+          type: 'warning',
+          text: '幂等键冲突：请关闭调账对话框并刷新用户列表核对余额，不要直接重试。',
+        }
+      } else {
+        notice.value = { type: 'error', text: errorText(error, '余额调整失败') }
+      }
     }
   } finally {
     if (activeBalanceSave === token) {
@@ -316,6 +335,15 @@ async function saveBalance(payload: BalanceAdjustmentCreate): Promise<void> {
       if (mounted) balanceSubmitting.value = false
     }
   }
+}
+
+function replaceUserMoney(userId: number, balance: string, totalSpent: string): void {
+  const index = users.value.findIndex((candidate) => candidate.id === userId)
+  if (index === -1) return
+  stateRevision += 1
+  const current = users.value[index]
+  if (current === undefined) return
+  users.value.splice(index, 1, { ...current, balance, total_spent: totalSpent })
 }
 
 function openLedger(user: UserResponse): void {
@@ -332,23 +360,32 @@ function openLedger(user: UserResponse): void {
   ledgerController = controller
   void listLedger(user.id, controller.signal)
     .then((entries) => {
-      if (
-        !isCurrentOperation(controller, user.id, 'ledger') ||
-        !ledgerOpen.value ||
-        ledgerSession !== session ||
-        ledgerUser.value?.id !== user.id
-      ) return
+      if (!isCurrentLedger(controller, user.id, session)) return
       ledgerEntries.value = entries
       ledgerError.value = ''
     })
     .catch((error: unknown) => {
-      if (!isCurrentOperation(controller, user.id, 'ledger') || ledgerSession !== session) return
+      if (!isCurrentLedger(controller, user.id, session)) return
       ledgerError.value = errorText(error, '账本加载失败')
     })
     .finally(() => {
       operationControllers.delete(controller)
-      if (mounted && ledgerSession === session) ledgerLoading.value = false
+      if (isCurrentLedger(controller, user.id, session)) ledgerLoading.value = false
     })
+}
+
+function isCurrentLedger(
+  controller: AbortController,
+  userId: number,
+  session: number,
+): boolean {
+  return (
+    ledgerController === controller &&
+    isCurrentOperation(controller, userId, 'ledger') &&
+    ledgerOpen.value &&
+    ledgerSession === session &&
+    ledgerUser.value?.id === userId
+  )
 }
 
 function setLedgerOpen(open: boolean): void {
@@ -554,6 +591,7 @@ onBeforeUnmount(() => {
     :model-value="balanceOpen"
     :user="balanceUser"
     :submitting="balanceSubmitting"
+    :retry-blocked="balanceRetryBlocked"
     @submit="saveBalance"
     @update:model-value="setBalanceOpen"
   />

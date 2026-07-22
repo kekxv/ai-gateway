@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { ElButton, ElDialog, ElForm, ElFormItem, ElInput } from 'element-plus'
+import { ElAlert, ElButton, ElDialog, ElForm, ElFormItem, ElInput } from 'element-plus'
+import 'element-plus/theme-chalk/el-alert.css'
 import 'element-plus/theme-chalk/el-button.css'
 import 'element-plus/theme-chalk/el-dialog.css'
 import 'element-plus/theme-chalk/el-form.css'
@@ -14,6 +15,7 @@ const props = defineProps<{
   modelValue: boolean
   user: UserResponse | null
   submitting: boolean
+  retryBlocked?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -25,6 +27,7 @@ const amount = ref('')
 const reason = ref('')
 const amountError = ref('')
 const reasonError = ref('')
+const lockedPayload = ref<BalanceAdjustmentCreate | null>(null)
 let idempotencyKey = ''
 const signedMoneyPattern = /^[+-]?(?:0|[1-9]\d{0,11})(?:\.\d{1,8})?$/
 
@@ -33,6 +36,7 @@ const direction = computed(() => {
   if (!isNonzeroMoney(value)) return ''
   return value.startsWith('-') ? '扣减' : '增加'
 })
+const fieldsLocked = computed(() => props.submitting || lockedPayload.value !== null)
 
 function isNonzeroMoney(value: string): boolean {
   if (!signedMoneyPattern.test(value)) return false
@@ -45,6 +49,7 @@ function clearTransientState(): void {
   reason.value = ''
   amountError.value = ''
   reasonError.value = ''
+  lockedPayload.value = null
   idempotencyKey = ''
 }
 
@@ -83,7 +88,11 @@ function handleBeforeClose(done: () => void): void {
 }
 
 function submitForm(): void {
-  if (props.submitting) return
+  if (props.submitting || props.retryBlocked) return
+  if (lockedPayload.value !== null) {
+    emit('submit', { ...lockedPayload.value })
+    return
+  }
   amountError.value = ''
   reasonError.value = ''
   const normalizedAmount = amount.value.trim()
@@ -93,11 +102,12 @@ function submitForm(): void {
   }
   if (normalizedReason === '') reasonError.value = '请输入调整原因'
   if (amountError.value !== '' || reasonError.value !== '') return
-  emit('submit', {
+  lockedPayload.value = {
     amount: normalizedAmount,
     reason: normalizedReason,
     idempotency_key: idempotencyKey,
-  })
+  }
+  emit('submit', { ...lockedPayload.value })
 }
 </script>
 
@@ -120,13 +130,23 @@ function submitForm(): void {
       </div>
     </template>
 
-    <ElForm :disabled="submitting" label-position="top" @submit.prevent="submitForm">
+    <ElAlert
+      v-if="retryBlocked"
+      data-test="balance-reconciliation"
+      class="reconciliation-alert"
+      title="幂等键冲突：请关闭对话框并刷新用户列表核对余额，不要直接重试。"
+      type="warning"
+      :closable="false"
+      show-icon
+    />
+    <ElForm :disabled="fieldsLocked" label-position="top" @submit.prevent="submitForm">
       <ElFormItem label="调整金额" :error="amountError">
         <ElInput
           v-model="amount"
           data-test="balance-amount"
           inputmode="decimal"
           autocomplete="off"
+          :disabled="fieldsLocked"
           placeholder="例如 +10.25000000 或 -2.50000000"
         />
       </ElFormItem>
@@ -141,6 +161,7 @@ function submitForm(): void {
           :rows="3"
           maxlength="500"
           show-word-limit
+          :disabled="fieldsLocked"
         />
       </ElFormItem>
     </ElForm>
@@ -153,9 +174,10 @@ function submitForm(): void {
         data-test="balance-submit"
         type="primary"
         :loading="submitting"
+        :disabled="retryBlocked"
         @click="submitForm"
       >
-        确认调整
+        {{ lockedPayload === null ? '确认调整' : '原样重试' }}
       </ElButton>
     </template>
   </ElDialog>
@@ -177,5 +199,9 @@ function submitForm(): void {
   margin: -0.5rem 0 1rem;
   color: var(--gateway-brand);
   font-weight: 600;
+}
+
+.reconciliation-alert {
+  margin-bottom: 1rem;
 }
 </style>
