@@ -8,6 +8,14 @@
   --gateway-text: #172033;
   --gateway-muted: #667085;
   --gateway-brand: #2563eb;
+  --el-color-primary: #1d4ed8;
+  --el-color-primary-light-3: #1e40af;
+  --el-color-primary-dark-2: #1e3a8a;
+  --el-color-danger: #b42318;
+  --el-color-danger-light-3: #991b1b;
+  --el-text-color-regular: #475467;
+  --el-text-color-secondary: #667085;
+  --el-text-color-placeholder: #667085;
   font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
   font-synthesis: none;
   text-rendering: optimizelegibility;

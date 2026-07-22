@@ -63,6 +63,34 @@ curl --fail http://127.0.0.1:8000/health
 `/health` returns `200 {"status":"ok"}` only when MySQL is reachable. Startup also refuses a
 database that is not at migration head `0004`.
 
+### Admin console development
+
+Run the backend and Vite development server in separate terminals after migrating the database
+and creating an administrator:
+
+```bash
+# terminal 1: backend
+uv run uvicorn ai_gateway.main:app --host 127.0.0.1 --port 8000 --reload
+
+# terminal 2: frontend dev server
+npm ci --prefix frontend
+npm --prefix frontend run dev
+# open http://127.0.0.1:5173/console/
+```
+
+For a production-style local check, compile the console and let FastAPI serve it from the public
+gateway process:
+
+```bash
+npm --prefix frontend run build
+uv run uvicorn ai_gateway.main:app --host 127.0.0.1 --port 8000
+# open http://127.0.0.1:8000/console/
+```
+
+The public model gateway remains on port `8000`; the compiled console uses the same origin and
+does not require a separate production Node process. Port `5173` is only the Vite development
+server.
+
 ## Docker deployment
 
 For container deployment, set `GATEWAY_ENVIRONMENT=production` in `.env`, use non-example JWT,
@@ -231,6 +259,12 @@ uv run ruff format --check src tests
 uv run mypy src
 GATEWAY_TEST_DATABASE_URL='mysql+asyncmy://gateway:gateway@127.0.0.1:3306/gateway_test' \
   uv run pytest -W error --cov=ai_gateway --cov-report=term-missing --cov-fail-under=90
+npm --prefix frontend run lint
+npm --prefix frontend run typecheck
+npm --prefix frontend run test
+npm --prefix frontend run build
+E2E_ADMIN_EMAIL='admin@example.com' E2E_ADMIN_PASSWORD='short-lived-password' \
+  npm --prefix frontend run e2e
 docker build -t lean-ai-gateway:test .
 docker compose config --quiet
 ```

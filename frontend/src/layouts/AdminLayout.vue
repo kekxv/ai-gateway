@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import {
   ElAside,
@@ -68,9 +68,40 @@ function updateViewport(): void {
   if (!isMobile.value) drawerOpen.value = false
 }
 
+function handleNavigationKeydown(event: KeyboardEvent): void {
+  if (!['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) return
+  const items = Array.from(
+    document.querySelectorAll<HTMLElement>('.admin-sidebar [data-navigation-route]'),
+  )
+  if (items.length === 0) return
+  const focusedIndex = items.indexOf(document.activeElement as HTMLElement)
+  if (event.key === 'Enter' || event.key === ' ') {
+    if (focusedIndex === -1) return
+    const path = items[focusedIndex]?.dataset.navigationRoute
+    if (path === undefined) return
+    event.preventDefault()
+    event.stopPropagation()
+    void navigate(path)
+    return
+  }
+
+  event.preventDefault()
+  event.stopPropagation()
+  const activeIndex = items.findIndex((item) => item.classList.contains('is-active'))
+  const startingIndex = focusedIndex === -1 ? activeIndex : focusedIndex
+  const direction = event.key === 'ArrowDown' ? 1 : -1
+  const nextIndex =
+    focusedIndex === -1
+      ? Math.max(startingIndex, 0)
+      : (startingIndex + direction + items.length) % items.length
+  items[nextIndex]?.focus()
+}
+
 async function navigate(path: string): Promise<void> {
   drawerOpen.value = false
   await router.push(path)
+  await nextTick()
+  document.querySelector<HTMLElement>('.page-header h1')?.focus()
 }
 
 async function logout(): Promise<void> {
@@ -95,18 +126,25 @@ onBeforeUnmount(() => {
         <span class="brand__mark" aria-hidden="true">智</span>
         <span v-if="!isCollapsed" class="brand__name">AI 网关</span>
       </div>
-      <ElMenu
-        class="admin-menu"
-        :default-active="route.path"
-        :collapse="isCollapsed"
-        :collapse-transition="false"
-        @select="navigate"
-      >
-        <ElMenuItem v-for="item in navigation" :key="item.route" :index="item.route">
-          <ElIcon><component :is="item.icon" /></ElIcon>
-          <template #title>{{ item.label }}</template>
-        </ElMenuItem>
-      </ElMenu>
+      <nav aria-label="控制台导航" tabindex="0" @keydown="handleNavigationKeydown">
+        <ElMenu
+          class="admin-menu"
+          :default-active="route.path"
+          :collapse="isCollapsed"
+          :collapse-transition="false"
+          @select="navigate"
+        >
+          <ElMenuItem
+            v-for="item in navigation"
+            :key="item.route"
+            :index="item.route"
+            :data-navigation-route="item.route"
+          >
+            <ElIcon><component :is="item.icon" /></ElIcon>
+            <template #title>{{ item.label }}</template>
+          </ElMenuItem>
+        </ElMenu>
+      </nav>
     </ElAside>
 
     <ElDrawer

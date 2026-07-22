@@ -27,7 +27,9 @@
     "src/**/*.ts",
     "src/**/*.tsx",
     "src/**/*.vue",
+    "e2e/**/*.ts",
     "tests/**/*.ts",
+    "playwright.config.ts",
     "vite.config.ts",
     "eslint.config.ts"
   ]

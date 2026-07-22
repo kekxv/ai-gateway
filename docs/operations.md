@@ -20,6 +20,40 @@
 - The Compose MySQL port is bound only to `127.0.0.1:3306`. Use private networking rather than
   widening that host binding for remote access.
 
+## Admin console deployment and reverse proxy
+
+The public gateway and compiled administrator console share the FastAPI process on port `8000`.
+The console entry point is `/console/`; browser history routes under `/console/*` are served by the
+same application. A production deployment does not need Node.js at runtime because the image
+builds the frontend in a Node 22 stage and copies only the compiled assets into the Python image.
+
+For a production-style local verification:
+
+```bash
+npm ci --prefix frontend
+npm --prefix frontend run build
+uv run uvicorn ai_gateway.main:app --host 127.0.0.1 --port 8000
+# open http://127.0.0.1:8000/console/
+```
+
+During frontend development, keep the gateway on `127.0.0.1:8000` and run Vite separately:
+
+```bash
+# terminal 1
+uv run uvicorn ai_gateway.main:app --host 127.0.0.1 --port 8000 --reload
+
+# terminal 2
+npm ci --prefix frontend
+npm --prefix frontend run dev
+# open http://127.0.0.1:5173/console/
+```
+
+Configure a reverse proxy to preserve the origin and forward `/console/`, `/auth/`, and `/admin/`
+to the gateway. The `/auth/` prefix includes `GET /auth/me`; there is no separate `/me/` endpoint.
+Continue forwarding `/v1/` and `/v1beta/` for public client traffic, including WebSocket upgrade
+headers where required. Do not route `/console/*` through a static-server fallback that can
+intercept the API or model-gateway prefixes.
+
 ## MySQL password rotation for an existing volume
 
 Do not edit the deployment environment first: the running database still knows only the old

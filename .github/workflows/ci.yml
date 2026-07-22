@@ -32,6 +32,8 @@ jobs:
       GATEWAY_JWT_SECRET: ci-jwt-secret-at-least-32-bytes-long
       GATEWAY_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
       GATEWAY_NO_PROXY: 127.0.0.1,localhost
+      NO_PROXY: 127.0.0.1,localhost
+      no_proxy: 127.0.0.1,localhost
       MYSQL_DATABASE: gateway
       MYSQL_PASSWORD: gateway
       MYSQL_ROOT_PASSWORD: gateway-root
@@ -44,6 +46,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
       - uses: astral-sh/setup-uv@v7
         with:
           version: "0.11.30"
@@ -51,6 +59,9 @@ jobs:
 
       - name: Install locked dependencies
         run: uv sync --frozen
+
+      - name: Install locked frontend dependencies
+        run: npm ci --prefix frontend
 
       - name: Create isolated test database
         run: >-
@@ -76,6 +87,32 @@ jobs:
           --cov=ai_gateway
           --cov-report=term-missing
           --cov-fail-under=90
+
+      - name: Lint frontend
+        run: npm --prefix frontend run lint
+
+      - name: Type-check frontend
+        run: npm --prefix frontend run typecheck
+
+      - name: Test frontend
+        run: npm --prefix frontend run test
+
+      - name: Build frontend
+        run: npm --prefix frontend run build
+
+      - name: Install Chromium
+        run: npm exec --prefix frontend -- playwright install --with-deps chromium
+
+      - name: Run administrator browser acceptance tests
+        run: |
+          export GATEWAY_BOOTSTRAP_PASSWORD="$(openssl rand -hex 24)"
+          trap 'unset GATEWAY_BOOTSTRAP_PASSWORD E2E_ADMIN_EMAIL E2E_ADMIN_PASSWORD' EXIT
+          uv run python scripts/create_admin.py \
+            --email console-e2e@example.com \
+            --password-env GATEWAY_BOOTSTRAP_PASSWORD
+          export E2E_ADMIN_EMAIL='console-e2e@example.com'
+          export E2E_ADMIN_PASSWORD="$GATEWAY_BOOTSTRAP_PASSWORD"
+          npm --prefix frontend run e2e
 
       - name: Validate Compose
         run: docker compose config --quiet
