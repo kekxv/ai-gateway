@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="GATEWAY_", extra="ignore")
 
     environment: Literal["development", "test", "production"] = "development"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     database_url: str = "mysql+asyncmy://gateway:gateway@127.0.0.1:3306/gateway"
     jwt_secret: SecretStr
     jwt_issuer: str = "ai-gateway"

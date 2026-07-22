@@ -2,9 +2,13 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response
+import httpx
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from ai_gateway.admin.api_keys import router as api_keys_router
 from ai_gateway.admin.billing import router as billing_router
@@ -20,7 +24,17 @@ from ai_gateway.billing.recovery import BillingRecoveryScheduler
 from ai_gateway.billing.service import BillingService
 from ai_gateway.catalog.scheduler import ModelSyncScheduler
 from ai_gateway.core.config import Settings, get_settings
-from ai_gateway.core.errors import sanitized_request_validation_error_handler
+from ai_gateway.core.errors import (
+    GatewayError,
+    database_error_handler,
+    gateway_error_handler,
+    http_error_handler,
+    sanitized_request_validation_error_handler,
+    timeout_error_handler,
+    unexpected_error_handler,
+)
+from ai_gateway.core.logging import configure_logging
+from ai_gateway.core.middleware import correlation_middleware
 from ai_gateway.db.session import get_engine_for_url, get_session, get_session_factory_for_url
 from ai_gateway.gateway.claude import router as claude_gateway_router
 from ai_gateway.gateway.gemini import router as gemini_gateway_router
@@ -28,6 +42,52 @@ from ai_gateway.gateway.models import router as models_gateway_router
 from ai_gateway.gateway.openai import router as openai_gateway_router
 from ai_gateway.gateway.websocket import router as websocket_gateway_router
 from ai_gateway.transport.http import HttpClientFactory
+
+REQUIRED_MIGRATION_HEAD = "0004"
+_EXAMPLE_JWT_SECRET = "replace-with-a-long-random-secret"
+_EXAMPLE_ENCRYPTION_KEY = "replace-with-a-fernet-key"
+
+
+def validate_runtime_settings(settings: Settings) -> None:
+    if getattr(settings, "environment", "development") != "production":
+        return
+    example_fields = {
+        "jwt_secret": (settings.jwt_secret.get_secret_value(), _EXAMPLE_JWT_SECRET),
+        "encryption_key": (settings.encryption_key.get_secret_value(), _EXAMPLE_ENCRYPTION_KEY),
+    }
+    for field, (value, example) in example_fields.items():
+        if value == example:
+            raise RuntimeError(f"Production {field} must not use the example value")
+
+
+async def verify_database(
+    engine: AsyncEngine,
+    *,
+    require_migration_head: bool = True,
+) -> None:
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+            if not require_migration_head:
+                return
+            revisions = set(
+                await connection.scalars(text("SELECT version_num FROM alembic_version"))
+            )
+    except SQLAlchemyError as exc:
+        raise RuntimeError("Database connectivity or migration check failed") from exc
+    if revisions != {REQUIRED_MIGRATION_HEAD}:
+        raise RuntimeError(
+            f"Database migration head must be {REQUIRED_MIGRATION_HEAD}; run alembic upgrade head"
+        )
+
+
+async def database_is_available(engine: AsyncEngine) -> bool:
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+    except SQLAlchemyError:
+        return False
+    return True
 
 
 def _audit_body_limit(settings: object) -> int:
@@ -66,7 +126,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         active_settings = app_settings()
+        validate_runtime_settings(active_settings)
+        configure_logging(level=getattr(active_settings, "log_level", "INFO"))
         engine = configured_engine or get_engine_for_url(active_settings.database_url)
+        await verify_database(
+            engine,
+            require_migration_head=getattr(active_settings, "environment", "development")
+            == "production",
+        )
         session_factory = configured_session_factory or get_session_factory_for_url(
             active_settings.database_url
         )
@@ -114,12 +181,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await http_client_factory.aclose()
 
     app = FastAPI(title="Lean AI Gateway", version="0.1.0", lifespan=lifespan)
+    configure_logging(level=(getattr(settings, "log_level", "INFO") if settings else "INFO"))
     if settings is not None:
         app.state.settings = settings
         app.state.engine = configured_engine
         app.state.session_factory = configured_session_factory
         app.state.audit_service = configured_audit_service
         app.state.billing_service = configured_billing_service
+
+    @app.middleware("http")
+    async def correlate_request(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        return await correlation_middleware(request, call_next)
 
     @app.middleware("http")
     async def bind_audit_service(
@@ -146,6 +221,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         RequestValidationError,
         sanitized_request_validation_error_handler,
     )
+    app.add_exception_handler(HTTPException, http_error_handler)
+    app.add_exception_handler(GatewayError, gateway_error_handler)
+    app.add_exception_handler(SQLAlchemyError, database_error_handler)
+    app.add_exception_handler(TimeoutError, timeout_error_handler)
+    app.add_exception_handler(httpx.TimeoutException, timeout_error_handler)
+    app.add_exception_handler(Exception, unexpected_error_handler)
     app.include_router(auth_router)
     app.include_router(users_router)
     app.include_router(api_keys_router)
@@ -162,8 +243,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(websocket_gateway_router)
 
     @app.get("/health", include_in_schema=False)
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
+    async def health(request: Request) -> JSONResponse:
+        engine = getattr(request.app.state, "engine", None)
+        if not isinstance(engine, AsyncEngine):
+            engine = configured_engine or get_engine_for_url(app_settings().database_url)
+        if not await database_is_available(engine):
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"status": "unavailable"},
+            )
+        return JSONResponse(content={"status": "ok"})
 
     return app
 
