@@ -11,7 +11,21 @@ export const REFRESH_TOKEN_KEY = 'gateway.refresh_token'
 
 interface RetriableRequestConfig extends InternalAxiosRequestConfig {
   _retried?: boolean
+  _sessionGeneration?: number
 }
+
+interface RefreshedSession {
+  accessToken: string
+  generation: number
+}
+
+interface RefreshState {
+  generation: number
+  refreshToken: string
+  promise: Promise<RefreshedSession>
+}
+
+type SessionInvalidatedListener = () => void
 
 export class ApiError extends Error {
   public readonly requestId: string | undefined
@@ -31,9 +45,33 @@ export class ApiError extends Error {
 export const rawClient = axios.create()
 export const apiClient = axios.create()
 
+let sessionGeneration = 0
+let refreshState: RefreshState | null = null
+const sessionInvalidatedListeners = new Set<SessionInvalidatedListener>()
+
+function advanceSessionGeneration(): void {
+  sessionGeneration += 1
+  refreshState = null
+}
+
 export function clearSessionTokens(): void {
+  advanceSessionGeneration()
   sessionStorage.removeItem(ACCESS_TOKEN_KEY)
   sessionStorage.removeItem(REFRESH_TOKEN_KEY)
+  for (const listener of sessionInvalidatedListeners) listener()
+}
+
+export function replaceSessionTokens(accessToken: string, refreshToken: string): void {
+  advanceSessionGeneration()
+  sessionStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
+  sessionStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+}
+
+export function onSessionInvalidated(listener: SessionInvalidatedListener): () => void {
+  sessionInvalidatedListeners.add(listener)
+  return () => {
+    sessionInvalidatedListeners.delete(listener)
+  }
 }
 
 function isValidationError(value: unknown): value is ApiValidationError {
@@ -60,9 +98,47 @@ function isApiErrorBody(value: unknown): value is ApiErrorBody {
   )
 }
 
+const apiErrorMessages: Readonly<Record<string, string>> = {
+  admin_required: '仅管理员可以访问管理控制台',
+  authentication_required: '请先登录管理控制台',
+  current_totp_required: '请输入当前双重验证验证码',
+  invalid_credentials: '邮箱或密码错误',
+  invalid_token: '登录状态已失效',
+  invalid_totp: '双重验证验证码无效',
+  session_changed: '登录状态已变更，请重试',
+  totp_required: '请输入双重验证验证码',
+}
+
+const validationFieldLabels: Readonly<Record<string, string>> = {
+  code: '验证码',
+  current_totp_code: '当前验证码',
+  email: '邮箱',
+  password: '密码',
+  refresh_token: '刷新令牌',
+  totp_code: '验证码',
+}
+
 function validationMessage(errors: ApiValidationError[]): string {
-  if (errors.length === 0) return '请求参数无效'
-  return errors.map((error) => `${error.loc.join('.')}: ${error.msg}`).join('; ')
+  const labels = new Set<string>()
+  for (const error of errors) {
+    const field = error.loc[error.loc.length - 1]
+    if (typeof field === 'string') labels.add(validationFieldLabels[field] ?? '请求')
+  }
+  return labels.size === 0 ? '请求参数无效' : `${[...labels].join('、')}参数无效`
+}
+
+function safeApiMessage(code: string, status: number): string {
+  const knownMessage = apiErrorMessages[code]
+  if (knownMessage !== undefined) return knownMessage
+  if (status === 400) return '请求内容无效'
+  if (status === 401) return '登录状态已失效'
+  if (status === 403) return '没有权限执行此操作'
+  if (status === 404) return '请求的资源不存在'
+  if (status === 409) return '操作发生冲突，请刷新后重试'
+  if (status === 422) return '请求参数无效'
+  if (status === 429) return '请求过于频繁，请稍后重试'
+  if (status >= 500) return '服务暂时不可用，请稍后重试'
+  return '请求失败，请稍后重试'
 }
 
 export function normalizeApiError(error: unknown): ApiError {
@@ -77,7 +153,12 @@ export function normalizeApiError(error: unknown): ApiError {
     if (Array.isArray(body.detail)) {
       return new ApiError(status, 'validation_error', validationMessage(body.detail))
     }
-    return new ApiError(status, body.detail.code, body.detail.message, body.detail.request_id)
+    return new ApiError(
+      status,
+      body.detail.code,
+      safeApiMessage(body.detail.code, status),
+      body.detail.request_id,
+    )
   }
 
   if (status === 401) return new ApiError(status, 'authentication_required', '登录状态已失效')
@@ -86,27 +167,57 @@ export function normalizeApiError(error: unknown): ApiError {
   return new ApiError(status, 'request_failed', `请求失败（HTTP ${String(status)}）`)
 }
 
-let refreshPromise: Promise<string> | null = null
+function sessionMatches(generation: number, refreshToken: string): boolean {
+  return (
+    sessionGeneration === generation &&
+    sessionStorage.getItem(REFRESH_TOKEN_KEY) === refreshToken
+  )
+}
 
-async function refreshAccessToken(): Promise<string> {
+function sessionChangedError(): ApiError {
+  return new ApiError(401, 'session_changed', safeApiMessage('session_changed', 401))
+}
+
+async function refreshAccessToken(): Promise<RefreshedSession> {
   const refreshToken = sessionStorage.getItem(REFRESH_TOKEN_KEY)
   if (refreshToken === null) {
     throw new ApiError(401, 'authentication_required', '登录状态已失效')
   }
 
-  refreshPromise ??= rawClient
-    .post<AccessToken>('/auth/refresh', { refresh_token: refreshToken })
-    .then(({ data }) => {
-      sessionStorage.setItem(ACCESS_TOKEN_KEY, data.access_token)
-      return data.access_token
-    })
-    .finally(() => {
-      refreshPromise = null
-    })
-  return refreshPromise
+  const generation = sessionGeneration
+  if (
+    refreshState !== null &&
+    refreshState.generation === generation &&
+    refreshState.refreshToken === refreshToken
+  ) {
+    return refreshState.promise
+  }
+
+  const state: RefreshState = {
+    generation,
+    refreshToken,
+    promise: rawClient
+      .post<AccessToken>('/auth/refresh', { refresh_token: refreshToken })
+      .then(({ data }) => {
+        if (!sessionMatches(generation, refreshToken)) throw sessionChangedError()
+        sessionStorage.setItem(ACCESS_TOKEN_KEY, data.access_token)
+        return { accessToken: data.access_token, generation }
+      })
+      .catch((error: unknown) => {
+        if (!sessionMatches(generation, refreshToken)) throw sessionChangedError()
+        clearSessionTokens()
+        throw normalizeApiError(error)
+      }),
+  }
+  state.promise = state.promise.finally(() => {
+    if (refreshState === state) refreshState = null
+  })
+  refreshState = state
+  return state.promise
 }
 
-apiClient.interceptors.request.use((config) => {
+apiClient.interceptors.request.use((config: RetriableRequestConfig) => {
+  config._sessionGeneration = sessionGeneration
   const accessToken = sessionStorage.getItem(ACCESS_TOKEN_KEY)
   if (accessToken !== null) {
     config.headers.set('Authorization', `Bearer ${accessToken}`)
@@ -118,23 +229,30 @@ apiClient.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
     const config = error.config as RetriableRequestConfig | undefined
+    const belongsToCurrentSession = config?._sessionGeneration === sessionGeneration
+    if (error.response?.status === 401 && !belongsToCurrentSession) {
+      throw sessionChangedError()
+    }
+
     const canRefresh =
       error.response?.status === 401 &&
       config !== undefined &&
       config._retried !== true &&
+      belongsToCurrentSession &&
       sessionStorage.getItem(REFRESH_TOKEN_KEY) !== null
 
     if (!canRefresh) throw normalizeApiError(error)
 
     config._retried = true
-    try {
-      const accessToken = await refreshAccessToken()
-      config.headers = AxiosHeaders.from(config.headers)
-      config.headers.set('Authorization', `Bearer ${accessToken}`)
-      return await apiClient.request(config)
-    } catch (refreshError: unknown) {
-      clearSessionTokens()
-      throw normalizeApiError(refreshError)
+    const refreshedSession = await refreshAccessToken()
+    if (
+      refreshedSession.generation !== sessionGeneration ||
+      config._sessionGeneration !== refreshedSession.generation
+    ) {
+      throw sessionChangedError()
     }
+    config.headers = AxiosHeaders.from(config.headers)
+    config.headers.set('Authorization', `Bearer ${refreshedSession.accessToken}`)
+    return apiClient.request(config)
   },
 )

@@ -24,6 +24,20 @@ const regularUser: CurrentUser = {
   role: 'user',
 }
 
+const replacementAdmin: CurrentUser = {
+  ...adminUser,
+  id: 3,
+  email: 'replacement-admin@example.com',
+}
+
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let release!: () => void
+  const promise = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  return { promise, resolve: release }
+}
+
 const server = setupServer()
 
 beforeAll(() => {
@@ -91,6 +105,36 @@ describe('authentication store', () => {
     expect(sessionStorage.getItem('gateway.refresh_token')).toBe('refresh')
   })
 
+  it('stores no tokens when login fails and uses a Chinese safe message', async () => {
+    server.use(
+      http.post('/auth/login', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              code: 'invalid_credentials',
+              message: 'Invalid email or password',
+              request_id: 'request-1',
+            },
+          },
+          { status: 401 },
+        ),
+      ),
+    )
+
+    const request = useAuthStore().login({ email: adminUser.email, password: 'wrong-secret' })
+
+    await expect(request).rejects.toEqual(
+      expect.objectContaining({
+        status: 401,
+        code: 'invalid_credentials',
+        message: '邮箱或密码错误',
+        requestId: 'request-1',
+      }),
+    )
+    expect(sessionStorage.length).toBe(0)
+    expect(useAuthStore().user).toBeNull()
+  })
+
   it('rejects a non-admin login and clears its tokens', async () => {
     server.use(
       http.post('/auth/login', () =>
@@ -146,6 +190,143 @@ describe('authentication store', () => {
     expect(sessionStorage.getItem('gateway.access_token')).toBe('renewed')
   })
 
+  it('does not restore stale tokens when logout happens during refresh', async () => {
+    sessionStorage.setItem('gateway.access_token', 'old-access')
+    sessionStorage.setItem('gateway.refresh_token', 'old-refresh')
+    server.use(http.get('/auth/me', () => HttpResponse.json(adminUser)))
+    const store = useAuthStore()
+    await store.restore()
+
+    const refreshStarted = createDeferred()
+    const releaseRefresh = createDeferred()
+    server.use(
+      http.get('/admin/race', ({ request }) => {
+        if (request.headers.get('Authorization') === 'Bearer stale-access') {
+          return HttpResponse.json({ ok: true })
+        }
+        return new HttpResponse(null, { status: 401 })
+      }),
+      http.post('/auth/refresh', async () => {
+        refreshStarted.resolve()
+        await releaseRefresh.promise
+        return HttpResponse.json({ access_token: 'stale-access', token_type: 'bearer' })
+      }),
+    )
+
+    const pendingRequest = apiClient.get('/admin/race')
+    await refreshStarted.promise
+    store.logout()
+    releaseRefresh.resolve()
+
+    await expect(pendingRequest).rejects.toEqual(
+      expect.objectContaining({ code: 'session_changed' }),
+    )
+    expect(sessionStorage.length).toBe(0)
+    expect(store.user).toBeNull()
+  })
+
+  it('does not let an old refresh overwrite a newly logged-in session', async () => {
+    sessionStorage.setItem('gateway.access_token', 'old-access')
+    sessionStorage.setItem('gateway.refresh_token', 'old-refresh')
+    server.use(http.get('/auth/me', () => HttpResponse.json(adminUser)))
+    const store = useAuthStore()
+    await store.restore()
+
+    const refreshStarted = createDeferred()
+    const releaseRefresh = createDeferred()
+    const newRefreshStarted = createDeferred()
+    const releaseNewRefresh = createDeferred()
+    const secondNewSessionUnauthorized = createDeferred()
+    let oldRefreshCalls = 0
+    let newRefreshCalls = 0
+    let newSessionUnauthorizedCalls = 0
+    server.use(
+      http.get('/admin/race', ({ request }) => {
+        if (request.headers.get('Authorization') === 'Bearer stale-access') {
+          return HttpResponse.json({ ok: true })
+        }
+        return new HttpResponse(null, { status: 401 })
+      }),
+      http.get('/admin/new-session', ({ request }) => {
+        if (request.headers.get('Authorization') === 'Bearer renewed-new-access') {
+          return HttpResponse.json({ ok: true })
+        }
+        newSessionUnauthorizedCalls += 1
+        if (newSessionUnauthorizedCalls === 2) secondNewSessionUnauthorized.resolve()
+        return new HttpResponse(null, { status: 401 })
+      }),
+      http.post('/auth/refresh', async ({ request }) => {
+        const payload = (await request.json()) as { refresh_token?: unknown }
+        if (payload.refresh_token === 'old-refresh') {
+          oldRefreshCalls += 1
+          refreshStarted.resolve()
+          await releaseRefresh.promise
+          return HttpResponse.json({ access_token: 'stale-access', token_type: 'bearer' })
+        }
+        newRefreshCalls += 1
+        newRefreshStarted.resolve()
+        await releaseNewRefresh.promise
+        return HttpResponse.json({ access_token: 'renewed-new-access', token_type: 'bearer' })
+      }),
+      http.post('/auth/login', () =>
+        HttpResponse.json({
+          access_token: 'new-access',
+          refresh_token: 'new-refresh',
+          token_type: 'bearer',
+        }),
+      ),
+      http.get('/auth/me', ({ request }) => {
+        if (request.headers.get('Authorization') === 'Bearer new-access') {
+          return HttpResponse.json(replacementAdmin)
+        }
+        return HttpResponse.json(adminUser)
+      }),
+    )
+
+    const pendingRequest = apiClient.get('/admin/race')
+    await refreshStarted.promise
+    await store.login({ email: replacementAdmin.email, password: 'new-secret' })
+    const firstNewSessionRequest = apiClient.get('/admin/new-session')
+    await newRefreshStarted.promise
+    releaseRefresh.resolve()
+
+    await expect(pendingRequest).rejects.toEqual(
+      expect.objectContaining({ code: 'session_changed' }),
+    )
+    const secondNewSessionRequest = apiClient.get('/admin/new-session')
+    await secondNewSessionUnauthorized.promise
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0)
+    })
+    releaseNewRefresh.resolve()
+    await Promise.all([firstNewSessionRequest, secondNewSessionRequest])
+
+    expect(oldRefreshCalls).toBe(1)
+    expect(newRefreshCalls).toBe(1)
+    expect(sessionStorage.getItem('gateway.access_token')).toBe('renewed-new-access')
+    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('new-refresh')
+    expect(store.user).toEqual(replacementAdmin)
+  })
+
+  it('clears an established Pinia session when background refresh fails', async () => {
+    sessionStorage.setItem('gateway.access_token', 'access')
+    sessionStorage.setItem('gateway.refresh_token', 'refresh')
+    server.use(http.get('/auth/me', () => HttpResponse.json(adminUser)))
+    const store = useAuthStore()
+    await store.restore()
+
+    server.use(
+      http.get('/admin/background', () => new HttpResponse(null, { status: 401 })),
+      http.post('/auth/refresh', () => new HttpResponse(null, { status: 401 })),
+    )
+
+    await expect(apiClient.get('/admin/background')).rejects.toBeInstanceOf(ApiError)
+
+    expect(sessionStorage.length).toBe(0)
+    expect(store.user).toBeNull()
+    expect(store.authenticated).toBe(false)
+  })
+
   it('normalizes validation errors without exposing submitted secrets', async () => {
     server.use(
       http.post('/auth/login', () =>
@@ -163,7 +344,20 @@ describe('authentication store', () => {
       password: 'do-not-repeat-this',
     })
 
-    await expect(request).rejects.toBeInstanceOf(ApiError)
-    await expect(request).rejects.not.toHaveProperty('message', expect.stringContaining('do-not-repeat-this'))
+    await expect(request).rejects.toEqual(
+      expect.objectContaining({
+        status: 422,
+        code: 'validation_error',
+        message: '密码参数无效',
+      }),
+    )
+    await expect(request).rejects.not.toHaveProperty(
+      'message',
+      expect.stringContaining('do-not-repeat-this'),
+    )
+    await expect(request).rejects.not.toHaveProperty(
+      'message',
+      expect.stringContaining('Field required'),
+    )
   })
 })
