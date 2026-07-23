@@ -1,0 +1,78 @@
+# Build and push the production image to GitHub Container Registry.
+#
+# This workflow is a *reusable* workflow — it is invoked by `ci.yml` only
+# after the full quality gate (lint / type-check / tests / e2e / build)
+# has passed, so a broken commit can never be published.
+#
+# The caller is responsible for triggering on the right events and
+# gating the call (see .github/workflows/ci.yml `publish` job).
+#
+# Resulting tags (computed from the inherited github.ref context):
+#   push to main   → `latest` + short commit SHA
+#   push of v* tag → semver triple (`v1.2.3`, `v1.2`, `v1`)
+
+name: docker-publish
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Build exactly the commit that passed CI, not whatever HEAD
+          # currently points to (defends against races if new pushes
+          # land between ci.yml finishing and this workflow running).
+          ref: ${{ github.sha }}
+
+      - name: Set up QEMU (multi-arch, optional)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false

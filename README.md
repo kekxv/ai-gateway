@@ -1,5 +1,7 @@
 # Lean AI Gateway
 
+**[English](README.md)** | **[中文](README.zh-CN.md)**
+
 Lean AI Gateway is a focused, multi-provider AI gateway for OpenAI, Claude, and Gemini
 HTTP/SSE protocols plus OpenAI Realtime and Gemini Live WebSockets. It provides model aliases,
 weighted routes, API-key scoping, MySQL-backed route health, exact `Decimal` billing, and
@@ -8,12 +10,50 @@ GZIP-compressed redacted audit logs without Redis, Celery, or Kafka.
 The service is deliberately stateless outside MySQL. Run one Uvicorn process per container and
 scale containers horizontally.
 
+## Features
+
+- OpenAI, Claude, and Gemini compatible HTTP APIs, including streaming SSE responses.
+- OpenAI Realtime and Gemini Live WebSocket relays.
+- Automatic conversion among OpenAI, Claude, and Gemini request/response protocols; matching
+  protocols are passed through without conversion.
+- Weighted-random routing with MySQL-backed health state, cooldowns, half-open probes, and
+  automatic failover away from unhealthy routes.
+- Providers with multiple protocols, optional model discovery, HTTP/HTTPS proxy support, and
+  `NO_PROXY` rules for hosts, ports, IPv4/IPv6 addresses, and CIDR ranges.
+- Canonical models, aliases, exact per-million-token pricing, and provider-specific
+  `upstream_model` rewriting. Aliases are returned by model discovery but are never forwarded
+  upstream as provider model names.
+- Independently managed API keys scoped to all resources, selected providers, selected models,
+  or both provider and model sets.
+- JWT access/refresh authentication, administrator authorization, and TOTP enrollment or
+  replacement.
+- Exact `Decimal` balance accounting, reservations, settlement, adjustments, and an immutable
+  ledger.
+- Redacted request logs with cursor pagination and GZIP-compressed request/response details.
+- A Chinese Vue 3 administration console for day-to-day gateway operations.
+
+## Supported interfaces
+
+| Interface | Endpoint | Modes |
+| --- | --- | --- |
+| OpenAI chat completions | `/v1/chat/completions` | HTTP, SSE |
+| OpenAI model catalog | `/v1/models`, `/v1/models/{model}` | HTTP |
+| OpenAI Realtime | `/v1/realtime` | WebSocket |
+| Claude messages | `/v1/messages` | HTTP, SSE |
+| Gemini generate content | `/v1beta/models/{model}:generateContent` | HTTP |
+| Gemini stream generate content | `/v1beta/models/{model}:streamGenerateContent` | SSE |
+| Gemini model catalog | `/v1beta/models` | HTTP |
+| Gemini Live | `/v1beta/live` | WebSocket |
+| Administration console | `/console/` | Browser SPA |
+| OpenAPI documentation | `/docs`, `/redoc`, `/openapi.json` | HTTP |
+
 ## Requirements
 
 - Python 3.12
 - [uv](https://docs.astral.sh/uv/)
 - Docker with Compose v2
 - MySQL 8.4 (the provided Compose service is the supported local setup)
+- Node.js 22 and npm (only for console development and frontend tests)
 
 ## Local startup
 
@@ -91,6 +131,19 @@ The public model gateway remains on port `8000`; the compiled console uses the s
 does not require a separate production Node process. Port `5173` is only the Vite development
 server.
 
+The console is administrator-only and provides:
+
+- dashboard usage, cost, health, and resource summaries;
+- provider protocols, credentials, model synchronization, models, aliases, and weighted routes;
+- users, balances, immutable ledger entries, and scoped API keys;
+- one-time API-key display with explicit copy/download acknowledgement;
+- request-log filters, backend cursor navigation, and redacted JSON detail inspection;
+- initial TOTP enrollment and verified TOTP replacement.
+
+JWT access and refresh tokens are stored in `sessionStorage`, not `localStorage`. Provider
+credentials, TOTP codes, passwords, and full API keys are never persisted or redisplayed after
+their one-time workflow ends.
+
 ## Docker deployment
 
 For container deployment, set `GATEWAY_ENVIRONMENT=production` in `.env`, use non-example JWT,
@@ -122,6 +175,44 @@ docker compose run --rm \
   --password-env GATEWAY_BOOTSTRAP_PASSWORD
 unset GATEWAY_BOOTSTRAP_PASSWORD
 ```
+
+### Published images
+
+After the full CI quality job succeeds, pushes to the default branch and version tags publish a
+multi-stage production image to GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/<owner>/<repository>:latest
+docker pull ghcr.io/<owner>/<repository>:<commit-sha>
+docker pull ghcr.io/<owner>/<repository>:1.2.3
+```
+
+Default-branch builds publish `latest`, the branch name, and the short commit SHA. A tag such as
+`v1.2.3` publishes `1.2.3`, `1.2`, `1`, and the commit SHA. Replace the placeholders with this
+repository's lowercase GitHub owner and repository name.
+
+The final image contains the Python runtime and the compiled Vue console, runs as the non-root
+`gateway` user, and does not contain Node.js or npm. The image defaults to production mode, so
+valid JWT, Fernet, and database secrets are required at startup.
+
+## Important configuration
+
+Common configuration examples and operational guidance live in [`.env.example`](.env.example)
+and the [operations runbook](docs/operations.md). The most important settings are:
+
+| Setting | Purpose |
+| --- | --- |
+| `GATEWAY_DATABASE_URL` | Async SQLAlchemy URL for the MySQL application database |
+| `GATEWAY_JWT_SECRET` | Signs access and refresh tokens; use a unique high-entropy value |
+| `GATEWAY_ENCRYPTION_KEY` | Fernet key for provider credentials, headers, and TOTP secrets |
+| `GATEWAY_HTTP_PROXY`, `GATEWAY_HTTPS_PROXY` | Optional outbound provider proxies |
+| `GATEWAY_NO_PROXY` | Comma-separated host, suffix, port, IP, CIDR, or `*` bypass rules |
+| `GATEWAY_AUDIT_BODY_LIMIT_BYTES` | Maximum request/response body size retained for audit detail |
+| `GATEWAY_BILLING_DEFAULT_MAX_OUTPUT_TOKENS` | Reservation fallback when a request omits an output limit |
+
+Production startup rejects the example JWT and encryption secrets. Keep all credentials in a
+secret manager and run `alembic upgrade head` as a separate release step before starting the new
+application version.
 
 ## Obtain a gateway API key
 
@@ -254,26 +345,31 @@ URL without `test` in the database name, refuses the application schema, and rem
 tables plus `alembic_version` from that isolated schema.
 
 ```bash
-uv run ruff check src tests
-uv run ruff format --check src tests
-uv run mypy src
+docker compose up -d mysql mysql-test-setup
+uv run ruff check src tests scripts
+uv run ruff format --check src tests scripts
+uv run mypy src scripts
 GATEWAY_TEST_DATABASE_URL='mysql+asyncmy://gateway:gateway@127.0.0.1:3306/gateway_test' \
   uv run pytest -W error --cov=ai_gateway --cov-report=term-missing --cov-fail-under=90
 npm --prefix frontend run lint
 npm --prefix frontend run typecheck
 npm --prefix frontend run test
 npm --prefix frontend run build
+npm exec --prefix frontend -- playwright install --with-deps chromium
 E2E_ADMIN_EMAIL='admin@example.com' E2E_ADMIN_PASSWORD='short-lived-password' \
   npm --prefix frontend run e2e
 docker build -t lean-ai-gateway:test .
 docker compose config --quiet
 ```
 
-The E2E suite uses only MySQL and loopback fake providers; it never requires real provider
-credentials or public network access.
+The browser E2E account must already exist in the selected database. The E2E suite uses only
+MySQL and loopback fake providers; it never requires real provider credentials or public network
+access. It creates uniquely named resources, removes disposable resources in reverse dependency
+order, and disables users whose immutable ledger history prevents deletion.
 
 ## Further documentation
 
 - [Architecture](docs/architecture.md)
 - [Protocol compatibility](docs/protocol-compatibility.md)
 - [Operations runbook](docs/operations.md)
+- Runtime API reference: `/docs` or `/redoc`

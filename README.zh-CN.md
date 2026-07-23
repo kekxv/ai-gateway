@@ -1,0 +1,332 @@
+# Lean AI Gateway
+
+**[English](README.md)** | **[中文](README.zh-CN.md)**
+
+Lean AI Gateway 是一个专注于多 AI 提供商的网关，支持 OpenAI、Claude 和 Gemini 的 HTTP/SSE 协议，以及 OpenAI Realtime 和 Gemini Live 的 WebSocket 协议。它提供模型别名、加权路由、API Key 作用域控制、基于 MySQL 的路由健康检查、精确的 `Decimal` 计费，以及 GZIP 压缩的脱敏审计日志，无需 Redis、Celery 或 Kafka。
+
+服务在 MySQL 之外完全无状态。每个容器运行一个 Uvicorn 进程，通过水平扩展容器来提升容量。
+
+## 功能特性
+
+- 兼容 OpenAI、Claude 和 Gemini 的 HTTP API，并支持 SSE 流式响应。
+- 支持 OpenAI Realtime 与 Gemini Live WebSocket 中继。
+- 自动转换 OpenAI、Claude、Gemini 三种请求/响应协议；协议相同时直接透传。
+- 基于权重的随机路由，使用 MySQL 保存健康状态、冷却时间和半开探测，并自动避开故障路由。
+- 单个提供商可配置多种协议、可选模型自动发现、HTTP/HTTPS 代理，以及支持主机、端口、
+  IPv4/IPv6 和 CIDR 的 `NO_PROXY` 规则。
+- 支持规范模型、模型别名、精确的每百万 Token 价格和提供商专用 `upstream_model`。模型目录会返回别名，
+  但转发到上游前始终会改写为提供商的原始模型名。
+- API Key 独立管理，可授权全部资源、指定提供商、指定模型，或同时限定提供商与模型集合。
+- JWT access/refresh 认证、管理员权限控制，以及 TOTP 首次绑定和安全换绑。
+- 基于 `Decimal` 的精确余额、预留、结算、调账和不可变账本。
+- 脱敏请求日志、后端游标分页，以及 GZIP 压缩的请求/响应详情。
+- 提供中文 Vue 3 管理控制台，覆盖日常网关运维。
+
+## 支持的接口
+
+| 接口 | 路径 | 模式 |
+| --- | --- | --- |
+| OpenAI Chat Completions | `/v1/chat/completions` | HTTP、SSE |
+| OpenAI 模型目录 | `/v1/models`、`/v1/models/{model}` | HTTP |
+| OpenAI Realtime | `/v1/realtime` | WebSocket |
+| Claude Messages | `/v1/messages` | HTTP、SSE |
+| Gemini Generate Content | `/v1beta/models/{model}:generateContent` | HTTP |
+| Gemini Stream Generate Content | `/v1beta/models/{model}:streamGenerateContent` | SSE |
+| Gemini 模型目录 | `/v1beta/models` | HTTP |
+| Gemini Live | `/v1beta/live` | WebSocket |
+| 管理控制台 | `/console/` | 浏览器 SPA |
+| OpenAPI 文档 | `/docs`、`/redoc`、`/openapi.json` | HTTP |
+
+## 环境要求
+
+- Python 3.12
+- [uv](https://docs.astral.sh/uv/)
+- Docker with Compose v2
+- MySQL 8.4（提供的 Compose 服务是官方支持的本地开发环境）
+- Node.js 22 和 npm（仅用于控制台开发与前端测试）
+
+## 本地启动
+
+创建本地环境文件并替换网关密钥：
+
+```bash
+cp .env.example .env
+uv run python - <<'PY'
+import secrets
+from cryptography.fernet import Fernet
+
+print("GATEWAY_JWT_SECRET=" + secrets.token_urlsafe(48))
+print("GATEWAY_ENCRYPTION_KEY=" + Fernet.generate_key().decode())
+PY
+```
+
+将生成的值粘贴到 `.env` 文件中。永远不要提交 `.env`。Compose 从该文件读取 `MYSQL_DATABASE`、`MYSQL_USER`、`MYSQL_PASSWORD` 和 `MYSQL_ROOT_PASSWORD`，并使用相同的值构建网关数据库 URL。文件中的默认值仅用于本地开发；在第一次运行 `docker compose up`（会初始化非临时卷）之前，请替换两个 MySQL 密码。MySQL 初始化变量不会更改已有卷中的密码。要轮换现有部署的密码，请使用旧凭据登录，执行 `ALTER USER`，然后更新环境变量并重启网关；详见运维手册。由于 Compose 会将 `MYSQL_PASSWORD` 嵌入 SQLAlchemy URL，请使用 URL 安全的密码字符（`A-Z`、`a-z`、`0-9`、`.`、`_`、`~`、`-`）。对于本地宿主机运行，请保持 `GATEWAY_DATABASE_URL` 与这些值一致，并使用 `127.0.0.1:3306`。
+
+MySQL 仅发布在 `127.0.0.1:3306`；不会暴露到外部主机接口。`compose.yaml` 是规范且唯一的 Compose 文件。
+
+启动 MySQL，安装冻结的依赖集，迁移后再启动应用：
+
+```bash
+docker compose up -d mysql
+uv sync --frozen
+uv run alembic upgrade head
+uv run python scripts/create_admin.py --email admin@example.com
+uv run uvicorn ai_gateway.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+检查就绪状态：
+
+```bash
+curl --fail http://127.0.0.1:8000/health
+```
+
+`/health` 仅在 MySQL 可达时返回 `200 {"status":"ok"}`。如果数据库未迁移到 `0004` 版本，启动也会拒绝。
+
+### 管理控制台开发
+
+在迁移数据库并创建管理员后，分别在两个终端运行后端和 Vite 开发服务器：
+
+```bash
+# 终端 1：后端
+uv run uvicorn ai_gateway.main:app --host 127.0.0.1 --port 8000 --reload
+
+# 终端 2：前端开发服务器
+npm ci --prefix frontend
+npm --prefix frontend run dev
+# 打开 http://127.0.0.1:5173/console/
+```
+
+如需在本地模拟生产环境，编译控制台并让 FastAPI 从公共网关进程提供服务：
+
+```bash
+npm --prefix frontend run build
+uv run uvicorn ai_gateway.main:app --host 127.0.0.1 --port 8000
+# 打开 http://127.0.0.1:8000/console/
+```
+
+公共模型网关仍在 `8000` 端口；编译后的控制台使用同源，不需要单独的生产 Node 进程。`5173` 端口仅用于 Vite 开发服务器。
+
+控制台仅允许管理员访问，提供以下功能：
+
+- 用量、成本、健康状态和资源统计仪表盘；
+- 提供商协议、凭据、模型同步、模型、别名和加权路由管理；
+- 用户、余额、不可变账本和带作用域的 API Key 管理；
+- 一次性 API Key 展示，以及明确的复制/下载确认流程；
+- 请求日志筛选、后端游标翻页和脱敏 JSON 详情查看；
+- TOTP 首次绑定和经过当前验证码校验的安全换绑。
+
+JWT access 和 refresh token 仅保存在 `sessionStorage`，不会写入 `localStorage`。提供商凭据、
+TOTP 验证码、密码和完整 API Key 不会持久化，也不会在一次性流程结束后再次显示。
+
+## Docker 部署
+
+对于容器部署，在 `.env` 中设置 `GATEWAY_ENVIRONMENT=production`，使用非示例的 JWT、Fernet 和 MySQL 密钥，数据库主机名保持 `compose.yaml` 的覆盖值（`mysql`）。然后：
+
+```bash
+docker compose build gateway
+docker compose up -d mysql
+docker compose run --rm gateway alembic upgrade head
+docker compose run --rm gateway python scripts/create_admin.py --email admin@example.com
+docker compose up -d gateway
+docker compose ps
+```
+
+运行时容器以非 root 用户 `gateway` 身份运行。Compose 使其根文件系统只读，将 `/tmp` 挂载为 tmpfs，删除所有 Linux 能力，并启用 `no-new-privileges`。
+
+对于非交互式引导，注入一个短期环境变量并在之后立即删除：
+
+```bash
+export GATEWAY_BOOTSTRAP_PASSWORD='replace-this-in-your-shell'
+docker compose run --rm \
+  -e GATEWAY_BOOTSTRAP_PASSWORD \
+  gateway python scripts/create_admin.py \
+  --email admin@example.com \
+  --password-env GATEWAY_BOOTSTRAP_PASSWORD
+unset GATEWAY_BOOTSTRAP_PASSWORD
+```
+
+### 已发布镜像
+
+完整 CI 质量任务通过后，默认分支和版本标签会将多阶段生产镜像发布到 GitHub Container Registry：
+
+```bash
+docker pull ghcr.io/<owner>/<repository>:latest
+docker pull ghcr.io/<owner>/<repository>:<commit-sha>
+docker pull ghcr.io/<owner>/<repository>:1.2.3
+```
+
+默认分支构建会发布 `latest`、分支名和短提交 SHA。`v1.2.3` 这样的标签会发布 `1.2.3`、
+`1.2`、`1` 和提交 SHA。请将占位符替换为该仓库的小写 GitHub 所有者与仓库名。
+
+最终镜像包含 Python 运行时和已编译的 Vue 控制台，以非 root 用户 `gateway` 运行，且不包含
+Node.js 或 npm。镜像默认使用生产模式，因此启动时必须提供有效的 JWT、Fernet 和数据库密钥。
+
+## 重要配置
+
+常用配置示例和运维说明见 [`.env.example`](.env.example) 与[运维手册](docs/operations.md)。
+最重要的配置项如下：
+
+| 配置项 | 用途 |
+| --- | --- |
+| `GATEWAY_DATABASE_URL` | MySQL 应用数据库的异步 SQLAlchemy URL |
+| `GATEWAY_JWT_SECRET` | 签发 access/refresh token；应使用唯一的高熵值 |
+| `GATEWAY_ENCRYPTION_KEY` | 加密提供商凭据、请求头和 TOTP 密钥的 Fernet key |
+| `GATEWAY_HTTP_PROXY`、`GATEWAY_HTTPS_PROXY` | 可选的提供商出站代理 |
+| `GATEWAY_NO_PROXY` | 逗号分隔的主机、后缀、端口、IP、CIDR 或 `*` 绕过规则 |
+| `GATEWAY_AUDIT_BODY_LIMIT_BYTES` | 审计详情保留的请求/响应正文大小上限 |
+| `GATEWAY_BILLING_DEFAULT_MAX_OUTPUT_TOKENS` | 请求未指定输出上限时的预留回退值 |
+
+生产启动会拒绝示例 JWT 与加密密钥。所有凭据都应保存在密钥管理系统中，并在启动新版本应用前，
+将 `alembic upgrade head` 作为独立发布步骤执行。
+
+## 获取网关 API Key
+
+以管理员身份登录，然后使用管理 API 创建用户、提供商、模型、别名、路由、API Key 和余额调整。`/docs` 的交互式 API 文档列出了所有字段。只有 API Key 创建或轮换响应会包含原始密钥；请立即保存。
+
+```bash
+export GATEWAY_URL=http://127.0.0.1:8000
+export ADMIN_TOKEN="$({
+  curl --silent --fail "$GATEWAY_URL/auth/login" \
+    -H 'content-type: application/json' \
+    -d '{"email":"admin@example.com","password":"replace-me"}'
+} | uv run python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+```
+
+以下示例假设配置已完成：
+
+```bash
+export GATEWAY_API_KEY='sk-gw-replace-me'
+export MODEL_ALIAS='friendly-chat'
+```
+
+别名在入站时被接受，并在向提供商发起请求或 WebSocket 握手之前被重写为所选的 `ModelRoute.upstream_model`。
+
+## OpenAI 兼容的 HTTP 和 SSE
+
+非流式：
+
+```bash
+curl --fail "$GATEWAY_URL/v1/chat/completions" \
+  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -H 'content-type: application/json' \
+  -d "{\"model\":\"$MODEL_ALIAS\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":128}"
+```
+
+流式：
+
+```bash
+curl --no-buffer --fail "$GATEWAY_URL/v1/chat/completions" \
+  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -H 'content-type: application/json' \
+  -d "{\"model\":\"$MODEL_ALIAS\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":128,\"stream\":true}"
+```
+
+## Claude 兼容的 HTTP 和 SSE
+
+非流式：
+
+```bash
+curl --fail "$GATEWAY_URL/v1/messages" \
+  -H "x-api-key: $GATEWAY_API_KEY" \
+  -H 'anthropic-version: 2023-06-01' \
+  -H 'content-type: application/json' \
+  -d "{\"model\":\"$MODEL_ALIAS\",\"max_tokens\":128,\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
+```
+
+流式：
+
+```bash
+curl --no-buffer --fail "$GATEWAY_URL/v1/messages" \
+  -H "x-api-key: $GATEWAY_API_KEY" \
+  -H 'anthropic-version: 2023-06-01' \
+  -H 'content-type: application/json' \
+  -d "{\"model\":\"$MODEL_ALIAS\",\"max_tokens\":128,\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
+```
+
+## Gemini 兼容的 HTTP 和 SSE
+
+非流式：
+
+```bash
+curl --fail "$GATEWAY_URL/v1beta/models/$MODEL_ALIAS:generateContent" \
+  -H "x-goog-api-key: $GATEWAY_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"contents":[{"role":"user","parts":[{"text":"Hello"}]}],"generationConfig":{"maxOutputTokens":128}}'
+```
+
+流式：
+
+```bash
+curl --no-buffer --fail \
+  "$GATEWAY_URL/v1beta/models/$MODEL_ALIAS:streamGenerateContent?alt=sse" \
+  -H "x-goog-api-key: $GATEWAY_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"contents":[{"role":"user","parts":[{"text":"Hello"}]}],"generationConfig":{"maxOutputTokens":128}}'
+```
+
+## OpenAI Realtime WebSocket
+
+使用 `websocat`：
+
+```bash
+websocat \
+  -H="Authorization: Bearer $GATEWAY_API_KEY" \
+  -H='Sec-WebSocket-Protocol: realtime' \
+  "ws://127.0.0.1:8000/v1/realtime?model=$MODEL_ALIAS"
+```
+
+然后发送如下帧：
+
+```json
+{"type":"session.update","session":{"model":"friendly-chat","modalities":["text"]}}
+```
+
+## Gemini Live WebSocket
+
+```bash
+websocat \
+  -H="x-goog-api-key: $GATEWAY_API_KEY" \
+  -H='Sec-WebSocket-Protocol: gemini-live' \
+  ws://127.0.0.1:8000/v1beta/live
+```
+
+当模型未在查询字符串中指定时，第一帧必须标识模型：
+
+```json
+{"setup":{"model":"models/friendly-chat","generationConfig":{"responseModalities":["TEXT"]}}}
+```
+
+WebSocket 是透明的同协议中继：文本/二进制帧、ping/pong 和 close 细节都会被传播；客户端凭据会被移除，提供商凭据会被注入到上游。
+
+## 质量门禁
+
+测试需要专用的 `gateway_test` schema。`docker compose up -d mysql mysql-test-setup` 会创建/授权该 schema，即使在升级现有的持久化 MySQL 卷时也是如此。fixture 会拒绝数据库名中不包含 `test` 的 URL，拒绝应用 schema，并且只从该隔离 schema 中删除网关表和 `alembic_version`。
+
+```bash
+docker compose up -d mysql mysql-test-setup
+uv run ruff check src tests scripts
+uv run ruff format --check src tests scripts
+uv run mypy src scripts
+GATEWAY_TEST_DATABASE_URL='mysql+asyncmy://gateway:gateway@127.0.0.1:3306/gateway_test' \
+  uv run pytest -W error --cov=ai_gateway --cov-report=term-missing --cov-fail-under=90
+npm --prefix frontend run lint
+npm --prefix frontend run typecheck
+npm --prefix frontend run test
+npm --prefix frontend run build
+npm exec --prefix frontend -- playwright install --with-deps chromium
+E2E_ADMIN_EMAIL='admin@example.com' E2E_ADMIN_PASSWORD='short-lived-password' \
+  npm --prefix frontend run e2e
+docker build -t lean-ai-gateway:test .
+docker compose config --quiet
+```
+
+浏览器 E2E 使用的管理员必须已存在于所选数据库中。E2E 测试套件仅使用 MySQL 和本地回环假提供商；
+它不需要真实的提供商凭据或公共网络访问。测试会创建带唯一名称的资源，按依赖关系逆序删除可安全删除的
+资源，并停用因不可变账本历史而不能删除的用户。
+
+## 更多文档
+
+- [架构](docs/architecture.md)
+- [协议兼容性](docs/protocol-compatibility.md)
+- [运维手册](docs/operations.md)
+- 运行时 API 参考：`/docs` 或 `/redoc`
