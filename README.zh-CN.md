@@ -45,6 +45,20 @@ Lean AI Gateway 是一个专注于多 AI 提供商的网关，支持 OpenAI、Cl
 - MySQL 8.4（提供的 Compose 服务是官方支持的本地开发环境）
 - Node.js 22 和 npm（仅用于控制台开发与前端测试）
 
+## 一条命令启动 Docker 示例
+
+如需快速进行一次性本地体验，[`example/`](example/) 目录会构建网关、启动 MySQL、执行数据库迁移、
+创建本地管理员并提供管理控制台：
+
+```bash
+cd example
+docker compose up
+```
+
+打开 <http://127.0.0.1:8000/console/>，使用 `admin@example.com` / `change-me-now`，并输入演示
+TOTP 密钥 `JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP` 当前生成的验证码。这些固定凭据和密钥仅限
+本地体验；覆盖配置和清理方法见[示例说明](example/README.md)。
+
 ## 本地启动
 
 创建本地环境文件并替换网关密钥：
@@ -62,7 +76,7 @@ PY
 
 将生成的值粘贴到 `.env` 文件中。永远不要提交 `.env`。Compose 从该文件读取 `MYSQL_DATABASE`、`MYSQL_USER`、`MYSQL_PASSWORD` 和 `MYSQL_ROOT_PASSWORD`，并使用相同的值构建网关数据库 URL。文件中的默认值仅用于本地开发；在第一次运行 `docker compose up`（会初始化非临时卷）之前，请替换两个 MySQL 密码。MySQL 初始化变量不会更改已有卷中的密码。要轮换现有部署的密码，请使用旧凭据登录，执行 `ALTER USER`，然后更新环境变量并重启网关；详见运维手册。由于 Compose 会将 `MYSQL_PASSWORD` 嵌入 SQLAlchemy URL，请使用 URL 安全的密码字符（`A-Z`、`a-z`、`0-9`、`.`、`_`、`~`、`-`）。对于本地宿主机运行，请保持 `GATEWAY_DATABASE_URL` 与这些值一致，并使用 `127.0.0.1:3306`。
 
-MySQL 仅发布在 `127.0.0.1:3306`；不会暴露到外部主机接口。`compose.yaml` 是规范且唯一的 Compose 文件。
+MySQL 仅发布在 `127.0.0.1:3306`；不会暴露到外部主机接口。根目录的 `compose.yaml` 是常规开发和部署使用的规范 Compose 文件；`example/compose.yaml` 则是独立、可随时丢弃的一键演示。
 
 启动 MySQL，安装冻结的依赖集，迁移后再启动应用：
 
@@ -120,30 +134,34 @@ TOTP 验证码、密码和完整 API Key 不会持久化，也不会在一次性
 
 ## Docker 部署
 
-对于容器部署，在 `.env` 中设置 `GATEWAY_ENVIRONMENT=production`，使用非示例的 JWT、Fernet 和 MySQL 密钥，数据库主机名保持 `compose.yaml` 的覆盖值（`mysql`）。然后：
+对于容器部署，在 `.env` 中设置 `GATEWAY_ENVIRONMENT=production`，使用非示例的 JWT、Fernet
+和 MySQL 密钥，数据库主机名保持 `compose.yaml` 的覆盖值（`mysql`）。首次启动前可设置以下
+变量来创建第一个管理员；TOTP 密钥可选，但必须为 Base32 且解码后至少 160 bit：
 
 ```bash
-docker compose build gateway
-docker compose up -d mysql
-docker compose run --rm gateway alembic upgrade head
-docker compose run --rm gateway python scripts/create_admin.py --email admin@example.com
-docker compose up -d gateway
+uv run python -c 'import pyotp; print(pyotp.random_base32())'
+
+# 将生成值及其他引导变量写入 .env 或由密钥管理系统提供的环境文件：
+# GATEWAY_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+# GATEWAY_BOOTSTRAP_ADMIN_PASSWORD=<高强度初始密码>
+# GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET=<生成的-base32-密钥>
+
+docker compose up -d --build
 docker compose ps
 ```
 
-运行时容器以非 root 用户 `gateway` 身份运行。Compose 使其根文件系统只读，将 `/tmp` 挂载为 tmpfs，删除所有 Linux 能力，并启用 `no-new-privileges`。
+一次性的 `setup` 服务会等待 MySQL、执行全部迁移，然后创建管理员。三个引导变量全部为空时，
+它会跳过管理员创建；只要配置了任意一项，就必须同时提供邮箱和密码，TOTP 仍为可选。引导值仅在
+该邮箱首次创建时生效：后续部署或并发初始化都不会覆盖已有管理员的密码或 TOTP 配置。首次启动成功后，
+请从部署环境删除全部三个引导变量（尤其是密码和 TOTP 密钥）；后续 Compose 重启仍会正常执行迁移并
+启动网关。具体应先从 `.env` 或密钥来源删除三个值，再执行 `docker compose rm -f setup` 删除仍携带
+初始化秘密的已退出 setup 容器。长期运行的 `gateway` 服务会显式将三个变量覆盖为空，因此其容器环境
+不会保留这些值；后续启动会用空值重新创建 setup。
 
-对于非交互式引导，注入一个短期环境变量并在之后立即删除：
-
-```bash
-export GATEWAY_BOOTSTRAP_PASSWORD='replace-this-in-your-shell'
-docker compose run --rm \
-  -e GATEWAY_BOOTSTRAP_PASSWORD \
-  gateway python scripts/create_admin.py \
-  --email admin@example.com \
-  --password-env GATEWAY_BOOTSTRAP_PASSWORD
-unset GATEWAY_BOOTSTRAP_PASSWORD
-```
+运行时容器和 setup 容器都以非 root 用户 `gateway` 身份运行。Compose 使其根文件系统只读，
+将 `/tmp` 挂载为 tmpfs，删除所有 Linux 能力，并启用 `no-new-privileges`。在 Kubernetes 或其他
+编排器中，应在启动对应版本网关镜像之前，通过单独、串行的 release job 执行
+`alembic upgrade head` 和可选的 `scripts/create_admin.py`。
 
 ### 已发布镜像
 
@@ -171,13 +189,17 @@ Node.js 或 npm。镜像默认使用生产模式，因此启动时必须提供�
 | `GATEWAY_DATABASE_URL` | MySQL 应用数据库的异步 SQLAlchemy URL |
 | `GATEWAY_JWT_SECRET` | 签发 access/refresh token；应使用唯一的高熵值 |
 | `GATEWAY_ENCRYPTION_KEY` | 加密提供商凭据、请求头和 TOTP 密钥的 Fernet key |
+| `GATEWAY_BOOTSTRAP_ADMIN_EMAIL` | 可选的首次初始化管理员邮箱；配置时必须同时提供密码 |
+| `GATEWAY_BOOTSTRAP_ADMIN_PASSWORD` | 首次初始化管理员密码；成功后应删除 |
+| `GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET` | 可选、至少 160 bit 的首次初始化 Base32 TOTP 密钥；成功后应删除 |
 | `GATEWAY_HTTP_PROXY`、`GATEWAY_HTTPS_PROXY` | 可选的提供商出站代理 |
 | `GATEWAY_NO_PROXY` | 逗号分隔的主机、后缀、端口、IP、CIDR 或 `*` 绕过规则 |
 | `GATEWAY_AUDIT_BODY_LIMIT_BYTES` | 审计详情保留的请求/响应正文大小上限 |
 | `GATEWAY_BILLING_DEFAULT_MAX_OUTPUT_TOKENS` | 请求未指定输出上限时的预留回退值 |
 
-生产启动会拒绝示例 JWT 与加密密钥。所有凭据都应保存在密钥管理系统中，并在启动新版本应用前，
-将 `alembic upgrade head` 作为独立发布步骤执行。
+生产启动会拒绝示例 JWT 与加密密钥。所有凭据都应保存在密钥管理系统中。提供的 Compose `setup`
+服务就是串行 release step；其他编排器应在启动新版本应用前，通过单独 release job 执行相同的
+迁移和可选管理员初始化。
 
 ## 获取网关 API Key
 

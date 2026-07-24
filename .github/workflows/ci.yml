@@ -116,7 +116,9 @@ jobs:
           npm --prefix frontend run e2e
 
       - name: Validate Compose
-        run: docker compose config --quiet
+        run: |
+          docker compose -f compose.yaml config --quiet
+          docker compose -f example/compose.yaml config --quiet
 
       - name: Build production image
         run: docker build -t lean-ai-gateway:test .

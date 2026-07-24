@@ -24,6 +24,41 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  setup:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      GATEWAY_BOOTSTRAP_ADMIN_EMAIL: ${GATEWAY_BOOTSTRAP_ADMIN_EMAIL:-}
+      GATEWAY_BOOTSTRAP_ADMIN_PASSWORD: ${GATEWAY_BOOTSTRAP_ADMIN_PASSWORD:-}
+      GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET: ${GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET:-}
+      GATEWAY_DATABASE_URL: >-
+        mysql+asyncmy://${MYSQL_USER:-gateway}:${MYSQL_PASSWORD:-gateway}@mysql:3306/${MYSQL_DATABASE:-gateway}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        alembic upgrade head
+        python scripts/create_admin.py \
+          --email-env GATEWAY_BOOTSTRAP_ADMIN_EMAIL \
+          --password-env GATEWAY_BOOTSTRAP_ADMIN_PASSWORD \
+          --totp-secret-env GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET \
+          --skip-if-all-empty
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
   gateway:
     build:
       context: .
@@ -32,6 +67,9 @@ services:
       - path: .env
         required: false
     environment:
+      GATEWAY_BOOTSTRAP_ADMIN_EMAIL: ""
+      GATEWAY_BOOTSTRAP_ADMIN_PASSWORD: ""
+      GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET: ""
       GATEWAY_DATABASE_URL: >-
         mysql+asyncmy://${MYSQL_USER:-gateway}:${MYSQL_PASSWORD:-gateway}@mysql:3306/${MYSQL_DATABASE:-gateway}
     ports:
@@ -40,6 +78,8 @@ services:
       mysql:
         condition: service_healthy
       mysql-test-setup:
+        condition: service_completed_successfully
+      setup:
         condition: service_completed_successfully
     read_only: true
     tmpfs:

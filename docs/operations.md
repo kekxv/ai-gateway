@@ -8,7 +8,9 @@
   `GATEWAY_ENCRYPTION_KEY`. Production startup rejects the example secret values.
 - Run one gateway process per container. Put multiple containers behind a load balancer that
   removes a replica when `/health` is not `200`.
-- Run `alembic upgrade head` as a separate release job before starting the matching image.
+- With the provided Compose deployment, use its one-shot `setup` service as the serialized release
+  job. With any other orchestrator, run `alembic upgrade head` as a separate release job before
+  starting the matching image.
 - Keep `.env`, provider credentials, API keys, JWT secrets, database passwords, and proxy URLs in a
   secret manager; never bake them into the image.
 - `compose.yaml` is the canonical Compose definition. It interpolates `MYSQL_DATABASE`,
@@ -19,6 +21,52 @@
   `MYSQL_PASSWORD` or `MYSQL_ROOT_PASSWORD` later does not alter users stored in that volume.
 - The Compose MySQL port is bound only to `127.0.0.1:3306`. Use private networking rather than
   widening that host binding for remote access.
+
+## First administrator bootstrap
+
+The root Compose deployment's one-shot `setup` service always applies migrations and can create
+the first administrator non-interactively. Supply email and password together; a Base32 TOTP
+secret that decodes to at least 20 bytes (160 bits) is optional:
+
+```bash
+uv run python -c 'import pyotp; print(pyotp.random_base32())'
+
+GATEWAY_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+GATEWAY_BOOTSTRAP_ADMIN_PASSWORD=<strong-initial-password>
+GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET=<generated-base32-secret>
+```
+
+Put the values in the deployment's secret-backed environment and run `docker compose up -d`.
+When all three variables are empty, setup only migrates. A partial configuration fails closed:
+whenever any bootstrap value is supplied, both email and password must be non-empty. TOTP is
+enabled only when its variable contains a valid Base32 secret; the value is encrypted with
+`GATEWAY_ENCRYPTION_KEY` before storage and is never printed.
+
+Bootstrap is create-only and idempotent. If the email already belongs to an administrator, setup
+does not change its password or TOTP state. If it belongs to a regular user, setup refuses to
+promote it. Concurrent setup attempts converge on the same administrator without overwriting it.
+After the first successful deployment, remove all three bootstrap variables—especially password
+and TOTP secret—from `.env` or the backing secret source, then delete the exited container that
+still carries the original environment:
+
+```bash
+docker compose rm -f setup
+docker compose up -d
+```
+
+The long-running `gateway` service explicitly overrides all three bootstrap variables to empty
+values, so its container environment does not retain them. Restarts remain safe because setup is
+recreated with empty values, continues to migrate, and skips administrator creation.
+
+For Kubernetes and other orchestrators, run the same work as a serialized release job using the
+matching image: first `alembic upgrade head`, then optionally
+`python scripts/create_admin.py --email-env GATEWAY_BOOTSTRAP_ADMIN_EMAIL --password-env
+GATEWAY_BOOTSTRAP_ADMIN_PASSWORD --totp-secret-env GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET`. Omit the
+TOTP option when it is not configured, or leave that environment value empty to disable TOTP.
+Email and password remain required unless `--skip-if-all-empty` is used for an optional bootstrap
+job; in that mode, all-empty skips while every partial configuration fails. Pass only
+environment-variable names on the command line so secret values are not exposed in process
+arguments.
 
 ## Admin console deployment and reverse proxy
 

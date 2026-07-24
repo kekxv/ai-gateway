@@ -55,6 +55,21 @@ scale containers horizontally.
 - MySQL 8.4 (the provided Compose service is the supported local setup)
 - Node.js 22 and npm (only for console development and frontend tests)
 
+## One-command Docker example
+
+For a disposable local evaluation, the [`example/`](example/) directory builds the gateway,
+starts MySQL, applies migrations, creates a local administrator, and serves the console:
+
+```bash
+cd example
+docker compose up
+```
+
+Open <http://127.0.0.1:8000/console/> and sign in with `admin@example.com` / `change-me-now` plus
+the current code for demo TOTP secret `JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP`. These fixed
+credentials and secrets are strictly for local evaluation; see the
+[example README](example/README.md) for overrides and cleanup.
+
 ## Local startup
 
 Create a local environment file and replace the gateway secrets:
@@ -82,7 +97,8 @@ environment and roll the gateway; see the operations runbook. Because Compose em
 and `127.0.0.1:3306`.
 
 MySQL is published only on `127.0.0.1:3306`; it is not exposed on external host interfaces.
-`compose.yaml` is the canonical and only Compose file.
+The root `compose.yaml` is the canonical Compose file for normal development and deployment;
+`example/compose.yaml` is a separate, disposable one-command demonstration.
 
 Start MySQL, install the frozen dependency set, and migrate before starting the app:
 
@@ -148,33 +164,37 @@ their one-time workflow ends.
 
 For container deployment, set `GATEWAY_ENVIRONMENT=production` in `.env`, use non-example JWT,
 Fernet, and MySQL secrets, and leave the database hostname to the `compose.yaml` override
-(`mysql`). Then:
+(`mysql`). To create the first administrator, set the following values before the first start.
+The TOTP secret is optional and must be Base32 with at least 160 bits of decoded entropy:
 
 ```bash
-docker compose build gateway
-docker compose up -d mysql
-docker compose run --rm gateway alembic upgrade head
-docker compose run --rm gateway python scripts/create_admin.py --email admin@example.com
-docker compose up -d gateway
+uv run python -c 'import pyotp; print(pyotp.random_base32())'
+
+# Put the generated value and the other bootstrap values in .env or a secret-backed env file:
+# GATEWAY_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+# GATEWAY_BOOTSTRAP_ADMIN_PASSWORD=<strong-initial-password>
+# GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET=<generated-base32-secret>
+
+docker compose up -d --build
 docker compose ps
 ```
 
-The runtime container runs as the non-root `gateway` user. Compose makes its root filesystem
-read-only, mounts `/tmp` as tmpfs, drops every Linux capability, and enables
-`no-new-privileges`.
+The one-shot `setup` service waits for MySQL, applies all migrations, and then creates the
+administrator. If all three bootstrap variables are empty it skips administrator creation. If
+any is configured, email and password are required while TOTP remains optional. Bootstrap values
+only affect a newly created email: an existing administrator's password and TOTP configuration
+are never overwritten, including on later deployments or concurrent setup runs. After a
+successful first start, remove all three bootstrap variables (especially the password and TOTP
+secret) from `.env` or the backing secret source, then remove the exited setup container with
+`docker compose rm -f setup`. The long-running `gateway` service explicitly overrides all three
+variables to empty values, so they are not retained in its container environment. Subsequent
+Compose starts recreate setup with empty bootstrap values, migrate, and start the gateway normally.
 
-For non-interactive bootstrap, inject a short-lived environment variable and remove it
-immediately afterward:
-
-```bash
-export GATEWAY_BOOTSTRAP_PASSWORD='replace-this-in-your-shell'
-docker compose run --rm \
-  -e GATEWAY_BOOTSTRAP_PASSWORD \
-  gateway python scripts/create_admin.py \
-  --email admin@example.com \
-  --password-env GATEWAY_BOOTSTRAP_PASSWORD
-unset GATEWAY_BOOTSTRAP_PASSWORD
-```
+Both the runtime container and the setup container run as the non-root `gateway` user. Compose
+makes their root filesystems read-only, mounts `/tmp` as tmpfs, drops every Linux capability, and
+enables `no-new-privileges`. In Kubernetes or another orchestrator, run `alembic upgrade head` and
+the optional `scripts/create_admin.py` invocation in a separate serialized release job before
+starting the matching gateway image.
 
 ### Published images
 
@@ -205,14 +225,18 @@ and the [operations runbook](docs/operations.md). The most important settings ar
 | `GATEWAY_DATABASE_URL` | Async SQLAlchemy URL for the MySQL application database |
 | `GATEWAY_JWT_SECRET` | Signs access and refresh tokens; use a unique high-entropy value |
 | `GATEWAY_ENCRYPTION_KEY` | Fernet key for provider credentials, headers, and TOTP secrets |
+| `GATEWAY_BOOTSTRAP_ADMIN_EMAIL` | Optional first-run administrator email; requires the password setting |
+| `GATEWAY_BOOTSTRAP_ADMIN_PASSWORD` | First-run administrator password; remove after successful bootstrap |
+| `GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET` | Optional first-run Base32 TOTP secret of at least 160 bits; remove after successful bootstrap |
 | `GATEWAY_HTTP_PROXY`, `GATEWAY_HTTPS_PROXY` | Optional outbound provider proxies |
 | `GATEWAY_NO_PROXY` | Comma-separated host, suffix, port, IP, CIDR, or `*` bypass rules |
 | `GATEWAY_AUDIT_BODY_LIMIT_BYTES` | Maximum request/response body size retained for audit detail |
 | `GATEWAY_BILLING_DEFAULT_MAX_OUTPUT_TOKENS` | Reservation fallback when a request omits an output limit |
 
 Production startup rejects the example JWT and encryption secrets. Keep all credentials in a
-secret manager and run `alembic upgrade head` as a separate release step before starting the new
-application version.
+secret manager. The provided Compose `setup` service is its serialized release step; other
+orchestrators should run the same migration/bootstrap work in a separate release job before
+starting the new application version.
 
 ## Obtain a gateway API key
 

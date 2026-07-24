@@ -1,0 +1,100 @@
+name: ai-gateway-example
+
+x-gateway-service: &gateway-service
+  image: lean-ai-gateway-example:local
+  build:
+    context: ..
+    dockerfile: Dockerfile
+  environment: &gateway-environment
+    GATEWAY_DATABASE_URL: >-
+      mysql+asyncmy://${MYSQL_USER:-gateway}:${MYSQL_PASSWORD:-gateway}@mysql:3306/${MYSQL_DATABASE:-gateway}
+    GATEWAY_ENCRYPTION_KEY: ${GATEWAY_ENCRYPTION_KEY:-MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=}
+    GATEWAY_ENVIRONMENT: development
+    GATEWAY_JWT_SECRET: ${GATEWAY_JWT_SECRET:-local-example-jwt-secret-change-before-production}
+    GATEWAY_LOG_LEVEL: INFO
+    GATEWAY_NO_PROXY: 127.0.0.1,localhost,mysql
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=64m
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gateway}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gateway}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-gateway-root}
+      MYSQL_USER: ${MYSQL_USER:-gateway}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          MYSQL_PWD="$$MYSQL_PASSWORD"
+          mysql --protocol=TCP --host=127.0.0.1 --connect-timeout=3
+          --user="$$MYSQL_USER" --database="$$MYSQL_DATABASE"
+          --batch --skip-column-names --execute="SELECT 1" >/dev/null
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  setup:
+    <<: *gateway-service
+    environment:
+      <<: *gateway-environment
+      GATEWAY_BOOTSTRAP_ADMIN_EMAIL: ${GATEWAY_BOOTSTRAP_ADMIN_EMAIL-}
+      GATEWAY_BOOTSTRAP_ADMIN_PASSWORD: ${GATEWAY_BOOTSTRAP_ADMIN_PASSWORD-}
+      GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET: ${GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET-}
+      GATEWAY_BOOTSTRAP_ADMIN_OVERRIDE: >-
+        ${GATEWAY_BOOTSTRAP_ADMIN_EMAIL+x}${GATEWAY_BOOTSTRAP_ADMIN_PASSWORD+x}${GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET+x}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        alembic upgrade head
+        if [ -z "$$GATEWAY_BOOTSTRAP_ADMIN_OVERRIDE" ]; then
+          export GATEWAY_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+          export GATEWAY_BOOTSTRAP_ADMIN_PASSWORD=change-me-now
+          export GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP
+        fi
+        python scripts/create_admin.py \
+          --email-env GATEWAY_BOOTSTRAP_ADMIN_EMAIL \
+          --password-env GATEWAY_BOOTSTRAP_ADMIN_PASSWORD \
+          --totp-secret-env GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET
+    restart: "no"
+
+  gateway:
+    <<: *gateway-service
+    depends_on:
+      mysql:
+        condition: service_healthy
+      setup:
+        condition: service_completed_successfully
+    ports:
+      - "0.0.0.0:${GATEWAY_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
