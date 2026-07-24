@@ -17,7 +17,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.mysql import LONGBLOB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ai_gateway.core.enums import Protocol, RequestStatus, UsageSource, enum_values
 from ai_gateway.db.base import Base
@@ -74,7 +74,43 @@ class RequestLog(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     first_token_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    request_detail_gzip: Mapped[bytes | None] = mapped_column(LONGBLOB, nullable=True)
-    response_detail_gzip: Mapped[bytes | None] = mapped_column(LONGBLOB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # 关联的详情记录（1:1 关系）
+    detail: Mapped[RequestLogDetail | None] = relationship(
+        "RequestLogDetail",
+        back_populates="request_log",
+        uselist=False,
+        cascade="all, delete-orphan",
+        single_parent=True,
+    )
+
+
+class RequestLogDetail(Base):
+    """审计日志详情表 - 存储请求和响应的完整详情（gzip 压缩）"""
+    __tablename__ = "request_log_details"
+    __table_args__ = (
+        Index("ix_request_log_details_created_at", "created_at"),
+    )
+
+    # 使用与 RequestLog 相同的 ID 作为主键（1:1 关系）
+    id: Mapped[str] = mapped_column(
+        CHAR(36),
+        ForeignKey("request_logs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    request_detail_gzip: Mapped[bytes | None] = mapped_column(LONGBLOB, nullable=True)
+    response_detail_gzip: Mapped[bytes | None] = mapped_column(LONGBLOB, nullable=True)
+
+    # 冗余存储 created_at 便于独立查询和清理（避免 JOIN）
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+    )
+
+    # 反向关联
+    request_log: Mapped[RequestLog] = relationship(
+        "RequestLog",
+        back_populates="detail",
+    )

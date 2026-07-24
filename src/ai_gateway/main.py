@@ -19,6 +19,7 @@ from ai_gateway.admin.models import models_router, routes_router
 from ai_gateway.admin.providers import router as providers_router
 from ai_gateway.admin.request_logs import router as request_logs_router
 from ai_gateway.admin.users import router as users_router
+from ai_gateway.audit.cleanup import AuditLogCleanupScheduler
 from ai_gateway.audit.codec import DEFAULT_AUDIT_BODY_LIMIT_BYTES
 from ai_gateway.audit.service import AuditService, use_audit_service
 from ai_gateway.auth.router import router as auth_router
@@ -50,7 +51,7 @@ from ai_gateway.gateway.openai import router as openai_gateway_router
 from ai_gateway.gateway.websocket import router as websocket_gateway_router
 from ai_gateway.transport.http import HttpClientFactory
 
-REQUIRED_MIGRATION_HEAD = "0004"
+REQUIRED_MIGRATION_HEAD = "0005"
 _EXAMPLE_JWT_SECRET = "replace-with-a-long-random-secret"
 _EXAMPLE_ENCRYPTION_KEY = "replace-with-a-fernet-key"
 
@@ -161,10 +162,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 billing_service,
                 interval_seconds=getattr(active_settings, "billing_recovery_interval_seconds", 60),
             )
+            cleanup_scheduler = AuditLogCleanupScheduler(
+                session_factory=session_factory,
+                settings=active_settings,
+            )
             app.state.billing_service = billing_service
             app.state.http_client_factory = http_client_factory
             app.state.model_sync_scheduler = scheduler
             app.state.billing_recovery_scheduler = recovery_scheduler
+            app.state.audit_cleanup_scheduler = cleanup_scheduler
             scheduler_task = asyncio.create_task(
                 scheduler.run(),
                 name="provider-model-sync",
@@ -173,13 +179,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 recovery_scheduler.run(),
                 name="billing-reservation-recovery",
             )
+            cleanup_task = asyncio.create_task(
+                cleanup_scheduler.run(),
+                name="audit-log-cleanup",
+            )
             try:
                 yield
             finally:
                 scheduler.stop()
                 recovery_scheduler.stop()
+                cleanup_scheduler.stop()
                 await scheduler_task
                 await recovery_task
+                await cleanup_task
                 await http_client_factory.aclose()
         finally:
             await engine.dispose()

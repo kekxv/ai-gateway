@@ -449,6 +449,11 @@ h2 {
   height: 24rem;
 }
 
+.chart-card {
+  position: relative;
+  overflow: hidden;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

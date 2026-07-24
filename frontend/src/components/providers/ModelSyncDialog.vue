@@ -211,10 +211,12 @@ onBeforeUnmount(() => {
 .model-list-toolbar {
   position: sticky;
   top: 0;
-  padding: 0.75rem 0;
+  z-index: 10;
+  padding: 0.75rem 0.5rem;
   background: var(--gateway-panel);
   border-bottom: 1px solid var(--gateway-border);
   margin-bottom: 1rem;
+  box-shadow: 0 2px 4px rgb(0 0 0 / 0.05);
 }
 
 .protocol-group {

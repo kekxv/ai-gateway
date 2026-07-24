@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     billing_default_max_output_tokens: int = Field(default=4096, ge=1)
     billing_recovery_interval_seconds: int = Field(default=60, ge=1)
     billing_reservation_ttl_seconds: int = Field(default=300, ge=60)
+    audit_log_retention_days: int = Field(default=30, ge=0)
+    audit_log_cleanup_interval_seconds: int = Field(default=3600, ge=60)
 
 
 @lru_cache

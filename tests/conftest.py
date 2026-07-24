@@ -28,7 +28,7 @@ async def test_engine() -> AsyncIterator[AsyncEngine]:
         await connection.execute(
             text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
         )
-        await connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0004')"))
+        await connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0005')"))
 
     yield engine
 

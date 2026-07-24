@@ -8,7 +8,9 @@ import {
   ElIcon,
   ElInput,
   ElMessageBox,
+  ElOption,
   ElResult,
+  ElSelect,
   ElSkeleton,
   ElSkeletonItem,
   ElTag,
@@ -18,8 +20,10 @@ import 'element-plus/theme-chalk/el-button.css'
 import 'element-plus/theme-chalk/el-empty.css'
 import 'element-plus/theme-chalk/el-input.css'
 import 'element-plus/theme-chalk/el-message-box.css'
+import 'element-plus/theme-chalk/el-option.css'
 import 'element-plus/theme-chalk/el-overlay.css'
 import 'element-plus/theme-chalk/el-result.css'
+import 'element-plus/theme-chalk/el-select.css'
 import 'element-plus/theme-chalk/el-skeleton.css'
 import 'element-plus/theme-chalk/el-skeleton-item.css'
 import 'element-plus/theme-chalk/el-tag.css'
@@ -53,6 +57,7 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import ModelFormDrawer from '@/components/models/ModelFormDrawer.vue'
 import RouteFormDrawer from '@/components/models/RouteFormDrawer.vue'
+import ModelCard from '@/components/models/ModelCard.vue'
 
 type NoticeType = 'success' | 'warning' | 'error'
 type ModelOperation = 'edit' | 'delete' | 'disable'
@@ -79,6 +84,7 @@ const allRoutes = ref<ModelRouteResponse[]>([])
 const modelRoutes = ref<ModelRouteResponse[]>([])
 const selectedModelId = ref<number | null>(null)
 const searchText = ref('')
+const providerFilter = ref<number | null>(null)
 const loading = ref(true)
 const catalogReady = ref(false)
 const loadError = ref('')
@@ -157,13 +163,33 @@ const selectionLocked = computed(
 )
 
 const filteredModels = computed(() => {
+  let result = models.value
   const query = searchText.value.trim().toLocaleLowerCase('zh-CN')
-  if (query === '') return models.value
-  return models.value.filter((model) =>
-    [model.display_name, model.canonical_name, ...model.aliases.map((alias) => alias.alias)].some(
-      (value) => value.toLocaleLowerCase('zh-CN').includes(query),
-    ),
-  )
+  if (query !== '') {
+    result = result.filter((model) =>
+      [model.display_name, model.canonical_name, ...model.aliases.map((alias) => alias.alias)].some(
+        (value) => value.toLocaleLowerCase('zh-CN').includes(query),
+      ),
+    )
+  }
+  if (providerFilter.value !== null) {
+    const providerId = providerFilter.value
+    const modelIdsWithRoutes = new Set(
+      allRoutes.value.filter((route) => route.provider_id === providerId).map((route) => route.model_id),
+    )
+    result = result.filter((model) => modelIdsWithRoutes.has(model.id))
+  }
+  return result
+})
+
+const routesByModel = computed(() => {
+  const map = new Map<number, ModelRouteResponse[]>()
+  for (const route of allRoutes.value) {
+    const routes = map.get(route.model_id) ?? []
+    routes.push(route)
+    map.set(route.model_id, routes)
+  }
+  return map
 })
 
 const routeCounts = computed(() => {
@@ -502,6 +528,26 @@ function openCreateRoute(): void {
     loading.value ||
     selectedModel.value === null ||
     modelId === null ||
+    routeSubmitting.value ||
+    modelDrawerOpen.value ||
+    routeDrawerOpen.value ||
+    modelOperations.value.has(modelId) ||
+    hasRouteActivity(modelId)
+  ) {
+    return
+  }
+  routeDrawerSession += 1
+  editingRoute.value = null
+  routeDrawerModelId.value = modelId
+  routeDrawerOpen.value = true
+}
+
+function openCreateRouteForModel(modelId: number): void {
+  const model = models.value.find((m) => m.id === modelId)
+  if (
+    !catalogReady.value ||
+    loading.value ||
+    model === null ||
     routeSubmitting.value ||
     modelDrawerOpen.value ||
     routeDrawerOpen.value ||
@@ -921,23 +967,39 @@ onBeforeUnmount(() => {
     <div class="panel-toolbar">
       <div>
         <h2 id="model-list-heading">模型列表</h2>
-        <p>共 {{ models.length }} 个模型，选择模型可管理其上游路由</p>
+        <p>共 {{ models.length }} 个模型</p>
       </div>
-      <ElInput
-        v-model="searchText"
-        data-test="model-search"
-        class="model-search"
-        clearable
-        placeholder="搜索显示名称、规范名称或别名"
-        aria-label="搜索模型"
-      >
-        <template #prefix><ElIcon><Search /></ElIcon></template>
-      </ElInput>
+      <div class="toolbar-filters">
+        <select
+          v-model="providerFilter"
+          data-test="provider-filter"
+          class="provider-filter-select"
+        >
+          <option :value="null">全部供应商</option>
+          <option
+            v-for="provider in providers"
+            :key="provider.id"
+            :value="provider.id"
+          >
+            {{ provider.name }}
+          </option>
+        </select>
+        <ElInput
+          v-model="searchText"
+          data-test="model-search"
+          class="model-search"
+          clearable
+          placeholder="搜索显示名称、规范名称或别名"
+          aria-label="搜索模型"
+        >
+          <template #prefix><ElIcon><Search /></ElIcon></template>
+        </ElInput>
+      </div>
     </div>
 
-    <div v-if="loading" class="loading-list" aria-label="正在加载模型">
+    <div v-if="loading" class="loading-grid" aria-label="正在加载模型">
       <ElSkeleton v-for="index in 3" :key="index" animated>
-        <template #template><ElSkeletonItem variant="rect" class="list-skeleton" /></template>
+        <template #template><ElSkeletonItem variant="rect" class="card-skeleton" /></template>
       </ElSkeleton>
     </div>
 
@@ -945,269 +1007,29 @@ onBeforeUnmount(() => {
       <template #extra><ElButton type="primary" @click="load">重新加载</ElButton></template>
     </ElResult>
 
-    <div v-else-if="filteredModels.length > 0" class="table-scroll">
-      <table class="model-table">
-        <thead>
-          <tr>
-            <th scope="col">模型</th>
-            <th scope="col">规范名称</th>
-            <th scope="col">别名</th>
-            <th scope="col">输入价格 / 百万令牌</th>
-            <th scope="col">输出价格 / 百万令牌</th>
-            <th scope="col">路由策略</th>
-            <th scope="col">状态</th>
-            <th scope="col">路由数</th>
-            <th scope="col" class="actions-column">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="model in filteredModels"
-            :key="model.id"
-            :class="{ selected: selectedModelId === model.id }"
-          >
-            <td>
-              <ElButton
-                :data-test="`select-model-${String(model.id)}`"
-                class="model-select"
-                text
-                type="primary"
-                :disabled="!catalogReady || loading || selectionLocked"
-                @click="selectModel(model)"
-              >
-                {{ model.display_name }}
-              </ElButton>
-            </td>
-            <td><code>{{ model.canonical_name }}</code></td>
-            <td>
-              <div class="tag-list">
-                <ElTag
-                  v-for="alias in model.aliases"
-                  :key="alias.id"
-                  :type="alias.enabled ? 'primary' : 'info'"
-                  effect="plain"
-                >
-                  {{ alias.alias }} · {{ alias.enabled ? '已启用' : '已停用' }}
-                </ElTag>
-                <span v-if="model.aliases.length === 0" class="muted">无别名</span>
-              </div>
-            </td>
-            <td class="decimal-value">{{ formatMoney(model.input_price_per_million) }}</td>
-            <td class="decimal-value">{{ formatMoney(model.output_price_per_million) }}</td>
-            <td>加权随机</td>
-            <td :data-test="`model-status-${String(model.id)}`">
-              <StatusTag :status="model.enabled ? 'enabled' : 'disabled'" />
-            </td>
-            <td :data-test="`route-count-${String(model.id)}`">
-              {{ routeCounts.get(model.id) ?? 0 }}
-            </td>
-            <td>
-              <div class="row-actions">
-                <ElButton
-                  :data-test="`edit-model-${String(model.id)}`"
-                  text
-                  :disabled="
-                    !catalogReady ||
-                    loading ||
-                    selectionLocked ||
-                    modelOperations.has(model.id) ||
-                    hasRouteActivity(model.id)
-                  "
-                  @click="openEditModel(model)"
-                >
-                  <ElIcon><Edit /></ElIcon>
-                  编辑
-                </ElButton>
-                <ElButton
-                  :data-test="`delete-model-${String(model.id)}`"
-                  text
-                  type="danger"
-                  :loading="modelOperations.get(model.id) === 'delete'"
-                  :disabled="
-                    !catalogReady ||
-                    loading ||
-                    selectionLocked ||
-                    modelOperations.has(model.id) ||
-                    hasRouteActivity(model.id) ||
-                    nonDeletableModelIds.has(model.id)
-                  "
-                  :title="
-                    nonDeletableModelIds.has(model.id)
-                      ? '该模型已有请求历史，请改为停用'
-                      : undefined
-                  "
-                  @click="removeModel(model)"
-                >
-                  <ElIcon><Delete /></ElIcon>
-                  删除
-                </ElButton>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <div v-else-if="filteredModels.length > 0" class="models-grid">
+      <ModelCard
+        v-for="model in filteredModels"
+        :key="model.id"
+        :data-test="`model-card-${String(model.id)}`"
+        :model="model"
+        :routes="routesByModel.get(model.id) ?? []"
+        :providers="providers"
+        :non-deletable="nonDeletableModelIds.has(model.id)"
+        @edit="openEditModel"
+        @delete="removeModel"
+        @disable="disableModel"
+        @edit-route="openEditRoute"
+        @delete-route="removeRoute"
+        @disable-route="disableRoute"
+        @create-route="openCreateRouteForModel(model.id)"
+      />
     </div>
 
     <ElEmpty
       v-else
-      :description="searchText.trim() === '' ? '暂无模型' : '没有匹配的模型'"
+      :description="searchText.trim() === '' && providerFilter === null ? '暂无模型' : '没有匹配的模型'"
     />
-  </section>
-
-  <section data-test="route-panel" class="route-panel page-card" aria-labelledby="route-heading">
-    <div class="panel-toolbar">
-      <div>
-        <h2 id="route-heading">
-          {{ selectedModel === null ? '模型路由' : `${selectedModel.display_name} 的模型路由` }}
-        </h2>
-        <p v-if="selectedModel">客户端名称会在转发前重写为路由中的提供商原始模型名</p>
-        <p v-else>请先创建或选择一个模型</p>
-      </div>
-      <ElButton
-        data-test="create-route"
-        type="primary"
-        plain
-        :disabled="
-          !catalogReady ||
-          loading ||
-          selectedModel === null ||
-          selectionLocked ||
-          selectedContextBusy
-        "
-        @click="openCreateRoute"
-      >
-        <ElIcon><Plus /></ElIcon>
-        新建路由
-      </ElButton>
-    </div>
-
-    <div v-if="visibleRouteNotice" data-test="route-notice" class="route-notice notice-row">
-      <ElAlert
-        :type="visibleRouteNotice.type"
-        :title="visibleRouteNotice.text"
-        show-icon
-        closable
-        @close="routeNotice = null"
-      />
-      <ElButton
-        v-if="visibleRouteNotice.conflictId !== undefined"
-        :data-test="`disable-route-${String(visibleRouteNotice.conflictId)}`"
-        type="warning"
-        plain
-        :loading="
-          routeOperations.get(visibleRouteNotice.conflictId)?.operation === 'disable'
-        "
-        :disabled="routeOperations.has(visibleRouteNotice.conflictId)"
-        @click="disableRoute(visibleRouteNotice.conflictId, visibleRouteNotice.modelId)"
-      >
-        改为停用
-      </ElButton>
-    </div>
-
-    <div v-if="routesLoading" class="loading-list" aria-label="正在加载模型路由">
-      <ElSkeleton v-for="index in 2" :key="index" animated>
-        <template #template><ElSkeletonItem variant="rect" class="list-skeleton" /></template>
-      </ElSkeleton>
-    </div>
-    <ElResult
-      v-else-if="routeLoadError"
-      icon="error"
-      title="模型路由加载失败"
-      :sub-title="routeLoadError"
-    >
-      <template #extra>
-        <ElButton v-if="selectedModelId !== null" type="primary" @click="loadRoutes(selectedModelId)">
-          重新加载
-        </ElButton>
-      </template>
-    </ElResult>
-    <div v-else-if="modelRoutes.length > 0" class="table-scroll">
-      <table class="route-table">
-        <thead>
-          <tr>
-            <th scope="col">供应商</th>
-            <th scope="col">协议</th>
-            <th scope="col">提供商原始模型名</th>
-            <th scope="col">权重</th>
-            <th scope="col">状态</th>
-            <th scope="col">来源</th>
-            <th scope="col">运行状态</th>
-            <th scope="col">连续失败</th>
-            <th scope="col">禁用至</th>
-            <th scope="col">最近错误</th>
-            <th scope="col" class="actions-column">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="route in modelRoutes" :key="route.id">
-            <td>{{ providerName(route.provider_id) }}</td>
-            <td>{{ protocolName(route.provider_id, route.provider_protocol_id) }}</td>
-            <td><code>{{ route.upstream_model }}</code></td>
-            <td>{{ route.weight }}</td>
-            <td :data-test="`route-status-${String(route.id)}`">
-              <StatusTag :status="route.enabled ? 'enabled' : 'disabled'" />
-            </td>
-            <td>
-              <ElTag :type="route.source === 'discovered' ? 'primary' : 'info'" effect="plain">
-                {{ sourceLabels[route.source] }}
-              </ElTag>
-            </td>
-            <td>
-              <ElTag :type="runtimeDetails[route.runtime_state].type" effect="light">
-                {{ runtimeDetails[route.runtime_state].label }}
-              </ElTag>
-            </td>
-            <td>{{ route.consecutive_failures }}</td>
-            <td>{{ formatDate(route.disabled_until) }}</td>
-            <td>
-              <span v-if="route.last_error_code" :title="formatDate(route.last_error_at)">
-                {{ route.last_error_code }}
-              </span>
-              <span v-else>—</span>
-            </td>
-            <td>
-              <div class="row-actions">
-                <ElButton
-                  :data-test="`edit-route-${String(route.id)}`"
-                  text
-                  :disabled="
-                    selectionLocked ||
-                    modelOperations.has(route.model_id) ||
-                    routeOperations.has(route.id)
-                  "
-                  @click="openEditRoute(route)"
-                >
-                  <ElIcon><Edit /></ElIcon>
-                  编辑
-                </ElButton>
-                <ElButton
-                  :data-test="`delete-route-${String(route.id)}`"
-                  text
-                  type="danger"
-                  :loading="routeOperations.get(route.id)?.operation === 'delete'"
-                  :disabled="
-                    selectionLocked ||
-                    modelOperations.has(route.model_id) ||
-                    routeOperations.has(route.id) ||
-                    nonDeletableRouteIds.has(route.id)
-                  "
-                  :title="
-                    nonDeletableRouteIds.has(route.id)
-                      ? '该路由已有请求历史，请改为停用'
-                      : undefined
-                  "
-                  @click="removeRoute(route)"
-                >
-                  <ElIcon><Delete /></ElIcon>
-                  删除
-                </ElButton>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <ElEmpty v-else :description="selectedModel === null ? '尚未选择模型' : '暂无模型路由'" />
   </section>
 
   <ModelFormDrawer
@@ -1219,7 +1041,7 @@ onBeforeUnmount(() => {
   />
   <RouteFormDrawer
     :model-value="routeDrawerOpen"
-    :model="selectedModel"
+    :model="models.find((m) => m.id === routeDrawerModelId) ?? null"
     :route="editingRoute"
     :providers="providers"
     :submitting="routeSubmitting"
@@ -1240,13 +1062,8 @@ onBeforeUnmount(() => {
   flex: 1;
 }
 
-.model-panel,
-.route-panel {
+.model-panel {
   overflow: hidden;
-}
-
-.route-panel {
-  margin-top: 1.25rem;
 }
 
 .panel-toolbar {
@@ -1274,68 +1091,49 @@ onBeforeUnmount(() => {
   font-size: 0.875rem;
 }
 
+.toolbar-filters {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.provider-filter-select {
+  width: 15rem;
+  height: 2rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--gateway-border);
+  border-radius: 4px;
+  background: var(--gateway-panel);
+  color: var(--gateway-text);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.provider-filter-select:focus {
+  outline: none;
+  border-color: var(--gateway-brand);
+}
+
 .model-search {
   width: min(100%, 25rem);
 }
 
-.loading-list {
+.loading-grid {
   display: grid;
-  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 1rem;
   padding: 1.25rem;
 }
 
-.list-skeleton {
-  height: 3.5rem;
+.card-skeleton {
+  height: 250px;
 }
 
-.table-scroll {
-  overflow-x: auto;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.model-table {
-  min-width: 94rem;
-}
-
-.route-table {
-  min-width: 105rem;
-}
-
-th,
-td {
-  padding: 0.9rem 1rem;
-  text-align: left;
-  vertical-align: middle;
-  border-bottom: 1px solid var(--gateway-border);
-}
-
-th {
-  color: var(--gateway-muted);
-  font-size: 0.8rem;
-  font-weight: 600;
-  background: #f8fafc;
-}
-
-tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-tbody tr:hover,
-tbody tr.selected {
-  background: #f8fafc;
-}
-
-tbody tr.selected td:first-child {
-  box-shadow: inset 3px 0 var(--gateway-brand);
-}
-
-.model-select {
-  padding: 0;
-  font-weight: 600;
+.models-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 1rem;
+  padding: 1.25rem;
 }
 
 code,
@@ -1364,11 +1162,6 @@ code,
   width: 12rem;
 }
 
-.route-notice {
-  padding: 1rem 1.25rem 0;
-  margin-bottom: 0;
-}
-
 @media (max-width: 640px) {
   .panel-toolbar,
   .notice-row {
@@ -1376,8 +1169,18 @@ code,
     flex-direction: column;
   }
 
+  .toolbar-filters {
+    flex-direction: column;
+  }
+
+  .provider-filter,
   .model-search {
     width: 100%;
+  }
+
+  .loading-grid,
+  .models-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

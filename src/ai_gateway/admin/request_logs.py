@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
@@ -10,14 +10,17 @@ from uuid import UUID
 import orjson
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel
-from sqlalchemy import Select, and_, or_, select
+from sqlalchemy import Select, and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.audit.codec import gunzip_json
 from ai_gateway.auth.dependencies import admin_user
 from ai_gateway.auth.service import raise_auth_error
+from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import Protocol, RequestStatus, UsageSource
-from ai_gateway.db.models import RequestLog, User
+from ai_gateway.db.models import RequestLog
+from ai_gateway.db.models import RequestLogDetail as RequestLogDetailRecord
+from ai_gateway.db.models import User
 from ai_gateway.db.session import get_session
 
 router = APIRouter(prefix="/admin/request-logs", tags=["admin-request-logs"])
@@ -159,16 +162,17 @@ async def get_request_log(
             "request_log_not_found",
             "Request log not found",
         )
+    detail_record = await session.get(RequestLogDetailRecord, str(request_id))
     return RequestLogDetail(
         **_summary_values(request_log),
         request_detail=(
-            gunzip_json(request_log.request_detail_gzip)
-            if request_log.request_detail_gzip is not None
+            gunzip_json(detail_record.request_detail_gzip)
+            if detail_record and detail_record.request_detail_gzip is not None
             else None
         ),
         response_detail=(
-            gunzip_json(request_log.response_detail_gzip)
-            if request_log.response_detail_gzip is not None
+            gunzip_json(detail_record.response_detail_gzip)
+            if detail_record and detail_record.response_detail_gzip is not None
             else None
         ),
     )
@@ -243,3 +247,33 @@ def _decode_cursor(cursor: str) -> tuple[datetime, str]:
             "Request log cursor is invalid",
         )
     return _database_datetime(created_at), request_id
+
+
+class CleanupResponse(BaseModel):
+    deleted_count: int
+
+
+@router.post("/cleanup", response_model=CleanupResponse)
+async def cleanup_audit_details(
+    session: Session,
+    _: AdminUser,
+    settings: Annotated[Settings, Depends(get_settings)],
+    retention_days: int | None = None,
+) -> CleanupResponse:
+    """手动清理过期的审计日志详情记录"""
+    days = retention_days if retention_days is not None else settings.audit_log_retention_days
+    if days < 0:
+        raise_auth_error(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "invalid_retention_days",
+            "retention_days must be non-negative",
+        )
+    if days == 0:
+        return CleanupResponse(deleted_count=0)
+
+    cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
+    result = await session.execute(
+        delete(RequestLogDetailRecord).where(RequestLogDetailRecord.created_at < cutoff)
+    )
+    await session.commit()
+    return CleanupResponse(deleted_count=result.rowcount)

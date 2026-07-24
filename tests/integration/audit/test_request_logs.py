@@ -36,6 +36,7 @@ from ai_gateway.db.models import (
     Provider,
     ProviderProtocol,
     RequestLog,
+    RequestLogDetail,
     User,
 )
 from ai_gateway.db.session import get_session
@@ -169,13 +170,15 @@ async def test_request_lifecycle_writes_started_completion_and_redacted_details(
 
     request_id = await service.start_request(context, request_body)
     started = await session.get(RequestLog, str(request_id))
+    started_detail = await session.get(RequestLogDetail, str(request_id))
 
     assert started is not None
     assert started.status is RequestStatus.STARTED
     assert started.provider_id is None
     assert started.completed_at is None
-    assert started.request_detail_gzip is not None
-    request_detail = gunzip_json(started.request_detail_gzip)
+    assert started_detail is not None
+    assert started_detail.request_detail_gzip is not None
+    request_detail = gunzip_json(started_detail.request_detail_gzip)
     assert request_detail == {
         "body": {
             "api_key": "[REDACTED]",
@@ -202,6 +205,7 @@ async def test_request_lifecycle_writes_started_completion_and_redacted_details(
         ),
     )
     await session.refresh(started)
+    await session.refresh(started_detail)
 
     assert started.status is RequestStatus.COMPLETED
     assert started.provider_id == provider.id
@@ -215,8 +219,8 @@ async def test_request_lifecycle_writes_started_completion_and_redacted_details(
     assert started.latency_ms == 321
     assert started.first_token_ms == 87
     assert started.completed_at is not None
-    assert started.response_detail_gzip is not None
-    assert gunzip_json(started.response_detail_gzip) == {
+    assert started_detail.response_detail_gzip is not None
+    assert gunzip_json(started_detail.response_detail_gzip) == {
         "body": {"access_token": "[REDACTED]", "result": "ok"},
         "headers": {"Content-Type": "application/json"},
     }
@@ -262,13 +266,15 @@ async def test_failure_lifecycle_distinguishes_upstream_error_and_disconnect(
         ),
     )
     stored = await session.get(RequestLog, str(request_id))
+    stored_detail = await session.get(RequestLogDetail, str(request_id))
 
     assert stored is not None
     assert stored.status is expected_status
     assert stored.error_code == "upstream_timeout"
     assert stored.completed_at is not None
-    assert stored.response_detail_gzip is not None
-    assert gunzip_json(stored.response_detail_gzip)["body"]["password"] == "[REDACTED]"
+    assert stored_detail is not None
+    assert stored_detail.response_detail_gzip is not None
+    assert gunzip_json(stored_detail.response_detail_gzip)["body"]["password"] == "[REDACTED]"
 
 
 async def test_audit_write_failure_is_logged_and_not_raised(
@@ -364,15 +370,17 @@ async def test_unparseable_request_bodies_store_only_safe_metadata(
         body,
     )
     stored = await session.get(RequestLog, str(request_id))
+    stored_detail = await session.get(RequestLogDetail, str(request_id))
 
     assert stored is not None
-    assert stored.request_detail_gzip is not None
-    uncompressed = gzip.decompress(stored.request_detail_gzip)
-    detail = gunzip_json(stored.request_detail_gzip)
+    assert stored_detail is not None
+    assert stored_detail.request_detail_gzip is not None
+    uncompressed = gzip.decompress(stored_detail.request_detail_gzip)
+    detail = gunzip_json(stored_detail.request_detail_gzip)
     assert detail["body"]["unparseable"] is True
     assert detail["body"]["byte_length"] == len(body)
     assert "sha256" in detail["body"]
-    assert secret not in stored.request_detail_gzip
+    assert secret not in stored_detail.request_detail_gzip
     assert secret not in uncompressed
     assert secret.decode() not in str(detail)
     assert secret.decode() not in caplog.text
@@ -416,11 +424,13 @@ async def test_dataclass_and_pydantic_bodies_are_normalized_then_redacted(
 
     await service.complete_request(request_id, RequestResult(http_status=200, body=body))
     stored = await session.get(RequestLog, str(request_id))
+    stored_detail = await session.get(RequestLogDetail, str(request_id))
 
     assert stored is not None
-    assert stored.response_detail_gzip is not None
-    uncompressed = gzip.decompress(stored.response_detail_gzip)
-    detail = gunzip_json(stored.response_detail_gzip)
+    assert stored_detail is not None
+    assert stored_detail.response_detail_gzip is not None
+    uncompressed = gzip.decompress(stored_detail.response_detail_gzip)
+    detail = gunzip_json(stored_detail.response_detail_gzip)
     assert detail["body"] == {
         "password": "[REDACTED]",
         "nested": {
@@ -429,7 +439,7 @@ async def test_dataclass_and_pydantic_bodies_are_normalized_then_redacted(
         },
     }
     for secret in (b"mapping-secret", b"pydantic-secret", b"dataclass-secret"):
-        assert secret not in stored.response_detail_gzip
+        assert secret not in stored_detail.response_detail_gzip
         assert secret not in uncompressed
         assert secret.decode() not in caplog.text
 
@@ -507,11 +517,13 @@ async def test_custom_app_binds_module_audit_lifecycle_to_its_own_configuration(
     request_id = response.json()["id"]
     async with session_factory() as check_session:
         stored = await check_session.get(RequestLog, request_id)
+        stored_detail = await check_session.get(RequestLogDetail, str(request_id))
         assert stored is not None
-        assert stored.request_detail_gzip is not None
-        assert stored.response_detail_gzip is not None
-        assert gunzip_json(stored.request_detail_gzip)["truncated"] is True
-        assert gunzip_json(stored.response_detail_gzip)["truncated"] is True
+        assert stored_detail is not None
+        assert stored_detail.request_detail_gzip is not None
+        assert stored_detail.response_detail_gzip is not None
+        assert gunzip_json(stored_detail.request_detail_gzip)["truncated"] is True
+        assert gunzip_json(stored_detail.response_detail_gzip)["truncated"] is True
         assert await check_session.get(RequestLog, str(outside_request_id)) is None
         await check_session.execute(delete(RequestLog).where(RequestLog.id == request_id))
         await check_session.execute(delete(Account).where(Account.user_id == user_id))

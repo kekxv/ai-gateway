@@ -21,7 +21,7 @@ from ai_gateway.audit.codec import DEFAULT_AUDIT_BODY_LIMIT_BYTES, gzip_json
 from ai_gateway.audit.redaction import redact_headers, redact_json
 from ai_gateway.core.config import get_settings
 from ai_gateway.core.enums import Protocol, RequestStatus, UsageSource
-from ai_gateway.db.models import RequestLog
+from ai_gateway.db.models import RequestLog, RequestLogDetail
 from ai_gateway.db.session import get_session_factory
 
 logger = logging.getLogger(__name__)
@@ -112,6 +112,8 @@ class AuditService:
         request_id = request_id or uuid4()
         try:
             detail = _detail(headers=context.headers, body=body, metadata=context.metadata)
+            request_detail_gzip = gzip_json(detail, limit_bytes=self._body_limit_bytes)
+            now = self._clock()
             async with self._session_factory() as session:
                 session.add(
                     RequestLog(
@@ -123,10 +125,13 @@ class AuditService:
                         transport=context.transport,
                         stream=context.stream,
                         status=RequestStatus.STARTED,
-                        request_detail_gzip=gzip_json(
-                            detail,
-                            limit_bytes=self._body_limit_bytes,
-                        ),
+                    )
+                )
+                session.add(
+                    RequestLogDetail(
+                        id=str(request_id),
+                        request_detail_gzip=request_detail_gzip,
+                        created_at=now,
                     )
                 )
                 await session.commit()
@@ -223,10 +228,15 @@ class AuditService:
                         latency_ms=latency_ms,
                         first_token_ms=first_token_ms,
                         error_code=error_code,
-                        response_detail_gzip=response_detail_gzip,
                         completed_at=self._clock(),
                     )
                 )
+                if response_detail_gzip is not None:
+                    await session.execute(
+                        update(RequestLogDetail)
+                        .where(RequestLogDetail.id == str(request_id))
+                        .values(response_detail_gzip=response_detail_gzip)
+                    )
                 await session.commit()
         except Exception as exc:
             _log_write_failure("finish", request_id, exc, status=status)

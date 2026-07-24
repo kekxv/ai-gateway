@@ -42,6 +42,7 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
 import ModelSyncDialog from '@/components/providers/ModelSyncDialog.vue'
+import ProviderCard from '@/components/providers/ProviderCard.vue'
 
 type NoticeType = 'success' | 'warning' | 'error'
 type ProviderOperation = 'edit' | 'sync' | 'delete'
@@ -432,92 +433,18 @@ onBeforeUnmount(() => {
       </template>
     </ElResult>
 
-    <div v-else-if="filteredProviders.length > 0" class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">名称</th>
-            <th scope="col">状态</th>
-            <th scope="col">协议</th>
-            <th scope="col">模型同步</th>
-            <th scope="col">上次同步</th>
-            <th scope="col">同步间隔</th>
-            <th scope="col" class="actions-column">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="provider in filteredProviders" :key="provider.id">
-            <td>
-              <strong>{{ provider.name }}</strong>
-            </td>
-            <td>
-              <StatusTag :status="provider.enabled ? 'enabled' : 'disabled'" />
-            </td>
-            <td>
-              <div class="protocol-list">
-                <ElTag
-                  v-for="protocol in provider.protocols"
-                  :key="protocol.id"
-                  :type="protocol.enabled ? 'primary' : 'info'"
-                  effect="plain"
-                  :title="protocol.base_url"
-                >
-                  {{ protocolLabels[protocol.protocol] }}
-                </ElTag>
-                <span v-if="provider.protocols.length === 0" class="muted">未配置</span>
-              </div>
-            </td>
-            <td>
-              <StatusTag
-                :status="provider.auto_load_models ? 'healthy' : 'disabled'"
-                :label="provider.auto_load_models ? '自动同步' : '手动同步'"
-              />
-            </td>
-            <td>{{ formatSyncTime(provider.last_model_sync_at) }}</td>
-            <td>{{ formatInterval(provider.model_sync_interval_seconds) }}</td>
-            <td>
-              <div class="row-actions">
-                <ElButton
-                  :data-test="`sync-provider-${String(provider.id)}`"
-                  text
-                  type="primary"
-                  :loading="providerOperations.get(provider.id) === 'sync'"
-                  :disabled="providerOperations.has(provider.id)"
-                  @click="openSyncDialog(provider)"
-                >
-                  <ElIcon><Refresh /></ElIcon>
-                  同步
-                </ElButton>
-                <ElButton
-                  :data-test="`edit-provider-${String(provider.id)}`"
-                  text
-                  :disabled="providerOperations.has(provider.id) || drawerOpen"
-                  @click="openEdit(provider)"
-                >
-                  <ElIcon><Edit /></ElIcon>
-                  编辑
-                </ElButton>
-                <ElButton
-                  :data-test="`delete-provider-${String(provider.id)}`"
-                  text
-                  type="danger"
-                  :loading="providerOperations.get(provider.id) === 'delete'"
-                  :disabled="providerOperations.has(provider.id) || nonDeletableIds.has(provider.id)"
-                  :title="
-                    nonDeletableIds.has(provider.id)
-                      ? '该供应商已有请求历史，请改为停用'
-                      : undefined
-                  "
-                  @click="removeProvider(provider)"
-                >
-                  <ElIcon><Delete /></ElIcon>
-                  删除
-                </ElButton>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <div v-else-if="filteredProviders.length > 0" class="providers-grid">
+      <ProviderCard
+        v-for="provider in filteredProviders"
+        :key="provider.id"
+        :data-test="`provider-card-${String(provider.id)}`"
+        :provider="provider"
+        :loading="providerOperations.has(provider.id)"
+        :non-deletable="nonDeletableIds.has(provider.id)"
+        @edit="openEdit"
+        @delete="removeProvider"
+        @sync="openSyncDialog"
+      />
     </div>
 
     <ElEmpty
@@ -583,65 +510,20 @@ onBeforeUnmount(() => {
 
 .provider-loading {
   display: grid;
-  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 1rem;
   padding: 1.25rem;
 }
 
 .provider-skeleton {
-  height: 3.5rem;
+  height: 200px;
 }
 
-.table-scroll {
-  overflow-x: auto;
-}
-
-table {
-  width: 100%;
-  min-width: 70rem;
-  border-collapse: collapse;
-}
-
-th,
-td {
-  padding: 0.95rem 1rem;
-  text-align: left;
-  vertical-align: middle;
-  border-bottom: 1px solid var(--gateway-border);
-}
-
-th {
-  color: var(--gateway-muted);
-  font-size: 0.8rem;
-  font-weight: 600;
-  background: #f8fafc;
-}
-
-tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-tbody tr:hover {
-  background: #f8fafc;
-}
-
-.actions-column {
-  width: 16rem;
-}
-
-.protocol-list,
-.row-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  align-items: center;
-}
-
-.row-actions {
-  flex-wrap: nowrap;
-}
-
-.row-actions :deep(.el-button + .el-button) {
-  margin-left: 0;
+.providers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 1rem;
+  padding: 1.25rem;
 }
 
 @media (max-width: 640px) {
@@ -652,6 +534,11 @@ tbody tr:hover {
 
   .provider-search {
     width: 100%;
+  }
+
+  .provider-loading,
+  .providers-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

@@ -27,6 +27,7 @@ from ai_gateway.db.models import (
     Provider,
     ProviderProtocol,
     RequestLog,
+    RequestLogDetail,
     User,
 )
 
@@ -136,10 +137,14 @@ def test_schema_contains_exact_tables_and_columns() -> None:
             "latency_ms",
             "first_token_ms",
             "error_code",
+            "created_at",
+            "completed_at",
+        },
+        "request_log_details": {
+            "id",
             "request_detail_gzip",
             "response_detail_gzip",
             "created_at",
-            "completed_at",
         },
     }
 
@@ -164,6 +169,7 @@ async def test_mysql_reflection_preserves_security_and_decimal_column_types(
                     "models",
                     "providers",
                     "provider_protocols",
+                    "request_log_details",
                     "request_logs",
                 )
             }
@@ -185,8 +191,8 @@ async def test_mysql_reflection_preserves_security_and_decimal_column_types(
     for table, column in (
         ("providers", "credential_encrypted"),
         ("provider_protocols", "extra_headers_encrypted"),
-        ("request_logs", "request_detail_gzip"),
-        ("request_logs", "response_detail_gzip"),
+        ("request_log_details", "request_detail_gzip"),
+        ("request_log_details", "response_detail_gzip"),
     ):
         assert isinstance(reflected[table][column], LONGBLOB)
 
@@ -342,5 +348,6 @@ assert all(
         Account,
         LedgerEntry,
         RequestLog,
+        RequestLogDetail,
     )
 )

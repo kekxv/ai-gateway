@@ -100,7 +100,7 @@ async def test_startup_checks_connectivity_and_required_migration_head() -> None
     assert current.statements == ["SELECT 1", "SELECT version_num FROM alembic_version"]
 
     outdated = StubConnection({"0003"})
-    with pytest.raises(RuntimeError, match="0004"):
+    with pytest.raises(RuntimeError, match="0005"):
         await verify_database(cast(AsyncEngine, StubEngine(outdated)))
 
     unavailable = StubConnection(set(), error=SQLAlchemyError("database down"))
@@ -122,7 +122,7 @@ async def test_non_production_startup_still_requires_current_migration_head(
     monkeypatch.setattr(main_module, "get_engine_for_url", lambda _: cast(AsyncEngine, engine))
     app = create_app(runtime_settings(environment="development"))
 
-    with pytest.raises(RuntimeError, match="0004"):
+    with pytest.raises(RuntimeError, match="0005"):
         async with app.router.lifespan_context(app):
             pytest.fail("development startup accepted an outdated migration")
 
