@@ -7,7 +7,8 @@ from typing import Annotated
 from typing import Protocol as TypingProtocol
 
 import httpx
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Body, Depends, Request, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,8 +49,53 @@ class SyncProviderNotFoundError(LookupError):
     pass
 
 
+class DiscoverModelsRequest(BaseModel):
+    models: list[str] | None = Field(
+        default=None,
+        description="Only sync these models. If null/empty, sync all discovered models.",
+    )
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+@router.get("/{provider_id}/discover-models")
+async def discover_provider_models_endpoint(
+    provider_id: int,
+    request: Request,
+    session: Session,
+    _: AdminUser,
+    settings: AppSettings,
+) -> dict[str, list[str]]:
+    """Discover available models from the provider without writing to the database."""
+    http_client_factory = getattr(request.app.state, "http_client_factory", None)
+    if http_client_factory is None:
+        raise_auth_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "model_discovery_unavailable",
+            "Model discovery is unavailable",
+        )
+    try:
+        models_by_protocol = await discover_provider_models(
+            provider_id,
+            session=session,
+            http_client_factory=http_client_factory,
+            settings=settings,
+        )
+        return models_by_protocol
+    except SyncProviderNotFoundError:
+        raise_auth_error(
+            status.HTTP_404_NOT_FOUND,
+            "provider_not_found",
+            "Provider not found",
+        )
+    except (httpx.HTTPError, ValueError, RuntimeError):
+        raise_auth_error(
+            status.HTTP_502_BAD_GATEWAY,
+            "model_discovery_failed",
+            "Provider model discovery failed",
+        )
 
 
 @router.post("/{provider_id}/sync-models", response_model=ModelSyncResult)
@@ -59,6 +105,7 @@ async def sync_provider_models_endpoint(
     session: Session,
     _: AdminUser,
     settings: AppSettings,
+    body: DiscoverModelsRequest = Body(default=None),
 ) -> ModelSyncResult:
     http_client_factory = getattr(request.app.state, "http_client_factory", None)
     if http_client_factory is None:
@@ -67,12 +114,14 @@ async def sync_provider_models_endpoint(
             "model_discovery_unavailable",
             "Model discovery is unavailable",
         )
+    selected_models = body.models if body is not None else None
     try:
         return await sync_provider_models(
             provider_id,
             session=session,
             http_client_factory=http_client_factory,
             settings=settings,
+            selected_models=selected_models,
         )
     except SyncProviderNotFoundError:
         raise_auth_error(
@@ -88,6 +137,34 @@ async def sync_provider_models_endpoint(
         )
 
 
+async def discover_provider_models(
+    provider_id: int,
+    *,
+    session: AsyncSession,
+    http_client_factory: HttpClientProvider,
+    settings: Settings,
+) -> dict[str, list[str]]:
+    """Discover models from all enabled protocols, returning {protocol_name: [model_names]}."""
+    provider = await session.scalar(
+        select(Provider).where(Provider.id == provider_id).options(selectinload(Provider.protocols))
+    )
+    if provider is None:
+        raise SyncProviderNotFoundError(provider_id)
+
+    enabled_protocols = [protocol for protocol in provider.protocols if protocol.enabled]
+    result: dict[str, list[str]] = {}
+    for provider_protocol in enabled_protocols:
+        url = discovery_url(provider_protocol)
+        client = await http_client_factory.client_for(url)
+        models = await discover_models(
+            provider_protocol,
+            client=client,
+            settings=settings,
+        )
+        result[provider_protocol.protocol.value] = models
+    return result
+
+
 async def sync_provider_models(
     provider_id: int,
     *,
@@ -95,8 +172,12 @@ async def sync_provider_models(
     http_client_factory: HttpClientProvider,
     settings: Settings,
     clock: Clock = _utcnow,
+    selected_models: list[str] | None = None,
 ) -> ModelSyncResult:
-    """Synchronize one provider after every enabled protocol discovers successfully."""
+    """Synchronize one provider after every enabled protocol discovers successfully.
+
+    If selected_models is provided, only sync those specific models.
+    """
 
     provider = await session.scalar(
         select(Provider).where(Provider.id == provider_id).options(selectinload(Provider.protocols))
@@ -109,11 +190,15 @@ async def sync_provider_models(
     for provider_protocol in enabled_protocols:
         url = discovery_url(provider_protocol)
         client = await http_client_factory.client_for(url)
-        discovered_by_protocol[provider_protocol.id] = await discover_models(
+        discovered = await discover_models(
             provider_protocol,
             client=client,
             settings=settings,
         )
+        # Filter to selected models if specified
+        if selected_models:
+            discovered = [m for m in discovered if m in selected_models]
+        discovered_by_protocol[provider_protocol.id] = discovered
 
     for attempt in range(_SYNC_WRITE_ATTEMPTS):
         try:
@@ -122,6 +207,7 @@ async def sync_provider_models(
                 discovered_by_protocol=discovered_by_protocol,
                 session=session,
                 clock=clock,
+                selected_models=selected_models,
             )
         except IntegrityError:
             await session.rollback()
@@ -136,6 +222,7 @@ async def _apply_discovered_models(
     discovered_by_protocol: dict[int, list[str]],
     session: AsyncSession,
     clock: Clock,
+    selected_models: list[str] | None = None,
 ) -> ModelSyncResult:
     provider = await session.get(Provider, provider_id)
     if provider is None:
@@ -202,11 +289,14 @@ async def _apply_discovered_models(
                 route.enabled = True
 
     disabled_routes = 0
-    for route in existing_routes:
-        key = (route.provider_protocol_id, route.model_id)
-        if route.source is RouteSource.DISCOVERED and key not in seen_route_keys and route.enabled:
-            route.enabled = False
-            disabled_routes += 1
+    # Only disable routes for models that were discovered but not selected
+    # If selected_models is provided, don't disable existing routes for non-selected models
+    if selected_models is None:
+        for route in existing_routes:
+            key = (route.provider_protocol_id, route.model_id)
+            if route.source is RouteSource.DISCOVERED and key not in seen_route_keys and route.enabled:
+                route.enabled = False
+                disabled_routes += 1
 
     provider.last_model_sync_at = clock()
     await session.commit()

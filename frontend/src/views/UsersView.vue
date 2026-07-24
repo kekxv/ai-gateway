@@ -45,6 +45,7 @@ import BalanceDialog from '@/components/users/BalanceDialog.vue'
 import LedgerDrawer from '@/components/users/LedgerDrawer.vue'
 import UserFormDrawer from '@/components/users/UserFormDrawer.vue'
 import { useAuthStore } from '@/stores/auth'
+import { formatMoney } from '@/utils/format'
 
 type NoticeType = 'success' | 'warning' | 'error'
 type UserOperation = 'edit' | 'adjust' | 'ledger' | 'delete'
@@ -314,7 +315,7 @@ async function saveBalance(payload: BalanceAdjustmentCreate): Promise<void> {
     finishUserOperation(userId, 'adjust')
     notice.value = {
       type: 'success',
-      text: `余额调整成功：当前余额 ${result.balance}，累计消费 ${result.total_spent}`,
+      text: `余额调整成功：当前余额 ${formatMoney(result.balance)}，累计消费 ${formatMoney(result.total_spent)}`,
     }
   } catch (error: unknown) {
     if (isCurrentBalanceSave(controller, token, session, userId)) {
@@ -538,8 +539,8 @@ onBeforeUnmount(() => {
                 {{ user.is_active ? '启用' : '停用' }}
               </ElTag>
             </td>
-            <td class="money-cell">{{ user.balance }}</td>
-            <td class="money-cell">{{ user.total_spent }}</td>
+            <td class="money-cell">{{ formatMoney(user.balance) }}</td>
+            <td class="money-cell">{{ formatMoney(user.total_spent) }}</td>
             <td>{{ formatTime(user.created_at) }}</td>
             <td>{{ formatTime(user.updated_at) }}</td>
             <td>

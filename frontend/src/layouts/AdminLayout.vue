@@ -193,15 +193,15 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .admin-shell {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .admin-sidebar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  height: 100vh;
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
   background: var(--gateway-panel);
   border-right: 1px solid var(--gateway-border);
   transition: width 180ms ease;
@@ -210,6 +210,7 @@ onBeforeUnmount(() => {
 .brand {
   display: flex;
   height: 64px;
+  flex-shrink: 0;
   gap: 0.75rem;
   align-items: center;
   padding: 0 1rem;
@@ -229,8 +230,9 @@ onBeforeUnmount(() => {
   place-items: center;
   color: #fff;
   font-weight: 700;
-  background: var(--gateway-brand);
+  background: linear-gradient(135deg, var(--gateway-brand) 0%, #3b82f6 100%);
   border-radius: 0.55rem;
+  box-shadow: 0 2px 8px rgb(37 99 235 / 25%);
 }
 
 .brand__name {
@@ -240,6 +242,7 @@ onBeforeUnmount(() => {
 }
 
 .admin-menu {
+  flex: 1;
   border-right: 0;
 }
 
@@ -259,11 +262,15 @@ onBeforeUnmount(() => {
 }
 
 .admin-workspace {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  overflow: hidden;
 }
 
 .admin-header {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: flex-end;
   background: rgb(255 255 255 / 92%);
@@ -290,7 +297,10 @@ onBeforeUnmount(() => {
 }
 
 .admin-main {
+  flex: 1;
   padding: 1.5rem;
+  overflow-y: auto;
+  background: var(--gateway-bg);
 }
 
 @media (max-width: 767px) {

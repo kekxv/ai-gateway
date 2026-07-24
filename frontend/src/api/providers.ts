@@ -40,14 +40,28 @@ export async function deleteProvider(providerId: number, signal?: AbortSignal): 
   await apiClient.delete(`/admin/providers/${String(providerId)}`, config)
 }
 
+export async function discoverProviderModels(
+  providerId: number,
+  signal?: AbortSignal,
+): Promise<Record<string, string[]>> {
+  const config = signal === undefined ? undefined : { signal }
+  const { data } = await apiClient.get<Record<string, string[]>>(
+    `/admin/providers/${String(providerId)}/discover-models`,
+    config,
+  )
+  return data
+}
+
 export async function syncProviderModels(
   providerId: number,
+  models?: string[] | null,
   signal?: AbortSignal,
 ): Promise<ModelSyncResult> {
   const config = signal === undefined ? undefined : { signal }
+  const payload = models !== undefined && models !== null ? { models } : undefined
   const { data } = await apiClient.post<ModelSyncResult>(
     `/admin/providers/${String(providerId)}/sync-models`,
-    undefined,
+    payload,
     config,
   )
   return data

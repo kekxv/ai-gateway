@@ -10,6 +10,7 @@ import 'element-plus/theme-chalk/el-input.css'
 import 'element-plus/theme-chalk/el-overlay.css'
 
 import type { BalanceAdjustmentCreate, UserResponse } from '@/api/types'
+import { formatMoney } from '@/utils/format'
 
 const props = defineProps<{
   modelValue: boolean
@@ -126,7 +127,7 @@ function submitForm(): void {
     <template #header>
       <div>
         <h2 class="dialog-heading">调整余额</h2>
-        <p class="dialog-description">{{ user?.email }} · 当前余额 {{ user?.balance }}</p>
+        <p class="dialog-description">{{ user?.email }} · 当前余额 {{ formatMoney(user?.balance ?? '0') }}</p>
       </div>
     </template>
 

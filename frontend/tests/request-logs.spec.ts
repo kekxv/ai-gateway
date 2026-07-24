@@ -212,7 +212,7 @@ describe('请求日志搜索与详情检查', () => {
     wrapper.unmount()
   })
 
-  it('展示全部审计列并保持 Decimal cost 原字符串', async () => {
+  it('展示全部审计列并格式化显示 Decimal cost', async () => {
     const wrapper = await mountLogs()
 
     for (const heading of [
@@ -227,7 +227,7 @@ describe('请求日志搜索与详情检查', () => {
     expect(row.text()).toContain('模型 #21 / 供应商 #11 / 路由 #201')
     expect(row.text()).toContain('claude → openai')
     expect(row.text()).toContain('http / 是')
-    expect(row.text()).toContain(firstLog.cost)
+    expect(row.text()).toContain(`¥${firstLog.cost}`)
     expect(row.text()).toContain('1234 / 56')
     wrapper.unmount()
   })

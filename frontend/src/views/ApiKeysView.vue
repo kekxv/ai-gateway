@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Delete, Edit, Key, Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Delete, Document, Edit, Key, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import {
   ElAlert,
   ElButton,
@@ -11,6 +11,8 @@ import {
   ElResult,
   ElSkeleton,
   ElSkeletonItem,
+  ElTabPane,
+  ElTabs,
   ElTag,
 } from 'element-plus'
 import 'element-plus/theme-chalk/el-alert.css'
@@ -22,6 +24,7 @@ import 'element-plus/theme-chalk/el-overlay.css'
 import 'element-plus/theme-chalk/el-result.css'
 import 'element-plus/theme-chalk/el-skeleton.css'
 import 'element-plus/theme-chalk/el-skeleton-item.css'
+import 'element-plus/theme-chalk/el-tabs.css'
 import 'element-plus/theme-chalk/el-tag.css'
 
 import {
@@ -68,6 +71,11 @@ const secretOpen = ref(false)
 const oneTimeSecret = ref<string | null>(null)
 const secretOperationActive = ref(false)
 const keyOperations = ref(new Map<number, KeyOperation>())
+const examplesOpen = ref(false)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const examplesTab = ref<any>('openai')
+
+const baseUrl = window.location.origin
 
 const deletedIds = new Set<number>()
 const operationControllers = new Set<AbortController>()
@@ -86,6 +94,195 @@ const scopeLabels: Readonly<Record<ApiKeyScope, string>> = {
   providers: '指定供应商',
   models: '指定模型',
   providers_and_models: '指定供应商和模型',
+}
+
+const testApiKey = ref('')
+const testMessage = ref('你好，请用一句话介绍自己。')
+const testModel = ref('')
+const testChatLoading = ref(false)
+const testChatResult = ref<{ success: boolean; message: string } | null>(null)
+let testChatController: AbortController | null = null
+
+const availableModelNames = computed(() =>
+  models.value.map((m) => m.canonical_name),
+)
+
+const curlExamples = computed(() => {
+  const key = testApiKey.value.trim() || 'sk-gw-YOUR_API_KEY'
+  const base = baseUrl
+  const model = testModel.value || 'gpt-4'
+  const message = testMessage.value || 'Hello!'
+  const escapedMessage = message.replace(/'/g, "\\'")
+
+  return {
+    openai: `curl "${base}/v1/chat/completions" \\
+  -H "Authorization: Bearer ${key}" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${model}",
+    "messages": [{"role": "user", "content": "${escapedMessage}"}],
+    "max_tokens": 100
+  }'`,
+    claude: `curl "${base}/v1/messages" \\
+  -H "x-api-key: ${key}" \\
+  -H "anthropic-version: 2023-06-01" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${model}",
+    "max_tokens": 100,
+    "messages": [{"role": "user", "content": "${escapedMessage}"}]
+  }'`,
+    gemini: `curl "${base}/v1beta/models/${model}:generateContent" \\
+  -H "x-goog-api-key: ${key}" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "contents": [{"parts": [{"text": "${escapedMessage}"}]}]
+  }'`,
+    websocket: `# OpenAI Realtime WebSocket (使用 websocat)
+websocat -H="Authorization: Bearer ${key}" \\
+  -H="Sec-WebSocket-Protocol: realtime" \\
+  "${base.replace('http', 'ws')}/v1/realtime?model=${model}"
+
+# Gemini Live WebSocket
+websocat -H="x-goog-api-key: ${key}" \\
+  -H="Sec-WebSocket-Protocol: gemini-live" \\
+  "${base.replace('http', 'ws')}/v1beta/live"`,
+  }
+})
+
+const copyStatus = ref('')
+
+async function copyCurlExample(protocol: string): Promise<void> {
+  const example = curlExamples.value[protocol as keyof typeof curlExamples.value]
+  if (!example) return
+  try {
+    await navigator.clipboard.writeText(example)
+    copyStatus.value = `${protocol.toUpperCase()} 示例已复制`
+    setTimeout(() => { copyStatus.value = '' }, 2000)
+  } catch {
+    copyStatus.value = '复制失败'
+  }
+}
+
+async function testChat(): Promise<void> {
+  const key = testApiKey.value.trim()
+  if (!key) {
+    testChatResult.value = { success: false, message: '请先输入 API 密钥' }
+    return
+  }
+  const message = testMessage.value.trim()
+  if (!message) {
+    testChatResult.value = { success: false, message: '请输入消息内容' }
+    return
+  }
+  const model = testModel.value.trim() || 'gpt-4'
+
+  testChatController?.abort()
+  const controller = new AbortController()
+  testChatController = controller
+  testChatLoading.value = true
+  testChatResult.value = null
+
+  let collected = ''
+
+  try {
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: message }],
+        max_tokens: 500,
+        stream: true,
+      }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null)
+      const errorMsg = errorData?.detail ?? errorData?.error?.message ?? `HTTP ${response.status}`
+      testChatResult.value = { success: false, message: `请求失败：${errorMsg}` }
+      return
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      testChatResult.value = { success: false, message: '响应不支持流式读取' }
+      return
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let usedModel = model
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (trimmed === '' || trimmed === 'data: [DONE]') continue
+        if (!trimmed.startsWith('data: ')) continue
+
+        try {
+          const json = JSON.parse(trimmed.slice(6))
+          if (json.model) usedModel = json.model
+          const delta =
+            json.choices?.[0]?.delta?.content ??
+            json.choices?.[0]?.message?.content ??
+            ''
+          if (typeof delta === 'string' && delta.length > 0) {
+            collected += delta
+
+            // Show partial result as streaming arrives
+            testChatResult.value = {
+              success: true,
+              message: collected,
+            }
+          }
+        } catch {
+          // ignore malformed SSE lines
+        }
+      }
+    }
+
+    if (collected === '') {
+      testChatResult.value = { success: false, message: '未收到响应内容' }
+    } else {
+      copyStatus.value = `使用模型：${usedModel}`
+      setTimeout(() => { copyStatus.value = '' }, 3000)
+    }
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      if (collected.length > 0) {
+        testChatResult.value = {
+          success: true,
+          message: `${collected}\n\n（已手动停止）`,
+        }
+      } else {
+        testChatResult.value = { success: false, message: '请求已取消' }
+      }
+    } else {
+      testChatResult.value = {
+        success: false,
+        message: `网络错误：${error instanceof Error ? error.message : '未知错误'}`,
+      }
+    }
+  } finally {
+    testChatController = null
+    testChatLoading.value = false
+  }
+}
+
+function stopTestChat(): void {
+  testChatController?.abort()
 }
 
 const ownerEmails = computed(
@@ -449,6 +646,7 @@ onBeforeUnmount(() => {
   secretOperationActive.value = false
   loadController?.abort()
   saveController?.abort()
+  testChatController?.abort()
   for (const controller of operationControllers) controller.abort()
   operationControllers.clear()
 })
@@ -457,6 +655,14 @@ onBeforeUnmount(() => {
 <template>
   <PageHeader title="接口密钥" description="管理用户密钥、访问作用域、有效期与安全轮换。">
     <template #actions>
+      <ElButton
+        data-test="toggle-examples"
+        :type="examplesOpen ? 'info' : 'default'"
+        @click="examplesOpen = !examplesOpen"
+      >
+        <ElIcon><Document /></ElIcon>
+        {{ examplesOpen ? '隐藏示例' : '使用示例' }}
+      </ElButton>
       <ElButton
         data-test="create-api-key"
         type="primary"
@@ -468,6 +674,108 @@ onBeforeUnmount(() => {
       </ElButton>
     </template>
   </PageHeader>
+
+  <section v-if="examplesOpen" class="examples-panel page-card">
+    <div class="examples-header">
+      <h3>API 使用示例</h3>
+      <p>输入你的 API 密钥，示例命令会自动更新</p>
+    </div>
+    <div class="test-input-grid">
+      <div class="test-input-row">
+        <ElInput
+          v-model="testApiKey"
+          placeholder="sk-gw-..."
+          clearable
+          type="password"
+          show-password
+        >
+          <template #prepend>API 密钥</template>
+        </ElInput>
+      </div>
+      <div class="test-input-row test-input-row--split">
+        <ElInput
+          v-model="testModel"
+          placeholder="gpt-4（留空使用默认）"
+          clearable
+          class="test-model-input"
+        >
+          <template #prepend>模型</template>
+          <template #append>
+            <select v-model="testModel" class="model-pick-select">
+              <option value="">从列表选择...</option>
+              <option v-for="name in availableModelNames" :key="name" :value="name">
+                {{ name }}
+              </option>
+            </select>
+          </template>
+        </ElInput>
+        <ElButton
+          v-if="!testChatLoading"
+          type="primary"
+          :disabled="!testApiKey.trim() || !testMessage.trim()"
+          @click="testChat"
+        >
+          测试聊天
+        </ElButton>
+        <ElButton
+          v-else
+          type="danger"
+          @click="stopTestChat"
+        >
+          停止
+        </ElButton>
+      </div>
+      <div class="test-input-row">
+        <ElInput
+          v-model="testMessage"
+          type="textarea"
+          :rows="2"
+          placeholder="输入要测试的消息..."
+          maxlength="500"
+          show-word-limit
+        />
+      </div>
+      <div v-if="testChatResult" class="test-result" :class="[testChatResult.success ? 'success' : 'error', testChatLoading ? 'test-result--streaming' : '']">
+        <strong>{{ testChatResult.success ? '✓ 成功' : '✗ 失败' }}：</strong>
+        <pre class="test-result-message">{{ testChatResult.message }}</pre>
+      </div>
+    </div>
+    <ElTabs v-model="examplesTab" class="examples-tabs">
+      <ElTabPane label="OpenAI" name="openai">
+        <div class="code-block-wrapper">
+          <pre class="code-block">{{ curlExamples.openai }}</pre>
+          <ElButton size="small" class="copy-btn" @click="copyCurlExample('openai')">
+            复制
+          </ElButton>
+        </div>
+      </ElTabPane>
+      <ElTabPane label="Claude" name="claude">
+        <div class="code-block-wrapper">
+          <pre class="code-block">{{ curlExamples.claude }}</pre>
+          <ElButton size="small" class="copy-btn" @click="copyCurlExample('claude')">
+            复制
+          </ElButton>
+        </div>
+      </ElTabPane>
+      <ElTabPane label="Gemini" name="gemini">
+        <div class="code-block-wrapper">
+          <pre class="code-block">{{ curlExamples.gemini }}</pre>
+          <ElButton size="small" class="copy-btn" @click="copyCurlExample('gemini')">
+            复制
+          </ElButton>
+        </div>
+      </ElTabPane>
+      <ElTabPane label="WebSocket" name="websocket">
+        <div class="code-block-wrapper">
+          <pre class="code-block">{{ curlExamples.websocket }}</pre>
+          <ElButton size="small" class="copy-btn" @click="copyCurlExample('websocket')">
+            复制
+          </ElButton>
+        </div>
+      </ElTabPane>
+    </ElTabs>
+    <div v-if="copyStatus" class="copy-status">{{ copyStatus }}</div>
+  </section>
 
   <ElAlert
     v-if="notice !== null"
@@ -521,7 +829,7 @@ onBeforeUnmount(() => {
       <table class="key-table">
         <thead>
           <tr>
-            <th>名称</th><th>所有者</th><th>密钥前缀</th><th>作用域</th><th>状态</th>
+            <th>名称</th><th>所有者</th><th>密钥</th><th>作用域</th><th>状态</th>
             <th>过期时间</th><th>最后使用</th><th>创建时间</th><th>操作</th>
           </tr>
         </thead>
@@ -533,7 +841,7 @@ onBeforeUnmount(() => {
           >
             <td><strong>{{ apiKey.name }}</strong></td>
             <td>{{ ownerEmail(apiKey.user_id) }}</td>
-            <td class="prefix-cell">{{ apiKey.key_prefix }}</td>
+            <td class="prefix-cell">{{ apiKey.key_prefix.slice(0, 8) }}****</td>
             <td><ElTag effect="plain">{{ scopeLabels[apiKey.scope] }}</ElTag></td>
             <td>
               <ElTag :type="apiKey.is_active ? 'success' : 'info'" effect="light">
@@ -576,7 +884,6 @@ onBeforeUnmount(() => {
   <ApiKeyFormDrawer
     :model-value="formOpen"
     :api-key="editingApiKey"
-    :users="users"
     :providers="providers"
     :models="models"
     :submitting="formSubmitting"
@@ -684,5 +991,173 @@ onBeforeUnmount(() => {
   .toolbar-actions :deep(.el-input) {
     width: 100%;
   }
+}
+
+.examples-panel {
+  margin-bottom: 1rem;
+  padding: 1.25rem;
+}
+
+.examples-header {
+  margin-bottom: 1rem;
+}
+
+.examples-header h3 {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.examples-header p {
+  margin: 0;
+  color: var(--gateway-muted);
+  font-size: 0.85rem;
+}
+
+.examples-header code {
+  padding: 0.15rem 0.4rem;
+  background: var(--gateway-soft);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+
+.examples-tabs :deep(.el-tabs__header) {
+  margin-bottom: 0;
+}
+
+.code-block-wrapper {
+  position: relative;
+}
+
+.code-block {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: 1rem;
+  padding-right: 4rem;
+  overflow-x: auto;
+  overflow-wrap: normal;
+  white-space: pre;
+  background: #f8fafc;
+  color: #1e293b;
+  border: 1px solid var(--gateway-border);
+  border-radius: var(--el-border-radius-base);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+}
+
+.copy-status {
+  margin-top: 0.75rem;
+  color: var(--gateway-muted);
+  font-size: 0.85rem;
+}
+
+.test-key-input {
+  margin-bottom: 1.25rem;
+}
+
+.test-key-input :deep(.el-input-group__prepend) {
+  width: 5.5rem;
+  flex-shrink: 0;
+}
+
+.test-input-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.test-input-row {
+  width: 100%;
+}
+
+.test-input-row--split {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.test-input-row--split :deep(.el-input-group__prepend) {
+  width: 4.5rem;
+  flex-shrink: 0;
+}
+
+.test-model-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.model-pick-select {
+  width: 100%;
+  max-width: 14rem;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  outline: none;
+}
+
+.model-pick-select option {
+  color: var(--gateway-text);
+  background: var(--gateway-panel);
+}
+
+.test-input-row--split :deep(.el-button) {
+  height: auto;
+  flex-shrink: 0;
+}
+
+.test-result {
+  margin-top: 0.25rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--el-border-radius-base);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.test-result.success {
+  color: #065f46;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+}
+
+.test-result.error {
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+}
+
+.test-result strong {
+  margin-right: 0.25rem;
+}
+
+.test-result-message {
+  margin: 0.35rem 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: transparent;
+}
+
+.test-result.success.test-result--streaming .test-result-message::after {
+  content: '▊';
+  animation: blink-cursor 1s steps(2) infinite;
+  color: var(--gateway-muted);
+}
+
+@keyframes blink-cursor {
+  50% { opacity: 0; }
 }
 </style>

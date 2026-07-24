@@ -125,13 +125,13 @@ describe('用户、余额与账本管理', () => {
     expect(loadedModule.default).toBe(UsersView)
   })
 
-  it('原样显示精确与科学记数金额，并禁止当前管理员停用或删除自己', async () => {
+  it('格式化显示金额（含科学记数法），并禁止当前管理员停用或删除自己', async () => {
     const wrapper = await mountUsers()
 
-    expect(wrapper.text()).toContain('999999999999.99999999')
-    expect(wrapper.text()).toContain('0E-8')
-    expect(wrapper.text()).toContain('8.75000000')
-    expect(wrapper.text()).toContain('1.25000000')
+    expect(wrapper.text()).toContain('¥999999999999.99999999')
+    expect(wrapper.text()).toContain('¥0.00000000')
+    expect(wrapper.text()).toContain('¥8.75000000')
+    expect(wrapper.text()).toContain('¥1.25000000')
     expect(wrapper.get('[data-test="edit-user-1"]').attributes('disabled')).toBeUndefined()
     expect(wrapper.get('[data-test="delete-user-1"]').attributes('disabled')).toBeDefined()
 
@@ -434,8 +434,8 @@ describe('用户、余额与账本管理', () => {
       'ledger-row-12',
       'ledger-row-11',
     ])
-    expect(wrapper.text()).toContain('10.25000000')
-    expect(wrapper.text()).toContain('19.00000000')
+    expect(wrapper.text()).toContain('¥10.25000000')
+    expect(wrapper.text()).toContain('¥19.00000000')
     expect(wrapper.text()).toContain('11111111-1111-1111-1111-111111111111')
     expect(wrapper.text()).toContain('<img src=x onerror=')
     expect(wrapper.find('img').exists()).toBe(false)

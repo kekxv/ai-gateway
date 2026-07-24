@@ -41,6 +41,7 @@ import type {
 import PageHeader from '@/components/common/PageHeader.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
+import ModelSyncDialog from '@/components/providers/ModelSyncDialog.vue'
 
 type NoticeType = 'success' | 'warning' | 'error'
 type ProviderOperation = 'edit' | 'sync' | 'delete'
@@ -56,6 +57,8 @@ const submitting = ref(false)
 const providerOperations = ref(new Map<number, ProviderOperation>())
 const nonDeletableIds = ref(new Set<number>())
 const deletedIds = new Set<number>()
+const syncDialogOpen = ref(false)
+const syncTargetProvider = ref<ProviderResponse | null>(null)
 let requestController: AbortController | undefined
 let saveController: AbortController | undefined
 const operationControllers = new Set<AbortController>()
@@ -252,15 +255,30 @@ async function saveProvider(payload: ProviderCreate | ProviderUpdate): Promise<v
   }
 }
 
-async function syncModels(provider: ProviderResponse): Promise<void> {
+function openSyncDialog(provider: ProviderResponse): void {
   if (!beginProviderOperation(provider.id, 'sync')) return
+  syncTargetProvider.value = provider
+  syncDialogOpen.value = true
+}
+
+function setSyncDialogOpen(open: boolean): void {
+  if (open) return
+  const providerId = syncTargetProvider.value?.id
+  syncDialogOpen.value = false
+  syncTargetProvider.value = null
+  if (providerId !== undefined) finishProviderOperation(providerId, 'sync')
+}
+
+async function confirmSyncModels(models: string[]): Promise<void> {
+  const provider = syncTargetProvider.value
+  if (provider === null) return
   const controller = operationController()
   try {
-    const result = await syncProviderModels(provider.id, controller.signal)
+    const result = await syncProviderModels(provider.id, models, controller.signal)
     if (!mounted || controller.signal.aborted) return
     notice.value = {
       type: 'success',
-      text: `供应商“${provider.name}”同步完成：发现 ${String(result.discovered_models)} 个，新增模型 ${String(result.created_models)} 个，新增路由 ${String(result.created_routes)} 条，更新路由 ${String(result.updated_routes)} 条，停用路由 ${String(result.disabled_routes)} 条`,
+      text: `供应商”${provider.name}”同步完成：发现 ${String(result.discovered_models)} 个，新增模型 ${String(result.created_models)} 个，新增路由 ${String(result.created_routes)} 条，更新路由 ${String(result.updated_routes)} 条，停用路由 ${String(result.disabled_routes)} 条`,
     }
     await load()
   } catch (error: unknown) {
@@ -269,6 +287,8 @@ async function syncModels(provider: ProviderResponse): Promise<void> {
     }
   } finally {
     operationControllers.delete(controller)
+    syncDialogOpen.value = false
+    syncTargetProvider.value = null
     if (mounted) finishProviderOperation(provider.id, 'sync')
   }
 }
@@ -463,7 +483,7 @@ onBeforeUnmount(() => {
                   type="primary"
                   :loading="providerOperations.get(provider.id) === 'sync'"
                   :disabled="providerOperations.has(provider.id)"
-                  @click="syncModels(provider)"
+                  @click="openSyncDialog(provider)"
                 >
                   <ElIcon><Refresh /></ElIcon>
                   同步
@@ -512,6 +532,14 @@ onBeforeUnmount(() => {
     :submitting="submitting"
     @update:model-value="setDrawerOpen"
     @submit="saveProvider"
+  />
+
+  <ModelSyncDialog
+    :model-value="syncDialogOpen"
+    :provider-id="syncTargetProvider?.id ?? null"
+    :provider-name="syncTargetProvider?.name ?? ''"
+    @update:model-value="setSyncDialogOpen"
+    @confirm="confirmSyncModels"
   />
 </template>
 

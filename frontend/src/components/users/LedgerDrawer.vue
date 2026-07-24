@@ -11,6 +11,7 @@ import 'element-plus/theme-chalk/el-skeleton-item.css'
 import 'element-plus/theme-chalk/el-tag.css'
 
 import type { LedgerEntryResponse, LedgerKind, UserResponse } from '@/api/types'
+import { formatMoney } from '@/utils/format'
 
 const props = defineProps<{
   modelValue: boolean
@@ -83,11 +84,11 @@ function formatTime(value: string): string {
       >
         <div class="ledger-row__heading">
           <ElTag effect="plain">{{ kindLabels[entry.kind] }}</ElTag>
-          <strong>{{ entry.amount }}</strong>
+          <strong>{{ formatMoney(entry.amount) }}</strong>
           <time :datetime="entry.created_at">{{ formatTime(entry.created_at) }}</time>
         </div>
         <dl class="ledger-fields">
-          <div><dt>余额结余</dt><dd>{{ entry.balance_after }}</dd></div>
+          <div><dt>余额结余</dt><dd>{{ formatMoney(entry.balance_after) }}</dd></div>
           <div><dt>请求 ID</dt><dd>{{ entry.request_id ?? '—' }}</dd></div>
           <div><dt>幂等键</dt><dd>{{ entry.idempotency_key }}</dd></div>
         </dl>

@@ -2,23 +2,32 @@
 
 :root {
   color-scheme: light;
-  --gateway-bg: #f4f7fb;
+  --gateway-bg: #f8fafc;
   --gateway-panel: #ffffff;
-  --gateway-border: #dfe7f1;
-  --gateway-text: #172033;
-  --gateway-muted: #667085;
-  --gateway-brand: #2563eb;
-  --el-color-primary: #1d4ed8;
-  --el-color-primary-light-3: #1e40af;
-  --el-color-primary-dark-2: #1e3a8a;
-  --el-color-danger: #b42318;
-  --el-color-danger-light-3: #991b1b;
-  --el-text-color-regular: #475467;
-  --el-text-color-secondary: #667085;
-  --el-text-color-placeholder: #667085;
+  --gateway-border: #e2e8f0;
+  --gateway-text: #0f172a;
+  --gateway-muted: #64748b;
+  --gateway-brand: #3b82f6;
+  --gateway-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --gateway-shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+
+  --el-color-primary: #3b82f6;
+  --el-color-primary-light-3: #60a5fa;
+  --el-color-primary-dark-2: #2563eb;
+  --el-color-danger: #ef4444;
+  --el-color-danger-light-3: #f87171;
+  --el-text-color-regular: #334155;
+  --el-text-color-secondary: #64748b;
+  --el-text-color-placeholder: #94a3b8;
+  --el-border-color: #e2e8f0;
+  --el-border-color-light: #f1f5f9;
+  --el-fill-color-light: #f8fafc;
+
   font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
   font-synthesis: none;
   text-rendering: optimizelegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 html {
@@ -48,6 +57,7 @@ select {
   background: var(--gateway-panel);
   border: 1px solid var(--gateway-border);
   border-radius: 12px;
+  box-shadow: var(--gateway-shadow);
 }
 
 .skip-link {
@@ -60,7 +70,9 @@ select {
   text-decoration: none;
   background: var(--gateway-brand);
   border-radius: 0.5rem;
+  box-shadow: var(--gateway-shadow-md);
   transform: translateY(-200%);
+  transition: transform 200ms ease;
 }
 
 .skip-link:focus {
@@ -68,6 +80,25 @@ select {
 }
 
 :focus-visible {
-  outline: 3px solid rgb(37 99 235 / 35%);
+  outline: 2px solid var(--gateway-brand);
   outline-offset: 2px;
+}
+
+/* Scrollbar styling for webkit browsers */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }

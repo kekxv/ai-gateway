@@ -12,7 +12,7 @@ import 'element-plus/theme-chalk/el-tag.css'
 import { getRequestLog } from '@/api/requestLogs'
 import type { RequestLogDetail, RequestStatus } from '@/api/types'
 import JsonViewer from '@/components/common/JsonViewer.vue'
-import { formatDateTime, formatDuration } from '@/utils/format'
+import { formatDateTime, formatDuration, formatMoney } from '@/utils/format'
 
 const props = defineProps<{
   modelValue: boolean
@@ -142,7 +142,7 @@ onBeforeUnmount(() => {
           <div><dt>HTTP 状态</dt><dd>{{ detail.http_status ?? '—' }}</dd></div>
           <div><dt>输入 / 输出令牌</dt><dd>{{ detail.prompt_tokens }} / {{ detail.completion_tokens }}</dd></div>
           <div><dt>用量来源</dt><dd>{{ detail.usage_source === 'provider' ? '供应商' : detail.usage_source === 'estimated' ? '估算' : '—' }}</dd></div>
-          <div><dt>精确费用</dt><dd class="exact-value">{{ detail.cost }}</dd></div>
+          <div><dt>精确费用</dt><dd class="exact-value">{{ formatMoney(detail.cost) }}</dd></div>
           <div><dt>延迟 / 首个令牌</dt><dd>{{ formatDuration(detail.latency_ms) }} / {{ formatDuration(detail.first_token_ms) }}</dd></div>
           <div><dt>错误代码</dt><dd>{{ detail.error_code ?? '—' }}</dd></div>
           <div><dt>创建 / 完成时间</dt><dd>{{ formatDateTime(detail.created_at) }} / {{ formatDateTime(detail.completed_at) }}</dd></div>

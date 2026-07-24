@@ -41,6 +41,9 @@ interface ProtocolRow {
   extraHeadersError: string
 }
 
+type AuthScheme = 'bearer' | 'apikey' | 'none'
+type AuthHeader = 'authorization' | 'x-api-key' | 'custom'
+
 const props = defineProps<{
   modelValue: boolean
   provider: ProviderResponse | null
@@ -53,19 +56,23 @@ const emit = defineEmits<{
 }>()
 
 const name = ref('')
-const credentialText = ref('')
+const apiKey = ref('')
+const authScheme = ref<AuthScheme>('bearer')
+const authHeader = ref<AuthHeader>('authorization')
+const customAuthHeader = ref('')
 const enabled = ref(true)
 const autoLoadModels = ref(false)
 const syncInterval = ref<number | null>(3600)
 const protocols = ref<ProtocolRow[]>([])
 const nameError = ref('')
-const credentialError = ref('')
+const apiKeyError = ref('')
 const syncIntervalError = ref('')
 const formContent = ref<HTMLElement | null>(null)
 let nextProtocolKey = 1
 
 const editing = computed(() => props.provider !== null)
 const drawerTitle = computed(() => (editing.value ? '编辑供应商' : '新建供应商'))
+const showCustomHeaderInput = computed(() => authHeader.value === 'custom')
 
 function newProtocolRow(): ProtocolRow {
   return {
@@ -83,7 +90,10 @@ function newProtocolRow(): ProtocolRow {
 function resetForm(): void {
   const provider = props.provider
   name.value = provider?.name ?? ''
-  credentialText.value = ''
+  apiKey.value = ''
+  authScheme.value = 'bearer'
+  authHeader.value = 'authorization'
+  customAuthHeader.value = ''
   enabled.value = provider?.enabled ?? true
   autoLoadModels.value = provider?.auto_load_models ?? false
   syncInterval.value = provider?.model_sync_interval_seconds ?? 3600
@@ -102,12 +112,12 @@ function resetForm(): void {
           extraHeadersError: '',
         }))
   nameError.value = ''
-  credentialError.value = ''
+  apiKeyError.value = ''
   syncIntervalError.value = ''
 }
 
 function clearSensitiveState(): void {
-  credentialText.value = ''
+  apiKey.value = ''
   for (const row of protocols.value) row.extraHeadersText = ''
 }
 
@@ -126,24 +136,6 @@ function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function parseObject(text: string, emptyMessage: string): JsonObject | undefined {
-  if (text.trim() === '') {
-    credentialError.value = emptyMessage
-    return undefined
-  }
-  try {
-    const value: unknown = JSON.parse(text)
-    if (!isJsonObject(value)) {
-      credentialError.value = '必须是 JSON 对象，不能使用数组或单个值'
-      return undefined
-    }
-    return value
-  } catch {
-    credentialError.value = 'JSON 格式不正确'
-    return undefined
-  }
-}
-
 function parseExtraHeaders(row: ProtocolRow): JsonObject | undefined {
   if (row.extraHeadersText.trim() === '') return undefined
   try {
@@ -157,6 +149,31 @@ function parseExtraHeaders(row: ProtocolRow): JsonObject | undefined {
     row.extraHeadersError = 'JSON 格式不正确'
     return undefined
   }
+}
+
+function buildCredential(): JsonObject | undefined {
+  const key = apiKey.value.trim()
+  if (!editing.value && key === '') {
+    apiKeyError.value = '请输入 API 密钥'
+    return undefined
+  }
+  if (key === '') return undefined
+
+  const credential: JsonObject = { api_key: key }
+
+  if (authScheme.value !== 'none') {
+    credential.auth_scheme = authScheme.value === 'bearer' ? 'Bearer' : 'ApiKey'
+  }
+
+  if (authHeader.value === 'authorization') {
+    credential.auth_header = 'Authorization'
+  } else if (authHeader.value === 'x-api-key') {
+    credential.auth_header = 'x-api-key'
+  } else if (authHeader.value === 'custom' && customAuthHeader.value.trim() !== '') {
+    credential.auth_header = customAuthHeader.value.trim()
+  }
+
+  return credential
 }
 
 function addProtocol(): void {
@@ -246,7 +263,7 @@ function buildProtocols(): ProviderProtocolInput[] | undefined {
 function submitForm(): void {
   if (props.submitting) return
   nameError.value = ''
-  credentialError.value = ''
+  apiKeyError.value = ''
   syncIntervalError.value = ''
   if (name.value.trim() === '') nameError.value = '请输入供应商名称'
   const interval = syncInterval.value
@@ -255,13 +272,10 @@ function submitForm(): void {
   }
 
   const protocolPayload = buildProtocols()
-  let credential: JsonObject | undefined
-  if (!editing.value || credentialText.value.trim() !== '') {
-    credential = parseObject(credentialText.value, '请输入凭据 JSON')
-  }
+  const credential = buildCredential()
   if (
     nameError.value !== '' ||
-    credentialError.value !== '' ||
+    apiKeyError.value !== '' ||
     syncIntervalError.value !== '' ||
     protocolPayload === undefined
   ) {
@@ -271,13 +285,13 @@ function submitForm(): void {
     } else if (
       nameError.value === '' &&
       syncIntervalError.value === '' &&
-      credentialError.value !== ''
+      apiKeyError.value !== ''
     ) {
-      selector = '[data-validation="credential"] textarea'
+      selector = '[data-validation="api-key"] input'
     } else if (
       nameError.value === '' &&
       syncIntervalError.value === '' &&
-      credentialError.value === ''
+      apiKeyError.value === ''
     ) {
       const invalidIndex = protocols.value.findIndex(
         (row) => row.baseUrlError !== '' || row.extraHeadersError !== '',
@@ -364,20 +378,50 @@ function submitForm(): void {
           </ElFormItem>
         </div>
 
-        <ElFormItem
-          data-validation="credential"
-          :label="editing ? '替换凭据 JSON（留空则保持原值）' : '凭据 JSON'"
-          :error="credentialError"
-        >
-          <ElInput
-            v-model="credentialText"
-            data-test="provider-credential"
-            type="textarea"
-            :rows="4"
-            spellcheck="false"
-            placeholder='例如：{"api_key":"..."}'
-          />
-        </ElFormItem>
+        <div class="credential-section">
+          <h3 class="credential-section__title">
+            {{ editing ? '替换 API 密钥（留空则保持原值）' : 'API 密钥' }}
+          </h3>
+          <ElFormItem
+            data-validation="api-key"
+            :error="apiKeyError"
+          >
+            <ElInput
+              v-model="apiKey"
+              data-test="provider-api-key"
+              type="password"
+              show-password
+              spellcheck="false"
+              placeholder="sk-..."
+            />
+          </ElFormItem>
+
+          <div class="credential-options">
+            <ElFormItem label="授权方式">
+              <select v-model="authScheme" data-test="provider-auth-scheme">
+                <option value="bearer">Bearer Token</option>
+                <option value="apikey">API Key</option>
+                <option value="none">无（不添加授权头）</option>
+              </select>
+            </ElFormItem>
+
+            <ElFormItem label="授权头">
+              <select v-model="authHeader" data-test="provider-auth-header">
+                <option value="authorization">Authorization</option>
+                <option value="x-api-key">x-api-key</option>
+                <option value="custom">自定义</option>
+              </select>
+            </ElFormItem>
+          </div>
+
+          <ElFormItem v-if="showCustomHeaderInput" label="自定义授权头名称">
+            <ElInput
+              v-model="customAuthHeader"
+              data-test="provider-custom-header"
+              placeholder="例如：X-API-Key"
+            />
+          </ElFormItem>
+        </div>
 
         <div class="switch-row">
           <label>
@@ -516,10 +560,26 @@ function submitForm(): void {
 }
 
 .form-grid,
-.protocol-grid {
+.protocol-grid,
+.credential-options {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(12rem, 0.45fr);
   gap: 1rem;
+}
+
+.credential-section {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: #f8fafc;
+  border: 1px solid var(--gateway-border);
+  border-radius: 10px;
+}
+
+.credential-section__title {
+  margin: 0 0 1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--gateway-text);
 }
 
 .switch-row {

@@ -23,7 +23,7 @@ import { listRequestLogs, type RequestLogQuery } from '@/api/requestLogs'
 import type { Protocol, RequestLogSummary, RequestStatus } from '@/api/types'
 import PageHeader from '@/components/common/PageHeader.vue'
 import RequestLogDetailDrawer from '@/components/request-logs/RequestLogDetailDrawer.vue'
-import { formatDateTime, formatDuration } from '@/utils/format'
+import { formatDateTime, formatDuration, formatMoney } from '@/utils/format'
 
 interface FilterDraft {
   requestId: string
@@ -341,7 +341,7 @@ onBeforeUnmount(() => {
               </div>
             </td>
             <td>{{ log.prompt_tokens }} / {{ log.completion_tokens }}</td>
-            <td class="exact-value">{{ log.cost }}</td>
+            <td class="exact-value">{{ formatMoney(log.cost) }}</td>
             <td>{{ formatDuration(log.latency_ms) }} / {{ formatDuration(log.first_token_ms) }}</td>
             <td>{{ log.error_code ?? '—' }}</td>
             <td>{{ formatDateTime(log.created_at) }}</td>

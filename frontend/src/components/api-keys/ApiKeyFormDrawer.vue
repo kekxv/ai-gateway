@@ -23,13 +23,12 @@ import type {
   ApiKeyUpdate,
   ModelResponse,
   ProviderResponse,
-  UserResponse,
 } from '@/api/types'
+import { useAuthStore } from '@/stores/auth'
 
 const props = defineProps<{
   modelValue: boolean
   apiKey: ApiKeyResponse | null
-  users: UserResponse[]
   providers: ProviderResponse[]
   models: ModelResponse[]
   submitting: boolean
@@ -40,7 +39,7 @@ const emit = defineEmits<{
   submit: [payload: ApiKeyCreate | ApiKeyUpdate]
 }>()
 
-const ownerId = ref('')
+const auth = useAuthStore()
 const name = ref('')
 const scope = ref<ApiKeyScope>('all')
 const isActive = ref(true)
@@ -48,7 +47,6 @@ const expiry = ref('')
 const expiryDirty = ref(false)
 const providerIds = ref<number[]>([])
 const modelIds = ref<number[]>([])
-const ownerError = ref('')
 const nameError = ref('')
 const providerError = ref('')
 const modelError = ref('')
@@ -72,7 +70,6 @@ function localDateTime(iso: string | null): string {
 }
 
 function clearDraft(): void {
-  ownerId.value = ''
   name.value = ''
   scope.value = 'all'
   isActive.value = true
@@ -84,7 +81,6 @@ function clearDraft(): void {
 }
 
 function clearErrors(): void {
-  ownerError.value = ''
   nameError.value = ''
   providerError.value = ''
   modelError.value = ''
@@ -93,7 +89,6 @@ function clearErrors(): void {
 
 function resetForm(): void {
   const apiKey = props.apiKey
-  ownerId.value = apiKey === null ? '' : String(apiKey.user_id)
   name.value = apiKey?.name ?? ''
   scope.value = apiKey?.scope ?? 'all'
   isActive.value = apiKey?.is_active ?? true
@@ -145,18 +140,22 @@ function handleModelValueUpdate(value: boolean): void {
   emit('update:modelValue', value)
 }
 
-function updateProviderIds(event: Event): void {
-  providerIds.value = selectedIds(event)
+function toggleProvider(id: number): void {
+  const index = providerIds.value.indexOf(id)
+  if (index === -1) {
+    providerIds.value.push(id)
+  } else {
+    providerIds.value.splice(index, 1)
+  }
 }
 
-function updateModelIds(event: Event): void {
-  modelIds.value = selectedIds(event)
-}
-
-function selectedIds(event: Event): number[] {
-  const target = event.target
-  if (!(target instanceof HTMLSelectElement)) return []
-  return Array.from(target.selectedOptions, (option) => Number(option.value))
+function toggleModel(id: number): void {
+  const index = modelIds.value.indexOf(id)
+  if (index === -1) {
+    modelIds.value.push(id)
+  } else {
+    modelIds.value.splice(index, 1)
+  }
 }
 
 function normalizedExpiry(): string | null | undefined {
@@ -176,9 +175,6 @@ function sameExpiry(left: string | null, right: string | null): boolean {
 
 function validate(): string | null {
   clearErrors()
-  if (!editing.value && !props.users.some((user) => user.id === Number(ownerId.value))) {
-    ownerError.value = '请选择密钥所有者'
-  }
   if (name.value.trim() === '') nameError.value = '请输入密钥名称'
   if (needsProviders.value && providerIds.value.length === 0) {
     providerError.value = '至少选择一个供应商'
@@ -195,7 +191,6 @@ function submitForm(): void {
   if (props.submitting) return
   const expiresAt = validate()
   if (
-    ownerError.value !== '' ||
     nameError.value !== '' ||
     providerError.value !== '' ||
     modelError.value !== '' ||
@@ -206,8 +201,10 @@ function submitForm(): void {
   const normalizedModels = needsModels.value ? [...modelIds.value] : []
   const apiKey = props.apiKey
   if (apiKey === null) {
+    const userId = auth.user?.id
+    if (userId === undefined) return
     emit('submit', {
-      user_id: Number(ownerId.value),
+      user_id: userId,
       name: name.value.trim(),
       scope: scope.value,
       is_active: isActive.value,
@@ -260,20 +257,6 @@ function submitForm(): void {
     </template>
 
     <ElForm :disabled="submitting" label-position="top" @submit.prevent="submitForm">
-      <ElFormItem label="所有者" :error="ownerError">
-        <select
-          v-model="ownerId"
-          data-test="api-key-owner"
-          class="field-select"
-          :disabled="editing || submitting"
-        >
-          <option value="" disabled>请选择用户</option>
-          <option v-for="user in users" :key="user.id" :value="String(user.id)">
-            {{ user.email }}
-          </option>
-        </select>
-      </ElFormItem>
-
       <ElFormItem label="名称" :error="nameError">
         <ElInput v-model="name" data-test="api-key-name" maxlength="255" autocomplete="off" />
       </ElFormItem>
@@ -287,34 +270,34 @@ function submitForm(): void {
         </select>
       </ElFormItem>
 
-      <ElFormItem v-if="needsProviders" label="至少选择一个供应商" :error="providerError">
-        <select
-          data-test="provider-ids"
-          class="field-select multi-select"
-          multiple
-          :value="providerIds.map(String)"
-          :disabled="submitting"
-          @change="updateProviderIds"
-        >
-          <option v-for="provider in providers" :key="provider.id" :value="String(provider.id)">
-            {{ provider.name }}
-          </option>
-        </select>
+      <ElFormItem v-if="needsProviders" label="选择供应商" :error="providerError">
+        <div class="checkbox-list">
+          <label v-for="provider in providers" :key="provider.id" class="checkbox-item">
+            <input
+              type="checkbox"
+              :value="provider.id"
+              :checked="providerIds.includes(provider.id)"
+              @change="toggleProvider(provider.id)"
+            />
+            <span>{{ provider.name }}</span>
+          </label>
+          <p v-if="providers.length === 0" class="empty-hint">暂无可用供应商</p>
+        </div>
       </ElFormItem>
 
-      <ElFormItem v-if="needsModels" label="至少选择一个模型" :error="modelError">
-        <select
-          data-test="model-ids"
-          class="field-select multi-select"
-          multiple
-          :value="modelIds.map(String)"
-          :disabled="submitting"
-          @change="updateModelIds"
-        >
-          <option v-for="model in models" :key="model.id" :value="String(model.id)">
-            {{ model.display_name }}（{{ model.canonical_name }}）
-          </option>
-        </select>
+      <ElFormItem v-if="needsModels" label="选择模型" :error="modelError">
+        <div class="checkbox-list">
+          <label v-for="model in models" :key="model.id" class="checkbox-item">
+            <input
+              type="checkbox"
+              :value="model.id"
+              :checked="modelIds.includes(model.id)"
+              @change="toggleModel(model.id)"
+            />
+            <span>{{ model.display_name }}（{{ model.canonical_name }}）</span>
+          </label>
+          <p v-if="models.length === 0" class="empty-hint">暂无可用模型</p>
+        </div>
       </ElFormItem>
 
       <ElFormItem label="过期时间（可选）" :error="expiryError">
@@ -380,11 +363,6 @@ function submitForm(): void {
   border-radius: var(--el-border-radius-base);
 }
 
-.multi-select {
-  min-height: 7rem;
-  padding: 0.4rem;
-}
-
 .field-select:focus,
 .field-input:focus {
   border-color: var(--el-color-primary);
@@ -395,5 +373,44 @@ function submitForm(): void {
 .field-input:disabled {
   cursor: not-allowed;
   background: var(--el-disabled-bg-color);
+}
+
+.checkbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 12rem;
+  padding: 0.75rem;
+  overflow-y: auto;
+  background: #f8fafc;
+  border: 1px solid var(--gateway-border);
+  border-radius: 8px;
+}
+
+.checkbox-item {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  cursor: pointer;
+  padding: 0.25rem 0;
+}
+
+.checkbox-item input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+}
+
+.checkbox-item span {
+  font-size: 0.9rem;
+  color: var(--gateway-text);
+}
+
+.empty-hint {
+  margin: 0;
+  color: var(--gateway-muted);
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 0.5rem;
 }
 </style>

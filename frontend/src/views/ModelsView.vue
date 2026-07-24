@@ -48,6 +48,7 @@ import type {
   RouteRuntimeState,
   RouteSource,
 } from '@/api/types'
+import { formatMoney } from '@/utils/format'
 import PageHeader from '@/components/common/PageHeader.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import ModelFormDrawer from '@/components/models/ModelFormDrawer.vue'
@@ -991,8 +992,8 @@ onBeforeUnmount(() => {
                 <span v-if="model.aliases.length === 0" class="muted">无别名</span>
               </div>
             </td>
-            <td class="decimal-value">{{ model.input_price_per_million }}</td>
-            <td class="decimal-value">{{ model.output_price_per_million }}</td>
+            <td class="decimal-value">{{ formatMoney(model.input_price_per_million) }}</td>
+            <td class="decimal-value">{{ formatMoney(model.output_price_per_million) }}</td>
             <td>加权随机</td>
             <td :data-test="`model-status-${String(model.id)}`">
               <StatusTag :status="model.enabled ? 'enabled' : 'disabled'" />
