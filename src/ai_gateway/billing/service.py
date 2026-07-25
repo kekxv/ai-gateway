@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from hashlib import sha256
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 import orjson
@@ -15,12 +15,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from ai_gateway.billing.multipliers import get_effective_multipliers
 from ai_gateway.billing.pricing import MONEY_QUANTUM, PricedModel, calculate_cost
 from ai_gateway.core.enums import LedgerKind, UsageSource
 from ai_gateway.core.errors import GatewayError
 from ai_gateway.db.models import Account, LedgerEntry
 from ai_gateway.protocols.types import CanonicalUsage
 from ai_gateway.routing.sessions import mutation_session_factory_for
+
+if TYPE_CHECKING:
+    from ai_gateway.db.models import Provider
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
 MAX_MONEY = Decimal("999999999999.99999999")
@@ -153,6 +157,7 @@ class BillingService:
         idempotency_key: str,
         request_id: UUID | str | None = None,
         recovery: ReservationRecovery | None = None,
+        provider: "Provider | None" = None,
     ) -> BalanceReservation:
         if estimated_input_tokens < 0:
             raise ValueError("estimated_input_tokens must be nonnegative")
@@ -162,9 +167,12 @@ class BillingService:
         if selected_max_output < 0:
             raise ValueError("max_output_tokens must be nonnegative")
         normalized_key = _normalize_idempotency_key(idempotency_key)
+        model_mult, provider_mult = get_effective_multipliers(model, provider)
         reserved_amount = calculate_cost(
             model,
             CanonicalUsage(estimated_input_tokens, selected_max_output),
+            model_multiplier=model_mult,
+            provider_multiplier=provider_mult,
         )
         _validate_money_magnitude(reserved_amount, "reservation amount")
 
@@ -276,12 +284,13 @@ class BillingService:
         usage_source: UsageSource | None = None,
         expected_recovery_version: int | None = None,
         expected_recovery_claim: str | None = None,
+        provider: "Provider | None" = None,
     ) -> SettlementResult:
         normalized_key = _normalize_idempotency_key(
             idempotency_key,
             suffix_length=max(len(":release"), len(":usage")),
         )
-        actual_cost = _settlement_cost(model=model, usage=usage, cost=cost)
+        actual_cost = _settlement_cost(model=model, usage=usage, cost=cost, provider=provider)
         fingerprint = _settlement_fingerprint(
             reservation_id=reservation_id,
             actual_cost=actual_cost,
@@ -762,6 +771,7 @@ async def reserve_balance(
     request_id: UUID | str | None = None,
     default_max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     recovery: ReservationRecovery | None = None,
+    provider: "Provider | None" = None,
 ) -> BalanceReservation:
     return await BillingService(
         mutation_session_factory_for(session),
@@ -774,6 +784,7 @@ async def reserve_balance(
         idempotency_key=idempotency_key,
         request_id=request_id,
         recovery=recovery,
+        provider=provider,
     )
 
 
@@ -786,6 +797,7 @@ async def settle_request(
     usage: CanonicalUsage | None = None,
     cost: Decimal | None = None,
     usage_source: UsageSource | None = None,
+    provider: "Provider | None" = None,
 ) -> SettlementResult:
     return await BillingService(mutation_session_factory_for(session)).settle_request(
         reservation_id=reservation_id,
@@ -794,6 +806,7 @@ async def settle_request(
         usage=usage,
         cost=cost,
         usage_source=usage_source,
+        provider=provider,
     )
 
 
@@ -924,6 +937,7 @@ def _settlement_cost(
     model: PricedModel | None,
     usage: CanonicalUsage | None,
     cost: Decimal | None,
+    provider: "Provider | None" = None,
 ) -> Decimal:
     if cost is not None:
         if model is not None:
@@ -933,7 +947,16 @@ def _settlement_cost(
         return _money(cost)
     if model is None or usage is None:
         raise TypeError("model and usage are required when cost is omitted")
-    return _money(calculate_cost(model, usage), "settlement cost")
+    model_mult, provider_mult = get_effective_multipliers(model, provider)
+    return _money(
+        calculate_cost(
+            model,
+            usage,
+            model_multiplier=model_mult,
+            provider_multiplier=provider_mult,
+        ),
+        "settlement cost",
+    )
 
 
 def _reservation_from_entry(entry: LedgerEntry, *, user_id: int) -> BalanceReservation:

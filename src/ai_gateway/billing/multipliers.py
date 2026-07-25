@@ -6,21 +6,28 @@ if TYPE_CHECKING:
 
 
 def get_effective_multipliers(
-    model: "Model | None",
-    provider: "Provider | None",
+    model: "Model | object | None",
+    provider: "Provider | object | None",
 ) -> tuple[Decimal, Decimal]:
     """
     Extract price multipliers from Model and Provider objects.
 
     Args:
-        model: A Model object with a ``price_multiplier`` attribute, or None.
-        provider: A Provider object with a ``price_multiplier`` attribute, or None.
+        model: A Model (or any object with a ``price_multiplier`` attribute),
+            or None. Objects without a ``price_multiplier`` attribute (e.g.
+            internal recovery stubs) default to ``Decimal("1.00")``.
+        provider: A Provider (or any object with a ``price_multiplier``
+            attribute), or None.
 
     Returns:
         Tuple of (model_multiplier, provider_multiplier).
         Defaults to ``Decimal("1.00")`` for either value when the
-        corresponding object is None.
+        corresponding object is None or lacks the attribute.
     """
-    model_multiplier = model.price_multiplier if model else Decimal("1.00")
-    provider_multiplier = provider.price_multiplier if provider else Decimal("1.00")
+    model_multiplier = (
+        getattr(model, "price_multiplier", Decimal("1.00")) if model else Decimal("1.00")
+    )
+    provider_multiplier = (
+        getattr(provider, "price_multiplier", Decimal("1.00")) if provider else Decimal("1.00")
+    )
     return (model_multiplier, provider_multiplier)
