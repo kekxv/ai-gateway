@@ -146,6 +146,7 @@ export interface ProviderCreate {
   auto_load_models?: boolean
   model_sync_interval_seconds?: number | null
   protocols?: ProviderProtocolInput[]
+  price_multiplier?: number
 }
 
 export interface ProviderUpdate {
@@ -155,6 +156,7 @@ export interface ProviderUpdate {
   auto_load_models?: boolean | null
   model_sync_interval_seconds?: number | null
   protocols?: ProviderProtocolInput[] | null
+  price_multiplier?: number | null
 }
 
 export interface ProviderProtocolResponse {
@@ -175,6 +177,7 @@ export interface ProviderResponse {
   model_sync_interval_seconds: number
   last_model_sync_at: string | null
   protocols: ProviderProtocolResponse[]
+  price_multiplier: number
 }
 
 export interface ModelSyncResult {

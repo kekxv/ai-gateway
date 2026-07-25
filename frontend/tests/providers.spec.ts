@@ -35,6 +35,7 @@ const providerFixture: ProviderResponse = {
   auto_load_models: true,
   model_sync_interval_seconds: 3600,
   last_model_sync_at: '2026-07-22T08:30:00Z',
+  price_multiplier: 1.0,
   protocols: [
     {
       id: 11,

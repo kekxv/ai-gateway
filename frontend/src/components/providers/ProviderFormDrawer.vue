@@ -63,6 +63,7 @@ const customAuthHeader = ref('')
 const enabled = ref(true)
 const autoLoadModels = ref(false)
 const syncInterval = ref<number | null>(3600)
+const priceMultiplier = ref(1.0)
 const protocols = ref<ProtocolRow[]>([])
 const nameError = ref('')
 const apiKeyError = ref('')
@@ -97,6 +98,7 @@ function resetForm(): void {
   enabled.value = provider?.enabled ?? true
   autoLoadModels.value = provider?.auto_load_models ?? false
   syncInterval.value = provider?.model_sync_interval_seconds ?? 3600
+  priceMultiplier.value = provider?.price_multiplier ?? 1.0
   protocols.value =
     provider === null
       ? [newProtocolRow()]
@@ -316,6 +318,7 @@ function submitForm(): void {
       auto_load_models: autoLoadModels.value,
       model_sync_interval_seconds: interval,
       protocols: protocolPayload,
+      price_multiplier: priceMultiplier.value,
     })
     return
   }
@@ -333,6 +336,9 @@ function submitForm(): void {
     payload.model_sync_interval_seconds = interval
   }
   if (protocolsChanged()) payload.protocols = protocolPayload
+  if (priceMultiplier.value !== provider.price_multiplier) {
+    payload.price_multiplier = priceMultiplier.value
+  }
   emit('submit', payload)
 }
 </script>
@@ -375,6 +381,24 @@ function submitForm(): void {
               :step="60"
               controls-position="right"
             />
+          </ElFormItem>
+          <ElFormItem
+            data-test="price-multiplier-field"
+            data-validation="price-multiplier"
+            label="价格倍率"
+          >
+            <ElInputNumber
+              v-model="priceMultiplier"
+              data-test="provider-price-multiplier"
+              :min="0.10"
+              :max="10.00"
+              :step="0.1"
+              :precision="2"
+              controls-position="right"
+            />
+            <div class="form-help">
+              应用于该供应商所有模型的价格倍率（0.10 ~ 10.00）
+            </div>
           </ElFormItem>
         </div>
 
@@ -627,6 +651,13 @@ function submitForm(): void {
   color: var(--el-color-danger);
   font-size: 0.75rem;
   line-height: 1.2;
+}
+
+.form-help {
+  margin: 0.25rem 0 0;
+  color: var(--gateway-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
 }
 
 select {
