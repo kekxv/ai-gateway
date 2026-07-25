@@ -34,11 +34,18 @@ def calculate_cost(
     *,
     input_price: Decimal | None = None,
     output_price: Decimal | None = None,
+    model_multiplier: Decimal | None = None,
+    provider_multiplier: Decimal | None = None,
 ) -> Decimal:
     """Calculate a model charge using only Decimal arithmetic.
 
-    Catalog prices are expressed per million tokens. The final combined charge is
-    rounded once to the ledger's eight-decimal precision using ROUND_HALF_UP.
+    Catalog prices are expressed per million tokens. Optional ``model_multiplier``
+    and ``provider_multiplier`` are applied multiplicatively to the base cost
+    before final quantization. When both are supplied the effective multiplier
+    is ``model_multiplier * provider_multiplier``. ``None`` values are ignored,
+    preserving backward compatibility with callers that do not pass multipliers.
+    The final combined charge is rounded once to the ledger's eight-decimal
+    precision using ROUND_HALF_UP.
     """
 
     if usage is None:
@@ -57,4 +64,10 @@ def calculate_cost(
     unrounded = (
         Decimal(usage.input_tokens) * input_price + Decimal(usage.output_tokens) * output_price
     ) / TOKENS_PER_MILLION
+
+    if model_multiplier is not None:
+        unrounded *= model_multiplier
+    if provider_multiplier is not None:
+        unrounded *= provider_multiplier
+
     return unrounded.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
