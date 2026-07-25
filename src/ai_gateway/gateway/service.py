@@ -46,7 +46,7 @@ from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import Protocol, UsageSource
 from ai_gateway.core.errors import GatewayError
 from ai_gateway.core.logging import current_request_id
-from ai_gateway.db.models import Model
+from ai_gateway.db.models import Model, Provider
 from ai_gateway.protocols.base import (
     UnsupportedFeatureError,
     is_object,
@@ -256,6 +256,7 @@ class GatewayService:
         pending_usage_result: UsageResult | None = None
         settled_usage_result: UsageResult | None = None
         audit_terminal = False
+        provider: Provider | None = None
         try:
             correlation_id = _audit_correlation_id(request)
             audit_metadata = {
@@ -319,6 +320,9 @@ class GatewayService:
                 )
             route = attempt_response.route
             upstream = attempt_response.response
+
+            # Load the provider for billing multiplier application
+            provider = await self._session.get(Provider, route.provider_id)
 
             if upstream.status_code >= 400:
                 if canonical.stream:
@@ -402,6 +406,7 @@ class GatewayService:
                 model=priced_model,
                 usage=usage_result.usage,
                 usage_source=usage_result.usage_source,
+                provider=provider,
             )
             settled = True
             settled_cost = settlement.actual_cost
@@ -589,6 +594,9 @@ class GatewayService:
         except BaseException as cleanup_exc:
             _log_cleanup_failure("stream_response_close", cleanup_exc)
 
+        # Load provider for billing multiplier application
+        provider = await self._session.get(Provider, route.provider_id)
+
         usage_result = _stream_usage_result(context, request)
         settlement_cost = Decimal("0")
         billing_recovery_pending = False
@@ -608,6 +616,7 @@ class GatewayService:
                 model=priced_model,
                 usage=usage_result.usage,
                 usage_source=usage_result.usage_source,
+                provider=provider,
             )
             settlement_cost = settlement.actual_cost
         except BaseException as cleanup_exc:
@@ -710,6 +719,11 @@ class GatewayService:
         audit_terminal: bool,
         started_at: float,
     ) -> None:
+        # Load provider for billing multiplier application (if route is known)
+        provider: Provider | None = None
+        if final_route is not None:
+            provider = await self._session.get(Provider, final_route.provider_id)
+
         cleanup_cost = settled_cost
         charged_usage_result = settled_usage_result
         if not settled:
@@ -723,6 +737,7 @@ class GatewayService:
                         model=priced_model,
                         usage=pending_usage_result.usage,
                         usage_source=pending_usage_result.usage_source,
+                        provider=provider,
                     )
                     cleanup_cost = recovered.actual_cost
                     charged_usage_result = pending_usage_result
