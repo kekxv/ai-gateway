@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Edit, Delete, Plus } from '@element-plus/icons-vue'
+import { Edit, Delete, Plus, CopyDocument, Check } from '@element-plus/icons-vue'
 import { ElButton, ElIcon, ElTag } from 'element-plus'
 import type {
   ModelResponse,
@@ -32,7 +32,8 @@ const emit = defineEmits<{
   createRoute: []
 }>()
 
-const expanded = ref(false)
+const routesExpanded = ref(false)
+const copiedField = ref<string | null>(null)
 
 const protocolLabels: Readonly<Record<Protocol, string>> = {
   openai: 'OpenAI',
@@ -85,13 +86,40 @@ const routeStats = computed(() => {
   const healthy = props.routes.filter((r) => r.runtime_state === 'closed').length
   return { enabled, healthy, total: props.routes.length }
 })
+
+async function copyToClipboard(text: string, field: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+    copiedField.value = field
+    setTimeout(() => {
+      copiedField.value = null
+    }, 2000)
+  } catch {
+    // Fallback for older browsers
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    try {
+      document.execCommand('copy')
+      copiedField.value = field
+      setTimeout(() => {
+        copiedField.value = null
+      }, 2000)
+    } finally {
+      document.body.removeChild(textarea)
+    }
+  }
+}
 </script>
 
 <template>
-  <div class="model-card" :class="{ 'is-disabled': !model.enabled, 'is-expanded': expanded }">
+  <div class="model-card" :class="{ 'is-disabled': !model.enabled }">
     <div class="card-header">
       <div class="model-info">
-        <h3 class="model-name">{{ model.display_name }}</h3>
+        <h3 class="model-name" :title="model.display_name">{{ model.display_name }}</h3>
         <StatusTag :status="model.enabled ? 'enabled' : 'disabled'" />
       </div>
       <div class="card-actions">
@@ -116,7 +144,16 @@ const routeStats = computed(() => {
       <div class="basic-info">
         <div class="info-item">
           <span class="label">规范名称：</span>
-          <code class="value">{{ model.canonical_name }}</code>
+          <button
+            class="copyable-code"
+            :class="{ 'is-copied': copiedField === 'canonical' }"
+            :title="`点击复制: ${model.canonical_name}`"
+            @click="copyToClipboard(model.canonical_name, 'canonical')"
+          >
+            <code>{{ model.canonical_name }}</code>
+            <ElIcon v-if="copiedField === 'canonical'" class="copy-icon"><Check /></ElIcon>
+            <ElIcon v-else class="copy-icon"><CopyDocument /></ElIcon>
+          </button>
         </div>
         <div class="info-item">
           <span class="label">输入价格：</span>
@@ -145,15 +182,21 @@ const routeStats = computed(() => {
 
       <div class="routes-section">
         <div class="routes-header">
-          <div class="section-title">
-            模型路由
-            <ElTag size="small" type="info" effect="plain">
-              {{ routeStats.enabled }}/{{ routeStats.total }} 启用
-            </ElTag>
-            <ElTag size="small" type="success" effect="plain">
-              {{ routeStats.healthy }}/{{ routeStats.total }} 健康
-            </ElTag>
-          </div>
+          <button
+            class="routes-toggle"
+            @click="routesExpanded = !routesExpanded"
+          >
+            <div class="section-title">
+              模型路由
+              <ElTag size="small" type="info" effect="plain">
+                {{ routeStats.enabled }}/{{ routeStats.total }} 启用
+              </ElTag>
+              <ElTag size="small" type="success" effect="plain">
+                {{ routeStats.healthy }}/{{ routeStats.total }} 健康
+              </ElTag>
+            </div>
+            <span class="expand-indicator">{{ routesExpanded ? '收起' : '展开' }}</span>
+          </button>
           <ElButton
             size="small"
             type="primary"
@@ -171,7 +214,7 @@ const routeStats = computed(() => {
         <div v-else-if="routes.length === 0" class="routes-empty">
           <div class="empty-text">暂无路由配置</div>
         </div>
-        <div v-else class="routes-grid">
+        <div v-else-if="routesExpanded" class="routes-grid">
           <div
             v-for="route in routes"
             :key="route.id"
@@ -223,6 +266,28 @@ const routeStats = computed(() => {
             </div>
           </div>
         </div>
+        <div v-else class="routes-collapsed">
+          <div class="collapsed-routes">
+            <div
+              v-for="route in routes.slice(0, 3)"
+              :key="route.id"
+              class="collapsed-route-tag"
+            >
+              <ElTag
+                size="small"
+                :type="route.enabled ? (route.runtime_state === 'closed' ? 'success' : route.runtime_state === 'open' ? 'danger' : 'warning') : 'info'"
+                effect="light"
+              >
+                {{ providerName(route.provider_id) }} · {{ route.upstream_model }}
+              </ElTag>
+            </div>
+            <div v-if="routes.length > 3" class="more-routes">
+              <ElTag size="small" type="info" effect="plain">
+                +{{ routes.length - 3 }} 更多
+              </ElTag>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -247,11 +312,6 @@ const routeStats = computed(() => {
 .model-card.is-disabled {
   opacity: 0.65;
   background: #f1f5f9;
-}
-
-.model-card.is-expanded {
-  border-color: var(--gateway-brand);
-  box-shadow: 0 8px 24px rgb(37 99 235 / 0.15);
 }
 
 .card-header {
@@ -326,14 +386,47 @@ const routeStats = computed(() => {
   font-weight: 600;
 }
 
-code {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  background: #e2e8f0;
+.copyable-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
   padding: 0.25rem 0.5rem;
+  background: #e2e8f0;
   border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s;
+  font: inherit;
+}
+
+.copyable-code:hover {
+  border-color: var(--gateway-brand);
+  background: #cbd5e1;
+}
+
+.copyable-code.is-copied {
+  background: #d1fae5;
+  border-color: #10b981;
+}
+
+.copyable-code code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
   font-size: 0.8125rem;
   font-weight: 600;
   color: #334155;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border-radius: 0;
+}
+
+.copy-icon {
+  font-size: 0.75rem;
+  color: var(--gateway-muted);
+}
+
+.copyable-code.is-copied .copy-icon {
+  color: #10b981;
 }
 
 .aliases-section {
@@ -370,6 +463,35 @@ code {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 1rem;
+}
+
+.routes-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.routes-toggle:hover .section-title {
+  opacity: 1;
+}
+
+.routes-toggle .section-title {
+  margin-bottom: 0;
+  transition: opacity 0.2s;
+}
+
+.expand-indicator {
+  font-size: 0.75rem;
+  color: var(--gateway-brand);
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .routes-loading,
@@ -497,6 +619,25 @@ code {
   border: 1px solid #f87171;
 }
 
+.routes-collapsed {
+  padding: 0.5rem 0;
+}
+
+.collapsed-routes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.collapsed-route-tag {
+  display: inline-block;
+}
+
+.more-routes {
+  display: inline-block;
+}
+
 @media (max-width: 640px) {
   .card-header {
     flex-direction: column;
@@ -513,6 +654,12 @@ code {
 
   .routes-grid {
     grid-template-columns: 1fr;
+  }
+
+  .routes-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
   }
 }
 </style>
