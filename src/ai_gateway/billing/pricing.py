@@ -16,7 +16,14 @@ class PricedModel(Protocol):
 
 
 @overload
-def calculate_cost(model: PricedModel, usage: CanonicalUsage, /) -> Decimal: ...
+def calculate_cost(
+    model: PricedModel,
+    usage: CanonicalUsage,
+    /,
+    *,
+    model_multiplier: Decimal | None = None,
+    provider_multiplier: Decimal | None = None,
+) -> Decimal: ...
 
 
 @overload
@@ -25,6 +32,8 @@ def calculate_cost(
     input_price: Decimal,
     output_price: Decimal,
     usage: CanonicalUsage,
+    model_multiplier: Decimal | None = None,
+    provider_multiplier: Decimal | None = None,
 ) -> Decimal: ...
 
 
