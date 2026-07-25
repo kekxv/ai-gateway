@@ -45,6 +45,12 @@ class Provider(Base):
         server_default=text("3600"),
     )
     last_model_sync_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    price_multiplier: Mapped[Decimal] = mapped_column(
+        Numeric(4, 2),
+        default=Decimal("1.00"),
+        server_default=text("1.00"),
+        nullable=False,
+    )
 
     protocols: Mapped[list[ProviderProtocol]] = relationship(
         back_populates="provider",
@@ -95,6 +101,12 @@ class Model(Base):
         Numeric(20, 8),
         default=Decimal("0"),
         server_default=text("0.00000000"),
+    )
+    price_multiplier: Mapped[Decimal] = mapped_column(
+        Numeric(4, 2),
+        default=Decimal("1.00"),
+        server_default=text("1.00"),
+        nullable=False,
     )
     routing_strategy: Mapped[str] = mapped_column(
         Enum("weighted_random", name="routing_strategy"),
