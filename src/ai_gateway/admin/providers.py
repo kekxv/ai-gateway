@@ -55,6 +55,7 @@ async def create_provider(
             if payload.model_sync_interval_seconds is not None
             else settings.model_sync_interval_seconds
         ),
+        price_multiplier=payload.price_multiplier,
         protocols=[_new_protocol(item, settings) for item in payload.protocols],
     )
     session.add(provider)

@@ -56,6 +56,7 @@ class ProviderCreate(BaseModel):
     auto_load_models: bool = False
     model_sync_interval_seconds: int | None = Field(default=None, ge=1)
     protocols: list[ProviderProtocolInput] = Field(default_factory=list)
+    price_multiplier: PriceMultiplier = Decimal("1.00")
 
 
 class ProviderUpdate(BaseModel):
