@@ -32,7 +32,7 @@ from ai_gateway.catalog.repository import CatalogRepository
 from ai_gateway.catalog.schemas import ResolvedModel
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import Protocol, UsageSource
-from ai_gateway.db.models import Model
+from ai_gateway.db.models import Model, Provider
 from ai_gateway.db.session import get_session
 from ai_gateway.protocols.types import CanonicalUsage
 from ai_gateway.routing.service import router_for_settings
@@ -75,6 +75,7 @@ class BillingBackend(TypingProtocol):
         usage: CanonicalUsage | None = None,
         cost: Decimal | None = None,
         usage_source: UsageSource | None = None,
+        provider: Provider | None = None,
     ) -> SettlementResult: ...
 
     async def update_reservation_recovery(
@@ -235,6 +236,7 @@ class WebSocketBillingCycle:
         token_threshold: int = 100_000,
         interval_seconds: float = 60,
         reservation_ttl_seconds: float = 300,
+        provider: Provider | None = None,
     ) -> None:
         self._billing = billing
         self._user_id = user_id
@@ -253,6 +255,7 @@ class WebSocketBillingCycle:
         self._reconciliation_sequence = 0
         self._last_settled_request_id: str | None = None
         self._lock = anyio.Lock()
+        self._provider = provider
         self.actual_cost = Decimal("0")
         self.charged_cost = Decimal("0")
         self.uncollected_cost = Decimal("0")
@@ -498,6 +501,7 @@ class WebSocketBillingCycle:
             usage=usage,
             cost=cost,
             usage_source=usage_source,
+            provider=self._provider,
         )
 
 
@@ -563,6 +567,9 @@ class WebSocketGatewayService:
             if priced_model is None:
                 raise RuntimeError("resolved catalog model disappeared")
 
+            # Load provider for billing multiplier application
+            provider = await self._session.get(Provider, route.provider_id)
+
             request_id = uuid4()
             billing_key = f"websocket:{principal.user_id}:{principal.api_key_id}:{request_id}"
             audit_id = await self._audit.start_request(
@@ -594,6 +601,7 @@ class WebSocketGatewayService:
                     "billing_reservation_ttl_seconds",
                     300,
                 ),
+                provider=provider,
             )
             await billing_cycle.reserve_initial(
                 estimated_input_tokens=estimate_websocket_frame_tokens(initial_request)
