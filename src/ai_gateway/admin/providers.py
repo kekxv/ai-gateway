@@ -112,6 +112,8 @@ async def update_provider(
     if payload.protocols is not None:
         _validate_protocol_payloads(payload.protocols, creating=False)
         await _replace_protocols(session, provider, payload.protocols, settings)
+    if payload.price_multiplier is not None:
+        provider.price_multiplier = payload.price_multiplier
     try:
         await session.flush()
         response = _provider_response(provider)
@@ -278,6 +280,7 @@ def _provider_response(provider: Provider) -> ProviderResponse:
             )
             for protocol in protocols
         ],
+        price_multiplier=provider.price_multiplier,
     )
 
 

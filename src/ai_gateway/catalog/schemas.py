@@ -23,6 +23,9 @@ WebsocketUrl = Annotated[
 ]
 JsonObject = dict[str, JsonValue]
 Price = Annotated[Decimal, Field(ge=0, max_digits=20, decimal_places=8)]
+PriceMultiplier = Annotated[
+    Decimal, Field(ge=Decimal("0.10"), le=Decimal("10.00"), max_digits=20, decimal_places=8)
+]
 RoutingStrategy = Literal["weighted_random"]
 
 
@@ -64,6 +67,7 @@ class ProviderUpdate(BaseModel):
     auto_load_models: bool | None = None
     model_sync_interval_seconds: int | None = Field(default=None, ge=1)
     protocols: list[ProviderProtocolInput] | None = None
+    price_multiplier: PriceMultiplier | None = None
 
 
 class ProviderProtocolResponse(BaseModel):
@@ -84,6 +88,7 @@ class ProviderResponse(BaseModel):
     model_sync_interval_seconds: int
     last_model_sync_at: datetime | None
     protocols: list[ProviderProtocolResponse]
+    price_multiplier: Decimal
 
 
 class ModelAliasInput(BaseModel):
@@ -123,6 +128,7 @@ class ModelUpdate(BaseModel):
     enabled: bool | None = None
     aliases: list[AliasInput] | None = None
     routing_strategy: RoutingStrategy | None = None
+    price_multiplier: PriceMultiplier | None = None
 
     @model_validator(mode="after")
     def validate_aliases(self) -> ModelUpdate:
@@ -148,6 +154,7 @@ class ModelResponse(BaseModel):
     routing_strategy: RoutingStrategy
     created_at: datetime
     updated_at: datetime
+    price_multiplier: Decimal
 
 
 class ModelRouteCreate(BaseModel):

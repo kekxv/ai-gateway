@@ -117,6 +117,8 @@ async def update_model(
         model.enabled = payload.enabled
     if payload.routing_strategy is not None:
         model.routing_strategy = payload.routing_strategy
+    if payload.price_multiplier is not None:
+        model.price_multiplier = payload.price_multiplier
     if aliases is not None:
         _replace_aliases(model, aliases)
     try:
@@ -371,6 +373,7 @@ def _model_response(model: Model) -> ModelResponse:
         routing_strategy=cast(RoutingStrategy, model.routing_strategy),
         created_at=model.created_at,
         updated_at=model.updated_at,
+        price_multiplier=model.price_multiplier,
     )
 
 
