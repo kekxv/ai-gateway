@@ -58,6 +58,7 @@ async def create_model(payload: ModelCreate, session: Session, _: AdminUser) -> 
         output_price_per_million=payload.output_price_per_million,
         enabled=payload.enabled,
         routing_strategy=payload.routing_strategy,
+        price_multiplier=payload.price_multiplier,
         aliases=[ModelAlias(alias=item.alias, enabled=item.enabled) for item in aliases],
     )
     session.add(model)

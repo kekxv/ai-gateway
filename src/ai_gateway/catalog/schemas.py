@@ -112,6 +112,7 @@ class ModelCreate(BaseModel):
     enabled: bool = True
     aliases: list[AliasInput] = Field(default_factory=list)
     routing_strategy: RoutingStrategy = "weighted_random"
+    price_multiplier: PriceMultiplier = Decimal("1.00")
 
     @model_validator(mode="after")
     def validate_aliases(self) -> ModelCreate:

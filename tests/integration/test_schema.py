@@ -69,6 +69,7 @@ def test_schema_contains_exact_tables_and_columns() -> None:
             "auto_load_models",
             "model_sync_interval_seconds",
             "last_model_sync_at",
+            "price_multiplier",
         },
         "provider_protocols": {
             "id",
@@ -86,6 +87,7 @@ def test_schema_contains_exact_tables_and_columns() -> None:
             "enabled",
             "input_price_per_million",
             "output_price_per_million",
+            "price_multiplier",
             "routing_strategy",
             "created_at",
             "updated_at",
