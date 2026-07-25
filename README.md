@@ -30,7 +30,7 @@ scale containers horizontally.
 - Exact `Decimal` balance accounting, reservations, settlement, adjustments, and an immutable
   ledger.
 - Redacted request logs with cursor pagination and GZIP-compressed request/response details.
-- 支持供应商和模型级别的价格倍率配置，灵活调整计费价格。
+- Support for provider and model-level price multipliers for flexible billing adjustments.
 - A Chinese Vue 3 administration console for day-to-day gateway operations.
 
 ## Supported interfaces
