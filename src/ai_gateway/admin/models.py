@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ai_gateway.admin.audit import log_multiplier_change
 from ai_gateway.auth.dependencies import admin_user
 from ai_gateway.auth.service import raise_auth_error
 from ai_gateway.catalog.schemas import (
@@ -92,7 +93,7 @@ async def update_model(
     model_id: int,
     payload: ModelUpdate,
     session: Session,
-    _: AdminUser,
+    admin: AdminUser,
 ) -> ModelResponse:
     model = await _get_model(session, model_id)
     aliases = alias_values(payload.aliases) if payload.aliases is not None else None
@@ -106,6 +107,7 @@ async def update_model(
             else [ModelAliasInput(alias=item.alias, enabled=item.enabled) for item in model.aliases]
         ),
     )
+    old_multiplier = model.price_multiplier
     if payload.canonical_name is not None:
         model.canonical_name = payload.canonical_name
     if payload.display_name is not None:
@@ -120,6 +122,14 @@ async def update_model(
         model.routing_strategy = payload.routing_strategy
     if payload.price_multiplier is not None:
         model.price_multiplier = payload.price_multiplier
+        await log_multiplier_change(
+            session=session,
+            user_id=admin.id,
+            resource_type="model",
+            resource_id=model_id,
+            old_value=old_multiplier,
+            new_value=payload.price_multiplier,
+        )
     if aliases is not None:
         _replace_aliases(model, aliases)
     try:

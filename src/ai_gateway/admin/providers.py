@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ai_gateway.admin.audit import log_multiplier_change
 from ai_gateway.auth.dependencies import admin_user
 from ai_gateway.auth.service import raise_auth_error
 from ai_gateway.catalog.schemas import (
@@ -90,10 +91,11 @@ async def update_provider(
     provider_id: int,
     payload: ProviderUpdate,
     session: Session,
-    _: AdminUser,
+    admin: AdminUser,
     settings: AppSettings,
 ) -> ProviderResponse:
     provider = await _get_provider(session, provider_id)
+    old_multiplier = provider.price_multiplier
     if payload.name is not None:
         provider.name = payload.name
     if "credential" in payload.model_fields_set:
@@ -115,6 +117,14 @@ async def update_provider(
         await _replace_protocols(session, provider, payload.protocols, settings)
     if payload.price_multiplier is not None:
         provider.price_multiplier = payload.price_multiplier
+        await log_multiplier_change(
+            session=session,
+            user_id=admin.id,
+            resource_type="provider",
+            resource_id=provider_id,
+            old_value=old_multiplier,
+            new_value=payload.price_multiplier,
+        )
     try:
         await session.flush()
         response = _provider_response(provider)

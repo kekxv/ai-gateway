@@ -114,3 +114,23 @@ class RequestLogDetail(Base):
         "RequestLog",
         back_populates="detail",
     )
+
+
+class ConfigAuditLog(Base):
+    """Configuration change audit log for tracking price_multiplier updates."""
+
+    __tablename__ = "config_audit_logs"
+    __table_args__ = (
+        Index("ix_config_audit_logs_resource", "resource_type", "resource_id"),
+        Index("ix_config_audit_logs_user_id", "user_id"),
+        Index("ix_config_audit_logs_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    action: Mapped[str] = mapped_column(String(100))
+    resource_type: Mapped[str] = mapped_column(String(50))
+    resource_id: Mapped[int] = mapped_column(Integer)
+    old_value: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    new_value: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

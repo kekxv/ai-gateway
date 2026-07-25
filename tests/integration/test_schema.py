@@ -20,6 +20,7 @@ from ai_gateway.db.models import (
     ApiKey,
     ApiKeyModel,
     ApiKeyProvider,
+    ConfigAuditLog,
     LedgerEntry,
     Model,
     ModelAlias,
@@ -146,6 +147,16 @@ def test_schema_contains_exact_tables_and_columns() -> None:
             "id",
             "request_detail_gzip",
             "response_detail_gzip",
+            "created_at",
+        },
+        "config_audit_logs": {
+            "id",
+            "user_id",
+            "action",
+            "resource_type",
+            "resource_id",
+            "old_value",
+            "new_value",
             "created_at",
         },
     }
@@ -351,5 +362,6 @@ assert all(
         LedgerEntry,
         RequestLog,
         RequestLogDetail,
+        ConfigAuditLog,
     )
 )
