@@ -163,6 +163,12 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
           <span class="label">输出价格：</span>
           <span class="value">{{ formatMoney(model.output_price_per_million) }}</span>
         </div>
+        <div v-if="parseFloat(String(model.price_multiplier ?? 1)) !== 1.00" class="info-item multiplier">
+          <span class="label">价格倍率：</span>
+          <ElTag type="warning" size="small">
+            {{ parseFloat(String(model.price_multiplier ?? 1)).toFixed(2) }}x
+          </ElTag>
+        </div>
       </div>
 
       <div v-if="model.aliases.length > 0" class="aliases-section">
@@ -383,6 +389,17 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
 .info-item .value {
   color: var(--gateway-text);
   font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.info-item.multiplier {
+  grid-column: 1 / -1;
+  margin-top: 0.25rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.info-item.multiplier .label {
   font-weight: 600;
 }
 
