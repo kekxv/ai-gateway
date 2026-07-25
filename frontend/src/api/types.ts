@@ -201,6 +201,7 @@ export interface ModelCreate {
   display_name: string
   input_price_per_million?: string
   output_price_per_million?: string
+  price_multiplier?: number
   enabled?: boolean
   aliases?: AliasInput[]
   routing_strategy?: RoutingStrategy
@@ -211,6 +212,7 @@ export interface ModelUpdate {
   display_name?: string | null
   input_price_per_million?: string | null
   output_price_per_million?: string | null
+  price_multiplier?: number | null
   enabled?: boolean | null
   aliases?: AliasInput[] | null
   routing_strategy?: RoutingStrategy | null
@@ -228,6 +230,7 @@ export interface ModelResponse {
   display_name: string
   input_price_per_million: string
   output_price_per_million: string
+  price_multiplier: number
   enabled: boolean
   aliases: ModelAliasResponse[]
   routing_strategy: RoutingStrategy

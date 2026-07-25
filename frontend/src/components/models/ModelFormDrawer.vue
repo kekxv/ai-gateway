@@ -8,6 +8,7 @@ import {
   ElFormItem,
   ElIcon,
   ElInput,
+  ElInputNumber,
   ElSwitch,
 } from 'element-plus'
 import 'element-plus/theme-chalk/el-button.css'
@@ -15,6 +16,7 @@ import 'element-plus/theme-chalk/el-drawer.css'
 import 'element-plus/theme-chalk/el-form.css'
 import 'element-plus/theme-chalk/el-form-item.css'
 import 'element-plus/theme-chalk/el-input.css'
+import 'element-plus/theme-chalk/el-input-number.css'
 import 'element-plus/theme-chalk/el-overlay.css'
 import 'element-plus/theme-chalk/el-switch.css'
 
@@ -45,6 +47,7 @@ const canonicalName = ref('')
 const displayName = ref('')
 const inputPrice = ref('0')
 const outputPrice = ref('0')
+const priceMultiplier = ref(1.0)
 const enabled = ref(true)
 const aliases = ref<AliasRow[]>([])
 const canonicalNameError = ref('')
@@ -118,6 +121,7 @@ function clearDraft(): void {
   displayName.value = ''
   inputPrice.value = '0'
   outputPrice.value = '0'
+  priceMultiplier.value = 1.0
   enabled.value = true
   aliases.value = []
   resetErrors()
@@ -129,6 +133,7 @@ function resetForm(): void {
   displayName.value = model?.display_name ?? ''
   inputPrice.value = normalizeDecimalInput(model?.input_price_per_million ?? '0')
   outputPrice.value = normalizeDecimalInput(model?.output_price_per_million ?? '0')
+  priceMultiplier.value = model?.price_multiplier ?? 1.0
   enabled.value = model?.enabled ?? true
   aliases.value =
     model?.aliases.map((alias) => ({
@@ -249,6 +254,7 @@ function submitForm(): void {
       display_name: display,
       input_price_per_million: inputPrice.value,
       output_price_per_million: outputPrice.value,
+      price_multiplier: priceMultiplier.value,
       enabled: enabled.value,
       aliases: aliasPayload,
       routing_strategy: 'weighted_random',
@@ -266,6 +272,9 @@ function submitForm(): void {
   }
   if (outputPrice.value !== normalizeDecimalInput(model.output_price_per_million)) {
     payload.output_price_per_million = outputPrice.value
+  }
+  if (priceMultiplier.value !== model.price_multiplier) {
+    payload.price_multiplier = priceMultiplier.value
   }
   if (enabled.value !== model.enabled) payload.enabled = enabled.value
   if (aliasesChanged(model)) payload.aliases = aliasPayload
@@ -331,6 +340,25 @@ function submitForm(): void {
               inputmode="decimal"
               spellcheck="false"
             />
+          </ElFormItem>
+          <ElFormItem
+            data-test="price-multiplier-field"
+            data-validation="price-multiplier"
+            label="价格倍率"
+          >
+            <ElInputNumber
+              v-model="priceMultiplier"
+              data-test="model-price-multiplier"
+              :min="0.10"
+              :max="10.00"
+              :step="0.1"
+              :precision="2"
+              :placeholder="'1.00'"
+              controls-position="right"
+            />
+            <div class="form-help">
+              应用于该模型的价格倍率（0.10 ~ 10.00）
+            </div>
           </ElFormItem>
         </div>
 
@@ -491,6 +519,13 @@ function submitForm(): void {
   text-align: center;
   background: #f8fafc;
   border-radius: 10px;
+}
+
+.form-help {
+  margin: 0.25rem 0 0;
+  color: var(--gateway-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
 }
 
 .drawer-actions {

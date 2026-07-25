@@ -34,6 +34,7 @@ const modelFixture: ModelResponse = {
   display_name: 'GPT 4.1',
   input_price_per_million: '2.00000000',
   output_price_per_million: '8.00000000',
+  price_multiplier: 1.0,
   enabled: true,
   aliases: [
     { id: 101, alias: 'fast-chat', enabled: true },
@@ -160,6 +161,7 @@ describe('模型与别名管理', () => {
       display_name: 'GPT 4.1',
       input_price_per_million: '2.00000000',
       output_price_per_million: '8.00000000',
+      price_multiplier: 1.0,
       enabled: true,
       aliases: [{ alias: 'fast-chat', enabled: false }],
       routing_strategy: 'weighted_random',
