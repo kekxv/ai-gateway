@@ -19,6 +19,7 @@ const props = defineProps<{
   providers: ProviderResponse[]
   loading?: boolean
   nonDeletable?: boolean
+  nonDeletableRouteIds?: ReadonlySet<number>
   routesLoading?: boolean
 }>()
 
@@ -120,17 +121,26 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
     <div class="card-header">
       <div class="model-info">
         <h3 class="model-name" :title="model.display_name">{{ model.display_name }}</h3>
-        <StatusTag :status="model.enabled ? 'enabled' : 'disabled'" />
+        <StatusTag
+          :data-test="`model-status-${String(model.id)}`"
+          :status="model.enabled ? 'enabled' : 'disabled'"
+        />
       </div>
       <div class="card-actions">
-        <ElButton size="small" @click="emit('edit', model)">
+        <ElButton
+          :data-test="`edit-model-${String(model.id)}`"
+          size="small"
+          :disabled="loading === true"
+          @click="emit('edit', model)"
+        >
           <ElIcon><Edit /></ElIcon>
           编辑
         </ElButton>
         <ElButton
           size="small"
           type="danger"
-          :disabled="nonDeletable"
+          :data-test="`delete-model-${String(model.id)}`"
+          :disabled="loading === true || nonDeletable === true"
           :title="nonDeletable ? '该模型已有请求历史，请改为停用' : undefined"
           @click="emit('delete', model)"
         >
@@ -190,12 +200,13 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
         <div class="routes-header">
           <button
             class="routes-toggle"
+            :disabled="routesLoading"
             @click="routesExpanded = !routesExpanded"
           >
             <div class="section-title">
               模型路由
               <ElTag size="small" type="info" effect="plain">
-                {{ routeStats.enabled }}/{{ routeStats.total }} 启用
+                {{ routeStats.enabled }}/<span :data-test="`route-count-${String(model.id)}`">{{ routeStats.total }}</span> 启用
               </ElTag>
               <ElTag size="small" type="success" effect="plain">
                 {{ routeStats.healthy }}/{{ routeStats.total }} 健康
@@ -207,6 +218,8 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
             size="small"
             type="primary"
             plain
+            :data-test="`create-route-${String(model.id)}`"
+            :disabled="loading === true || routesLoading === true"
             @click="emit('createRoute')"
           >
             <ElIcon><Plus /></ElIcon>
@@ -238,22 +251,45 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
                 <span class="provider-name">{{ providerName(route.provider_id) }}</span>
               </div>
               <div class="route-actions">
-                <ElButton size="small" text @click="emit('editRoute', route)">
+                <ElButton
+                  :data-test="`edit-route-${String(route.id)}`"
+                  size="small"
+                  text
+                  :disabled="loading === true"
+                  @click="emit('editRoute', route)"
+                >
                   <ElIcon><Edit /></ElIcon>
                 </ElButton>
                 <ElButton
+                  :data-test="`delete-route-${String(route.id)}`"
                   size="small"
                   text
                   type="danger"
+                  :disabled="loading === true || nonDeletableRouteIds?.has(route.id) === true"
+                  :title="nonDeletableRouteIds?.has(route.id) ? '该路由已有请求历史，请改为停用' : undefined"
                   @click="emit('deleteRoute', route)"
                 >
                   <ElIcon><Delete /></ElIcon>
+                </ElButton>
+                <ElButton
+                  :data-test="`disable-route-${String(route.id)}`"
+                  size="small"
+                  text
+                  type="warning"
+                  :disabled="loading === true || !route.enabled"
+                  @click="emit('disableRoute', route.id, route.model_id)"
+                >
+                  停用
                 </ElButton>
               </div>
             </div>
             <div class="route-model">{{ route.upstream_model }}</div>
             <div class="route-stats">
               <span class="stat">权重: {{ route.weight }}</span>
+              <StatusTag
+                :data-test="`route-status-${String(route.id)}`"
+                :status="route.enabled ? 'enabled' : 'disabled'"
+              />
               <ElTag :type="runtimeDetails[route.runtime_state].type" size="small" effect="light">
                 {{ runtimeDetails[route.runtime_state].label }}
               </ElTag>

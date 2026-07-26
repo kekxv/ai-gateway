@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Delete, Edit, Plus, Search } from '@element-plus/icons-vue'
+import { Plus, Search } from '@element-plus/icons-vue'
 import {
   ElAlert,
   ElButton,
@@ -8,25 +8,19 @@ import {
   ElIcon,
   ElInput,
   ElMessageBox,
-  ElOption,
   ElResult,
-  ElSelect,
   ElSkeleton,
   ElSkeletonItem,
-  ElTag,
 } from 'element-plus'
 import 'element-plus/theme-chalk/el-alert.css'
 import 'element-plus/theme-chalk/el-button.css'
 import 'element-plus/theme-chalk/el-empty.css'
 import 'element-plus/theme-chalk/el-input.css'
 import 'element-plus/theme-chalk/el-message-box.css'
-import 'element-plus/theme-chalk/el-option.css'
 import 'element-plus/theme-chalk/el-overlay.css'
 import 'element-plus/theme-chalk/el-result.css'
-import 'element-plus/theme-chalk/el-select.css'
 import 'element-plus/theme-chalk/el-skeleton.css'
 import 'element-plus/theme-chalk/el-skeleton-item.css'
-import 'element-plus/theme-chalk/el-tag.css'
 
 import { ApiError } from '@/api/client'
 import {
@@ -47,14 +41,9 @@ import type {
   ModelRouteResponse,
   ModelRouteUpdate,
   ModelUpdate,
-  Protocol,
   ProviderResponse,
-  RouteRuntimeState,
-  RouteSource,
 } from '@/api/types'
-import { formatMoney } from '@/utils/format'
 import PageHeader from '@/components/common/PageHeader.vue'
-import StatusTag from '@/components/common/StatusTag.vue'
 import ModelFormDrawer from '@/components/models/ModelFormDrawer.vue'
 import RouteFormDrawer from '@/components/models/RouteFormDrawer.vue'
 import ModelCard from '@/components/models/ModelCard.vue'
@@ -81,15 +70,12 @@ interface RouteOperationState {
 const models = ref<ModelResponse[]>([])
 const providers = ref<ProviderResponse[]>([])
 const allRoutes = ref<ModelRouteResponse[]>([])
-const modelRoutes = ref<ModelRouteResponse[]>([])
-const selectedModelId = ref<number | null>(null)
 const searchText = ref('')
 const providerFilter = ref<number | null>(null)
 const loading = ref(true)
 const catalogReady = ref(false)
 const loadError = ref('')
-const routesLoading = ref(false)
-const routeLoadError = ref('')
+const routesLoading = ref(true)
 const modelNotice = ref<Notice | null>(null)
 const routeNotice = ref<RouteNotice | null>(null)
 const modelDrawerOpen = ref(false)
@@ -107,54 +93,17 @@ const deletedModelIds = new Set<number>()
 const deletedRouteIds = new Set<number>()
 const operationControllers = new Set<AbortController>()
 let loadController: AbortController | undefined
-let routeLoadController: AbortController | undefined
 let modelSaveController: AbortController | undefined
 let routeSaveController: AbortController | undefined
 let mounted = true
 let loadGeneration = 0
-let routeLoadGeneration = 0
 let stateRevision = 0
-let routeStateRevision = 0
-let selectionRevision = 0
 let modelDrawerSession = 0
 let routeDrawerSession = 0
 let activeModelSaveToken: symbol | undefined
 let activeRouteSaveToken: symbol | undefined
 
-const protocolLabels: Readonly<Record<Protocol, string>> = {
-  openai: 'OpenAI',
-  claude: 'Claude',
-  gemini: 'Gemini',
-}
-
-const sourceLabels: Readonly<Record<RouteSource, string>> = {
-  manual: '手动',
-  discovered: '自动发现',
-}
-
-const runtimeDetails: Readonly<
-  Record<RouteRuntimeState, { label: string; type: 'success' | 'warning' | 'danger' }>
-> = {
-  closed: { label: '健康', type: 'success' },
-  half_open: { label: '探测中', type: 'warning' },
-  open: { label: '不可用', type: 'danger' },
-}
-
-const selectedModel = computed(
-  () => models.value.find((model) => model.id === selectedModelId.value) ?? null,
-)
-
-const visibleRouteNotice = computed(() =>
-  routeNotice.value?.modelId === selectedModelId.value ? routeNotice.value : null,
-)
-
-const selectedContextBusy = computed(() => {
-  const modelId = selectedModelId.value
-  if (modelId === null) return false
-  return modelOperations.value.has(modelId) || hasRouteActivity(modelId)
-})
-
-const selectionLocked = computed(
+const controlsLocked = computed(
   () =>
     modelDrawerOpen.value ||
     routeDrawerOpen.value ||
@@ -190,14 +139,6 @@ const routesByModel = computed(() => {
     map.set(route.model_id, routes)
   }
   return map
-})
-
-const routeCounts = computed(() => {
-  const counts = new Map<number, number>()
-  for (const route of allRoutes.value) {
-    counts.set(route.model_id, (counts.get(route.model_id) ?? 0) + 1)
-  }
-  return counts
 })
 
 function errorText(error: unknown, fallback: string): string {
@@ -263,65 +204,9 @@ function isCurrentRouteOperation(
   return (
     mounted &&
     !controller.signal.aborted &&
-    selectedModelId.value === modelId &&
     current?.modelId === modelId &&
     current.operation === operation
   )
-}
-
-function hasRouteActivity(modelId: number): boolean {
-  if (routeDrawerOpen.value && routeDrawerModelId.value === modelId) return true
-  for (const operation of routeOperations.value.values()) {
-    if (operation.modelId === modelId) return true
-  }
-  return false
-}
-
-function setSelectedModelId(modelId: number | null): void {
-  if (selectedModelId.value === modelId) return
-  selectedModelId.value = modelId
-  selectionRevision += 1
-}
-
-async function loadRoutes(modelId: number): Promise<void> {
-  routeLoadController?.abort()
-  const controller = new AbortController()
-  routeLoadController = controller
-  const generation = ++routeLoadGeneration
-  const startingRevision = routeStateRevision
-  const startingSelectionRevision = selectionRevision
-  routesLoading.value = true
-  try {
-    const loadedRoutes = await listModelRoutes({ model_id: modelId }, controller.signal)
-    if (
-      !mounted ||
-      controller.signal.aborted ||
-      generation !== routeLoadGeneration ||
-      selectedModelId.value !== modelId ||
-      startingSelectionRevision !== selectionRevision ||
-      startingRevision !== routeStateRevision
-    ) {
-      return
-    }
-    modelRoutes.value = loadedRoutes.filter(
-      (route) => route.model_id === modelId && !deletedRouteIds.has(route.id),
-    )
-    routeLoadError.value = ''
-  } catch (error: unknown) {
-    if (
-      !mounted ||
-      controller.signal.aborted ||
-      generation !== routeLoadGeneration ||
-      selectedModelId.value !== modelId ||
-      startingSelectionRevision !== selectionRevision ||
-      startingRevision !== routeStateRevision
-    ) {
-      return
-    }
-    routeLoadError.value = errorText(error, '模型路由加载失败')
-  } finally {
-    if (mounted && generation === routeLoadGeneration) routesLoading.value = false
-  }
 }
 
 async function load(): Promise<void> {
@@ -330,8 +215,8 @@ async function load(): Promise<void> {
   loadController = controller
   const generation = ++loadGeneration
   const startingRevision = stateRevision
-  const startingSelectionRevision = selectionRevision
   loading.value = models.value.length === 0
+  routesLoading.value = true
   try {
     const [loadedModels, loadedProviders, loadedRoutes] = await Promise.all([
       listModels(controller.signal),
@@ -341,54 +226,28 @@ async function load(): Promise<void> {
     if (!mounted || controller.signal.aborted || generation !== loadGeneration) return
     providers.value = loadedProviders
     catalogReady.value = true
-    if (
-      startingRevision !== stateRevision ||
-      startingSelectionRevision !== selectionRevision
-    ) return
+    if (startingRevision !== stateRevision) return
     models.value = loadedModels.filter((model) => !deletedModelIds.has(model.id))
     allRoutes.value = loadedRoutes.filter(
       (route) => !deletedRouteIds.has(route.id) && !deletedModelIds.has(route.model_id),
     )
     loadError.value = ''
-    const currentStillExists = models.value.some((model) => model.id === selectedModelId.value)
-    setSelectedModelId(currentStillExists ? selectedModelId.value : (models.value[0]?.id ?? null))
-    if (selectedModelId.value === null) {
-      modelRoutes.value = []
-      routeLoadError.value = ''
-    } else {
-      void loadRoutes(selectedModelId.value)
-    }
   } catch (error: unknown) {
     if (
       !mounted ||
       controller.signal.aborted ||
       generation !== loadGeneration ||
-      startingRevision !== stateRevision ||
-      startingSelectionRevision !== selectionRevision
+      startingRevision !== stateRevision
     ) {
       return
     }
     loadError.value = errorText(error, '模型列表加载失败')
   } finally {
-    if (mounted && generation === loadGeneration) loading.value = false
+    if (mounted && generation === loadGeneration) {
+      loading.value = false
+      routesLoading.value = false
+    }
   }
-}
-
-function selectModel(model: ModelResponse): void {
-  if (
-    selectedModelId.value === model.id ||
-    modelDrawerOpen.value ||
-    routeDrawerOpen.value ||
-    modelSubmitting.value ||
-    routeSubmitting.value ||
-    selectionLocked.value
-  ) {
-    return
-  }
-  setSelectedModelId(model.id)
-  routeNotice.value = null
-  modelRoutes.value = []
-  void loadRoutes(model.id)
 }
 
 function replaceModel(updated: ModelResponse): void {
@@ -397,34 +256,21 @@ function replaceModel(updated: ModelResponse): void {
   const index = models.value.findIndex((model) => model.id === updated.id)
   if (index === -1) models.value.push(updated)
   else models.value.splice(index, 1, updated)
-  if (selectedModelId.value === null) {
-    setSelectedModelId(updated.id)
-    void loadRoutes(updated.id)
-  }
 }
 
 function replaceRoute(updated: ModelRouteResponse): void {
   stateRevision += 1
-  routeStateRevision += 1
   deletedRouteIds.delete(updated.id)
   const allIndex = allRoutes.value.findIndex((route) => route.id === updated.id)
   if (allIndex === -1) allRoutes.value.push(updated)
   else allRoutes.value.splice(allIndex, 1, updated)
-  if (selectedModelId.value === updated.model_id) {
-    const routeIndex = modelRoutes.value.findIndex((route) => route.id === updated.id)
-    if (routeIndex === -1) modelRoutes.value.push(updated)
-    else modelRoutes.value.splice(routeIndex, 1, updated)
-  }
 }
 
 function openCreateModel(): void {
   if (
     !catalogReady.value ||
     loading.value ||
-    modelSubmitting.value ||
-    modelDrawerOpen.value ||
-    routeDrawerOpen.value ||
-    selectedContextBusy.value
+    controlsLocked.value
   ) return
   modelDrawerSession += 1
   editingModel.value = null
@@ -433,13 +279,9 @@ function openCreateModel(): void {
 
 function openEditModel(model: ModelResponse): void {
   if (
-    modelSubmitting.value ||
     !catalogReady.value ||
     loading.value ||
-    modelDrawerOpen.value ||
-    routeDrawerOpen.value ||
-    hasRouteActivity(model.id) ||
-    selectedContextBusy.value ||
+    controlsLocked.value ||
     !beginModelOperation(model.id, 'edit')
   ) {
     return
@@ -521,38 +363,13 @@ async function saveModel(payload: ModelCreate | ModelUpdate): Promise<void> {
   }
 }
 
-function openCreateRoute(): void {
-  const modelId = selectedModelId.value
-  if (
-    !catalogReady.value ||
-    loading.value ||
-    selectedModel.value === null ||
-    modelId === null ||
-    routeSubmitting.value ||
-    modelDrawerOpen.value ||
-    routeDrawerOpen.value ||
-    modelOperations.value.has(modelId) ||
-    hasRouteActivity(modelId)
-  ) {
-    return
-  }
-  routeDrawerSession += 1
-  editingRoute.value = null
-  routeDrawerModelId.value = modelId
-  routeDrawerOpen.value = true
-}
-
 function openCreateRouteForModel(modelId: number): void {
   const model = models.value.find((m) => m.id === modelId)
   if (
     !catalogReady.value ||
     loading.value ||
-    model === null ||
-    routeSubmitting.value ||
-    modelDrawerOpen.value ||
-    routeDrawerOpen.value ||
-    modelOperations.value.has(modelId) ||
-    hasRouteActivity(modelId)
+    model === undefined ||
+    controlsLocked.value
   ) {
     return
   }
@@ -564,14 +381,9 @@ function openCreateRouteForModel(modelId: number): void {
 
 function openEditRoute(route: ModelRouteResponse): void {
   if (
-    routeSubmitting.value ||
     !catalogReady.value ||
     loading.value ||
-    modelDrawerOpen.value ||
-    routeDrawerOpen.value ||
-    selectedModelId.value !== route.model_id ||
-    modelOperations.value.has(route.model_id) ||
-    hasRouteActivity(route.model_id) ||
+    controlsLocked.value ||
     !beginRouteOperation(route.id, route.model_id, 'edit')
   ) {
     return
@@ -607,8 +419,7 @@ function isCurrentRouteSave(
     routeDrawerOpen.value &&
     routeDrawerSession === session &&
     routeDrawerModelId.value === modelId &&
-    editingRoute.value?.id === routeId &&
-    selectedModelId.value === modelId
+    editingRoute.value?.id === routeId
   )
 }
 
@@ -618,7 +429,6 @@ async function saveRoute(payload: ModelRouteCreate | ModelRouteUpdate): Promise<
     routeSubmitting.value ||
     !routeDrawerOpen.value ||
     modelId === null ||
-    selectedModelId.value !== modelId ||
     modelOperations.value.has(modelId)
   ) return
   const routeId = editingRoute.value?.id
@@ -659,8 +469,7 @@ async function saveRoute(payload: ModelRouteCreate | ModelRouteUpdate): Promise<
       mounted &&
       !controller.signal.aborted &&
       activeRouteSaveToken === token &&
-      routeDrawerSession === session &&
-      selectedModelId.value === modelId
+      routeDrawerSession === session
     ) {
       routeNotice.value = {
         type: 'error',
@@ -681,10 +490,7 @@ async function removeModel(model: ModelResponse): Promise<void> {
   if (
     !catalogReady.value ||
     loading.value ||
-    modelDrawerOpen.value ||
-    routeDrawerOpen.value ||
-    hasRouteActivity(model.id) ||
-    selectedContextBusy.value ||
+    controlsLocked.value ||
     nonDeletableModelIds.value.has(model.id) ||
     !beginModelOperation(model.id, 'delete')
   ) return
@@ -711,16 +517,9 @@ async function removeModel(model: ModelResponse): Promise<void> {
     await deleteModel(model.id, controller.signal)
     if (!isCurrentModelOperation(controller, model.id, 'delete')) return
     stateRevision += 1
-    routeStateRevision += 1
     deletedModelIds.add(model.id)
     models.value = models.value.filter((item) => item.id !== model.id)
     allRoutes.value = allRoutes.value.filter((route) => route.model_id !== model.id)
-    if (selectedModelId.value === model.id) {
-      const nextModelId = models.value[0]?.id ?? null
-      setSelectedModelId(nextModelId)
-      modelRoutes.value = []
-      if (nextModelId !== null) void loadRoutes(nextModelId)
-    }
     modelNotice.value = { type: 'success', text: `模型“${model.display_name}”已删除` }
   } catch (error: unknown) {
     if (!isCurrentModelOperation(controller, model.id, 'delete')) return
@@ -746,10 +545,7 @@ async function disableModel(modelId: number): Promise<void> {
   if (
     !catalogReady.value ||
     loading.value ||
-    modelDrawerOpen.value ||
-    routeDrawerOpen.value ||
-    hasRouteActivity(modelId) ||
-    selectedContextBusy.value ||
+    controlsLocked.value ||
     !beginModelOperation(modelId, 'disable')
   ) return
   const controller = operationController()
@@ -775,11 +571,7 @@ async function removeRoute(route: ModelRouteResponse): Promise<void> {
   if (
     !catalogReady.value ||
     loading.value ||
-    selectedModelId.value !== modelId ||
-    modelDrawerOpen.value ||
-    routeDrawerOpen.value ||
-    modelOperations.value.has(modelId) ||
-    hasRouteActivity(modelId) ||
+    controlsLocked.value ||
     nonDeletableRouteIds.value.has(route.id) ||
     !beginRouteOperation(route.id, modelId, 'delete')
   ) return
@@ -806,10 +598,8 @@ async function removeRoute(route: ModelRouteResponse): Promise<void> {
     await deleteModelRoute(route.id, controller.signal)
     if (!isCurrentRouteOperation(controller, route.id, modelId, 'delete')) return
     stateRevision += 1
-    routeStateRevision += 1
     deletedRouteIds.add(route.id)
     allRoutes.value = allRoutes.value.filter((item) => item.id !== route.id)
-    modelRoutes.value = modelRoutes.value.filter((item) => item.id !== route.id)
     routeNotice.value = {
       type: 'success',
       text: `路由“${route.upstream_model}”已删除`,
@@ -844,12 +634,8 @@ async function disableRoute(routeId: number, modelId: number): Promise<void> {
   if (
     !catalogReady.value ||
     loading.value ||
-    selectedModelId.value !== modelId ||
-    modelDrawerOpen.value ||
-    routeDrawerOpen.value ||
-    modelOperations.value.has(modelId) ||
-    hasRouteActivity(modelId) ||
-    !modelRoutes.value.some((route) => route.id === routeId && route.model_id === modelId) ||
+    controlsLocked.value ||
+    !allRoutes.value.some((route) => route.id === routeId && route.model_id === modelId) ||
     !beginRouteOperation(routeId, modelId, 'disable')
   ) return
   const controller = operationController()
@@ -881,33 +667,6 @@ async function disableRoute(routeId: number, modelId: number): Promise<void> {
   }
 }
 
-function providerName(providerId: number): string {
-  return (
-    providers.value.find((provider) => provider.id === providerId)?.name ??
-    `#${String(providerId)}`
-  )
-}
-
-function protocolName(providerId: number, protocolId: number): string {
-  const protocol = providers.value
-    .find((provider) => provider.id === providerId)
-    ?.protocols.find((item) => item.id === protocolId)
-  return protocol === undefined ? `#${String(protocolId)}` : protocolLabels[protocol.protocol]
-}
-
-function formatDate(value: string | null): string {
-  if (value === null) return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '时间未知'
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date)
-}
-
 onMounted(() => {
   void load()
 })
@@ -915,11 +674,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   mounted = false
   loadGeneration += 1
-  routeLoadGeneration += 1
   modelDrawerSession += 1
   routeDrawerSession += 1
   loadController?.abort()
-  routeLoadController?.abort()
   modelSaveController?.abort()
   routeSaveController?.abort()
   for (const controller of operationControllers) controller.abort()
@@ -933,7 +690,7 @@ onBeforeUnmount(() => {
       <ElButton
         data-test="create-model"
         type="primary"
-        :disabled="!catalogReady || loading || selectionLocked"
+        :disabled="!catalogReady || loading || controlsLocked"
         @click="openCreateModel"
       >
         <ElIcon><Plus /></ElIcon>
@@ -956,8 +713,29 @@ onBeforeUnmount(() => {
       type="warning"
       plain
       :loading="modelOperations.get(modelNotice.conflictId) === 'disable'"
-      :disabled="modelOperations.has(modelNotice.conflictId)"
+      :disabled="controlsLocked"
       @click="disableModel(modelNotice.conflictId)"
+    >
+      改为停用
+    </ElButton>
+  </div>
+
+  <div v-if="routeNotice" data-test="route-notice" class="notice-row">
+    <ElAlert
+      :type="routeNotice.type"
+      :title="routeNotice.text"
+      show-icon
+      closable
+      @close="routeNotice = null"
+    />
+    <ElButton
+      v-if="routeNotice.conflictId !== undefined"
+      :data-test="`disable-route-conflict-${String(routeNotice.conflictId)}`"
+      type="warning"
+      plain
+      :loading="routeOperations.get(routeNotice.conflictId)?.operation === 'disable'"
+      :disabled="controlsLocked"
+      @click="disableRoute(routeNotice.conflictId, routeNotice.modelId)"
     >
       改为停用
     </ElButton>
@@ -1015,7 +793,10 @@ onBeforeUnmount(() => {
         :model="model"
         :routes="routesByModel.get(model.id) ?? []"
         :providers="providers"
+        :loading="controlsLocked"
+        :routes-loading="routesLoading"
         :non-deletable="nonDeletableModelIds.has(model.id)"
+        :non-deletable-route-ids="nonDeletableRouteIds"
         @edit="openEditModel"
         @delete="removeModel"
         @disable="disableModel"

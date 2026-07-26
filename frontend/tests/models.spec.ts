@@ -405,12 +405,12 @@ describe('模型与别名管理', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('暂无模型')
-    expect(wrapper.text()).toContain('尚未选择模型')
-    expect(wrapper.get('[data-test="create-route"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test^="model-card-"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test^="create-route-"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('成功删除模型并从选择上下文移除它', async () => {
+  it('成功删除模型并保留其他独立模型卡片', async () => {
     useCatalog([modelFixture, scientificZeroFixture])
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
       value: '',
@@ -423,8 +423,8 @@ describe('模型与别名管理', () => {
     await wrapper.get('[data-test="delete-model-1"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('[data-test="select-model-1"]').exists()).toBe(false)
-    expect(wrapper.get('[data-test="route-panel"]').text()).toContain('零价格模型')
+    expect(wrapper.find('[data-test="model-card-1"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="model-card-2"]').text()).toContain('零价格模型')
     expect(wrapper.get('[data-test="model-notice"]').text()).toContain('已删除')
     wrapper.unmount()
   })
@@ -516,7 +516,7 @@ describe('模型与别名管理', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('保留的本地模型')
     expect(wrapper.get('[data-test="route-count-1"]').text()).toBe('1')
-    await wrapper.get('[data-test="create-route"]').trigger('click')
+    await wrapper.get('[data-test="create-route-1"]').trigger('click')
     expect(wrapper.getComponent(RouteFormDrawer).text()).toContain('刷新后的提供商')
     wrapper.unmount()
   })
