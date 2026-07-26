@@ -27,5 +27,9 @@ export default defineConfig({
     exclude: [...configDefaults.exclude, 'e2e/**'],
     setupFiles: ['./src/test/setup.ts'],
     restoreMocks: true,
+    maxWorkers: 2,
+    testTimeout: 5_000,
+    hookTimeout: 10_000,
+    teardownTimeout: 10_000,
   },
 })
