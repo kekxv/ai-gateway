@@ -884,6 +884,7 @@ onBeforeUnmount(() => {
   <ApiKeyFormDrawer
     :model-value="formOpen"
     :api-key="editingApiKey"
+    :users="users"
     :providers="providers"
     :models="models"
     :submitting="formSubmitting"

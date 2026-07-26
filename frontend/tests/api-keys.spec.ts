@@ -220,34 +220,25 @@ describe('接口密钥作用域与一次性明文', () => {
     await flushPromises()
     await wrapper.get('[data-test="api-key-scope"]').setValue(scope)
 
-    expect(wrapper.find('[data-test="provider-ids"]').exists()).toBe(providersVisible)
-    expect(wrapper.find('[data-test="model-ids"]').exists()).toBe(modelsVisible)
-    if (providersVisible) expect(wrapper.text()).toContain('至少选择一个供应商')
-    if (modelsVisible) expect(wrapper.text()).toContain('至少选择一个模型')
+    expect(wrapper.find('[data-test="api-key-provider-11"]').exists()).toBe(providersVisible)
+    expect(wrapper.find('[data-test="api-key-model-21"]').exists()).toBe(modelsVisible)
     wrapper.unmount()
   })
 
   it('切换作用域立即清除无关数组，并按 ISO/null 语义创建', async () => {
     const { wrapper, onSubmit } = mountForm()
     await flushPromises()
-    await wrapper.get('[data-test="api-key-owner"]').setValue('2')
     await wrapper.get('[data-test="api-key-name"]').setValue('  移动端  ')
+    await wrapper.get('[data-test="api-key-submit"]').trigger('click')
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-test="api-key-owner"]').setValue('2')
     await wrapper.get('[data-test="api-key-scope"]').setValue('providers_and_models')
-    const providerSelect = wrapper.get<HTMLSelectElement>('[data-test="provider-ids"]')
-    const providerOption = Array.from(providerSelect.element.options).find(
-      (option) => option.value === '11',
-    )
-    if (providerOption === undefined) throw new Error('供应商选项不存在')
-    providerOption.selected = true
-    await providerSelect.trigger('change')
-    const modelSelect = wrapper.get<HTMLSelectElement>('[data-test="model-ids"]')
-    const modelOption = Array.from(modelSelect.element.options).find(
-      (option) => option.value === '21',
-    )
-    if (modelOption === undefined) throw new Error('模型选项不存在')
-    modelOption.selected = true
-    await modelSelect.trigger('change')
+    await wrapper.get<HTMLInputElement>('[data-test="api-key-provider-11"]').setValue(true)
+    await wrapper.get<HTMLInputElement>('[data-test="api-key-model-21"]').setValue(true)
     await wrapper.get('[data-test="api-key-scope"]').setValue('models')
+    expect(wrapper.find('[data-test="api-key-provider-11"]').exists()).toBe(false)
+    expect(wrapper.get<HTMLInputElement>('[data-test="api-key-model-21"]').element.checked).toBe(true)
     await wrapper.get('[data-test="api-key-expiry"]').setValue('2030-01-02T03:04')
     await wrapper.get('[data-test="api-key-submit"]').trigger('click')
 
@@ -368,6 +359,7 @@ describe('接口密钥作用域与一次性明文', () => {
     expect(writeText).toHaveBeenCalledWith('sk-gw-download-once')
     expect(wrapper.text()).toContain('已复制')
     expect(wrapper.text().match(/sk-gw-download-once/g)).toHaveLength(1)
+    expect(wrapper.text()).toContain('$AI_GATEWAY_API_KEY')
 
     await wrapper.get('[data-test="secret-download"]').trigger('click')
     expect(createObjectURL).toHaveBeenCalledTimes(1)
@@ -454,7 +446,7 @@ describe('接口密钥作用域与一次性明文', () => {
     )
     await flushPromises()
     expect(wrapper.find('[data-test="api-key-row-31"]').exists()).toBe(false)
-    expect(wrapper.get('[data-test="api-key-row-41"]').text()).toContain('sk-gw-rot123')
+    expect(wrapper.get('[data-test="api-key-row-41"]').text()).toContain('sk-gw-ro****')
     expect(wrapper.text()).toContain('sk-gw-rotated-once')
     wrapper.unmount()
   })

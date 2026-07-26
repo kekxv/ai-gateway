@@ -23,12 +23,13 @@ import type {
   ApiKeyUpdate,
   ModelResponse,
   ProviderResponse,
+  UserResponse,
 } from '@/api/types'
-import { useAuthStore } from '@/stores/auth'
 
 const props = defineProps<{
   modelValue: boolean
   apiKey: ApiKeyResponse | null
+  users: UserResponse[]
   providers: ProviderResponse[]
   models: ModelResponse[]
   submitting: boolean
@@ -39,7 +40,7 @@ const emit = defineEmits<{
   submit: [payload: ApiKeyCreate | ApiKeyUpdate]
 }>()
 
-const auth = useAuthStore()
+const ownerId = ref<number | null>(null)
 const name = ref('')
 const scope = ref<ApiKeyScope>('all')
 const isActive = ref(true)
@@ -48,6 +49,7 @@ const expiryDirty = ref(false)
 const providerIds = ref<number[]>([])
 const modelIds = ref<number[]>([])
 const nameError = ref('')
+const ownerError = ref('')
 const providerError = ref('')
 const modelError = ref('')
 const expiryError = ref('')
@@ -70,6 +72,7 @@ function localDateTime(iso: string | null): string {
 }
 
 function clearDraft(): void {
+  ownerId.value = null
   name.value = ''
   scope.value = 'all'
   isActive.value = true
@@ -82,6 +85,7 @@ function clearDraft(): void {
 
 function clearErrors(): void {
   nameError.value = ''
+  ownerError.value = ''
   providerError.value = ''
   modelError.value = ''
   expiryError.value = ''
@@ -89,6 +93,7 @@ function clearErrors(): void {
 
 function resetForm(): void {
   const apiKey = props.apiKey
+  ownerId.value = apiKey?.user_id ?? null
   name.value = apiKey?.name ?? ''
   scope.value = apiKey?.scope ?? 'all'
   isActive.value = apiKey?.is_active ?? true
@@ -175,6 +180,7 @@ function sameExpiry(left: string | null, right: string | null): boolean {
 
 function validate(): string | null {
   clearErrors()
+  if (!editing.value && ownerId.value === null) ownerError.value = '请选择密钥所有者'
   if (name.value.trim() === '') nameError.value = '请输入密钥名称'
   if (needsProviders.value && providerIds.value.length === 0) {
     providerError.value = '至少选择一个供应商'
@@ -191,6 +197,7 @@ function submitForm(): void {
   if (props.submitting) return
   const expiresAt = validate()
   if (
+    ownerError.value !== '' ||
     nameError.value !== '' ||
     providerError.value !== '' ||
     modelError.value !== '' ||
@@ -201,10 +208,9 @@ function submitForm(): void {
   const normalizedModels = needsModels.value ? [...modelIds.value] : []
   const apiKey = props.apiKey
   if (apiKey === null) {
-    const userId = auth.user?.id
-    if (userId === undefined) return
+    if (ownerId.value === null) return
     emit('submit', {
-      user_id: userId,
+      user_id: ownerId.value,
       name: name.value.trim(),
       scope: scope.value,
       is_active: isActive.value,
@@ -257,6 +263,18 @@ function submitForm(): void {
     </template>
 
     <ElForm :disabled="submitting" label-position="top" @submit.prevent="submitForm">
+      <ElFormItem label="所有者" :error="ownerError" required>
+        <select
+          v-model="ownerId"
+          data-test="api-key-owner"
+          class="field-select"
+          :disabled="submitting || editing"
+        >
+          <option :value="null" disabled>请选择用户</option>
+          <option v-for="user in users" :key="user.id" :value="user.id">{{ user.email }}</option>
+        </select>
+      </ElFormItem>
+
       <ElFormItem label="名称" :error="nameError">
         <ElInput v-model="name" data-test="api-key-name" maxlength="255" autocomplete="off" />
       </ElFormItem>
@@ -277,6 +295,8 @@ function submitForm(): void {
               type="checkbox"
               :value="provider.id"
               :checked="providerIds.includes(provider.id)"
+              :data-test="`api-key-provider-${String(provider.id)}`"
+              :disabled="submitting"
               @change="toggleProvider(provider.id)"
             />
             <span>{{ provider.name }}</span>
@@ -292,6 +312,8 @@ function submitForm(): void {
               type="checkbox"
               :value="model.id"
               :checked="modelIds.includes(model.id)"
+              :data-test="`api-key-model-${String(model.id)}`"
+              :disabled="submitting"
               @change="toggleModel(model.id)"
             />
             <span>{{ model.display_name }}（{{ model.canonical_name }}）</span>

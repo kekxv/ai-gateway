@@ -29,7 +29,7 @@ let outstandingObjectUrl: string | null = null
 const baseUrl = computed(() => props.gatewayUrl ?? window.location.origin)
 
 const curlExamples = computed(() => {
-  const key = props.secret ?? 'sk-gw-YOUR_API_KEY'
+  const key = '$AI_GATEWAY_API_KEY'
   const base = baseUrl.value
 
   return {
