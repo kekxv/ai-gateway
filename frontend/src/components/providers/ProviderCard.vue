@@ -53,20 +53,28 @@ function formatInterval(seconds: number): string {
         <ElButton
           size="small"
           type="primary"
+          :data-test="`sync-provider-${String(provider.id)}`"
           :loading="loading"
+          :disabled="loading"
           @click="emit('sync', provider)"
         >
           <ElIcon><Refresh /></ElIcon>
           同步
         </ElButton>
-        <ElButton size="small" @click="emit('edit', provider)">
+        <ElButton
+          size="small"
+          :data-test="`edit-provider-${String(provider.id)}`"
+          :disabled="loading"
+          @click="emit('edit', provider)"
+        >
           <ElIcon><Edit /></ElIcon>
           编辑
         </ElButton>
         <ElButton
           size="small"
           type="danger"
-          :disabled="nonDeletable"
+          :data-test="`delete-provider-${String(provider.id)}`"
+          :disabled="loading || nonDeletable"
           :title="nonDeletable ? '该供应商已有请求历史，请改为停用' : undefined"
           @click="emit('delete', provider)"
         >

@@ -2,7 +2,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { ElMessageBox, type MessageBoxData } from 'element-plus'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ProviderResponse } from '@/api/types'
 import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
@@ -80,6 +80,14 @@ beforeAll(() => {
   server.listen({ onUnhandledRequest: 'error' })
 })
 
+beforeEach(() => {
+  server.use(
+    http.get('/admin/providers/:providerId/discover-models', () =>
+      HttpResponse.json({ openai: ['gpt-4.1'] }),
+    ),
+  )
+})
+
 afterEach(() => {
   vi.restoreAllMocks()
   server.resetHandlers()
@@ -101,6 +109,16 @@ async function mountProviders(
   const wrapper = mount(ProvidersView, { attachTo: document.body })
   await flushPromises()
   return wrapper
+}
+
+async function confirmSelectedModels(wrapper: VueWrapper): Promise<void> {
+  await flushPromises()
+  const confirmButton = wrapper
+    .findAll('button')
+    .find((button) => button.text().includes('同步选中的模型'))
+  if (confirmButton === undefined) throw new Error('未找到模型同步确认按钮')
+  await confirmButton.trigger('click')
+  await flushPromises()
 }
 
 describe('供应商与协议管理', () => {
@@ -189,7 +207,7 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
-  it('创建时支持多条协议，并把对象格式凭据与请求头发送到接口', async () => {
+  it('创建时支持多条协议，并把高级对象凭据与请求头发送到接口', async () => {
     const requests: unknown[] = []
     useProviderList([])
     server.use(
@@ -229,7 +247,38 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
-  it('拒绝数组或标量 JSON，并在对应协议行显示请求头错误', async () => {
+  it('合并高级凭据中的任意字段，并让引导字段覆盖保留键', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: null, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-name"]').setValue('高级凭据供应商')
+    await wrapper.get('[data-test="provider-api-key"]').setValue('guided-secret')
+    await wrapper.get('[data-test="provider-auth-scheme"]').setValue('apikey')
+    await wrapper.get('[data-test="provider-auth-header"]').setValue('x-api-key')
+    await wrapper
+      .get('[data-test="provider-credential"]')
+      .setValue('{"tenant":"north","api_key":"advanced-secret","auth_scheme":"ignored","auth_header":"Ignored"}')
+    await wrapper.get('[data-test="protocol-base-url-0"]').setValue('https://api.example.com')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: {
+          tenant: 'north',
+          api_key: 'guided-secret',
+          auth_scheme: 'ApiKey',
+          auth_header: 'x-api-key',
+        },
+      }),
+    )
+    wrapper.unmount()
+  })
+
+  it('拒绝作为高级凭据的 JSON 数组，并在对应协议行显示请求头错误', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(ProviderFormDrawer, {
       props: { modelValue: true, provider: null, submitting: false, onSubmit },
@@ -254,6 +303,48 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('拒绝作为高级凭据的 JSON 标量', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: null, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-name"]').setValue('无效配置')
+    await wrapper.get('[data-test="provider-credential"]').setValue('"token"')
+    await wrapper.get('[data-test="protocol-base-url-0"]').setValue('https://api.example.com')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+    await waitForFormErrors()
+
+    expect(wrapper.get('[data-validation="credential"] .el-form-item__error').text()).toContain(
+      '必须是 JSON 对象',
+    )
+    expect(onSubmit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('拒绝格式错误的高级凭据 JSON', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: null, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-name"]').setValue('无效配置')
+    await wrapper.get('[data-test="provider-credential"]').setValue('{"api_key":')
+    await wrapper.get('[data-test="protocol-base-url-0"]').setValue('https://api.example.com')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+    await waitForFormErrors()
+
+    expect(wrapper.get('[data-validation="credential"] .el-form-item__error').text()).toContain(
+      'JSON 格式不正确',
+    )
+    expect(onSubmit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('显示模型同步响应中的全部计数', async () => {
     server.use(
       http.post('/admin/providers/1/sync-models', () =>
@@ -270,7 +361,7 @@ describe('供应商与协议管理', () => {
     const wrapper = await mountProviders()
 
     await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
-    await flushPromises()
+    await confirmSelectedModels(wrapper)
 
     expect(wrapper.get('[data-test="provider-notice"]').text()).toContain(
       '发现 12 个，新增模型 2 个，新增路由 3 条，更新路由 4 条，停用路由 1 条',
@@ -387,6 +478,7 @@ describe('供应商与协议管理', () => {
 
     await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
     await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
+    await confirmSelectedModels(wrapper)
     await wrapper.get('[data-test="edit-provider-1"]').trigger('click')
     await wrapper.get('[data-test="delete-provider-1"]').trigger('click')
     await flushPromises()
@@ -519,7 +611,7 @@ describe('供应商与协议管理', () => {
     await flushPromises()
 
     await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
-    await flushPromises()
+    await confirmSelectedModels(wrapper)
     await wrapper.get('[data-test="delete-provider-2"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-test="delete-provider-2"]').exists()).toBe(false)
@@ -560,7 +652,7 @@ describe('供应商与协议管理', () => {
     await flushPromises()
 
     await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
-    await flushPromises()
+    await confirmSelectedModels(wrapper)
     await wrapper.get('[data-test="delete-provider-2"]').trigger('click')
     await flushPromises()
     staleList.resolve(HttpResponse.json(null, { status: 500 }))

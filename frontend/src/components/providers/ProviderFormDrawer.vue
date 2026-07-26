@@ -57,6 +57,7 @@ const emit = defineEmits<{
 
 const name = ref('')
 const apiKey = ref('')
+const advancedCredentialText = ref('')
 const authScheme = ref<AuthScheme>('bearer')
 const authHeader = ref<AuthHeader>('authorization')
 const customAuthHeader = ref('')
@@ -67,6 +68,7 @@ const priceMultiplier = ref(1.0)
 const protocols = ref<ProtocolRow[]>([])
 const nameError = ref('')
 const apiKeyError = ref('')
+const advancedCredentialError = ref('')
 const syncIntervalError = ref('')
 const formContent = ref<HTMLElement | null>(null)
 let nextProtocolKey = 1
@@ -92,6 +94,7 @@ function resetForm(): void {
   const provider = props.provider
   name.value = provider?.name ?? ''
   apiKey.value = ''
+  advancedCredentialText.value = ''
   authScheme.value = 'bearer'
   authHeader.value = 'authorization'
   customAuthHeader.value = ''
@@ -115,11 +118,13 @@ function resetForm(): void {
         }))
   nameError.value = ''
   apiKeyError.value = ''
+  advancedCredentialError.value = ''
   syncIntervalError.value = ''
 }
 
 function clearSensitiveState(): void {
   apiKey.value = ''
+  advancedCredentialText.value = ''
   for (const row of protocols.value) row.extraHeadersText = ''
 }
 
@@ -153,15 +158,33 @@ function parseExtraHeaders(row: ProtocolRow): JsonObject | undefined {
   }
 }
 
+function parseAdvancedCredential(): JsonObject | undefined {
+  if (advancedCredentialText.value.trim() === '') return undefined
+  try {
+    const value: unknown = JSON.parse(advancedCredentialText.value)
+    if (!isJsonObject(value)) {
+      advancedCredentialError.value = '必须是 JSON 对象，不能使用数组或单个值'
+      return undefined
+    }
+    return value
+  } catch {
+    advancedCredentialError.value = 'JSON 格式不正确'
+    return undefined
+  }
+}
+
 function buildCredential(): JsonObject | undefined {
+  const advancedCredential = parseAdvancedCredential()
+  if (advancedCredentialError.value !== '') return undefined
   const key = apiKey.value.trim()
-  if (!editing.value && key === '') {
+  if (advancedCredential === undefined && key === '') {
+    if (editing.value) return undefined
     apiKeyError.value = '请输入 API 密钥'
     return undefined
   }
-  if (key === '') return undefined
+  const credential: JsonObject = { ...(advancedCredential ?? {}) }
 
-  const credential: JsonObject = { api_key: key }
+  if (key !== '') credential.api_key = key
 
   if (authScheme.value !== 'none') {
     credential.auth_scheme = authScheme.value === 'bearer' ? 'Bearer' : 'ApiKey'
@@ -266,6 +289,7 @@ function submitForm(): void {
   if (props.submitting) return
   nameError.value = ''
   apiKeyError.value = ''
+  advancedCredentialError.value = ''
   syncIntervalError.value = ''
   if (name.value.trim() === '') nameError.value = '请输入供应商名称'
   const interval = syncInterval.value
@@ -278,6 +302,7 @@ function submitForm(): void {
   if (
     nameError.value !== '' ||
     apiKeyError.value !== '' ||
+    advancedCredentialError.value !== '' ||
     syncIntervalError.value !== '' ||
     protocolPayload === undefined
   ) {
@@ -287,6 +312,13 @@ function submitForm(): void {
     } else if (
       nameError.value === '' &&
       syncIntervalError.value === '' &&
+      advancedCredentialError.value !== ''
+    ) {
+      selector = '[data-validation="credential"] textarea'
+    } else if (
+      nameError.value === '' &&
+      syncIntervalError.value === '' &&
+      advancedCredentialError.value === '' &&
       apiKeyError.value !== ''
     ) {
       selector = '[data-validation="api-key"] input'
@@ -418,6 +450,22 @@ function submitForm(): void {
               spellcheck="false"
               placeholder="sk-..."
             />
+          </ElFormItem>
+
+          <ElFormItem
+            data-validation="credential"
+            label="高级凭据 JSON（可选）"
+            :error="advancedCredentialError"
+          >
+            <ElInput
+              v-model="advancedCredentialText"
+              data-test="provider-credential"
+              type="textarea"
+              :rows="4"
+              spellcheck="false"
+              placeholder='例如：{"api_key":"sk-...","organization":"team-a"}'
+            />
+            <p class="form-help">可添加供应商专用字段；引导填写的 API 密钥和授权设置会优先使用。</p>
           </ElFormItem>
 
           <div class="credential-options">
