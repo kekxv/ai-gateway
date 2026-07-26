@@ -461,6 +461,48 @@ describe('加权模型路由管理', () => {
     wrapper.unmount()
   })
 
+  it('从非初始模型卡直接停用路由并更新该行状态', async () => {
+    const patchBodies: unknown[] = []
+    useCatalog()
+    server.use(
+      http.patch('/admin/model-routes/203', async ({ request }) => {
+        patchBodies.push(await request.json())
+        return HttpResponse.json({ ...openRoute, enabled: false })
+      }),
+    )
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="model-card-2"] .routes-toggle').trigger('click')
+    await wrapper.get('[data-test="disable-route-203"]').trigger('click')
+    await flushPromises()
+
+    expect(patchBodies).toEqual([{ enabled: false }])
+    expect(wrapper.get('[data-test="route-status-203"]').text()).toContain('已停用')
+    wrapper.unmount()
+  })
+
+  it('停用响应的路由编号不匹配时不改写其他路由或显示成功', async () => {
+    useCatalog()
+    server.use(
+      http.patch('/admin/model-routes/203', () =>
+        HttpResponse.json({ ...openRoute, id: 202, enabled: false }),
+      ),
+    )
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="model-card-1"] .routes-toggle').trigger('click')
+    await wrapper.get('[data-test="model-card-2"] .routes-toggle').trigger('click')
+    await wrapper.get('[data-test="disable-route-203"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="model-card-1"] [data-test="edit-route-202"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="route-status-203"]').text()).toContain('已启用')
+    expect(wrapper.find('[data-test="route-notice"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('路由草稿在提交时不因父级上下文变化而重置', async () => {
     const wrapper = mount(RouteFormDrawer, {
       props: {

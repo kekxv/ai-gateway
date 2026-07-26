@@ -642,6 +642,7 @@ async function disableRoute(routeId: number, modelId: number): Promise<void> {
   try {
     const updated = await updateModelRoute(routeId, { enabled: false }, controller.signal)
     if (
+      updated.id !== routeId ||
       updated.model_id !== modelId ||
       !isCurrentRouteOperation(controller, routeId, modelId, 'disable')
     ) return
