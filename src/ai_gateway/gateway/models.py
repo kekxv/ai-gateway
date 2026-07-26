@@ -35,18 +35,35 @@ class SelectableModel:
 
 
 @router.get("/v1/models")
-async def list_openai_models(request: Request, session: Session) -> Response:
+async def list_models(request: Request, session: Session) -> Response:
+    """List models - dispatches to OpenAI or Claude format based on request headers."""
     try:
         principal = await authenticate_api_key(extract_api_key(request), session)
-        models = await _list_selectable_models(session, principal, Protocol.OPENAI)
-        return JSONResponse(
-            content={
-                "object": "list",
-                "data": [_openai_model(model) for model in models],
-            }
-        )
+
+        # Check if this is a Claude-style request (has anthropic-version header)
+        is_claude_request = bool(request.headers.get("anthropic-version"))
+
+        if is_claude_request:
+            models = await _list_selectable_models(session, principal, Protocol.CLAUDE)
+            return JSONResponse(
+                content={
+                    "data": [_claude_model(model) for model in models],
+                }
+            )
+        else:
+            # Default to OpenAI format
+            models = await _list_selectable_models(session, principal, Protocol.OPENAI)
+            return JSONResponse(
+                content={
+                    "object": "list",
+                    "data": [_openai_model(model) for model in models],
+                }
+            )
     except Exception as exc:
-        return native_error_response(Protocol.OPENAI, exc)
+        # Determine which error format to use
+        is_claude_request = bool(request.headers.get("anthropic-version"))
+        protocol = Protocol.CLAUDE if is_claude_request else Protocol.OPENAI
+        return native_error_response(protocol, exc)
 
 
 @router.get("/v1/models/{model_id:path}")
@@ -145,4 +162,12 @@ def _gemini_model(model: SelectableModel) -> dict[str, Any]:
         "displayName": model.display_name,
         "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
         "gatewayMetadata": model.metadata,
+    }
+
+
+def _claude_model(model: SelectableModel) -> dict[str, Any]:
+    return {
+        "id": model.selectable_id,
+        "display_name": model.display_name,
+        "created_at": "2024-01-01T00:00:00Z",  # Placeholder; gateway doesn't track creation time per model
     }

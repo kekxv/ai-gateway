@@ -31,6 +31,7 @@ Lean AI Gateway 是一个专注于多 AI 提供商的网关，支持 OpenAI、Cl
 | OpenAI 模型目录 | `/v1/models`、`/v1/models/{model}` | HTTP |
 | OpenAI Realtime | `/v1/realtime` | WebSocket |
 | Claude Messages | `/v1/messages` | HTTP、SSE |
+| Claude 模型目录 | `/v1/models`（通过 `anthropic-version` 头区分） | HTTP |
 | Gemini Generate Content | `/v1beta/models/{model}:generateContent` | HTTP |
 | Gemini Stream Generate Content | `/v1beta/models/{model}:streamGenerateContent` | SSE |
 | Gemini 模型目录 | `/v1beta/models` | HTTP |

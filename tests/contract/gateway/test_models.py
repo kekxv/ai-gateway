@@ -102,7 +102,10 @@ def _client(
     active_app.dependency_overrides[get_session] = override_session
     client_headers: HeaderValues = headers or {}
     if raw_key is not None:
-        client_headers = {"Authorization": f"Bearer {raw_key}"}
+        if isinstance(client_headers, dict):
+            client_headers = {"Authorization": f"Bearer {raw_key}", **client_headers}
+        else:
+            client_headers = [("Authorization", f"Bearer {raw_key}"), *client_headers]
     return AsyncClient(
         transport=ASGITransport(app=active_app),
         base_url="http://test",
@@ -493,3 +496,135 @@ async def test_create_app_registers_model_routes_with_app_session_override(
     assert [item["id"] for item in listing.json()["data"]] == ["create-app-model"]
     assert detail.status_code == 200
     assert detail.json()["id"] == "create-app-model"
+
+
+async def test_claude_endpoint_returns_claude_format_with_anthropic_version_header(
+    session: AsyncSession,
+) -> None:
+    """Test that Claude endpoint is distinguished by anthropic-version header and returns Claude format."""
+    provider = _provider("claude-listing", Protocol.CLAUDE)
+    model = _model("claude-3-opus")
+    model.display_name = "Claude 3 Opus"
+    session.add(_route(model, provider, Protocol.CLAUDE))
+    user, _, raw_key = _api_key(ApiKeyScope.ALL)
+    session.add(user)
+    await session.flush()
+
+    # Claude endpoint with anthropic-version header
+    async with _client(session, raw_key, headers={"anthropic-version": "2023-06-01"}) as client:
+        response = await client.get("/v1/models")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": [
+            {
+                "id": "claude-3-opus",
+                "display_name": "Claude 3 Opus",
+                "created_at": "2024-01-01T00:00:00Z",
+            }
+        ]
+    }
+
+
+async def test_openai_endpoint_without_anthropic_version_returns_openai_format(
+    session: AsyncSession,
+) -> None:
+    """Test that without anthropic-version header, OpenAI format is returned (backward compatibility)."""
+    provider = _provider("openai-backward-compat", Protocol.OPENAI)
+    model = _model("gpt-4")
+    session.add(_route(model, provider, Protocol.OPENAI))
+    user, _, raw_key = _api_key(ApiKeyScope.ALL)
+    session.add(user)
+    await session.flush()
+
+    # OpenAI endpoint without anthropic-version header
+    async with _client(session, raw_key) as client:
+        response = await client.get("/v1/models")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "object": "list",
+        "data": [
+            {
+                "id": "gpt-4",
+                "object": "model",
+                "owned_by": "gateway",
+                "metadata": {},
+            }
+        ]
+    }
+
+
+async def test_claude_endpoint_filters_by_claude_protocol_routes(
+    session: AsyncSession,
+) -> None:
+    """Test that Claude endpoint only returns models with CLAUDE protocol routes."""
+    openai_provider = _provider("mixed-openai", Protocol.OPENAI)
+    claude_provider = _provider("mixed-claude", Protocol.CLAUDE)
+
+    openai_model = _model("gpt-4-turbo")
+    claude_model = _model("claude-3-sonnet")
+
+    session.add_all([
+        _route(openai_model, openai_provider, Protocol.OPENAI),
+        _route(claude_model, claude_provider, Protocol.CLAUDE),
+    ])
+    user, _, raw_key = _api_key(ApiKeyScope.ALL)
+    session.add(user)
+    await session.flush()
+
+    # Claude endpoint should only return Claude models
+    async with _client(session, raw_key, headers={"anthropic-version": "2023-06-01"}) as client:
+        response = await client.get("/v1/models")
+
+    assert response.status_code == 200
+    assert len(response.json()["data"]) == 1
+    assert response.json()["data"][0]["id"] == "claude-3-sonnet"
+
+
+async def test_claude_endpoint_respects_api_key_scopes(
+    session: AsyncSession,
+) -> None:
+    """Test that Claude endpoint respects API key scope restrictions."""
+    provider = _provider("scoped-claude", Protocol.CLAUDE)
+    allowed_model = _model("claude-3-haiku")
+    denied_model = _model("claude-3-opus-2")
+
+    session.add_all([
+        _route(allowed_model, provider, Protocol.CLAUDE),
+        _route(denied_model, provider, Protocol.CLAUDE),
+    ])
+    user, api_key, raw_key = _api_key(ApiKeyScope.MODELS)
+    session.add(user)
+    await session.flush()
+    session.add(ApiKeyModel(api_key_id=api_key.id, model=allowed_model))
+    await session.flush()
+
+    async with _client(session, raw_key, headers={"anthropic-version": "2023-06-01"}) as client:
+        response = await client.get("/v1/models")
+
+    assert response.status_code == 200
+    assert len(response.json()["data"]) == 1
+    assert response.json()["data"][0]["id"] == "claude-3-haiku"
+
+
+async def test_claude_endpoint_handles_authentication_errors(
+    session: AsyncSession,
+) -> None:
+    """Test that Claude endpoint returns proper authentication errors."""
+    # Missing authentication
+    async with _client(session, headers={"anthropic-version": "2023-06-01"}) as client:
+        response = await client.get("/v1/models")
+
+    assert response.status_code == 401
+    assert "error" in response.json()
+
+    # Invalid API key
+    async with _client(session, headers={
+        "anthropic-version": "2023-06-01",
+        "x-api-key": "sk-gw-invalid-key"
+    }) as client:
+        response = await client.get("/v1/models")
+
+    assert response.status_code == 401
+    assert "error" in response.json()

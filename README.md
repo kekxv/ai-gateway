@@ -41,6 +41,7 @@ scale containers horizontally.
 | OpenAI model catalog | `/v1/models`, `/v1/models/{model}` | HTTP |
 | OpenAI Realtime | `/v1/realtime` | WebSocket |
 | Claude messages | `/v1/messages` | HTTP, SSE |
+| Claude model catalog | `/v1/models` (distinguished by `anthropic-version` header) | HTTP |
 | Gemini generate content | `/v1beta/models/{model}:generateContent` | HTTP |
 | Gemini stream generate content | `/v1beta/models/{model}:streamGenerateContent` | SSE |
 | Gemini model catalog | `/v1beta/models` | HTTP |
