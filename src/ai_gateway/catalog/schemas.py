@@ -51,7 +51,7 @@ class ProviderCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: CatalogName
-    credential: JsonObject
+    credential: JsonObject = Field(default_factory=dict)
     enabled: bool = True
     auto_load_models: bool = False
     model_sync_interval_seconds: int | None = Field(default=None, ge=1)

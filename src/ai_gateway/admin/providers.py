@@ -20,7 +20,7 @@ from ai_gateway.catalog.schemas import (
     ProviderUpdate,
 )
 from ai_gateway.core.config import Settings, get_settings
-from ai_gateway.core.security import encrypt_secret
+from ai_gateway.core.security import decrypt_secret, encrypt_secret
 from ai_gateway.db.models import (
     ApiKeyProvider,
     ModelRoute,
@@ -62,7 +62,7 @@ async def create_provider(
     session.add(provider)
     try:
         await session.flush()
-        response = _provider_response(provider)
+        response = _provider_response(provider, settings)
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -71,18 +71,27 @@ async def create_provider(
 
 
 @router.get("", response_model=list[ProviderResponse])
-async def list_providers(session: Session, _: AdminUser) -> list[ProviderResponse]:
+async def list_providers(
+    session: Session,
+    _: AdminUser,
+    settings: AppSettings,
+) -> list[ProviderResponse]:
     providers = (
         await session.scalars(
             select(Provider).options(selectinload(Provider.protocols)).order_by(Provider.id)
         )
     ).all()
-    return [_provider_response(provider) for provider in providers]
+    return [_provider_response(provider, settings) for provider in providers]
 
 
 @router.get("/{provider_id}", response_model=ProviderResponse)
-async def get_provider(provider_id: int, session: Session, _: AdminUser) -> ProviderResponse:
-    return _provider_response(await _get_provider(session, provider_id))
+async def get_provider(
+    provider_id: int,
+    session: Session,
+    _: AdminUser,
+    settings: AppSettings,
+) -> ProviderResponse:
+    return _provider_response(await _get_provider(session, provider_id), settings)
 
 
 @router.patch("/{provider_id}", response_model=ProviderResponse)
@@ -127,7 +136,7 @@ async def update_provider(
         )
     try:
         await session.flush()
-        response = _provider_response(provider)
+        response = _provider_response(provider, settings)
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -270,12 +279,15 @@ def _validate_protocol_payloads(
         )
 
 
-def _provider_response(provider: Provider) -> ProviderResponse:
+def _provider_response(provider: Provider, settings: Settings) -> ProviderResponse:
     protocols = sorted(provider.protocols, key=lambda item: item.id)
     return ProviderResponse(
         id=provider.id,
         name=provider.name,
-        has_credential=bool(provider.credential_encrypted),
+        has_credential=orjson.loads(
+            decrypt_secret(provider.credential_encrypted, settings=settings)
+        )
+        != {},
         enabled=provider.enabled,
         auto_load_models=provider.auto_load_models,
         model_sync_interval_seconds=provider.model_sync_interval_seconds,

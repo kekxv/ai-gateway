@@ -96,6 +96,35 @@ async def test_provider_crud_supports_multiple_protocols_and_hides_secrets(
     )
 
 
+async def test_provider_create_without_credential_persists_empty_encrypted_object(
+    admin_client: AsyncClient,
+    admin_settings,
+    session: AsyncSession,
+) -> None:
+    response = await admin_client.post(
+        "/admin/providers",
+        json={"name": f"ollama-{uuid4().hex}", "protocols": []},
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["has_credential"] is False
+    assert "credential" not in body
+    assert "credential_encrypted" not in body
+
+    provider = await session.get(Provider, body["id"])
+    assert provider is not None
+    assert decrypt_secret(provider.credential_encrypted, settings=admin_settings) == "{}"
+
+    listing = await admin_client.get("/admin/providers")
+    detail = await admin_client.get(f"/admin/providers/{body['id']}")
+
+    assert listing.status_code == detail.status_code == 200
+    listed = next(item for item in listing.json() if item["id"] == body["id"])
+    assert listed["has_credential"] is False
+    assert detail.json() == body
+
+
 async def test_provider_uses_runtime_model_sync_interval_default(
     admin_client: AsyncClient,
     admin_settings,

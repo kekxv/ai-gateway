@@ -141,7 +141,7 @@ export interface ProviderProtocolInput {
 
 export interface ProviderCreate {
   name: string
-  credential: JsonObject
+  credential?: JsonObject
   enabled?: boolean
   auto_load_models?: boolean
   model_sync_interval_seconds?: number | null

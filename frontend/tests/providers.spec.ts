@@ -247,6 +247,38 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('创建无认证供应商时省略空白凭据', async () => {
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: null, submitting: false },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-name"]').setValue('本地 Ollama')
+    await wrapper.get('[data-test="protocol-base-url-0"]').setValue('http://ollama:11434/v1')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+    await flushPromises()
+
+    const payload = wrapper.emitted('submit')?.[0]?.[0]
+    expect(payload).toEqual({
+      name: '本地 Ollama',
+      enabled: true,
+      auto_load_models: false,
+      model_sync_interval_seconds: 3600,
+      protocols: [
+        {
+          protocol: 'openai',
+          base_url: 'http://ollama:11434/v1',
+          websocket_url: null,
+          enabled: true,
+        },
+      ],
+      price_multiplier: 1,
+    })
+    expect(payload).not.toHaveProperty('credential')
+    wrapper.unmount()
+  })
+
   it('合并高级凭据中的任意字段，并让引导字段覆盖保留键', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(ProviderFormDrawer, {
@@ -278,7 +310,7 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
-  it('拒绝作为高级凭据的 JSON 数组，并在对应协议行显示请求头错误', async () => {
+  it('分别在凭据字段和协议请求头字段拒绝非对象 JSON', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(ProviderFormDrawer, {
       props: { modelValue: true, provider: null, submitting: false, onSubmit },
@@ -477,8 +509,9 @@ describe('供应商与协议管理', () => {
     const wrapper = await mountProviders()
 
     await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
-    await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
     await confirmSelectedModels(wrapper)
+    expect(wrapper.get('[data-test="sync-provider-1"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
     await wrapper.get('[data-test="edit-provider-1"]').trigger('click')
     await wrapper.get('[data-test="delete-provider-1"]').trigger('click')
     await flushPromises()

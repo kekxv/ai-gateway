@@ -67,7 +67,6 @@ const syncInterval = ref<number | null>(3600)
 const priceMultiplier = ref(1.0)
 const protocols = ref<ProtocolRow[]>([])
 const nameError = ref('')
-const apiKeyError = ref('')
 const advancedCredentialError = ref('')
 const syncIntervalError = ref('')
 const formContent = ref<HTMLElement | null>(null)
@@ -117,7 +116,6 @@ function resetForm(): void {
           extraHeadersError: '',
         }))
   nameError.value = ''
-  apiKeyError.value = ''
   advancedCredentialError.value = ''
   syncIntervalError.value = ''
 }
@@ -177,11 +175,7 @@ function buildCredential(): JsonObject | undefined {
   const advancedCredential = parseAdvancedCredential()
   if (advancedCredentialError.value !== '') return undefined
   const key = apiKey.value.trim()
-  if (advancedCredential === undefined && key === '') {
-    if (editing.value) return undefined
-    apiKeyError.value = '请输入 API 密钥'
-    return undefined
-  }
+  if (advancedCredential === undefined && key === '') return undefined
   const credential: JsonObject = { ...(advancedCredential ?? {}) }
 
   if (key !== '') credential.api_key = key
@@ -288,7 +282,6 @@ function buildProtocols(): ProviderProtocolInput[] | undefined {
 function submitForm(): void {
   if (props.submitting) return
   nameError.value = ''
-  apiKeyError.value = ''
   advancedCredentialError.value = ''
   syncIntervalError.value = ''
   if (name.value.trim() === '') nameError.value = '请输入供应商名称'
@@ -301,7 +294,6 @@ function submitForm(): void {
   const credential = buildCredential()
   if (
     nameError.value !== '' ||
-    apiKeyError.value !== '' ||
     advancedCredentialError.value !== '' ||
     syncIntervalError.value !== '' ||
     protocolPayload === undefined
@@ -318,14 +310,7 @@ function submitForm(): void {
     } else if (
       nameError.value === '' &&
       syncIntervalError.value === '' &&
-      advancedCredentialError.value === '' &&
-      apiKeyError.value !== ''
-    ) {
-      selector = '[data-validation="api-key"] input'
-    } else if (
-      nameError.value === '' &&
-      syncIntervalError.value === '' &&
-      apiKeyError.value === ''
+      advancedCredentialError.value === ''
     ) {
       const invalidIndex = protocols.value.findIndex(
         (row) => row.baseUrlError !== '' || row.extraHeadersError !== '',
@@ -342,16 +327,16 @@ function submitForm(): void {
   if (interval === null) return
 
   if (!editing.value) {
-    if (credential === undefined) return
-    emit('submit', {
+    const payload: ProviderCreate = {
       name: name.value.trim(),
-      credential,
       enabled: enabled.value,
       auto_load_models: autoLoadModels.value,
       model_sync_interval_seconds: interval,
       protocols: protocolPayload,
       price_multiplier: priceMultiplier.value,
-    })
+    }
+    if (credential !== undefined) payload.credential = credential
+    emit('submit', payload)
     return
   }
 
@@ -438,10 +423,7 @@ function submitForm(): void {
           <h3 class="credential-section__title">
             {{ editing ? '替换 API 密钥（留空则保持原值）' : 'API 密钥' }}
           </h3>
-          <ElFormItem
-            data-validation="api-key"
-            :error="apiKeyError"
-          >
+          <ElFormItem data-validation="api-key">
             <ElInput
               v-model="apiKey"
               data-test="provider-api-key"

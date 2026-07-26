@@ -38,6 +38,8 @@ The guided API-key, authentication-scheme, and authentication-header fields rema
 - sensitive draft values are cleared when the drawer closes or a submission completes;
 - malformed advanced JSON produces inline validation and no request.
 
+Provider credentials are optional so unauthenticated upstreams such as Ollama can be created without one. The frontend omits blank credentials. The backend accepts that omission and stores an encrypted empty JSON object, preserving the non-null database invariant; create, list, and detail responses report `has_credential: false` for that empty object without exposing credential data.
+
 This preserves the approachable common case without restricting supported provider schemas.
 
 ### Model cards and route ownership
@@ -67,5 +69,5 @@ After focused suites pass, run the bounded public `npm run test` command, typech
 - Do not replace checkbox restrictions with the former multi-select UI.
 - Do not expose stored provider secrets returned only as `has_credential`.
 - Do not weaken concurrency guards or delete-conflict recovery assertions.
-- Do not change backend API contracts.
+- Do not change backend API contracts except for the ruled provider-create change that accepts an omitted credential and normalizes it to encrypted `{}`.
 - Preserve the existing uncommitted `auth.ready` router-guard change.

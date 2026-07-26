@@ -43,9 +43,13 @@
 
 **Files:**
 - Modify: `frontend/tests/providers.spec.ts`
+- Modify: `frontend/src/api/types.ts`
 - Modify: `frontend/src/components/providers/ProviderCard.vue`
 - Modify: `frontend/src/components/providers/ProviderFormDrawer.vue`
 - Modify if required: `frontend/src/views/ProvidersView.vue`
+- Modify: `src/ai_gateway/catalog/schemas.py`
+- Modify: `src/ai_gateway/admin/providers.py`
+- Modify: `tests/integration/admin/test_catalog.py`
 
 - [ ] Extend tests for the selected credential merge rules: arbitrary object fields survive, guided reserved fields override matching advanced keys, arrays/scalars/malformed JSON are rejected inline, blank edit input omits `credential`, and secret drafts are cleared on close/success.
 - [ ] Retain concurrency assertions for edit/sync/delete and stable per-provider hooks.
@@ -53,6 +57,7 @@
 - [ ] Restore `edit-provider-{id}`, `sync-provider-{id}`, and `delete-provider-{id}` hooks on the current card actions.
 - [ ] Disable all card actions while `loading`; delete additionally respects `nonDeletable`.
 - [ ] Add an advanced credential JSON-object textarea without removing the guided fields. Validate and merge it according to the design, omit blank credentials, and clear sensitive drafts on every terminal drawer path.
+- [ ] Accept omitted create credentials for unauthenticated providers. Normalize omission to encrypted `{}` without making the database column nullable, and report `has_credential: false` consistently from create/list/detail responses.
 - [ ] Keep the view's existing operation guard as defense in depth.
 - [ ] Re-run the focused test until green, then run `npm run typecheck`.
 - [ ] Commit only Task 2 files with `fix: restore provider credential flexibility`.
