@@ -37,7 +37,6 @@ export async function runWithDeadline(options: RunWithDeadlineOptions): Promise<
 
   return await new Promise<number>((resolve) => {
     let settled = false
-    let childClosed = false
     let timedOut = false
     let forwardedSignal: NodeJS.Signals | undefined
     let forceKillTimer: NodeJS.Timeout | undefined
@@ -96,7 +95,7 @@ export async function runWithDeadline(options: RunWithDeadlineOptions): Promise<
       if (forceKillTimer !== undefined) return
       forceKillTimer = setTimeout(() => {
         signalTree('SIGKILL')
-        if (childClosed) finish(completionCode())
+        finish(completionCode())
       }, options.killGraceMs)
     }
 
@@ -116,7 +115,6 @@ export async function runWithDeadline(options: RunWithDeadlineOptions): Promise<
       finish(1)
     })
     child.once('close', (code, signal) => {
-      childClosed = true
       if (timedOut || forwardedSignal !== undefined) {
         if (!processGroupExists()) finish(completionCode())
       } else if (code !== null) finish(code)
