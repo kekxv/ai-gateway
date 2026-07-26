@@ -371,6 +371,8 @@ docker build -t lean-ai-gateway:test .
 docker compose config --quiet
 ```
 
+`npm --prefix frontend run test` 将 Vitest 限制为两个 worker，并在前端单元测试整套运行超过 120 秒时终止。仅在需要持续监听本地修改时使用 `npm --prefix frontend run test:watch`，并通过 Ctrl+C 停止。
+
 浏览器 E2E 使用的管理员必须已存在于所选数据库中。E2E 测试套件仅使用 MySQL 和本地回环假提供商；
 它不需要真实的提供商凭据或公共网络访问。测试会创建带唯一名称的资源，按依赖关系逆序删除可安全删除的
 资源，并停用因不可变账本历史而不能删除的用户。
