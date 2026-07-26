@@ -28,6 +28,9 @@ Lean AI Gateway 是一个专注于多 AI 提供商的网关，支持 OpenAI、Cl
 | 接口 | 路径 | 模式 |
 | --- | --- | --- |
 | OpenAI Chat Completions | `/v1/chat/completions` | HTTP、SSE |
+| OpenAI Responses API | `/v1/responses` | HTTP、SSE |
+| OpenAI Embeddings | `/v1/embeddings` | HTTP |
+| OpenAI Completions (Legacy) | `/v1/completions` | HTTP |
 | OpenAI 模型目录 | `/v1/models`、`/v1/models/{model}` | HTTP |
 | OpenAI Realtime | `/v1/realtime` | WebSocket |
 | Claude Messages | `/v1/messages` | HTTP、SSE |
@@ -38,6 +41,30 @@ Lean AI Gateway 是一个专注于多 AI 提供商的网关，支持 OpenAI、Cl
 | Gemini Live | `/v1beta/live` | WebSocket |
 | 管理控制台 | `/console/` | 浏览器 SPA |
 | OpenAPI 文档 | `/docs`、`/redoc`、`/openapi.json` | HTTP |
+
+有关 OpenAI API 端点的详细信息，请参阅 [OpenAI API 参考文档](docs/openai-api-reference.md)。
+
+### OpenAI API 兼容性
+
+网关支持多种 OpenAI API 格式，以兼容各种 CLI 工具和应用程序：
+
+- **Chat Completions API** (`/v1/chat/completions`)：标准的聊天补全端点
+- **Responses API** (`/v1/responses`)：新的统一 API，支持简单字符串输入和结构化对话历史。兼容 Claude CLI 等现代工具。
+- **Embeddings API** (`/v1/embeddings`)：生成文本嵌入，用于 RAG 和向量操作
+- **Completions API** (`/v1/completions`)：向后兼容的旧版文本补全端点
+
+Responses API 接受两种格式：
+```json
+// 简单字符串输入
+{"model": "gpt-4", "input": "你好，最近怎么样？"}
+
+// 结构化对话历史
+{"model": "gpt-4", "input": [{"role": "user", "content": "你好"}]}
+```
+
+所有端点都会自动转换为规范格式并路由到适当的上游提供商。
+
+### OpenAI API 兼容性
 
 ## 环境要求
 

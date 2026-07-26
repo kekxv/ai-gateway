@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any, cast
+from uuid import uuid4
 
 import orjson
 
@@ -63,6 +65,19 @@ class OpenAIAdapter(ProtocolAdapter):
     protocol = Protocol.OPENAI
 
     def decode_request(self, payload: Mapping[str, Any]) -> CanonicalRequest:
+        # Support both Chat Completions and Responses API formats
+        # Responses API uses 'input' instead of 'messages'
+        if "input" in payload and "messages" not in payload:
+            # Convert Responses API format to Chat Completions format
+            input_data = payload.get("input")
+            if isinstance(input_data, str):
+                # Simple string input
+                payload = {**payload, "messages": [{"role": "user", "content": input_data}]}
+            elif isinstance(input_data, list):
+                # Structured input - convert Responses API typed items to Chat Completions messages
+                messages = _convert_responses_api_input(input_data)
+                payload = {**payload, "messages": messages}
+
         model = payload.get("model")
         if not isinstance(model, str):
             raise UnsupportedFeatureError("model", "must be a string")
@@ -306,6 +321,87 @@ class OpenAIAdapter(ProtocolAdapter):
                 "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
             }
         return payload
+
+    def encode_responses_api_response(self, response: CanonicalResponse) -> dict[str, Any]:
+        """Encode a canonical response in OpenAI Responses API format."""
+        if response.message.role != "assistant":
+            raise UnsupportedFeatureError("message.role", "must be assistant")
+
+        # Generate response ID with "resp_" prefix
+        response_id = response.metadata.get("response_id", f"resp_{uuid4().hex[:24]}")
+        if not response_id.startswith("resp_"):
+            response_id = f"resp_{response_id}"
+
+        # Build output items
+        output_items = []
+        message_item = self._encode_responses_api_message_item(response.message)
+        output_items.append(message_item)
+
+        # Handle tool calls as separate function_call items
+        tool_calls = [part for part in response.message.content if isinstance(part, ToolCallPart)]
+        for tool_call in tool_calls:
+            function_call_item = {
+                "type": "function_call",
+                "id": tool_call.id or f"call_{uuid4().hex[:24]}",
+                "call_id": tool_call.id or f"call_{uuid4().hex[:24]}",
+                "name": tool_call.name,
+                "arguments": orjson.dumps(thaw(tool_call.arguments)).decode(),
+                "status": "completed",
+            }
+            output_items.append(function_call_item)
+
+        # Build the response payload
+        payload = {
+            "id": response_id,
+            "object": "response",
+            "created_at": response.metadata.get("created", int(time.time())),
+            "model": response.model,
+            "output": output_items,
+            "status": _map_finish_reason_to_status(response.finish_reason),
+        }
+
+        # Add usage if present
+        if response.usage is not None:
+            validate_usage(response.usage)
+            payload["usage"] = {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
+            }
+
+        return payload
+
+    def _encode_responses_api_message_item(self, message: CanonicalMessage) -> dict[str, Any]:
+        """Encode a canonical message as a Responses API message item."""
+        content_parts = []
+        for part in message.content:
+            if isinstance(part, TextPart):
+                content_parts.append({
+                    "type": "output_text",
+                    "text": part.text,
+                    "annotations": [],
+                })
+            elif isinstance(part, ImagePart):
+                # Images in Responses API are represented differently
+                if part.url:
+                    content_parts.append({
+                        "type": "output_image",
+                        "url": part.url,
+                    })
+                elif part.data:
+                    content_parts.append({
+                        "type": "output_image",
+                        "data": f"data:{part.media_type or 'image/png'};base64,{part.data}",
+                    })
+
+        message_id = f"msg_{uuid4().hex[:24]}"
+        return {
+            "type": "message",
+            "id": message_id,
+            "role": message.role,
+            "status": "completed",
+            "content": content_parts,
+        }
 
     def create_stream_decoder(self) -> StreamDecoder:
         return _OpenAIStreamDecoder()
@@ -654,6 +750,209 @@ class _OpenAIStreamEncoder(StreamEncoder):
         return (frame,) if frame else ()
 
 
+class _ResponsesAPIStreamEncoder(StreamEncoder):
+    """Stream encoder for OpenAI Responses API format."""
+
+    def __init__(self) -> None:
+        self._response_id: str | None = None
+        self._message_id: str | None = None
+        self._created_at: int | None = None
+        self._model: str | None = None
+        self._emitted_response_created = False
+        self._emitted_output_item_added = False
+        self._emitted_content_part_added = False
+        self._final_usage: CanonicalUsage | None = None
+
+    def set_initial_usage(self, input_tokens: int) -> None:
+        # Responses API doesn't use initial usage in the same way
+        pass
+
+    def encode(self, event: StreamEvent) -> tuple[bytes, ...]:
+        frames: list[bytes] = []
+
+        # Initialize response metadata on first event
+        if self._response_id is None:
+            self._response_id = f"resp_{uuid4().hex[:24]}"
+            self._message_id = f"msg_{uuid4().hex[:24]}"
+            self._created_at = int(time.time())
+            self._model = event.model or "unknown"
+
+        # Track final usage
+        if event.type == "usage" and event.usage is not None:
+            self._final_usage = event.usage
+            return ()
+
+        # Emit response.created on first event
+        if not self._emitted_response_created:
+            response_created = {
+                "type": "response.created",
+                "response": {
+                    "id": self._response_id,
+                    "object": "response",
+                    "created_at": self._created_at,
+                    "model": self._model,
+                    "output": [],
+                    "status": "in_progress",
+                },
+            }
+            frames.append(encode_sse(response_created))
+            self._emitted_response_created = True
+
+        # Handle different event types
+        if event.type == "message_start":
+            # Emit response.in_progress
+            response_in_progress = {
+                "type": "response.in_progress",
+                "response": {
+                    "id": self._response_id,
+                    "object": "response",
+                    "created_at": self._created_at,
+                    "model": self._model,
+                    "output": [],
+                    "status": "in_progress",
+                },
+            }
+            frames.append(encode_sse(response_in_progress))
+
+            # Emit response.output_item.added
+            output_item_added = {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": self._message_id,
+                    "role": "assistant",
+                    "status": "in_progress",
+                    "content": [],
+                },
+            }
+            frames.append(encode_sse(output_item_added))
+            self._emitted_output_item_added = True
+
+        elif event.type == "content_delta" and event.text:
+            # Emit content_part.added on first content
+            if not self._emitted_content_part_added:
+                content_part_added = {
+                    "type": "response.content_part.added",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "part": {
+                        "type": "output_text",
+                        "text": "",
+                        "annotations": [],
+                    },
+                }
+                frames.append(encode_sse(content_part_added))
+                self._emitted_content_part_added = True
+
+            # Emit output_text.delta
+            output_text_delta = {
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": event.text,
+            }
+            frames.append(encode_sse(output_text_delta))
+
+        elif event.type == "tool_call_delta":
+            # For tool calls, we need to emit function_call items
+            # This is simplified - full implementation would track tool call state
+            if event.tool_name:
+                function_call_added = {
+                    "type": "response.output_item.added",
+                    "output_index": 1,  # After message
+                    "item": {
+                        "type": "function_call",
+                        "id": event.tool_call_id or f"call_{uuid4().hex[:24]}",
+                        "call_id": event.tool_call_id or f"call_{uuid4().hex[:24]}",
+                        "name": event.tool_name,
+                        "arguments": "",
+                        "status": "in_progress",
+                    },
+                }
+                frames.append(encode_sse(function_call_added))
+
+            if event.arguments_delta:
+                function_call_delta = {
+                    "type": "response.function_call_arguments.delta",
+                    "output_index": 1,
+                    "delta": event.arguments_delta,
+                }
+                frames.append(encode_sse(function_call_delta))
+
+        elif event.type == "message_end":
+            # Emit content_part.done
+            if self._emitted_content_part_added:
+                content_part_done = {
+                    "type": "response.content_part.done",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "part": {
+                        "type": "output_text",
+                        "text": "",  # Full text would be accumulated
+                        "annotations": [],
+                    },
+                }
+                frames.append(encode_sse(content_part_done))
+
+            # Emit message.done
+            message_done = {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": self._message_id,
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [],
+                },
+            }
+            frames.append(encode_sse(message_done))
+
+        elif event.type == "done":
+            # Emit response.completed
+            status = "completed"
+            if self._final_usage is None:
+                status = "incomplete"
+
+            response_completed = {
+                "type": "response.completed",
+                "response": {
+                    "id": self._response_id,
+                    "object": "response",
+                    "created_at": self._created_at,
+                    "model": self._model,
+                    "output": [],
+                    "status": status,
+                },
+            }
+            if self._final_usage is not None:
+                response_completed["response"]["usage"] = {
+                    "input_tokens": self._final_usage.input_tokens,
+                    "output_tokens": self._final_usage.output_tokens,
+                    "total_tokens": self._final_usage.input_tokens + self._final_usage.output_tokens,
+                }
+            frames.append(encode_sse(response_completed))
+
+        elif event.type == "error":
+            # Emit response.failed
+            response_failed = {
+                "type": "response.failed",
+                "response": {
+                    "id": self._response_id,
+                    "object": "response",
+                    "created_at": self._created_at,
+                    "model": self._model,
+                    "output": [],
+                    "status": "failed",
+                    "error": event.metadata,
+                },
+            }
+            frames.append(encode_sse(response_failed))
+
+        return tuple(frames)
+
+
 def _decode_content(value: Any, field: str) -> tuple[ContentPart, ...]:
     if value is None:
         return ()
@@ -738,6 +1037,65 @@ def _decode_result_content(value: Any, field: str) -> tuple[TextPart | ImagePart
     if not all(isinstance(part, (TextPart, ImagePart)) for part in parts):
         raise UnsupportedFeatureError(field, "tool results can contain only text or images")
     return cast(tuple[TextPart | ImagePart, ...], parts)
+
+
+def _convert_responses_api_input(input_items: list[Any]) -> list[dict[str, Any]]:
+    """Convert Responses API typed input items to Chat Completions messages.
+
+    Handles:
+    - {"type": "message", ...} - Explicit message items
+    - {"type": "function_call", ...} - Previous tool calls
+    - {"type": "function_call_output", ...} - Tool results
+    - Plain message dicts (backward compatibility)
+    """
+    messages: list[dict[str, Any]] = []
+
+    for item in input_items:
+        if not isinstance(item, Mapping):
+            continue
+
+        item_type = item.get("type")
+
+        if item_type == "message":
+            # Explicit message item
+            role = item.get("role", "user")
+            content = item.get("content", "")
+            messages.append({
+                "role": role,
+                "content": content,
+            })
+
+        elif item_type == "function_call":
+            # Previous tool call - convert to assistant message with tool_calls
+            tool_call = {
+                "id": item.get("id") or item.get("call_id"),
+                "type": "function",
+                "function": {
+                    "name": item.get("name", ""),
+                    "arguments": item.get("arguments", "{}"),
+                },
+            }
+            messages.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [tool_call],
+            })
+
+        elif item_type == "function_call_output":
+            # Tool result - convert to tool message
+            tool_call_id = item.get("call_id") or item.get("tool_call_id")
+            output = item.get("output", "")
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": output if isinstance(output, str) else orjson.dumps(output).decode(),
+            })
+
+        else:
+            # Plain message dict or unknown type - pass through
+            messages.append(dict(item))
+
+    return messages
 
 
 def _decode_tool_calls(value: Any, field: str) -> tuple[ToolCallPart, ...]:
@@ -989,6 +1347,17 @@ def _encode_finish_reason(value: FinishReason) -> str:
         "tool_call": "tool_calls",
         "content_filter": "content_filter",
     }[value]
+
+
+def _map_finish_reason_to_status(finish_reason: FinishReason) -> str:
+    """Map canonical finish reason to Responses API status."""
+    return {
+        "stop": "completed",
+        "length": "completed",
+        "tool_call": "completed",
+        "content_filter": "completed",
+        "error": "failed",
+    }[finish_reason]
 
 
 def _encode_tool(tool: CanonicalTool) -> dict[str, Any]:

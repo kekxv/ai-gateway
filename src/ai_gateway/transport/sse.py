@@ -126,6 +126,7 @@ class GatewayContext:
 
     source_protocol: Protocol
     target_protocol: Protocol
+    endpoint_path: str = "/v1/chat/completions"
     initial_input_tokens: int | None = None
     audit_body_limit_bytes: int = 1_048_576
     started_at: float = field(default_factory=monotonic)
@@ -332,7 +333,19 @@ async def stream_gateway_response(
     source_adapter = get_adapter(context.source_protocol)
     target_adapter = get_adapter(context.target_protocol)
     stream_decoder = source_adapter.create_stream_decoder()
-    stream_encoder = target_adapter.create_stream_encoder()
+
+    # Use Responses API encoder if targeting OpenAI Responses API
+    is_responses_api = (
+        context.target_protocol is Protocol.OPENAI
+        and context.endpoint_path == "/v1/responses"
+    )
+
+    if is_responses_api:
+        from ai_gateway.protocols.openai import _ResponsesAPIStreamEncoder
+        stream_encoder = _ResponsesAPIStreamEncoder()
+    else:
+        stream_encoder = target_adapter.create_stream_encoder()
+
     parser = SSEDecoder()
     pending_done: StreamEvent | None = None
     if context.target_protocol is Protocol.CLAUDE and context.initial_input_tokens is not None:
@@ -363,7 +376,8 @@ async def stream_gateway_response(
     try:
         async for chunk in upstream.aiter_bytes():
             native_events = parser.feed(chunk)
-            if context.source_protocol is context.target_protocol:
+            # For Responses API, we can't pass through even for same-protocol
+            if context.source_protocol is context.target_protocol and not is_responses_api:
                 for native_event in native_events:
                     context.observe_passthrough(native_event)
                 context.record_output(chunk)
@@ -375,7 +389,7 @@ async def stream_gateway_response(
                     yield frame
         terminal_frames: list[bytes] = []
         for native_event in parser.finish():
-            if context.source_protocol is context.target_protocol:
+            if context.source_protocol is context.target_protocol and not is_responses_api:
                 context.observe_passthrough(native_event)
             else:
                 terminal_frames.extend(await convert_native(native_event))
@@ -383,11 +397,11 @@ async def stream_gateway_response(
         if context.source_protocol is Protocol.GEMINI:
             context.gemini_eof_decodes += 1
             for canonical_event in stream_decoder.decode(b""):
-                if context.source_protocol is context.target_protocol:
+                if context.source_protocol is context.target_protocol and not is_responses_api:
                     context.observe(canonical_event)
                     continue
                 terminal_frames.extend(encode_canonical(canonical_event))
-        if context.source_protocol is context.target_protocol:
+        if context.source_protocol is context.target_protocol and not is_responses_api:
             if not context.semantic_finish_observed:
                 raise IncompleteStreamError(
                     "The upstream provider reached EOF without its native terminal event"

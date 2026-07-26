@@ -38,6 +38,9 @@ scale containers horizontally.
 | Interface | Endpoint | Modes |
 | --- | --- | --- |
 | OpenAI chat completions | `/v1/chat/completions` | HTTP, SSE |
+| OpenAI Responses API | `/v1/responses` | HTTP, SSE |
+| OpenAI embeddings | `/v1/embeddings` | HTTP |
+| OpenAI completions (Legacy) | `/v1/completions` | HTTP |
 | OpenAI model catalog | `/v1/models`, `/v1/models/{model}` | HTTP |
 | OpenAI Realtime | `/v1/realtime` | WebSocket |
 | Claude messages | `/v1/messages` | HTTP, SSE |
@@ -48,6 +51,29 @@ scale containers horizontally.
 | Gemini Live | `/v1beta/live` | WebSocket |
 | Administration console | `/console/` | Browser SPA |
 | OpenAPI documentation | `/docs`, `/redoc`, `/openapi.json` | HTTP |
+
+For detailed information about the OpenAI API endpoints, see the [OpenAI API Reference](docs/openai-api-reference.md).
+
+### OpenAI API Compatibility
+
+The gateway supports multiple OpenAI API formats for compatibility with various CLI tools and applications:
+
+- **Chat Completions API** (`/v1/chat/completions`): The standard chat completions endpoint
+- **Responses API** (`/v1/responses`): The newer unified API that supports both simple string input and structured conversation history. Compatible with Claude CLI and other modern tools.
+- **Embeddings API** (`/v1/embeddings`): Generate text embeddings for RAG and vector operations
+- **Completions API** (`/v1/completions`): Legacy text completions endpoint for backward compatibility
+
+The Responses API accepts both formats:
+```json
+// Simple string input
+{"model": "gpt-4", "input": "Hello, how are you?"}
+
+// Structured conversation history
+{"model": "gpt-4", "input": [{"role": "user", "content": "Hello"}]}
+```
+
+All endpoints are automatically converted to the canonical format and routed to the appropriate upstream provider.
+
 
 ## Requirements
 

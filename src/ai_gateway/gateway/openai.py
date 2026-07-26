@@ -16,6 +16,42 @@ async def chat_completions(
     service: Annotated[GatewayService, Depends(get_gateway_service)],
 ) -> Response:
     try:
+        return (await service.handle(request, Protocol.OPENAI, endpoint_path="/v1/chat/completions")).response()
+    except Exception as exc:
+        return native_error_response(Protocol.OPENAI, exc)
+
+
+@router.post("/v1/responses")
+async def responses(
+    request: Request,
+    service: Annotated[GatewayService, Depends(get_gateway_service)],
+) -> Response:
+    """OpenAI Responses API - unified interface for chat completions and other features."""
+    try:
+        return (await service.handle(request, Protocol.OPENAI, endpoint_path="/v1/responses")).response()
+    except Exception as exc:
+        return native_error_response(Protocol.OPENAI, exc)
+
+
+@router.post("/v1/embeddings")
+async def embeddings(
+    request: Request,
+    service: Annotated[GatewayService, Depends(get_gateway_service)],
+) -> Response:
+    """OpenAI Embeddings API - generate text embeddings."""
+    try:
+        return (await service.handle(request, Protocol.OPENAI)).response()
+    except Exception as exc:
+        return native_error_response(Protocol.OPENAI, exc)
+
+
+@router.post("/v1/completions")
+async def completions(
+    request: Request,
+    service: Annotated[GatewayService, Depends(get_gateway_service)],
+) -> Response:
+    """OpenAI Completions API (Legacy) - text completions."""
+    try:
         return (await service.handle(request, Protocol.OPENAI)).response()
     except Exception as exc:
         return native_error_response(Protocol.OPENAI, exc)

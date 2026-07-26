@@ -171,6 +171,7 @@ class _PreparedRequest:
     canonical: CanonicalRequest
     requested_model: str
     inbound_protocol: Protocol
+    endpoint_path: str = "/v1/chat/completions"
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +209,7 @@ class GatewayService:
         *,
         path_model: str | None = None,
         force_stream: bool = False,
+        endpoint_path: str = "/v1/chat/completions",
     ) -> GatewayOutput | GatewayStreamOutput:
         started_at = monotonic()
 
@@ -226,6 +228,7 @@ class GatewayService:
             canonical,
             requested_model,
             inbound_protocol,
+            endpoint_path,
         )
 
         priced_model = await self._session.get(Model, resolved.model_id)
@@ -380,6 +383,7 @@ class GatewayService:
 
             output, response_payload, canonical_response = _convert_response(
                 inbound_protocol=inbound_protocol,
+                endpoint_path=prepared.endpoint_path,
                 route=route,
                 upstream=upstream,
             )
@@ -514,6 +518,7 @@ class GatewayService:
             context = GatewayContext(
                 source_protocol=attempt.route.protocol,
                 target_protocol=inbound_protocol,
+                endpoint_path=prepared.endpoint_path,
                 initial_input_tokens=estimated_input_tokens,
                 audit_body_limit_bytes=self._settings.audit_body_limit_bytes,
                 started_at=started_at,
@@ -1201,6 +1206,7 @@ def _upstream_body(prepared: _PreparedRequest, route: RouteCandidate) -> bytes:
 def _convert_response(
     *,
     inbound_protocol: Protocol,
+    endpoint_path: str,
     route: RouteCandidate,
     upstream: httpx.Response,
 ) -> tuple[GatewayOutput, dict[str, Any], CanonicalResponse | None]:
@@ -1213,6 +1219,16 @@ def _convert_response(
             canonical_response = source_adapter.decode_response(payload)
         except (GatewayError, ValueError):
             canonical_response = None
+        # For Responses API, we need to re-encode even for same-protocol requests
+        if inbound_protocol is Protocol.OPENAI and endpoint_path == "/v1/responses":
+            if canonical_response is not None:
+                from ai_gateway.protocols.openai import OpenAIAdapter
+                encoded = OpenAIAdapter().encode_responses_api_response(canonical_response)
+                return (
+                    GatewayOutput(orjson.dumps(encoded), upstream.status_code, "application/json"),
+                    payload,
+                    canonical_response,
+                )
         return (
             GatewayOutput(upstream.content, upstream.status_code, content_type),
             payload,
@@ -1224,7 +1240,12 @@ def _convert_response(
     except (GatewayError, ValueError) as exc:
         raise UpstreamError("The upstream provider returned an invalid response") from exc
     try:
-        encoded = get_adapter(inbound_protocol).encode_response(canonical_response)
+        # Use Responses API encoding if endpoint is /v1/responses
+        if inbound_protocol is Protocol.OPENAI and endpoint_path == "/v1/responses":
+            from ai_gateway.protocols.openai import OpenAIAdapter
+            encoded = OpenAIAdapter().encode_responses_api_response(canonical_response)
+        else:
+            encoded = get_adapter(inbound_protocol).encode_response(canonical_response)
     except UnsupportedFeatureError:
         raise
     return (
