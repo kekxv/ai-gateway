@@ -238,7 +238,10 @@ describe('接口密钥作用域与一次性明文', () => {
     await wrapper.get<HTMLInputElement>('[data-test="api-key-model-21"]').setValue(true)
     await wrapper.get('[data-test="api-key-scope"]').setValue('models')
     expect(wrapper.find('[data-test="api-key-provider-11"]').exists()).toBe(false)
+    await wrapper.get('[data-test="api-key-scope"]').setValue('providers_and_models')
+    expect(wrapper.get<HTMLInputElement>('[data-test="api-key-provider-11"]').element.checked).toBe(false)
     expect(wrapper.get<HTMLInputElement>('[data-test="api-key-model-21"]').element.checked).toBe(true)
+    await wrapper.get('[data-test="api-key-scope"]').setValue('models')
     await wrapper.get('[data-test="api-key-expiry"]').setValue('2030-01-02T03:04')
     await wrapper.get('[data-test="api-key-submit"]').trigger('click')
 

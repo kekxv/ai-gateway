@@ -30,7 +30,7 @@
 - [ ] Update the form tests to mount the current checkbox UI and add explicit assertions that create requires/selects an owner, edit displays a disabled owner, provider/model IDs follow checked boxes, and hidden scope selections are cleared.
 - [ ] Keep the existing assertion that the raw one-time key occurs once and add an assertion that generated examples contain only the environment-variable placeholder.
 - [ ] Run `npm exec vitest -- run tests/api-keys.spec.ts --maxWorkers=1 --reporter=dot` and record the expected failures.
-- [ ] Add a required `users` prop and owner model to `ApiKeyFormDrawer`; remove `useAuthStore`; reset owner/drafts correctly; emit the selected user ID on create and the original user ID on edit.
+- [ ] Add a required `users` prop and owner model to `ApiKeyFormDrawer`; remove `useAuthStore`; reset owner/drafts correctly; emit the selected user ID on create, and on edit display/reset/lock the original owner while omitting `user_id` from the immutable PATCH payload.
 - [ ] Add stable hooks to each provider/model scope checkbox and update tests to click the actual checkbox inputs.
 - [ ] Pass `:users="users"` from `ApiKeysView`.
 - [ ] Replace raw-secret interpolation in all request examples with `$AI_GATEWAY_API_KEY` while keeping the dedicated secret field/copy/download behavior.
