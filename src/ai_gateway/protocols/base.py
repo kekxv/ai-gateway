@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from typing import Any, TypeGuard, cast
+from urllib.parse import urlsplit
 
 import orjson
 
@@ -30,6 +31,16 @@ CROSS_PROTOCOL_LOSSES = (
 # skip it. Gemini decoding interprets an empty input only when the HTTP response reaches EOF, where
 # it becomes the canonical `done` event; callers must not feed ordinary encoder no-ops back in.
 NO_STREAM_OUTPUT = b""
+
+_IMAGE_MEDIA_TYPES_BY_SUFFIX = {
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+_IMAGE_DETAILS = frozenset({"auto", "high", "low", "original"})
+_PORTABLE_IMAGE_MEDIA_TYPES = frozenset(_IMAGE_MEDIA_TYPES_BY_SUFFIX.values())
 
 
 class UnsupportedFeatureError(GatewayError):
@@ -118,6 +129,40 @@ def is_object(value: Any) -> TypeGuard[dict[str, Any]]:
 def require_object(value: Any, field: str) -> dict[str, Any]:
     if not is_object(value):
         raise UnsupportedFeatureError(field, "must be a JSON object")
+    return value
+
+
+def image_media_type(value: Any, field: str, *, required: bool = True) -> str | None:
+    if value is None:
+        if required:
+            raise UnsupportedFeatureError(field, "is required for portable image conversion")
+        return None
+    if not isinstance(value, str):
+        raise UnsupportedFeatureError(field, "must be a string")
+    normalized = value.strip().lower()
+    if normalized not in _PORTABLE_IMAGE_MEDIA_TYPES:
+        allowed = ", ".join(sorted(_PORTABLE_IMAGE_MEDIA_TYPES))
+        raise UnsupportedFeatureError(
+            field,
+            f"must be a portable image/* media type ({allowed})",
+        )
+    return normalized
+
+
+def image_media_type_from_url(url: str) -> str | None:
+    path = urlsplit(url).path.lower()
+    for suffix, media_type in _IMAGE_MEDIA_TYPES_BY_SUFFIX.items():
+        if path.endswith(suffix):
+            return media_type
+    return None
+
+
+def image_detail(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in _IMAGE_DETAILS:
+        allowed = ", ".join(sorted(_IMAGE_DETAILS))
+        raise UnsupportedFeatureError(field, f"must be one of {allowed}")
     return value
 
 

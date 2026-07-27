@@ -7,7 +7,7 @@
       "vendor_message": "fixture",
       "content": [
         {"type": "text", "text": "Inspect both images.", "cache_control": {"type": "ephemeral"}},
-        {"type": "image", "source": {"type": "url", "url": "https://example.test/cat.png"}, "detail": "high"},
+        {"type": "image", "source": {"type": "url", "url": "https://example.test/cat.png"}},
         {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}}
       ]
     },

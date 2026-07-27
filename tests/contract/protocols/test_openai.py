@@ -32,9 +32,8 @@ def test_openai_golden_request_decodes_all_contract_fields(load_fixture) -> None
     assert canonical.system == (TextPart("Be concise."),)
     assert [message.role for message in canonical.messages] == ["user", "assistant", "user", "user"]
     assert canonical.messages[0].content[1] == ImagePart(
-        media_type=None,
+        media_type="image/png",
         url="https://example.test/cat.png",
-        detail="high",
     )
     assert canonical.messages[0].content[2] == ImagePart(
         media_type="image/png",

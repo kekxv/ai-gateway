@@ -16,6 +16,8 @@ from ai_gateway.protocols.base import (
     add_vendor_scope,
     decode_sse,
     encode_sse,
+    image_media_type,
+    image_media_type_from_url,
     native_extensions,
     nonnegative_int,
     optional_float,
@@ -684,15 +686,17 @@ def _decode_parts(
             data = require_object(
                 part.get("inlineData", part.get("inline_data")), f"{field}[{index}].inlineData"
             )
-            media_type = data.get("mimeType", data.get("mime_type"))
+            media_type = image_media_type(
+                data.get("mimeType", data.get("mime_type")),
+                f"{field}[{index}].inlineData.mimeType",
+            )
             encoded = data.get("data")
-            if not isinstance(media_type, str) or not isinstance(encoded, str):
+            if not isinstance(encoded, str):
                 raise UnsupportedFeatureError(f"{field}[{index}].inlineData", "invalid image")
-            detail = part.get("detail")
             metadata = vendor_metadata(
                 Protocol.GEMINI,
                 part,
-                {"inlineData", "inline_data", "detail"},
+                {"inlineData", "inline_data"},
             )
             add_vendor_scope(
                 metadata,
@@ -708,7 +712,6 @@ def _decode_parts(
                 ImagePart(
                     media_type=media_type,
                     data=encoded,
-                    detail=detail if isinstance(detail, str) else None,
                     metadata=metadata,
                 )
             )
@@ -726,11 +729,14 @@ def _decode_parts(
                 raise UnsupportedFeatureError(
                     f"{field}[{index}].fileData.fileUri", "must be a string"
                 )
-            detail = part.get("detail")
+            media_type = image_media_type(
+                data.get("mimeType", data.get("mime_type")),
+                f"{field}[{index}].fileData.mimeType",
+            )
             metadata = vendor_metadata(
                 Protocol.GEMINI,
                 part,
-                {"fileData", "file_data", "detail"},
+                {"fileData", "file_data"},
             )
             add_vendor_scope(
                 metadata,
@@ -744,8 +750,8 @@ def _decode_parts(
             )
             result.append(
                 ImagePart(
+                    media_type=media_type,
                     url=url,
-                    detail=detail if isinstance(detail, str) else None,
                     metadata=metadata,
                 )
             )
@@ -870,11 +876,21 @@ def _encode_parts(
                     f"{field}[{index}].role",
                     "Gemini image inputs are only valid on user content",
                 )
+            if part.detail is not None:
+                raise UnsupportedFeatureError(
+                    f"{field}[{index}].detail",
+                    "is not supported by Gemini image parts",
+                )
             if part.url is not None:
+                media_type = part.media_type or image_media_type_from_url(part.url)
+                media_type = image_media_type(
+                    media_type,
+                    f"{field}[{index}].media_type",
+                )
                 data = vendor_scope(Protocol.GEMINI, part.metadata, "__image_data__")
                 data.update(
                     {
-                        **({"mimeType": part.media_type} if part.media_type is not None else {}),
+                        "mimeType": media_type,
                         "fileUri": part.url,
                     }
                 )
@@ -883,13 +899,16 @@ def _encode_parts(
                     "fileData": data,
                 }
             else:
+                media_type = image_media_type(
+                    part.media_type,
+                    f"{field}[{index}].media_type",
+                )
                 data = vendor_scope(Protocol.GEMINI, part.metadata, "__image_data__")
-                data.update({"mimeType": part.media_type, "data": part.data})
+                data.update({"mimeType": media_type, "data": part.data})
                 block = {
                     **native_extensions(Protocol.GEMINI, part.metadata),
                     "inlineData": data,
                 }
-            _set_optional(block, "detail", part.detail)
             result.append(block)
         elif isinstance(part, ToolCallPart):
             if role != "assistant":

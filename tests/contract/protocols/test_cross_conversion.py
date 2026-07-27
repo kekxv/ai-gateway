@@ -33,7 +33,7 @@ def expected_request() -> CanonicalRequest:
                 "user",
                 (
                     TextPart("Inspect both images."),
-                    ImagePart(url="https://example.test/cat.png", detail="high"),
+                    ImagePart(media_type="image/png", url="https://example.test/cat.png"),
                     ImagePart(media_type="image/png", data="aGVsbG8="),
                 ),
             ),

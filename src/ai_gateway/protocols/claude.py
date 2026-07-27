@@ -15,6 +15,8 @@ from ai_gateway.protocols.base import (
     add_vendor_scope,
     decode_sse,
     encode_sse,
+    image_media_type,
+    image_media_type_from_url,
     native_extensions,
     nonnegative_int,
     optional_float,
@@ -917,11 +919,10 @@ def _decode_content(
                     "Claude image input blocks are only valid on user messages",
                 )
             source = require_object(part.get("source"), f"{field}[{index}].source")
-            detail = part.get("detail")
             metadata = vendor_metadata(
                 Protocol.CLAUDE,
                 part,
-                {"type", "source", "detail"},
+                {"type", "source"},
             )
             add_vendor_scope(
                 metadata,
@@ -934,9 +935,12 @@ def _decode_content(
                 },
             )
             if source.get("type") == "base64":
-                media_type = source.get("media_type")
+                media_type = image_media_type(
+                    source.get("media_type"),
+                    f"{field}[{index}].source.media_type",
+                )
                 data = source.get("data")
-                if not isinstance(media_type, str) or not isinstance(data, str):
+                if not isinstance(data, str):
                     raise UnsupportedFeatureError(
                         f"{field}[{index}].source", "invalid base64 image"
                     )
@@ -944,15 +948,14 @@ def _decode_content(
                     ImagePart(
                         media_type=media_type,
                         data=data,
-                        detail=detail if isinstance(detail, str) else None,
                         metadata=metadata,
                     )
                 )
             elif source.get("type") == "url" and isinstance(source.get("url"), str):
                 result.append(
                     ImagePart(
+                        media_type=image_media_type_from_url(source["url"]),
                         url=source["url"],
-                        detail=detail if isinstance(detail, str) else None,
                         metadata=metadata,
                     )
                 )
@@ -1047,6 +1050,13 @@ def _encode_content(
                     f"{field}[{index}].role",
                     "Claude image input blocks are only valid on user messages",
                 )
+            if part.detail is not None:
+                raise UnsupportedFeatureError(
+                    f"{field}[{index}].detail",
+                    "is not supported by Claude image blocks",
+                )
+            if part.data is not None:
+                image_media_type(part.media_type, f"{field}[{index}].media_type")
             source = (
                 {"type": "url", "url": part.url}
                 if part.url is not None
@@ -1055,7 +1065,6 @@ def _encode_content(
             source.update(vendor_scope(Protocol.CLAUDE, part.metadata, "__source__"))
             block = native_extensions(Protocol.CLAUDE, part.metadata)
             block.update({"type": "image", "source": source})
-            _set_optional(block, "detail", part.detail)
             result.append(block)
         elif isinstance(part, ToolCallPart):
             if role != "assistant":

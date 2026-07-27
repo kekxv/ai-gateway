@@ -85,6 +85,118 @@ def test_responses_request_decodes_official_portable_shape() -> None:
     assert request.messages[2].content[0].tool_call_id == "call_123"
 
 
+def test_responses_chat_fallback_preserves_system_and_developer_roles() -> None:
+    adapter = OpenAIAdapter()
+    request = adapter.decode_responses_request(
+        {
+            "model": "gpt-5.6",
+            "instructions": "Top-level instructions.",
+            "input": [
+                {"type": "message", "role": "system", "content": "System input."},
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {"type": "input_text", "text": "Developer one."},
+                        {"type": "input_text", "text": "Developer two."},
+                    ],
+                },
+                {"type": "message", "role": "user", "content": "Hello."},
+            ],
+        }
+    )
+
+    encoded = adapter.encode_request(request)
+
+    assert encoded["messages"] == [
+        {"role": "system", "content": "Top-level instructions."},
+        {"role": "system", "content": "System input."},
+        {
+            "role": "developer",
+            "content": [
+                {"type": "text", "text": "Developer one."},
+                {"type": "text", "text": "Developer two."},
+            ],
+        },
+        {"role": "user", "content": "Hello."},
+    ]
+
+
+def test_responses_function_output_text_parts_convert_to_chat_tool_text() -> None:
+    adapter = OpenAIAdapter()
+    request = adapter.decode_responses_request(
+        {
+            "model": "gpt-5.6",
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_123",
+                    "output": [
+                        {"type": "input_text", "text": "first"},
+                        {"type": "input_text", "text": "second"},
+                    ],
+                }
+            ],
+        }
+    )
+
+    encoded = adapter.encode_request(request)
+
+    assert encoded["messages"] == [
+        {
+            "role": "tool",
+            "tool_call_id": "call_123",
+            "content": [
+                {"type": "text", "text": "first"},
+                {"type": "text", "text": "second"},
+            ],
+        }
+    ]
+
+
+def test_responses_function_output_image_is_rejected_by_chat_fallback() -> None:
+    adapter = OpenAIAdapter()
+    request = adapter.decode_responses_request(
+        {
+            "model": "gpt-5.6",
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_123",
+                    "output": [
+                        {
+                            "type": "input_image",
+                            "image_url": "https://example.test/result.png",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(UnsupportedFeatureError, match=r"content.*text"):
+        adapter.encode_request(request)
+
+
+@pytest.mark.parametrize("content_type", ["input_file", "input_audio"])
+def test_responses_nonportable_content_resources_are_rejected(content_type: str) -> None:
+    content = (
+        {"type": "input_file", "file_url": "https://example.test/report.pdf"}
+        if content_type == "input_file"
+        else {"type": "input_audio", "input_audio": {"data": "eA==", "format": "wav"}}
+    )
+
+    with pytest.raises(UnsupportedFeatureError, match=content_type):
+        OpenAIAdapter().decode_responses_request(
+            {
+                "model": "gpt-5.6",
+                "input": [
+                    {"type": "message", "role": "user", "content": [content]}
+                ],
+            }
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

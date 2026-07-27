@@ -7,7 +7,7 @@
       "vendorMessage": "fixture",
       "parts": [
         {"text": "Inspect both images.", "thoughtSignature": "fixture-signature"},
-        {"fileData": {"mimeType": "image/png", "fileUri": "https://example.test/cat.png"}, "detail": "high"},
+        {"fileData": {"mimeType": "image/png", "fileUri": "https://example.test/cat.png"}},
         {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}
       ]
     },
