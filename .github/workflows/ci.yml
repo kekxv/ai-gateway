@@ -34,7 +34,6 @@ jobs:
       GATEWAY_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
       GATEWAY_NO_PROXY: 127.0.0.1,localhost
       NO_PROXY: 127.0.0.1,localhost
-      no_proxy: 127.0.0.1,localhost
       MYSQL_DATABASE: gateway
       MYSQL_PASSWORD: gateway
       MYSQL_ROOT_PASSWORD: gateway-root
