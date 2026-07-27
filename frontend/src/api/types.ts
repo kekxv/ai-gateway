@@ -191,6 +191,15 @@ export interface ModelSyncResult {
   disabled_routes: number
 }
 
+export interface CatalogImportResult {
+  providers_created: number
+  providers_updated: number
+  models_created: number
+  models_updated: number
+  routes_created: number
+  routes_updated: number
+}
+
 export interface ModelAliasInput {
   alias: string
   enabled?: boolean

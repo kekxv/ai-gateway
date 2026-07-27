@@ -23,6 +23,7 @@ Lean AI Gateway 是一个专注于多 AI 提供商的网关，支持 OpenAI、Cl
 - 脱敏请求日志、后端游标分页，以及 GZIP 压缩的请求/响应详情。
 - 支持供应商和模型级别的价格倍率配置，灵活调整计费价格。
 - 提供中文 Vue 3 管理控制台，覆盖日常网关运维。
+- 管理员可备份/导入目录，并可从旧版 SQLite 迁移目录。
 
 ## 支持的接口
 
@@ -163,6 +164,14 @@ uv run uvicorn ai_gateway.main:app --host 127.0.0.1 --port 8000
 
 JWT access 和 refresh token 仅保存在 `sessionStorage`，不会写入 `localStorage`。提供商凭据、
 TOTP 验证码、密码和完整 API Key 不会持久化，也不会在一次性流程结束后再次显示。
+
+### 目录备份与旧版迁移
+
+管理员可在“供应商”页面导出或合并提供商/模型目录。默认导出会脱敏；控制台在下载包含上游凭据的
+备份前会明确警告并要求确认。完整的目录范围、合并行为、密钥处理和旧版命令见
+[目录备份与旧版 SQLite 迁移说明](docs/catalog-import-export.md)。从旧版库导出时，`--include-unowned`
+通常必需：旧版本没有始终填写管理员创建记录的 `userId`。使用 `--include-secrets` 生成的文件包含
+上游密钥，必须受保护，并在导入成功后删除。
 
 ## Docker 部署
 

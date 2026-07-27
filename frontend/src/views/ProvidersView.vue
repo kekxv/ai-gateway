@@ -23,6 +23,7 @@ import 'element-plus/theme-chalk/el-skeleton.css'
 import 'element-plus/theme-chalk/el-skeleton-item.css'
 
 import { ApiError } from '@/api/client'
+import { exportCatalog, importCatalog } from '@/api/configuration'
 import {
   createProvider,
   deleteProvider,
@@ -60,6 +61,9 @@ const notice = ref<{ type: NoticeType; text: string } | null>(null)
 const drawerOpen = ref(false)
 const editingProvider = ref<ProviderResponse | null>(null)
 const submitting = ref(false)
+const catalogExporting = ref(false)
+const catalogImporting = ref(false)
+const catalogFileInput = ref<HTMLInputElement | null>(null)
 const providerOperations = ref(new Map<number, ProviderOperation>())
 const nonDeletableIds = ref(new Set<number>())
 const deletedIds = new Set<number>()
@@ -67,6 +71,7 @@ const syncSession = shallowRef<ProviderSyncSession | null>(null)
 const syncDialogOpen = computed(() => syncSession.value !== null)
 const syncTargetProvider = computed(() => syncSession.value?.provider ?? null)
 const syncSubmitting = computed(() => syncSession.value?.submitting === true)
+const catalogOperationActive = computed(() => catalogExporting.value || catalogImporting.value)
 let requestController: AbortController | undefined
 let saveController: AbortController | undefined
 const operationControllers = new Set<AbortController>()
@@ -101,6 +106,99 @@ const filteredProviders = computed(() => {
 
 function errorText(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
+}
+
+function downloadCatalog(blob: Blob): void {
+  const objectUrl = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = 'ai-gateway-catalog-v1.json'
+  anchor.rel = 'noopener'
+  document.body.append(anchor)
+  try {
+    anchor.click()
+  } finally {
+    anchor.remove()
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
+function fileText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('文件读取失败'))
+    reader.onload = () => {
+      if (typeof reader.result === 'string') resolve(reader.result)
+      else reject(new Error('文件读取失败'))
+    }
+    reader.readAsText(file)
+  })
+}
+
+async function exportCatalogBackup(): Promise<void> {
+  if (catalogOperationActive.value) return
+  try {
+    await ElMessageBox.confirm(
+      '此备份可能包含上游 API 密钥和自定义请求头。请妥善保管下载文件。',
+      '导出目录备份',
+      { confirmButtonText: '导出包含密钥的备份', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+
+  catalogExporting.value = true
+  try {
+    downloadCatalog(await exportCatalog(true))
+    notice.value = { type: 'success', text: '目录备份下载已开始，请妥善保管其中的密钥。' }
+  } catch (error: unknown) {
+    notice.value = { type: 'error', text: errorText(error, '目录备份导出失败') }
+  } finally {
+    catalogExporting.value = false
+  }
+}
+
+function chooseCatalogImportFile(): void {
+  if (catalogOperationActive.value) return
+  catalogFileInput.value?.click()
+}
+
+async function importCatalogFile(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  try {
+    if (file === undefined || catalogOperationActive.value) return
+    let bundle: unknown
+    try {
+      bundle = JSON.parse(await fileText(file)) as unknown
+    } catch {
+      notice.value = { type: 'error', text: '目录文件 JSON 格式不正确，未发送导入请求。' }
+      return
+    }
+
+    try {
+      await ElMessageBox.confirm(
+        '导入会按名称合并目录中的供应商、模型、别名和路由，且不会删除未包含的现有资源。是否继续？',
+        '合并目录配置',
+        { confirmButtonText: '确认合并', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return
+    }
+
+    catalogImporting.value = true
+    const result = await importCatalog(bundle)
+    await load()
+    notice.value = {
+      type: 'success',
+      text: `目录合并完成：新增供应商 ${String(result.providers_created)} 个，更新供应商 ${String(result.providers_updated)} 个；新增模型 ${String(result.models_created)} 个，更新模型 ${String(result.models_updated)} 个；新增路由 ${String(result.routes_created)} 条，更新路由 ${String(result.routes_updated)} 条。`,
+    }
+  } catch (error: unknown) {
+    notice.value = { type: 'error', text: errorText(error, '目录导入失败') }
+  } finally {
+    input.value = ''
+    catalogImporting.value = false
+  }
 }
 
 async function load(): Promise<void> {
@@ -400,6 +498,30 @@ onBeforeUnmount(() => {
   <div class="route-page">
     <PageHeader title="供应商管理" description="管理上游服务、协议入口与模型自动同步。">
       <template #actions>
+        <input
+          ref="catalogFileInput"
+          data-test="import-catalog-input"
+          class="catalog-file-input"
+          type="file"
+          accept="application/json,.json"
+          @change="importCatalogFile"
+        />
+        <ElButton
+          data-test="import-catalog"
+          :loading="catalogImporting"
+          :disabled="catalogOperationActive"
+          @click="chooseCatalogImportFile"
+        >
+          导入目录
+        </ElButton>
+        <ElButton
+          data-test="export-catalog"
+          :loading="catalogExporting"
+          :disabled="catalogOperationActive"
+          @click="exportCatalogBackup"
+        >
+          导出备份
+        </ElButton>
         <ElButton data-test="create-provider" type="primary" @click="openCreate">
           <ElIcon><Plus /></ElIcon>
           新建供应商
@@ -497,6 +619,10 @@ onBeforeUnmount(() => {
 <style scoped>
 .notice {
   margin-bottom: 1rem;
+}
+
+.catalog-file-input {
+  display: none;
 }
 
 .provider-panel {

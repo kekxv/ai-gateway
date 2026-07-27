@@ -32,6 +32,7 @@ scale containers horizontally.
 - Redacted request logs with cursor pagination and GZIP-compressed request/response details.
 - Support for provider and model-level price multipliers for flexible billing adjustments.
 - A Chinese Vue 3 administration console for day-to-day gateway operations.
+- Administrator catalog backup/import controls and a legacy SQLite migration path.
 
 ## Supported interfaces
 
@@ -192,6 +193,13 @@ The console is administrator-only and provides:
 JWT access and refresh tokens are stored in `sessionStorage`, not `localStorage`. Provider
 credentials, TOTP codes, passwords, and full API keys are never persisted or redisplayed after
 their one-time workflow ends.
+
+### Catalog backup and legacy migration
+
+Administrators can export or merge the provider/model catalog from the Providers page. Exports are
+redacted by default; the console requires an explicit warning confirmation before downloading a
+backup that includes upstream credentials. See [catalog backup and legacy SQLite migration](docs/catalog-import-export.md)
+for the bundle scope, merge behavior, secret handling, and the legacy export command.
 
 ## Docker deployment
 

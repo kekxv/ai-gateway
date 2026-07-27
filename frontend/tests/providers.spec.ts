@@ -28,6 +28,11 @@ async function waitForFormErrors(): Promise<void> {
   await flushPromises()
 }
 
+async function waitForCatalogFile(): Promise<void> {
+  await new Promise((resolve) => window.setTimeout(resolve, 0))
+  await flushPromises()
+}
+
 const providerFixture: ProviderResponse = {
   id: 1,
   name: 'OpenAI 主线路',
@@ -1086,5 +1091,138 @@ describe('供应商与协议管理', () => {
     await flushPromises()
     expect(editSubmit).toHaveBeenCalledWith({ protocols: [] })
     editDrawer.unmount()
+  })
+
+  it('确认后导出包含上游密钥的目录备份并立即撤销下载 URL', async () => {
+    let exportRequests = 0
+    const createObjectURL = vi.fn().mockReturnValue('blob:catalog-backup')
+    const revokeObjectURL = vi.fn()
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
+      value: '',
+      action: 'confirm',
+    } as MessageBoxData)
+    server.use(
+      http.get('/admin/configuration/export', ({ request }) => {
+        exportRequests += 1
+        expect(new URL(request.url).searchParams.get('include_secrets')).toBe('true')
+        return HttpResponse.json({ format: 'ai-gateway.catalog', version: 1 })
+      }),
+    )
+    const wrapper = await mountProviders()
+
+    await wrapper.get('[data-test="export-catalog"]').trigger('click')
+    await flushPromises()
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining('上游 API 密钥'),
+      expect.any(String),
+      expect.objectContaining({ type: 'warning' }),
+    )
+    expect(exportRequests).toBe(1)
+    expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob))
+    expect(anchorClick).toHaveBeenCalledTimes(1)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:catalog-backup')
+    const anchor = document.querySelector('a[download="ai-gateway-catalog-v1.json"]')
+    expect(anchor).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('取消目录导出确认时不发送备份请求', async () => {
+    let exportRequests = 0
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('cancel'))
+    server.use(
+      http.get('/admin/configuration/export', () => {
+        exportRequests += 1
+        return HttpResponse.json({})
+      }),
+    )
+    const wrapper = await mountProviders()
+
+    await wrapper.get('[data-test="export-catalog"]').trigger('click')
+    await flushPromises()
+
+    expect(exportRequests).toBe(0)
+    wrapper.unmount()
+  })
+
+  it('确认后合并 JSON 目录、刷新供应商并显示所有创建和更新计数', async () => {
+    const importedCatalog = {
+      format: 'ai-gateway.catalog',
+      version: 1,
+      providers: [{ name: 'Imported provider', protocols: [] }],
+      models: [],
+    }
+    const receivedBundles: unknown[] = []
+    let providerListRequests = 0
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
+      value: '',
+      action: 'confirm',
+    } as MessageBoxData)
+    server.use(
+      http.get('/admin/providers', () => {
+        providerListRequests += 1
+        return HttpResponse.json(providerListRequests === 1 ? [providerFixture] : [geminiFixture])
+      }),
+      http.post('/admin/configuration/import', async ({ request }) => {
+        receivedBundles.push(await request.json())
+        return HttpResponse.json({
+          providers_created: 1,
+          providers_updated: 2,
+          models_created: 3,
+          models_updated: 4,
+          routes_created: 5,
+          routes_updated: 6,
+        })
+      }),
+    )
+    const wrapper = await mountProvidersView()
+    const file = new File([JSON.stringify(importedCatalog)], 'catalog.json', {
+      type: 'application/json',
+    })
+    const input = wrapper.get<HTMLInputElement>('[data-test="import-catalog-input"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+
+    await input.trigger('change')
+    await waitForCatalogFile()
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining('合并'),
+      expect.any(String),
+      expect.objectContaining({ type: 'warning' }),
+    )
+    expect(receivedBundles).toEqual([importedCatalog])
+    expect(providerListRequests).toBe(2)
+    expect(wrapper.text()).toContain('新增供应商 1 个，更新供应商 2 个')
+    expect(wrapper.text()).toContain('新增模型 3 个，更新模型 4 个')
+    expect(wrapper.text()).toContain('新增路由 5 条，更新路由 6 条')
+    expect((input.element as HTMLInputElement).value).toBe('')
+    wrapper.unmount()
+  })
+
+  it('本地目录 JSON 无效时显示错误且不发送导入请求', async () => {
+    let importRequests = 0
+    const confirm = vi.spyOn(ElMessageBox, 'confirm')
+    server.use(
+      http.post('/admin/configuration/import', () => {
+        importRequests += 1
+        return HttpResponse.json({})
+      }),
+    )
+    const wrapper = await mountProviders()
+    const file = new File(['{"format":'], 'broken-catalog.json', { type: 'application/json' })
+    const input = wrapper.get<HTMLInputElement>('[data-test="import-catalog-input"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+
+    await input.trigger('change')
+    await waitForCatalogFile()
+
+    expect(importRequests).toBe(0)
+    expect(confirm).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('JSON 格式不正确')
+    expect((input.element as HTMLInputElement).value).toBe('')
+    wrapper.unmount()
   })
 })
