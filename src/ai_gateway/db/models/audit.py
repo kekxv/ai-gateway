@@ -91,10 +91,9 @@ class RequestLog(Base):
 
 class RequestLogDetail(Base):
     """审计日志详情表 - 存储请求和响应的完整详情（gzip 压缩）"""
+
     __tablename__ = "request_log_details"
-    __table_args__ = (
-        Index("ix_request_log_details_created_at", "created_at"),
-    )
+    __table_args__ = (Index("ix_request_log_details_created_at", "created_at"),)
 
     # 使用与 RequestLog 相同的 ID 作为主键（1:1 关系）
     id: Mapped[str] = mapped_column(

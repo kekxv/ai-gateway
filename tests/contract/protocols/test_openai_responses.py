@@ -190,9 +190,7 @@ def test_responses_nonportable_content_resources_are_rejected(content_type: str)
         OpenAIAdapter().decode_responses_request(
             {
                 "model": "gpt-5.6",
-                "input": [
-                    {"type": "message", "role": "user", "content": [content]}
-                ],
+                "input": [{"type": "message", "role": "user", "content": [content]}],
             }
         )
 
@@ -290,9 +288,7 @@ def test_responses_stream_emits_stateful_official_text_events() -> None:
     ):
         payloads.extend(_payloads(encoder.encode(event)))
 
-    assert [payload["sequence_number"] for payload in payloads] == list(
-        range(len(payloads))
-    )
+    assert [payload["sequence_number"] for payload in payloads] == list(range(len(payloads)))
     event_types = [payload["type"] for payload in payloads]
     assert event_types == [
         "response.created",
@@ -384,6 +380,4 @@ def test_responses_stream_uses_incomplete_terminal_event_for_output_limit() -> N
 
     assert payloads[-1]["type"] == "response.incomplete"
     assert payloads[-1]["response"]["status"] == "incomplete"
-    assert payloads[-1]["response"]["incomplete_details"] == {
-        "reason": "max_output_tokens"
-    }
+    assert payloads[-1]["response"]["incomplete_details"] == {"reason": "max_output_tokens"}

@@ -390,6 +390,7 @@ async def stream_gateway_response(
     stream_encoder: StreamEncoder
     if is_responses_api:
         from ai_gateway.protocols.openai import _ResponsesAPIStreamEncoder
+
         stream_encoder = _ResponsesAPIStreamEncoder()
     else:
         stream_encoder = target_adapter.create_stream_encoder()

@@ -602,7 +602,7 @@ async def test_openai_endpoint_without_anthropic_version_returns_openai_format(
                 "owned_by": "gateway",
                 "metadata": {},
             }
-        ]
+        ],
     }
 
 
@@ -616,10 +616,12 @@ async def test_claude_endpoint_filters_by_claude_protocol_routes(
     openai_model = _model("gpt-4-turbo")
     claude_model = _model("claude-3-sonnet")
 
-    session.add_all([
-        _route(openai_model, openai_provider, Protocol.OPENAI),
-        _route(claude_model, claude_provider, Protocol.CLAUDE),
-    ])
+    session.add_all(
+        [
+            _route(openai_model, openai_provider, Protocol.OPENAI),
+            _route(claude_model, claude_provider, Protocol.CLAUDE),
+        ]
+    )
     user, _, raw_key = _api_key(ApiKeyScope.ALL)
     session.add(user)
     await session.flush()
@@ -641,10 +643,12 @@ async def test_claude_endpoint_respects_api_key_scopes(
     allowed_model = _model("claude-3-haiku")
     denied_model = _model("claude-3-opus-2")
 
-    session.add_all([
-        _route(allowed_model, provider, Protocol.CLAUDE),
-        _route(denied_model, provider, Protocol.CLAUDE),
-    ])
+    session.add_all(
+        [
+            _route(allowed_model, provider, Protocol.CLAUDE),
+            _route(denied_model, provider, Protocol.CLAUDE),
+        ]
+    )
     user, api_key, raw_key = _api_key(ApiKeyScope.MODELS)
     session.add(user)
     await session.flush()
@@ -671,10 +675,9 @@ async def test_claude_endpoint_handles_authentication_errors(
     assert "error" in response.json()
 
     # Invalid API key
-    async with _client(session, headers={
-        "anthropic-version": "2023-06-01",
-        "x-api-key": "sk-gw-invalid-key"
-    }) as client:
+    async with _client(
+        session, headers={"anthropic-version": "2023-06-01", "x-api-key": "sk-gw-invalid-key"}
+    ) as client:
         response = await client.get("/v1/models")
 
     assert response.status_code == 401

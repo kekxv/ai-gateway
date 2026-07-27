@@ -1,4 +1,5 @@
 """Test that WebSocket gateway passes provider to billing service."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -118,9 +119,7 @@ class TestWebSocketProviderIntegration:
 
         assert len(billing.settlements) >= 1
         for settlement_call in billing.settlements:
-            assert "provider" in settlement_call, (
-                "settle_request must receive provider parameter"
-            )
+            assert "provider" in settlement_call, "settle_request must receive provider parameter"
             assert settlement_call["provider"] is provider
 
     @pytest.mark.asyncio

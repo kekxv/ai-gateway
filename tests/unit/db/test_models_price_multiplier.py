@@ -5,6 +5,7 @@ both the Provider and Model ORM classes. The field must default to
 ``Decimal("1.00")`` at the ORM layer and carry a ``server_default=text("1.00")``
 for the database-level default.
 """
+
 from __future__ import annotations
 
 from decimal import Decimal

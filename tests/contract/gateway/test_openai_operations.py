@@ -509,9 +509,7 @@ def test_openai_to_claude_uses_gateway_default_when_output_limit_is_omitted() ->
         supports_responses=True,
     )
 
-    forwarded = orjson.loads(
-        _upstream_body(prepared, route, default_max_output_tokens=2048)
-    )
+    forwarded = orjson.loads(_upstream_body(prepared, route, default_max_output_tokens=2048))
 
     assert forwarded["max_tokens"] == 2048
 

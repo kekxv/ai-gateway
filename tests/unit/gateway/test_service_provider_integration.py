@@ -1,4 +1,5 @@
 """Test that gateway service passes provider to billing service."""
+
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4

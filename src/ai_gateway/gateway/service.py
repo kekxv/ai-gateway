@@ -1323,9 +1323,7 @@ def _native_responses_billing_request(payload: Mapping[str, Any]) -> CanonicalRe
         temperature=None,
         top_p=None,
         max_output_tokens=(
-            max_tokens
-            if isinstance(max_tokens, int) and not isinstance(max_tokens, bool)
-            else None
+            max_tokens if isinstance(max_tokens, int) and not isinstance(max_tokens, bool) else None
         ),
         stop_sequences=(),
         stream=payload.get("stream") is True,
@@ -1409,6 +1407,7 @@ def _convert_response(
         if inbound_protocol is Protocol.OPENAI and endpoint_path == "/v1/responses":
             if canonical_response is not None:
                 from ai_gateway.protocols.openai import OpenAIAdapter
+
                 encoded = OpenAIAdapter().encode_responses_api_response(canonical_response)
                 return (
                     GatewayOutput(orjson.dumps(encoded), upstream.status_code, "application/json"),
@@ -1429,6 +1428,7 @@ def _convert_response(
         # Use Responses API encoding if endpoint is /v1/responses
         if inbound_protocol is Protocol.OPENAI and endpoint_path == "/v1/responses":
             from ai_gateway.protocols.openai import OpenAIAdapter
+
             encoded = OpenAIAdapter().encode_responses_api_response(canonical_response)
         else:
             encoded = get_adapter(inbound_protocol).encode_response(canonical_response)

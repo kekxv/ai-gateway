@@ -62,9 +62,7 @@ class TestBackwardCompatibility:
 
 
 class TestModelMultiplier:
-    def test_model_multiplier_only(
-        self, sample_model: Model, usage_1k_500: CanonicalUsage
-    ) -> None:
+    def test_model_multiplier_only(self, sample_model: Model, usage_1k_500: CanonicalUsage) -> None:
         cost = calculate_cost(
             sample_model,
             usage_1k_500,
@@ -73,9 +71,7 @@ class TestModelMultiplier:
         # 0.02 * 1.5 = 0.03
         assert cost == Decimal("0.03000000")
 
-    def test_model_multiplier_with_explicit_prices(
-        self, usage_1k_500: CanonicalUsage
-    ) -> None:
+    def test_model_multiplier_with_explicit_prices(self, usage_1k_500: CanonicalUsage) -> None:
         cost = calculate_cost(
             input_price=Decimal("10.00000000"),
             output_price=Decimal("20.00000000"),
@@ -109,9 +105,7 @@ class TestProviderMultiplier:
 
 
 class TestBothMultipliers:
-    def test_both_multipliers(
-        self, sample_model: Model, usage_1k_500: CanonicalUsage
-    ) -> None:
+    def test_both_multipliers(self, sample_model: Model, usage_1k_500: CanonicalUsage) -> None:
         cost = calculate_cost(
             sample_model,
             usage_1k_500,
@@ -165,9 +159,7 @@ class TestMultiplierEdgeCases:
         )
         assert cost_without == cost_with_one
 
-    def test_result_still_quantized(
-        self, sample_model: Model
-    ) -> None:
+    def test_result_still_quantized(self, sample_model: Model) -> None:
         usage = CanonicalUsage(input_tokens=1_234_567, output_tokens=7_654_321)
         cost = calculate_cost(
             sample_model,
@@ -178,9 +170,7 @@ class TestMultiplierEdgeCases:
         # Must fit in 8 decimal places
         assert cost == cost.quantize(Decimal("0.00000001"))
 
-    def test_discount_multiplier(
-        self, sample_model: Model, usage_1k_500: CanonicalUsage
-    ) -> None:
+    def test_discount_multiplier(self, sample_model: Model, usage_1k_500: CanonicalUsage) -> None:
         cost = calculate_cost(
             sample_model,
             usage_1k_500,

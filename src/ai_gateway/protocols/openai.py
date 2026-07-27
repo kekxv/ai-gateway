@@ -244,9 +244,7 @@ class OpenAIAdapter(ProtocolAdapter):
                     "instructions", "portable conversion requires a string"
                 )
             system.append(TextPart(instructions))
-            system_messages.append(
-                {"role": "system", "part_count": 1, "extensions": {}}
-            )
+            system_messages.append({"role": "system", "part_count": 1, "extensions": {}})
         messages, input_system, input_system_messages = _decode_responses_input(
             payload.get("input", "")
         )
@@ -272,9 +270,7 @@ class OpenAIAdapter(ProtocolAdapter):
             tool_choice=_decode_responses_tool_choice(payload.get("tool_choice")),
             temperature=optional_float(payload.get("temperature"), "temperature"),
             top_p=optional_float(payload.get("top_p"), "top_p"),
-            max_output_tokens=optional_int(
-                payload.get("max_output_tokens"), "max_output_tokens"
-            ),
+            max_output_tokens=optional_int(payload.get("max_output_tokens"), "max_output_tokens"),
             stop_sequences=(),
             stream=required_bool(payload.get("stream"), "stream"),
             metadata=metadata,
@@ -473,11 +469,13 @@ class OpenAIAdapter(ProtocolAdapter):
         content_parts = []
         for part in message.content:
             if isinstance(part, TextPart):
-                content_parts.append({
-                    "type": "output_text",
-                    "text": part.text,
-                    "annotations": [],
-                })
+                content_parts.append(
+                    {
+                        "type": "output_text",
+                        "text": part.text,
+                        "annotations": [],
+                    }
+                )
             elif isinstance(part, ImagePart):
                 raise UnsupportedFeatureError(
                     "message.content",
@@ -1258,9 +1256,7 @@ def _decode_responses_input(
             elif role in {"user", "assistant"}:
                 messages.append(CanonicalMessage(role=cast(Any, role), content=content))
             else:
-                raise UnsupportedFeatureError(
-                    f"input[{index}].role", f"unsupported role {role!r}"
-                )
+                raise UnsupportedFeatureError(f"input[{index}].role", f"unsupported role {role!r}")
         elif item_type == "function_call":
             call_id = item.get("call_id", item.get("id"))
             name = item.get("name")
@@ -1302,9 +1298,7 @@ def _decode_responses_input(
                 )
             )
         else:
-            raise UnsupportedFeatureError(
-                f"input[{index}].type", f"unsupported item {item_type!r}"
-            )
+            raise UnsupportedFeatureError(f"input[{index}].type", f"unsupported item {item_type!r}")
     return tuple(messages), tuple(system), tuple(system_messages)
 
 

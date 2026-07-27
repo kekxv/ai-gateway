@@ -439,9 +439,7 @@ class TestSettlementCostHelper:
                 return_value=(Decimal("1.50"), Decimal("2.00")),
             ) as mock_get,
         ):
-            result = _settlement_cost(
-                model=model, usage=usage, cost=None, provider=provider
-            )
+            result = _settlement_cost(model=model, usage=usage, cost=None, provider=provider)
 
         mock_get.assert_called_once_with(model, provider)
         mock_calc.assert_called_once_with(
