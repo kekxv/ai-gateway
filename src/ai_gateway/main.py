@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from ai_gateway.admin.api_keys import router as api_keys_router
 from ai_gateway.admin.billing import router as billing_router
+from ai_gateway.admin.configuration import router as configuration_router
 from ai_gateway.admin.dashboard import router as dashboard_router
 from ai_gateway.admin.model_sync import router as model_sync_router
 from ai_gateway.admin.models import models_router, routes_router
@@ -254,6 +255,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(request_logs_router)
     app.include_router(billing_router)
     app.include_router(dashboard_router)
+    app.include_router(configuration_router)
     app.include_router(openai_gateway_router)
     app.include_router(claude_gateway_router)
     app.include_router(gemini_gateway_router)
