@@ -36,6 +36,10 @@ const emit = defineEmits<{
 const routesExpanded = ref(false)
 const copiedField = ref<string | null>(null)
 
+interface LegacyClipboardDocument {
+  execCommand(commandId: string): boolean
+}
+
 const protocolLabels: Readonly<Record<Protocol, string>> = {
   openai: 'OpenAI',
   claude: 'Claude',
@@ -104,7 +108,8 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
     document.body.appendChild(textarea)
     textarea.select()
     try {
-      document.execCommand('copy')
+      const legacyDocument = document as unknown as LegacyClipboardDocument
+      legacyDocument.execCommand('copy')
       copiedField.value = field
       setTimeout(() => {
         copiedField.value = null

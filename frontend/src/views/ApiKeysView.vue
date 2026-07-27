@@ -103,6 +103,32 @@ const testChatLoading = ref(false)
 const testChatResult = ref<{ success: boolean; message: string } | null>(null)
 let testChatController: AbortController | null = null
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function stringProperty(value: unknown, key: string): string | undefined {
+  if (!isRecord(value)) return undefined
+  const property = value[key]
+  return typeof property === 'string' ? property : undefined
+}
+
+function responseErrorMessage(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined
+  return stringProperty(value, 'detail') ?? stringProperty(value.error, 'message')
+}
+
+function chatChunkContent(value: unknown): { model: string | undefined; content: string } {
+  if (!isRecord(value)) return { model: undefined, content: '' }
+  const model = stringProperty(value, 'model')
+  const choices = value.choices
+  if (!Array.isArray(choices) || !isRecord(choices[0])) return { model, content: '' }
+  const choice = choices[0]
+  const content =
+    stringProperty(choice.delta, 'content') ?? stringProperty(choice.message, 'content') ?? ''
+  return { model, content }
+}
+
 const availableModelNames = computed(() =>
   models.value.map((m) => m.canonical_name),
 )
@@ -202,8 +228,8 @@ async function testChat(): Promise<void> {
     })
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => null)
-      const errorMsg = errorData?.detail ?? errorData?.error?.message ?? `HTTP ${response.status}`
+      const errorData: unknown = await response.json().catch(() => null)
+      const errorMsg = responseErrorMessage(errorData) ?? `HTTP ${String(response.status)}`
       testChatResult.value = { success: false, message: `请求失败：${errorMsg}` }
       return
     }
@@ -218,7 +244,7 @@ async function testChat(): Promise<void> {
     let buffer = ''
     let usedModel = model
 
-    while (true) {
+    for (;;) {
       const { done, value } = await reader.read()
       if (done) break
 
@@ -232,12 +258,10 @@ async function testChat(): Promise<void> {
         if (!trimmed.startsWith('data: ')) continue
 
         try {
-          const json = JSON.parse(trimmed.slice(6))
-          if (json.model) usedModel = json.model
-          const delta =
-            json.choices?.[0]?.delta?.content ??
-            json.choices?.[0]?.message?.content ??
-            ''
+          const json: unknown = JSON.parse(trimmed.slice(6))
+          const chunk = chatChunkContent(json)
+          if (chunk.model !== undefined && chunk.model !== '') usedModel = chunk.model
+          const delta = chunk.content
           if (typeof delta === 'string' && delta.length > 0) {
             collected += delta
 

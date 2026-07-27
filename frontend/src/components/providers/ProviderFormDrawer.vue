@@ -188,7 +188,7 @@ function buildCredential(): JsonObject | undefined {
     credential.auth_header = 'Authorization'
   } else if (authHeader.value === 'x-api-key') {
     credential.auth_header = 'x-api-key'
-  } else if (authHeader.value === 'custom' && customAuthHeader.value.trim() !== '') {
+  } else if (customAuthHeader.value.trim() !== '') {
     credential.auth_header = customAuthHeader.value.trim()
   }
 

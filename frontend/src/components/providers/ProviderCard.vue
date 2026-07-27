@@ -4,7 +4,7 @@ import { ElButton, ElIcon, ElTag } from 'element-plus'
 import type { Protocol, ProviderResponse } from '@/api/types'
 import StatusTag from '@/components/common/StatusTag.vue'
 
-const props = defineProps<{
+defineProps<{
   provider: ProviderResponse
   loading?: boolean
   nonDeletable?: boolean

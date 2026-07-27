@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Edit, Plus, Refresh, Search, Delete } from '@element-plus/icons-vue'
+import { Plus, Search } from '@element-plus/icons-vue'
 import {
   ElAlert,
   ElButton,
@@ -11,7 +11,6 @@ import {
   ElResult,
   ElSkeleton,
   ElSkeletonItem,
-  ElTag,
 } from 'element-plus'
 import 'element-plus/theme-chalk/el-alert.css'
 import 'element-plus/theme-chalk/el-button.css'
@@ -22,7 +21,6 @@ import 'element-plus/theme-chalk/el-overlay.css'
 import 'element-plus/theme-chalk/el-result.css'
 import 'element-plus/theme-chalk/el-skeleton.css'
 import 'element-plus/theme-chalk/el-skeleton-item.css'
-import 'element-plus/theme-chalk/el-tag.css'
 
 import { ApiError } from '@/api/client'
 import {
@@ -39,7 +37,6 @@ import type {
   ProviderUpdate,
 } from '@/api/types'
 import PageHeader from '@/components/common/PageHeader.vue'
-import StatusTag from '@/components/common/StatusTag.vue'
 import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
 import ModelSyncDialog from '@/components/providers/ModelSyncDialog.vue'
 import ProviderCard from '@/components/providers/ProviderCard.vue'
@@ -339,25 +336,6 @@ async function removeProvider(provider: ProviderResponse): Promise<void> {
       finishProviderOperation(provider.id, 'delete')
     }
   }
-}
-
-function formatSyncTime(value: string | null): string {
-  if (value === null) return '从未同步'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '时间未知'
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date)
-}
-
-function formatInterval(seconds: number): string {
-  if (seconds % 3600 === 0) return `${String(seconds / 3600)} 小时`
-  if (seconds % 60 === 0) return `${String(seconds / 60)} 分钟`
-  return `${String(seconds)} 秒`
 }
 
 onMounted(() => {

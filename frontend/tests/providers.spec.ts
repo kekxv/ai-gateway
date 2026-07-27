@@ -102,13 +102,17 @@ function useProviderList(providers: ProviderResponse[] = [providerFixture]): voi
   server.use(http.get('/admin/providers', () => HttpResponse.json(providers)))
 }
 
+async function mountProvidersView(): Promise<VueWrapper> {
+  const wrapper = mount(ProvidersView, { attachTo: document.body })
+  await flushPromises()
+  return wrapper
+}
+
 async function mountProviders(
   providers: ProviderResponse[] = [providerFixture],
 ): Promise<VueWrapper> {
   useProviderList(providers)
-  const wrapper = mount(ProvidersView, { attachTo: document.body })
-  await flushPromises()
-  return wrapper
+  return mountProvidersView()
 }
 
 async function confirmSelectedModels(wrapper: VueWrapper): Promise<void> {
@@ -640,8 +644,7 @@ describe('供应商与协议管理', () => {
       value: '',
       action: 'confirm',
     } as MessageBoxData)
-    const wrapper = mount(ProvidersView, { attachTo: document.body })
-    await flushPromises()
+    const wrapper = await mountProvidersView()
 
     await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
     await confirmSelectedModels(wrapper)
@@ -681,8 +684,7 @@ describe('供应商与协议管理', () => {
       value: '',
       action: 'confirm',
     } as MessageBoxData)
-    const wrapper = mount(ProvidersView, { attachTo: document.body })
-    await flushPromises()
+    const wrapper = await mountProvidersView()
 
     await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
     await confirmSelectedModels(wrapper)

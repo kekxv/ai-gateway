@@ -28,6 +28,11 @@ let outstandingObjectUrl: string | null = null
 
 const baseUrl = computed(() => props.gatewayUrl ?? window.location.origin)
 
+function modelCountFromResponse(value: unknown): number {
+  if (typeof value !== 'object' || value === null || !('data' in value)) return 0
+  return Array.isArray(value.data) ? value.data.length : 0
+}
+
 const curlExamples = computed(() => {
   const key = '$AI_GATEWAY_API_KEY'
   const base = baseUrl.value
@@ -152,11 +157,11 @@ async function testApiKey(): Promise<void> {
     })
 
     if (response.ok) {
-      const data = await response.json()
-      const modelCount = data.data?.length ?? 0
+      const data: unknown = await response.json()
+      const modelCount = modelCountFromResponse(data)
       testResult.value = {
         success: true,
-        message: `密钥有效！发现 ${modelCount} 个可用模型。`,
+        message: `密钥有效！发现 ${String(modelCount)} 个可用模型。`,
       }
     } else if (response.status === 401 || response.status === 403) {
       testResult.value = {
@@ -166,7 +171,7 @@ async function testApiKey(): Promise<void> {
     } else {
       testResult.value = {
         success: false,
-        message: `请求失败：HTTP ${response.status}`,
+        message: `请求失败：HTTP ${String(response.status)}`,
       }
     }
   } catch (error) {
