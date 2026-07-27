@@ -61,7 +61,7 @@ Coverage includes:
 - model card actions and current card-layout empty states;
 - expanding different model cards, creating/editing/deleting/disabling their routes, visible notices, historical-route recovery, counts, loading, and exclusive mutation behavior.
 
-After focused suites pass, run the bounded public `npm run test` command, typecheck, lint, and production build. The resource guard supplies the two-worker and 120-second suite limits.
+After focused suites pass, run the standard public `npm run test` command, typecheck, lint, and production build. Vitest configuration supplies the two-worker limit plus explicit test, hook, and teardown timeouts. The frontend application does not own a global suite process manager; CI or another external job supervisor may bound a whole run when needed.
 
 ## Scope Boundaries
 

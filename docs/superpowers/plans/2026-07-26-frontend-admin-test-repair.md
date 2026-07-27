@@ -15,7 +15,7 @@
 - Preserve the current card UI, collapsible route lists, provider credential guidance, and API-key scope checkboxes.
 - Preserve the worktree's `auth.ready` route-guard correction exactly.
 - Do not commit generated `pnpm-lock.yaml` or `pnpm-workspace.yaml` files.
-- Use at most one worker for focused runs until the resource guard is implemented.
+- Use one worker for focused runs; the public suite uses the configured maximum of two workers.
 
 ---
 
@@ -87,15 +87,15 @@
 
 ---
 
-### Task 4: Implement the bounded public test command
+### Task 4: Configure the standard public test command
 
 Execute every unchecked item in:
 
 `docs/superpowers/plans/2026-07-26-frontend-test-resource-guard.md`
 
-The final `npm run test` entry point must cap Vitest at two workers, terminate the whole suite at 120 seconds, allow 10 seconds for graceful shutdown, force-kill the remaining process group, and return 124 on timeout without hiding test failures.
+The final `npm run test` entry point must remain the direct standard `vitest run` command. Vitest caps execution at two workers and applies the configured per-operation limits. Do not add a custom launcher, global suite deadline, process-tree manager, or timeout exit-code handling. CI or another external job supervisor may bound a whole run when needed.
 
-Commit with `fix: bound frontend test resources`.
+Retain the focused runtime-policy regression and the `test: bound frontend unit test resources` configuration commit.
 
 ---
 
@@ -114,7 +114,7 @@ Commit with `fix: stabilize admin route transitions`.
 ### Task 6: Integrated verification and final review
 
 - [ ] Run all four repaired suites directly with at most two workers.
-- [ ] Run `npm run test -- --reporter=dot`; confirm it exits itself, uses at most two workers, and finishes below the suite deadline.
+- [ ] Run `npm run test -- --reporter=dot`; confirm standard Vitest execution exits normally and uses at most two workers. A whole-run timeout, if required, belongs to CI or another external job supervisor.
 - [ ] Run `npm run typecheck`, `npm run lint`, and `npm run build`.
 - [ ] Run `git diff --check`, inspect the complete branch diff, and confirm only intended docs/frontend files changed.
 - [ ] Confirm the original main workspace still contains its pre-existing `AdminLayout.vue` and `router/index.ts` changes and has not been overwritten.
