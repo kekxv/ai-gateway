@@ -8,7 +8,7 @@
     "build": "vue-tsc -b && vite build",
     "typecheck": "vue-tsc -b --pretty false",
     "lint": "eslint . --max-warnings=0",
-    "test": "jiti scripts/run-tests.ts",
+    "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test"
   },
