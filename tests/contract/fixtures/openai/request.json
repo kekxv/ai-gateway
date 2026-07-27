@@ -7,7 +7,7 @@
       "name": "fixture-user",
       "content": [
         {"type": "text", "text": "Inspect both images.", "cache_control": {"type": "ephemeral"}},
-        {"type": "image_url", "image_url": {"url": "https://example.test/cat.png", "detail": "high"}},
+        {"type": "image_url", "image_url": {"url": "https://example.test/cat.png"}},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}
       ]
     },

@@ -219,7 +219,18 @@ def _gateway_for_route(
             {
                 "model": "alias",
                 "instructions": "Be concise.",
-                "input": "hello",
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_file",
+                                "file_url": "https://example.test/report.pdf",
+                            }
+                        ],
+                    }
+                ],
                 "max_output_tokens": 32,
                 "store": False,
                 "previous_response_id": "resp_previous",
@@ -376,7 +387,11 @@ def test_responses_falls_back_to_chat_only_when_route_explicitly_disables_suppor
     payload = {
         "model": "alias",
         "instructions": "Be concise.",
-        "input": [{"type": "message", "role": "user", "content": "hello"}],
+        "input": [
+            {"type": "message", "role": "system", "content": "Follow policy."},
+            {"type": "message", "role": "developer", "content": "Use JSON."},
+            {"type": "message", "role": "user", "content": "hello"},
+        ],
         "tools": [
             {
                 "type": "function",
@@ -417,6 +432,8 @@ def test_responses_falls_back_to_chat_only_when_route_explicitly_disables_suppor
     assert forwarded["model"] == "upstream-model"
     assert forwarded["messages"] == [
         {"role": "system", "content": "Be concise."},
+        {"role": "system", "content": "Follow policy."},
+        {"role": "developer", "content": "Use JSON."},
         {"role": "user", "content": "hello"},
     ]
     assert forwarded["tools"] == [
@@ -698,8 +715,33 @@ async def test_responses_chat_fallback_stream_uses_official_event_sequence(
     assert billing.settled_usage == CanonicalUsage(4, 1)
 
 
+@pytest.mark.parametrize(
+    ("request_input", "extra", "feature"),
+    [
+        ("hello", {"previous_response_id": "resp_previous"}, "previous_response_id"),
+        (
+            [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_file",
+                            "file_url": "https://example.test/report.pdf",
+                        }
+                    ],
+                }
+            ],
+            {},
+            "input_file",
+        ),
+    ],
+)
 async def test_responses_fallback_rejects_nonportable_fields_before_upstream(
     monkeypatch: pytest.MonkeyPatch,
+    request_input: object,
+    extra: dict[str, object],
+    feature: str,
 ) -> None:
     settings = _settings()
     route = RouteCandidate(
@@ -738,13 +780,13 @@ async def test_responses_fallback_rejects_nonportable_fields_before_upstream(
             "/v1/responses",
             json={
                 "model": "alias",
-                "input": "hello",
-                "previous_response_id": "resp_previous",
+                "input": request_input,
+                **extra,
             },
         )
     await upstream_client.aclose()
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "unsupported_feature"
-    assert "previous_response_id" in response.json()["error"]["message"]
+    assert feature in response.json()["error"]["message"]
     assert seen == []

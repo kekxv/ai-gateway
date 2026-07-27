@@ -37,13 +37,13 @@ Cross-protocol requests/responses and every cross-protocol stream are mapped as 
 | Canonical meaning | OpenAI | Claude | Gemini | Notes/losses |
 |---|---|---|---|---|
 | Model | `model` | `model` | URL `models/{model}` | Always rewritten to the selected route's upstream model |
-| System instruction | `system`/`developer` messages | `system` | `systemInstruction.parts` | Cross-protocol conversion can lose the distinction/order between OpenAI `system` and `developer` roles |
+| System instruction | `system`/`developer` messages | `system` | `systemInstruction.parts` | Responses→Chat fallback preserves ordered `system`/`developer` messages; conversion through Claude/Gemini preserves text order but flattens the role distinction |
 | Conversation | `messages[]` | `messages[]` | `contents[]` | User/assistant map to user/assistant/model; unsupported roles are rejected |
 | Text | string or text content parts | text blocks/string | `parts[].text` | Text content is preserved; target-native wrapper shape changes |
-| Image | `image_url` content part | image source block | `inlineData`/`fileData` | URL/media-type/base64 representations map where target supports them; provider-specific image options may be omitted |
+| Image | `image_url` content part | image source block | `inlineData`/`fileData` | Portable for user input as an image URL or base64 GIF/JPEG/PNG/WebP; known URL suffixes supply MIME where Gemini requires it; OpenAI `detail` is rejected for Claude/Gemini instead of being emitted as an unknown field |
 | Tool definition | `tools[].function` | `tools[]` | `tools[].functionDeclarations` | Function name, description, and JSON input schema map; vendor extensions are not portable |
 | Tool call | assistant `tool_calls[]` | `tool_use` block | `functionCall` part | IDs/names/JSON arguments map; targets that synthesize IDs may not preserve the original ID exactly |
-| Tool result | `role=tool` + `tool_call_id` | `tool_result` block | `functionResponse` part | Text/structured result maps; provider-only status/cache metadata may be lost |
+| Tool result | `role=tool` + `tool_call_id` | `tool_result` block | `functionResponse` part | OpenAI Chat accepts text only; Claude can carry text/image blocks; Gemini requires exactly one text value plus a function name; unsupported image/error/cardinality combinations are rejected |
 | Tool choice | `auto`/`none`/`required`/function | `auto`/`any`/`tool` | function-calling mode/config | Only the common intent is portable; parallel/allowed-function nuances can be lossy |
 | Sampling | `temperature`, `top_p` | `temperature`, `top_p` | `generationConfig.temperature/topP` | Numeric values map directly when accepted by the target provider |
 | Output limit | `max_completion_tokens` or `max_tokens` | `max_tokens` | `generationConfig.maxOutputTokens` | Maps to a single canonical maximum; conversion to Claude uses the configured billing default when the source omits a limit |
@@ -52,6 +52,30 @@ Cross-protocol requests/responses and every cross-protocol stream are mapped as 
 
 Unknown fields are retained as protocol-scoped metadata when an adapter can safely round-trip
 them. They are not promised to appear on a different protocol's wire representation.
+
+### Portable content boundary
+
+The canonical conversion layer intentionally supports the common subset below:
+
+- Text in system/developer instructions and user/assistant messages.
+- Function tool definitions, tool selection, assistant function calls, and protocol-compatible
+  tool results.
+- User image inputs represented by a URL or base64 GIF, JPEG, PNG, or WebP data.
+
+The following content requires a native same-protocol route or is rejected with
+`422 unsupported_feature` during conversion:
+
+- OpenAI Responses `input_file`, file IDs, audio inputs, built-in tools, stateful conversation
+  fields, or background execution.
+- Claude `document` blocks and Gemini `inlineData`/`fileData` whose MIME type is audio, PDF, or
+  another non-image resource.
+- OpenAI image `detail` when the selected target is Claude or Gemini.
+- Images in OpenAI Chat tool messages or assistant messages, images in Gemini function results,
+  and error-tagged tool results when the target protocol has no equivalent error flag.
+
+This distinction is route-aware. An OpenAI Responses request containing files or built-in tools is
+still forwarded unchanged when the selected OpenAI route has `supports_responses=true`; the same
+request is rejected before contacting an upstream when conversion is required.
 
 ## Response field mapping
 

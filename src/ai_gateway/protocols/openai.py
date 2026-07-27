@@ -18,6 +18,9 @@ from ai_gateway.protocols.base import (
     add_vendor_scope,
     decode_sse,
     encode_sse,
+    image_detail,
+    image_media_type,
+    image_media_type_from_url,
     json_arguments,
     native_extensions,
     nonnegative_int,
@@ -114,7 +117,11 @@ class OpenAIAdapter(ProtocolAdapter):
                         f"messages[{index}].tool_calls",
                         "tool calls are only valid on assistant messages",
                     )
-                system_parts = _decode_content(message.get("content"), f"messages[{index}].content")
+                system_parts = _decode_content(
+                    message.get("content"),
+                    f"messages[{index}].content",
+                    role=role,
+                )
                 if not all(isinstance(part, TextPart) for part in system_parts):
                     raise UnsupportedFeatureError(
                         f"messages[{index}].content",
@@ -164,7 +171,13 @@ class OpenAIAdapter(ProtocolAdapter):
                     )
                 )
             elif role in {"user", "assistant"}:
-                parts = list(_decode_content(message.get("content"), f"messages[{index}].content"))
+                parts = list(
+                    _decode_content(
+                        message.get("content"),
+                        f"messages[{index}].content",
+                        role=role,
+                    )
+                )
                 if role == "user" and "tool_calls" in message:
                     raise UnsupportedFeatureError(
                         f"messages[{index}].tool_calls",
@@ -223,6 +236,7 @@ class OpenAIAdapter(ProtocolAdapter):
         if not isinstance(model, str):
             raise UnsupportedFeatureError("model", "must be a string")
         system: list[ContentPart] = []
+        system_messages: list[dict[str, Any]] = []
         instructions = payload.get("instructions")
         if instructions is not None:
             if not isinstance(instructions, str):
@@ -230,8 +244,26 @@ class OpenAIAdapter(ProtocolAdapter):
                     "instructions", "portable conversion requires a string"
                 )
             system.append(TextPart(instructions))
-        messages, input_system = _decode_responses_input(payload.get("input", ""))
+            system_messages.append(
+                {"role": "system", "part_count": 1, "extensions": {}}
+            )
+        messages, input_system, input_system_messages = _decode_responses_input(
+            payload.get("input", "")
+        )
         system.extend(input_system)
+        system_messages.extend(input_system_messages)
+        metadata = vendor_metadata(
+            self.protocol,
+            payload,
+            _RESPONSES_CANONICAL_FIELDS,
+        )
+        if system_messages:
+            add_vendor_scope(
+                metadata,
+                self.protocol,
+                "__system_messages__",
+                {"items": system_messages},
+            )
         return CanonicalRequest(
             model=model,
             messages=messages,
@@ -245,11 +277,7 @@ class OpenAIAdapter(ProtocolAdapter):
             ),
             stop_sequences=(),
             stream=required_bool(payload.get("stream"), "stream"),
-            metadata=vendor_metadata(
-                self.protocol,
-                payload,
-                _RESPONSES_CANONICAL_FIELDS,
-            ),
+            metadata=metadata,
         )
 
     def encode_request(self, request: CanonicalRequest) -> dict[str, Any]:
@@ -309,7 +337,13 @@ class OpenAIAdapter(ProtocolAdapter):
         message = require_object(choice.get("message"), "choices[0].message")
         if message.get("role") != "assistant":
             raise UnsupportedFeatureError("choices[0].message.role", "must be assistant")
-        parts = list(_decode_content(message.get("content"), "choices[0].message.content"))
+        parts = list(
+            _decode_content(
+                message.get("content"),
+                "choices[0].message.content",
+                role="assistant",
+            )
+        )
         parts.extend(_decode_tool_calls(message.get("tool_calls"), "choices[0].message.tool_calls"))
         usage = _decode_usage(payload.get("usage"))
         model = payload.get("model")
@@ -445,17 +479,10 @@ class OpenAIAdapter(ProtocolAdapter):
                     "annotations": [],
                 })
             elif isinstance(part, ImagePart):
-                # Images in Responses API are represented differently
-                if part.url:
-                    content_parts.append({
-                        "type": "output_image",
-                        "url": part.url,
-                    })
-                elif part.data:
-                    content_parts.append({
-                        "type": "output_image",
-                        "data": f"data:{part.media_type or 'image/png'};base64,{part.data}",
-                    })
+                raise UnsupportedFeatureError(
+                    "message.content",
+                    "image output cannot be represented as a Responses assistant message",
+                )
 
         message_id = f"msg_{uuid4().hex[:24]}"
         return {
@@ -1079,7 +1106,12 @@ class _ResponsesAPIStreamEncoder(StreamEncoder):
         return tuple(frames)
 
 
-def _decode_content(value: Any, field: str) -> tuple[ContentPart, ...]:
+def _decode_content(
+    value: Any,
+    field: str,
+    *,
+    role: str | None = None,
+) -> tuple[ContentPart, ...]:
     if value is None:
         return ()
     if isinstance(value, str):
@@ -1102,6 +1134,11 @@ def _decode_content(value: Any, field: str) -> tuple[ContentPart, ...]:
                 )
             )
         elif part_type == "image_url":
+            if role == "assistant":
+                raise UnsupportedFeatureError(
+                    f"{field}[{index}]",
+                    "image content is not valid on OpenAI assistant messages",
+                )
             image = part.get("image_url")
             image = {"url": image} if isinstance(image, str) else require_object(image, field)
             url = image.get("url")
@@ -1126,13 +1163,19 @@ def _decode_content(value: Any, field: str) -> tuple[ContentPart, ...]:
                 )
                 parts.append(
                     ImagePart(
-                        media_type=header[5:].split(";", 1)[0],
+                        media_type=image_media_type(
+                            header[5:].split(";", 1)[0],
+                            f"{field}[{index}].image_url.url",
+                        ),
                         data=data,
+                        detail=image_detail(
+                            image.get("detail"),
+                            f"{field}[{index}].image_url.detail",
+                        ),
                         metadata=metadata,
                     )
                 )
             else:
-                detail = image.get("detail")
                 metadata = vendor_metadata(
                     Protocol.OPENAI,
                     part,
@@ -1146,8 +1189,12 @@ def _decode_content(value: Any, field: str) -> tuple[ContentPart, ...]:
                 )
                 parts.append(
                     ImagePart(
+                        media_type=image_media_type_from_url(url),
                         url=url,
-                        detail=detail if isinstance(detail, str) else None,
+                        detail=image_detail(
+                            image.get("detail"),
+                            f"{field}[{index}].image_url.detail",
+                        ),
                         metadata=metadata,
                     )
                 )
@@ -1160,8 +1207,8 @@ def _decode_content(value: Any, field: str) -> tuple[ContentPart, ...]:
 
 def _decode_result_content(value: Any, field: str) -> tuple[TextPart | ImagePart, ...]:
     parts = _decode_content(value, field)
-    if not all(isinstance(part, (TextPart, ImagePart)) for part in parts):
-        raise UnsupportedFeatureError(field, "tool results can contain only text or images")
+    if not all(isinstance(part, TextPart) for part in parts):
+        raise UnsupportedFeatureError(field, "OpenAI tool messages can contain only text")
     return cast(tuple[TextPart | ImagePart, ...], parts)
 
 
@@ -1177,13 +1224,18 @@ def _validate_responses_portable_fields(payload: Mapping[str, Any]) -> None:
 
 def _decode_responses_input(
     value: Any,
-) -> tuple[tuple[CanonicalMessage, ...], tuple[ContentPart, ...]]:
+) -> tuple[
+    tuple[CanonicalMessage, ...],
+    tuple[ContentPart, ...],
+    tuple[dict[str, Any], ...],
+]:
     if isinstance(value, str):
-        return (CanonicalMessage(role="user", content=(TextPart(value),)),), ()
+        return (CanonicalMessage(role="user", content=(TextPart(value),)),), (), ()
     if not isinstance(value, list):
         raise UnsupportedFeatureError("input", "must be a string or list of input items")
     messages: list[CanonicalMessage] = []
     system: list[ContentPart] = []
+    system_messages: list[dict[str, Any]] = []
     for index, raw_item in enumerate(value):
         item = require_object(raw_item, f"input[{index}]")
         item_type = item.get("type", "message")
@@ -1196,6 +1248,13 @@ def _decode_responses_input(
                         f"input[{index}].content", "system input supports text only"
                     )
                 system.extend(content)
+                system_messages.append(
+                    {
+                        "role": role,
+                        "part_count": len(content),
+                        "extensions": {},
+                    }
+                )
             elif role in {"user", "assistant"}:
                 messages.append(CanonicalMessage(role=cast(Any, role), content=content))
             else:
@@ -1227,8 +1286,6 @@ def _decode_responses_input(
             call_id = item.get("call_id")
             if not isinstance(call_id, str):
                 raise UnsupportedFeatureError(f"input[{index}].call_id", "must be a string")
-            output = item.get("output", "")
-            text = output if isinstance(output, str) else orjson.dumps(output).decode()
             messages.append(
                 CanonicalMessage(
                     role="user",
@@ -1236,7 +1293,10 @@ def _decode_responses_input(
                         ToolResultPart(
                             tool_call_id=call_id,
                             name=None,
-                            content=(TextPart(text),),
+                            content=_decode_responses_tool_output(
+                                item.get("output", ""),
+                                f"input[{index}].output",
+                            ),
                         ),
                     ),
                 )
@@ -1245,7 +1305,7 @@ def _decode_responses_input(
             raise UnsupportedFeatureError(
                 f"input[{index}].type", f"unsupported item {item_type!r}"
             )
-    return tuple(messages), tuple(system)
+    return tuple(messages), tuple(system), tuple(system_messages)
 
 
 def _decode_responses_content(value: Any, field: str) -> tuple[ContentPart, ...]:
@@ -1265,19 +1325,29 @@ def _decode_responses_content(value: Any, field: str) -> tuple[ContentPart, ...]
                 raise UnsupportedFeatureError(
                     f"{field}[{index}].image_url", "portable images require a URL"
                 )
-            detail = part.get("detail")
+            detail = image_detail(part.get("detail"), f"{field}[{index}].detail")
             if image_url.startswith("data:"):
                 header, separator, data = image_url.partition(",")
                 if not separator or ";base64" not in header:
                     raise UnsupportedFeatureError(
                         f"{field}[{index}].image_url", "must be a base64 data URL"
                     )
-                parts.append(ImagePart(media_type=header[5:].split(";", 1)[0], data=data))
+                parts.append(
+                    ImagePart(
+                        media_type=image_media_type(
+                            header[5:].split(";", 1)[0],
+                            f"{field}[{index}].image_url",
+                        ),
+                        data=data,
+                        detail=detail,
+                    )
+                )
             else:
                 parts.append(
                     ImagePart(
+                        media_type=image_media_type_from_url(image_url),
                         url=image_url,
-                        detail=detail if isinstance(detail, str) else None,
+                        detail=detail,
                     )
                 )
         else:
@@ -1285,6 +1355,18 @@ def _decode_responses_content(value: Any, field: str) -> tuple[ContentPart, ...]
                 f"{field}[{index}].type", f"unsupported content {part_type!r}"
             )
     return tuple(parts)
+
+
+def _decode_responses_tool_output(
+    value: Any,
+    field: str,
+) -> tuple[TextPart | ImagePart, ...]:
+    if isinstance(value, str):
+        return (TextPart(value),)
+    parts = _decode_responses_content(value, field)
+    if not all(isinstance(part, (TextPart, ImagePart)) for part in parts):
+        raise UnsupportedFeatureError(field, "contains a non-portable tool output")
+    return cast(tuple[TextPart | ImagePart, ...], parts)
 
 
 def _decode_responses_tools(value: Any) -> tuple[CanonicalTool, ...]:
@@ -1478,6 +1560,11 @@ def _encode_message(message: CanonicalMessage, index: int) -> dict[str, Any]:
             raise UnsupportedFeatureError(
                 f"messages[{index}].content[0].tool_call_id", "is required by OpenAI"
             )
+        if not all(isinstance(part, TextPart) for part in result.content):
+            raise UnsupportedFeatureError(
+                f"messages[{index}].content[0].content",
+                "OpenAI tool messages can contain only text",
+            )
         payload: dict[str, Any] = native_extensions(Protocol.OPENAI, message.metadata)
         payload.update(
             {
@@ -1495,6 +1582,11 @@ def _encode_message(message: CanonicalMessage, index: int) -> dict[str, Any]:
             "tool calls are only valid on canonical assistant messages",
         )
     regular = [part for part in message.content if not isinstance(part, ToolCallPart)]
+    if message.role == "assistant" and any(isinstance(part, ImagePart) for part in regular):
+        raise UnsupportedFeatureError(
+            f"messages[{index}].content",
+            "image content is not valid on OpenAI assistant messages",
+        )
     payload = native_extensions(Protocol.OPENAI, message.metadata)
     payload.update({"role": message.role, "content": _encode_content(regular) if regular else None})
     if calls:
@@ -1538,6 +1630,9 @@ def _encode_content(parts: Sequence[ContentPart]) -> str | list[dict[str, Any]]:
             block.update({"type": "text", "text": part.text})
             encoded.append(block)
         elif isinstance(part, ImagePart):
+            if part.data is not None:
+                image_media_type(part.media_type, "content.image.media_type")
+            image_detail(part.detail, "content.image.detail")
             url = (
                 part.url
                 if part.url is not None
