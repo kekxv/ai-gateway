@@ -9,12 +9,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
 from sqlalchemy import Numeric
-from sqlalchemy.orm import Mapped
 
 from ai_gateway.db.models import Model, Provider
-
 
 # ---------------------------------------------------------------------------
 # Attribute presence

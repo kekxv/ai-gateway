@@ -294,7 +294,11 @@ async def _apply_discovered_models(
     if selected_models is None:
         for route in existing_routes:
             key = (route.provider_protocol_id, route.model_id)
-            if route.source is RouteSource.DISCOVERED and key not in seen_route_keys and route.enabled:
+            if (
+                route.source is RouteSource.DISCOVERED
+                and key not in seen_route_keys
+                and route.enabled
+            ):
                 route.enabled = False
                 disabled_routes += 1
 

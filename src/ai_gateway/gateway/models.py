@@ -169,5 +169,6 @@ def _claude_model(model: SelectableModel) -> dict[str, Any]:
     return {
         "id": model.selectable_id,
         "display_name": model.display_name,
-        "created_at": "2024-01-01T00:00:00Z",  # Placeholder; gateway doesn't track creation time per model
+        # Placeholder; gateway doesn't track creation time per model.
+        "created_at": "2024-01-01T00:00:00Z",
     }

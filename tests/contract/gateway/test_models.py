@@ -501,7 +501,7 @@ async def test_create_app_registers_model_routes_with_app_session_override(
 async def test_claude_endpoint_returns_claude_format_with_anthropic_version_header(
     session: AsyncSession,
 ) -> None:
-    """Test that Claude endpoint is distinguished by anthropic-version header and returns Claude format."""
+    """Return Claude format when the anthropic-version header is present."""
     provider = _provider("claude-listing", Protocol.CLAUDE)
     model = _model("claude-3-opus")
     model.display_name = "Claude 3 Opus"
@@ -529,7 +529,7 @@ async def test_claude_endpoint_returns_claude_format_with_anthropic_version_head
 async def test_openai_endpoint_without_anthropic_version_returns_openai_format(
     session: AsyncSession,
 ) -> None:
-    """Test that without anthropic-version header, OpenAI format is returned (backward compatibility)."""
+    """Return OpenAI format when the anthropic-version header is absent."""
     provider = _provider("openai-backward-compat", Protocol.OPENAI)
     model = _model("gpt-4")
     session.add(_route(model, provider, Protocol.OPENAI))

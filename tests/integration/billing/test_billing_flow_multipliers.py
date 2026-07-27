@@ -15,13 +15,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-
 from ai_gateway.billing.multipliers import get_effective_multipliers
 from ai_gateway.billing.pricing import calculate_cost
 from ai_gateway.db.models import Model, Provider
 from ai_gateway.protocols.types import CanonicalUsage
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -238,19 +235,34 @@ class TestBillingFlowWithMultipliers:
 
         # First request: no markup
         m1, p1 = get_effective_multipliers(model, provider)
-        cost1 = calculate_cost(model, ONE_MILLION_USAGE, model_multiplier=m1, provider_multiplier=p1)
+        cost1 = calculate_cost(
+            model,
+            ONE_MILLION_USAGE,
+            model_multiplier=m1,
+            provider_multiplier=p1,
+        )
         assert cost1 == Decimal("30.00000000")
 
         # Admin raises the provider multiplier
         provider.price_multiplier = Decimal("3.00")
         # Second request: provider markup applies
         m2, p2 = get_effective_multipliers(model, provider)
-        cost2 = calculate_cost(model, ONE_MILLION_USAGE, model_multiplier=m2, provider_multiplier=p2)
+        cost2 = calculate_cost(
+            model,
+            ONE_MILLION_USAGE,
+            model_multiplier=m2,
+            provider_multiplier=p2,
+        )
         assert cost2 == Decimal("90.00000000")
 
         # Admin also raises the model multiplier
         model.price_multiplier = Decimal("2.00")
         # Third request: both markups apply
         m3, p3 = get_effective_multipliers(model, provider)
-        cost3 = calculate_cost(model, ONE_MILLION_USAGE, model_multiplier=m3, provider_multiplier=p3)
+        cost3 = calculate_cost(
+            model,
+            ONE_MILLION_USAGE,
+            model_multiplier=m3,
+            provider_multiplier=p3,
+        )
         assert cost3 == Decimal("180.00000000")

@@ -5,9 +5,8 @@ from uuid import uuid4
 
 import pytest
 
-from ai_gateway.audit.service import RequestContext, RequestResult
 from ai_gateway.billing.service import BalanceReservation, SettlementResult
-from ai_gateway.core.enums import Protocol, UsageSource
+from ai_gateway.core.enums import Protocol
 from ai_gateway.db.models import Model, Provider
 from ai_gateway.gateway.service import GatewayService
 from ai_gateway.protocols.types import CanonicalUsage
@@ -38,16 +37,6 @@ class TestGatewayServiceProviderIntegration:
             price_multiplier=Decimal("2.00"),
         )
 
-        # Create a model
-        model = Model(
-            id=1,
-            canonical_name="test-model",
-            display_name="Test Model",
-            input_price_per_million=Decimal("1.00"),
-            output_price_per_million=Decimal("2.00"),
-            price_multiplier=Decimal("1.00"),
-        )
-
         # Mock session.get to return provider when requested
         async def mock_get(model_class, id):
             if model_class == Provider:
@@ -55,19 +44,6 @@ class TestGatewayServiceProviderIntegration:
             return None
 
         session.get = mock_get
-
-        # Create a route candidate
-        route = RouteCandidate(
-            route_id=1,
-            model_id=1,
-            provider_id=1,
-            provider_protocol_id=1,
-            protocol=Protocol.OPENAI,
-            base_url="https://api.openai.com",
-            websocket_url=None,
-            upstream_model="gpt-4",
-            weight=100,
-        )
 
         # Create service
         service = GatewayService(
@@ -242,8 +218,12 @@ class TestGatewayServiceProviderIntegration:
         call_args = billing_service.settle_request.call_args
 
         # Verify provider was passed
-        assert "provider" in call_args.kwargs, "provider parameter should be passed to settle_request"
-        assert call_args.kwargs["provider"] == provider, "provider should be the loaded Provider object"
+        assert "provider" in call_args.kwargs, (
+            "provider parameter should be passed to settle_request"
+        )
+        assert call_args.kwargs["provider"] == provider, (
+            "provider should be the loaded Provider object"
+        )
 
     @pytest.mark.asyncio
     async def test_provider_multiplier_applied_to_cost(self):

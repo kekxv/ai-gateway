@@ -5,9 +5,8 @@ Revises: 0006
 Create Date: 2026-07-25 10:00:00.000000
 
 """
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = '0007'
@@ -31,7 +30,11 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id'),
     )
     op.create_index('ix_config_audit_logs_user_id', 'config_audit_logs', ['user_id'])
-    op.create_index('ix_config_audit_logs_resource', 'config_audit_logs', ['resource_type', 'resource_id'])
+    op.create_index(
+        'ix_config_audit_logs_resource',
+        'config_audit_logs',
+        ['resource_type', 'resource_id'],
+    )
     op.create_index('ix_config_audit_logs_created_at', 'config_audit_logs', ['created_at'])
 
 

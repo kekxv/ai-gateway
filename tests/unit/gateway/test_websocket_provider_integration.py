@@ -4,8 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
 
 import pytest
 
@@ -13,13 +11,11 @@ from ai_gateway.billing.pricing import calculate_cost
 from ai_gateway.billing.service import (
     AdjustmentResult,
     BalanceReservation,
-    InsufficientBalance,
     SettlementResult,
 )
-from ai_gateway.core.enums import Protocol, UsageSource
+from ai_gateway.core.enums import Protocol
 from ai_gateway.db.models import Provider
 from ai_gateway.gateway.websocket import WebSocketBillingCycle, WebSocketUsage
-from ai_gateway.protocols.types import CanonicalUsage
 
 
 @dataclass
