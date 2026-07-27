@@ -372,6 +372,27 @@ describe('加权模型路由管理', () => {
     wrapper.unmount()
   })
 
+  it('图标路由操作使用包含上游模型名的可访问名称', async () => {
+    const wrapper = await mountRoutes()
+
+    await wrapper.get('[data-test="model-card-1"] .routes-toggle').trigger('click')
+    await wrapper.get('[data-test="model-card-2"] .routes-toggle').trigger('click')
+
+    expect(wrapper.get('[data-test="edit-route-201"]').attributes('aria-label')).toBe(
+      '编辑路由 gpt-4.1-2026-04-14',
+    )
+    expect(wrapper.get('[data-test="delete-route-201"]').attributes('aria-label')).toBe(
+      '删除路由 gpt-4.1-2026-04-14',
+    )
+    expect(wrapper.get('[data-test="edit-route-203"]').attributes('aria-label')).toBe(
+      '编辑路由 claude-opus-4-1',
+    )
+    expect(wrapper.get('[data-test="delete-route-203"]').attributes('aria-label')).toBe(
+      '删除路由 claude-opus-4-1',
+    )
+    wrapper.unmount()
+  })
+
   it('允许编辑自动发现路由但来源和运行状态不进入 PATCH', async () => {
     const patchBodies: unknown[] = []
     useCatalog()

@@ -284,6 +284,18 @@ describe('接口密钥作用域与一次性明文', () => {
     wrapper.unmount()
   })
 
+  it('所有者原生选择框与可见标签有程序化关联', async () => {
+    const { wrapper } = mountForm()
+    await flushPromises()
+
+    const ownerSelect = wrapper.get('[data-test="api-key-owner"]')
+    expect(ownerSelect.attributes('id')).toBe('api-key-owner')
+    const ownerLabel = wrapper.find('label[for="api-key-owner"]')
+    expect(ownerLabel.exists()).toBe(true)
+    expect(ownerLabel.text()).toContain('所有者')
+    wrapper.unmount()
+  })
+
   it('未编辑非整分钟过期时间时保留秒和毫秒精度，清空或真实修改仍发送', async () => {
     const preciseExpiryKey: ApiKeyResponse = {
       ...activeKey,

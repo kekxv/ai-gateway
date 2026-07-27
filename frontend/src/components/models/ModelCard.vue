@@ -258,6 +258,7 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
               <div class="route-actions">
                 <ElButton
                   :data-test="`edit-route-${String(route.id)}`"
+                  :aria-label="`编辑路由 ${route.upstream_model}`"
                   size="small"
                   text
                   :disabled="loading === true"
@@ -267,6 +268,7 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
                 </ElButton>
                 <ElButton
                   :data-test="`delete-route-${String(route.id)}`"
+                  :aria-label="`删除路由 ${route.upstream_model}`"
                   size="small"
                   text
                   type="danger"

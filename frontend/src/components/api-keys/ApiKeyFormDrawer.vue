@@ -263,8 +263,9 @@ function submitForm(): void {
     </template>
 
     <ElForm :disabled="submitting" label-position="top" @submit.prevent="submitForm">
-      <ElFormItem label="所有者" :error="ownerError" required>
+      <ElFormItem label="所有者" for="api-key-owner" :error="ownerError" required>
         <select
+          id="api-key-owner"
           v-model="ownerId"
           data-test="api-key-owner"
           class="field-select"
