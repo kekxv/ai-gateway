@@ -178,7 +178,7 @@ cd frontend
 npm run test -- --reporter=dot
 ```
 
-Expected: the command exits by itself under the 120-second suite deadline and uses no more than two workers. Report exact pass/fail counts; do not claim unrelated baseline failures are fixed.
+Expected: the direct Vitest command uses no more than two workers, applies only the configured per-operation timeouts, and exits by itself through normal Vitest behavior. The frontend owns no global suite deadline, grace-kill sequence, or timeout-specific exit code. Report exact pass/fail counts; do not claim unrelated baseline failures are fixed.
 
 - [ ] **Step 2: Re-run the direct route regression**
 
