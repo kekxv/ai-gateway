@@ -287,6 +287,37 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('混合协议供应商未触碰授权控件时保留各协议默认授权', async () => {
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: null, submitting: false },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-name"]').setValue('混合协议供应商')
+    await wrapper.get('[data-test="provider-api-key"]').setValue('mixed-secret')
+    await wrapper.get('[data-test="protocol-base-url-0"]').setValue('https://openai.example.com')
+    await wrapper.get('[data-test="add-protocol"]').trigger('click')
+    await wrapper.get('[data-test="protocol-type-1"]').setValue('claude')
+    await wrapper.get('[data-test="protocol-base-url-1"]').setValue('https://claude.example.com')
+    await wrapper.get('[data-test="add-protocol"]').trigger('click')
+    await wrapper.get('[data-test="protocol-type-2"]').setValue('gemini')
+    await wrapper.get('[data-test="protocol-base-url-2"]').setValue('https://gemini.example.com')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+
+    const payload = wrapper.emitted('submit')?.[0]?.[0]
+    expect(payload).toMatchObject({
+      credential: { api_key: 'mixed-secret' },
+      protocols: [
+        { protocol: 'openai', base_url: 'https://openai.example.com' },
+        { protocol: 'claude', base_url: 'https://claude.example.com' },
+        { protocol: 'gemini', base_url: 'https://gemini.example.com' },
+      ],
+    })
+    expect(payload).toHaveProperty('credential', { api_key: 'mixed-secret' })
+    wrapper.unmount()
+  })
+
   it('合并高级凭据中的任意字段，并让引导字段覆盖保留键', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(ProviderFormDrawer, {

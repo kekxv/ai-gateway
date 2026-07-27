@@ -41,8 +41,8 @@ interface ProtocolRow {
   extraHeadersError: string
 }
 
-type AuthScheme = 'bearer' | 'apikey' | 'none'
-type AuthHeader = 'authorization' | 'x-api-key' | 'custom'
+type AuthScheme = 'protocol-default' | 'bearer' | 'apikey' | 'none'
+type AuthHeader = 'protocol-default' | 'authorization' | 'x-api-key' | 'custom'
 
 const props = defineProps<{
   modelValue: boolean
@@ -58,8 +58,8 @@ const emit = defineEmits<{
 const name = ref('')
 const apiKey = ref('')
 const advancedCredentialText = ref('')
-const authScheme = ref<AuthScheme>('bearer')
-const authHeader = ref<AuthHeader>('authorization')
+const authScheme = ref<AuthScheme>('protocol-default')
+const authHeader = ref<AuthHeader>('protocol-default')
 const customAuthHeader = ref('')
 const enabled = ref(true)
 const autoLoadModels = ref(false)
@@ -112,8 +112,8 @@ function resetForm(): void {
   name.value = provider?.name ?? ''
   apiKey.value = ''
   advancedCredentialText.value = ''
-  authScheme.value = 'bearer'
-  authHeader.value = 'authorization'
+  authScheme.value = 'protocol-default'
+  authHeader.value = 'protocol-default'
   customAuthHeader.value = ''
   enabled.value = provider?.enabled ?? true
   autoLoadModels.value = provider?.auto_load_models ?? false
@@ -200,18 +200,22 @@ function buildCredential(): JsonObject | undefined {
   if (key !== '') credential.api_key = key
   if (typeof credential.api_key !== 'string' || credential.api_key.trim() === '') return credential
 
-  credential.auth_scheme =
-    authScheme.value === 'none'
-      ? 'none'
-      : authScheme.value === 'bearer'
-        ? 'Bearer'
-        : 'ApiKey'
+  if (authScheme.value === 'protocol-default') delete credential.auth_scheme
+  else {
+    credential.auth_scheme =
+      authScheme.value === 'none'
+        ? 'none'
+        : authScheme.value === 'bearer'
+          ? 'Bearer'
+          : 'ApiKey'
+  }
   if (authScheme.value === 'none') {
     delete credential.auth_header
     return credential
   }
 
-  if (authHeader.value === 'authorization') credential.auth_header = 'Authorization'
+  if (authHeader.value === 'protocol-default') delete credential.auth_header
+  else if (authHeader.value === 'authorization') credential.auth_header = 'Authorization'
   else if (authHeader.value === 'x-api-key') credential.auth_header = 'x-api-key'
   else {
     const header = customAuthHeader.value.trim()
@@ -496,6 +500,7 @@ function submitForm(): void {
           <div class="credential-options">
             <ElFormItem label="授权方式">
               <select v-model="authScheme" data-test="provider-auth-scheme">
+                <option value="protocol-default">按协议默认</option>
                 <option value="bearer">Bearer Token</option>
                 <option value="apikey">API Key</option>
                 <option value="none">无（不添加授权头）</option>
@@ -508,6 +513,7 @@ function submitForm(): void {
                 data-test="provider-auth-header"
                 :disabled="authScheme === 'none'"
               >
+                <option value="protocol-default">按协议默认</option>
                 <option value="authorization">Authorization</option>
                 <option value="x-api-key">x-api-key</option>
                 <option value="custom">自定义</option>
