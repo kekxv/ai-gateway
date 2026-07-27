@@ -754,6 +754,7 @@ onBeforeUnmount(() => {
             v-model="providerFilter"
             data-test="provider-filter"
             class="provider-filter-select"
+            aria-label="按供应商筛选模型"
           >
             <option :value="null">全部供应商</option>
             <option

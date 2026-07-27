@@ -152,8 +152,8 @@ function formatInterval(seconds: number): string {
 }
 
 .provider-card.is-disabled {
-  opacity: 0.65;
   background: #f1f5f9;
+  border-color: #cbd5e1;
 }
 
 .card-header {
@@ -237,11 +237,10 @@ function formatInterval(seconds: number): string {
 .section-title {
   font-size: 0.8125rem;
   font-weight: 700;
-  color: var(--gateway-text);
+  color: #475569;
   margin-bottom: 0.875rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  opacity: 0.7;
 }
 
 .protocols-grid {
@@ -267,8 +266,8 @@ function formatInterval(seconds: number): string {
 }
 
 .protocol-item.is-disabled {
-  opacity: 0.6;
   background: #f1f5f9;
+  border-color: #cbd5e1;
 }
 
 .protocol-details {

@@ -172,9 +172,24 @@ describe('管理控制台外壳', () => {
 
     expect(wrapper.get('.skip-link').attributes('href')).toBe('#main-content')
     const main = wrapper.get('main#main-content')
-    expect(main.attributes('tabindex')).toBe('-1')
+    expect(main.attributes('tabindex')).toBe('0')
     expect(main.text()).toContain('控制台概览')
     expect(main.text()).toContain('查看网关资源状态与近期请求趋势。')
+  })
+
+  it('通过侧栏键盘导航后把焦点移动到新页面标题', async () => {
+    const { router, wrapper } = await mountShell()
+    const navigation = wrapper.get('nav[aria-label="控制台导航"]')
+    const providerItem = wrapper.get('[data-navigation-route="/providers"]')
+    ;(providerItem.element as HTMLElement).focus()
+
+    await navigation.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    await vi.waitFor(() => {
+      expect(router.currentRoute.value.name).toBe('providers')
+      expect(wrapper.get('.page-header h1').text()).toBe('供应商管理')
+      expect(document.activeElement).toBe(wrapper.get('.page-header h1').element)
+    })
   })
 
   it('支持页头安全设置导航和退出登录', async () => {

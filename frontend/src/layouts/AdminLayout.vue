@@ -62,6 +62,7 @@ const viewportWidth = ref(typeof window === 'undefined' ? 1200 : window.innerWid
 const drawerOpen = ref(false)
 const isMobile = computed(() => viewportWidth.value < 768)
 const isCollapsed = computed(() => viewportWidth.value < 1200)
+let pendingPageHeadingPath: string | undefined
 
 function updateViewport(): void {
   viewportWidth.value = window.innerWidth
@@ -97,11 +98,22 @@ function handleNavigationKeydown(event: KeyboardEvent): void {
   items[nextIndex]?.focus()
 }
 
+function focusPendingPageHeading(): void {
+  if (pendingPageHeadingPath === undefined || route.path !== pendingPageHeadingPath) return
+  const heading = document.querySelector<HTMLElement>('.page-header h1')
+  if (heading === null) return
+  const expectedTitle = route.meta.title
+  if (typeof expectedTitle === 'string' && heading.textContent.trim() !== expectedTitle) return
+  heading.focus()
+  pendingPageHeadingPath = undefined
+}
+
 async function navigate(path: string): Promise<void> {
   drawerOpen.value = false
+  pendingPageHeadingPath = path
   await router.push(path)
   await nextTick()
-  document.querySelector<HTMLElement>('.page-header h1')?.focus()
+  focusPendingPageHeading()
 }
 
 async function logout(): Promise<void> {
@@ -184,9 +196,9 @@ onBeforeUnmount(() => {
           <ElButton text type="danger" @click="logout">退出登录</ElButton>
         </div>
       </ElHeader>
-      <ElMain id="main-content" class="admin-main" tabindex="-1">
+      <ElMain id="main-content" class="admin-main" tabindex="0">
         <RouterView v-slot="{ Component }">
-          <Transition name="page-fade" mode="out-in">
+          <Transition name="page-fade" mode="out-in" @after-enter="focusPendingPageHeading">
             <KeepAlive :max="7">
               <component :is="Component" />
             </KeepAlive>

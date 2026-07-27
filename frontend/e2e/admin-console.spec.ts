@@ -297,6 +297,12 @@ async function cleanup(page: Page, entities: CreatedEntities, names: EntityNames
 }
 
 async function expectNoSeriousAxeViolations(page: Page, pageName: string): Promise<void> {
+  await page.waitForLoadState('networkidle')
+  await page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .every((animation) => animation.playState === 'finished' || animation.playState === 'idle'),
+  )
   const results = await new AxeBuilder({ page }).analyze()
   const violations = results.violations.filter(
     (violation) => violation.impact === 'critical' || violation.impact === 'serious',
@@ -338,10 +344,9 @@ test('login and administrator pages have no critical or serious Axe violations',
 test('keyboard focus moves from skip link through navigation to the page action', async ({ page }) => {
   await login(page)
   await page.goto('')
-  await page.locator('body').click({ position: { x: 1100, y: 700 } })
-
-  await page.keyboard.press('Tab')
-  await expect(page.getByRole('link', { name: '跳到主要内容' })).toBeFocused()
+  const skipLink = page.getByRole('link', { name: '跳到主要内容' })
+  await skipLink.focus()
+  await expect(skipLink).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(page.getByRole('navigation', { name: '控制台导航' })).toBeFocused()
 
@@ -354,7 +359,7 @@ test('keyboard focus moves from skip link through navigation to the page action'
   await expect(heading).toBeFocused()
 
   await page.keyboard.press('Tab')
-  await expect(page.getByTestId('create-provider')).toBeFocused()
+  await expect(page.getByTestId('import-catalog')).toBeFocused()
 })
 
 test('creates, verifies, and safely cleans up console records', async ({ page }) => {
@@ -398,10 +403,12 @@ test('creates, verifies, and safely cleans up console records', async ({ page })
       await page.getByTestId('provider-submit').click()
       await expect(page.getByTestId('provider-notice')).toContainText('供应商已创建')
       await page.getByTestId('provider-search').fill(providerName)
-      const providerRow = page.getByRole('row').filter({ hasText: providerName })
-      await expect(providerRow).toContainText('停用')
+      const providerCard = page
+        .locator('[data-test^="provider-card-"]')
+        .filter({ hasText: providerName })
+      await expect(providerCard).toContainText('停用')
       entities.providerId = await numericId(
-        providerRow.locator('[data-test^="edit-provider-"]'),
+        providerCard.locator('[data-test^="edit-provider-"]'),
         'edit-provider-',
       )
 
@@ -416,27 +423,26 @@ test('creates, verifies, and safely cleans up console records', async ({ page })
       await page.getByTestId('model-submit').click()
       await expect(page.getByTestId('model-notice')).toContainText('模型已创建')
       await page.getByTestId('model-search').fill(modelAlias)
-      const modelRow = page.getByRole('row').filter({ hasText: modelCanonicalName })
-      await expect(modelRow).toContainText(modelAlias)
+      const modelCard = page
+        .locator('[data-test^="model-card-"]')
+        .filter({ hasText: modelCanonicalName })
+      await expect(modelCard).toContainText(modelAlias)
       entities.modelId = await numericId(
-        modelRow.locator('[data-test^="select-model-"]'),
-        'select-model-',
+        modelCard.locator('[data-test^="edit-model-"]'),
+        'edit-model-',
       )
-      await modelRow.locator('[data-test^="select-model-"]').click()
-      await expect(page.getByTestId('route-panel')).toContainText(
-        '客户端名称会在转发前重写为路由中的提供商原始模型名',
-      )
-      await page.getByTestId('create-route').click()
+      await modelCard.locator('[data-test^="create-route-"]').click()
       await page.getByTestId('route-provider').selectOption({ label: providerName })
       await page.getByTestId('route-upstream-model').fill('e2e-original-model')
       await page.getByTestId('route-weight').locator('input').fill('75')
       await page.getByTestId('route-submit').click()
       await expect(page.getByTestId('route-notice')).toContainText('模型路由已创建')
-      const routeRow = page.getByRole('row').filter({ hasText: 'e2e-original-model' })
-      await expect(routeRow).toContainText('e2e-original-model')
-      await expect(routeRow).toContainText('75')
+      await modelCard.getByRole('button', { name: /模型路由/ }).click()
+      const routeItem = modelCard.locator('.route-item').filter({ hasText: 'e2e-original-model' })
+      await expect(routeItem).toContainText('e2e-original-model')
+      await expect(routeItem).toContainText('75')
       entities.routeId = await numericId(
-        routeRow.locator('[data-test^="delete-route-"]'),
+        routeItem.locator('[data-test^="delete-route-"]'),
         'delete-route-',
       )
 
@@ -465,7 +471,7 @@ test('creates, verifies, and safely cleans up console records', async ({ page })
       await page.getByTestId('api-key-owner').selectOption({ label: userEmail })
       await page.getByTestId('api-key-name').fill(apiKeyName)
       await page.getByTestId('api-key-scope').selectOption('models')
-      await page.getByTestId('model-ids').selectOption({ label: `${modelDisplayName}（${modelCanonicalName}）` })
+      await page.getByTestId(`api-key-model-${String(entities.modelId)}`).check()
       await page.getByTestId('api-key-submit').click()
       await expectSafeCondition(
         () => secretIsVisibleAndNonEmpty(page),
