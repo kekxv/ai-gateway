@@ -80,8 +80,10 @@ export function createAppRouter(
 
   router.beforeEach(async (to) => {
     const auth = useAuthStore()
-    restorePromise ??= auth.restore()
-    await restorePromise
+    if (!auth.ready) {
+      restorePromise ??= auth.restore()
+      await restorePromise
+    }
 
     if (to.name === 'login' && auth.authenticated) return { name: 'dashboard' }
     if (to.meta.public === true) return true
