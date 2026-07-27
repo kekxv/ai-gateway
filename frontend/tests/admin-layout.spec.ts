@@ -105,13 +105,13 @@ describe('管理控制台外壳', () => {
     await router.push('/providers')
     await flushPromises()
 
-    expect(
-      warnings.some((message) =>
-        message.includes('Component inside <Transition> renders non-element root node'),
-      ),
-    ).toBe(false)
     await vi.waitFor(() => {
       expect(wrapper.get('.route-page').text()).toContain('供应商列表')
+      expect(
+        warnings.some((message) =>
+          message.includes('Component inside <Transition> renders non-element root node'),
+        ),
+      ).toBe(false)
     })
   })
 
