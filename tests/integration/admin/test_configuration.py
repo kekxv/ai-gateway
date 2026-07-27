@@ -537,3 +537,100 @@ async def test_admin_import_rejects_invalid_bundle_and_dangling_route_references
     assert invalid_format.status_code == 422
     assert invalid_version.status_code == 422
     assert dangling_route.status_code == 422
+
+
+async def test_admin_import_rejects_alias_that_collides_with_existing_canonical_name(
+    admin_client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    session.add(Model(canonical_name="canonical-alias-collision", display_name="Existing"))
+    await session.flush()
+    bundle = _import_bundle()
+    bundle["models"] = [
+        {
+            "canonical_name": "new-collision-model",
+            "display_name": "New Collision Model",
+            "aliases": [{"alias": "canonical-alias-collision", "enabled": True}],
+            "routes": [],
+        }
+    ]
+
+    response = await admin_client.post("/admin/configuration/import", json=bundle)
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "catalog_import_conflict"
+    assert await session.scalar(select(Provider).where(Provider.name == "import-provider")) is None
+    assert (
+        await session.scalar(select(Model).where(Model.canonical_name == "new-collision-model"))
+        is None
+    )
+
+
+async def test_catalog_export_and_import_preserve_max_precision_prices(
+    admin_client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    exact_price = Decimal("999999999999.12345678")
+    model = Model(
+        canonical_name="max-precision-model",
+        display_name="Max Precision Model",
+        input_price_per_million=exact_price,
+        output_price_per_million=exact_price,
+        cache_read_price_per_million=exact_price,
+        cache_write_price_per_million=exact_price,
+    )
+    session.add(model)
+    await session.flush()
+
+    exported = await admin_client.get("/admin/configuration/export")
+
+    assert exported.status_code == 200, exported.text
+    assert b"999999999999.12345678" in exported.content
+    imported = await admin_client.post(
+        "/admin/configuration/import",
+        content=exported.content,
+        headers={"Content-Type": "application/json"},
+    )
+    assert imported.status_code == 200, imported.text
+    await session.refresh(model)
+    assert model.input_price_per_million == exact_price
+    assert model.output_price_per_million == exact_price
+    assert model.cache_read_price_per_million == exact_price
+    assert model.cache_write_price_per_million == exact_price
+
+
+async def test_admin_import_requires_explicit_format_and_version(
+    admin_client: AsyncClient,
+) -> None:
+    response = await admin_client.post(
+        "/admin/configuration/import",
+        json={"providers": [], "models": []},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_admin_import_rejects_duplicate_aliases_for_one_model(
+    admin_client: AsyncClient,
+) -> None:
+    response = await admin_client.post(
+        "/admin/configuration/import",
+        json={
+            "format": "ai-gateway.catalog",
+            "version": 1,
+            "providers": [],
+            "models": [
+                {
+                    "canonical_name": "duplicate-alias-model",
+                    "display_name": "Duplicate Alias Model",
+                    "aliases": [
+                        {"alias": "same-alias", "enabled": True},
+                        {"alias": "same-alias", "enabled": False},
+                    ],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "catalog_import_invalid"

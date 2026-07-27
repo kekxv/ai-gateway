@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from typing import Annotated, Literal, cast
 
 import orjson
-from fastapi import APIRouter, Depends, Response, status
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -96,8 +98,8 @@ class CatalogModel(BaseModel):
 class CatalogBundle(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    format: Literal["ai-gateway.catalog"] = "ai-gateway.catalog"
-    version: Literal[1] = 1
+    format: Literal["ai-gateway.catalog"]
+    version: Literal[1]
     providers: list[CatalogProvider] = Field(default_factory=list)
     models: list[CatalogModel] = Field(default_factory=list)
 
@@ -135,6 +137,8 @@ async def export_catalog_bundle(
         )
     ).all()
     return CatalogBundle(
+        format="ai-gateway.catalog",
+        version=1,
         providers=[
             _catalog_provider(provider, settings, include_secrets) for provider in providers
         ],
@@ -151,7 +155,7 @@ async def export_configuration(
 ) -> Response:
     bundle = await export_catalog_bundle(session, settings, include_secrets)
     return Response(
-        content=orjson.dumps(bundle.model_dump(), default=_orjson_default),
+        content=orjson.dumps(_exact_json_numbers(bundle.model_dump())),
         media_type="application/json",
         headers={"Content-Disposition": 'attachment; filename="ai-gateway-catalog-v1.json"'},
     )
@@ -159,11 +163,12 @@ async def export_configuration(
 
 @router.post("/import", response_model=CatalogImportResult)
 async def import_configuration(
-    bundle: CatalogBundle,
+    request: Request,
     session: Session,
     _: AdminUser,
     settings: AppSettings,
 ) -> CatalogImportResult:
+    bundle = await _catalog_bundle_from_request(request)
     return await import_catalog_bundle(session, settings, bundle)
 
 
@@ -203,11 +208,14 @@ async def _validate_import_bundle(session: AsyncSession, bundle: CatalogBundle) 
     aliases: dict[str, str] = {}
     for model in bundle.models:
         for alias in model.aliases:
-            existing_owner = aliases.setdefault(alias.alias, model.canonical_name)
-            if existing_owner != model.canonical_name or alias.alias == model.canonical_name:
+            existing_owner = aliases.get(alias.alias)
+            if existing_owner == model.canonical_name:
+                _raise_catalog_import_validation("Model aliases must be unique")
+            if existing_owner is not None or alias.alias == model.canonical_name:
                 _raise_catalog_import_conflict()
             if alias.alias in model_names and alias.alias != model.canonical_name:
                 _raise_catalog_import_conflict()
+            aliases[alias.alias] = model.canonical_name
 
     route_provider_names = {route.provider for model in bundle.models for route in model.routes}
     existing_protocols = set(
@@ -245,6 +253,13 @@ async def _validate_import_bundle(session: AsyncSession, bundle: CatalogBundle) 
             await session.scalars(select(Model).where(Model.canonical_name.in_(set(model_names))))
         ).all()
     }
+    conflicting_canonical_names = set(
+        await session.scalars(
+            select(Model.canonical_name).where(Model.canonical_name.in_(set(aliases)))
+        )
+    )
+    if conflicting_canonical_names:
+        _raise_catalog_import_conflict()
     conflicting_aliases = (
         await session.scalars(
             select(ModelAlias).where(ModelAlias.alias.in_(set(aliases) | set(model_names)))
@@ -431,10 +446,23 @@ async def _merge_catalog_bundle(
     )
 
 
-def _orjson_default(value: object) -> float:
+async def _catalog_bundle_from_request(request: Request) -> CatalogBundle:
+    try:
+        payload = json.loads(await request.body(), parse_float=Decimal)
+        return CatalogBundle.model_validate(payload)
+    except (json.JSONDecodeError, ValidationError) as exc:
+        errors = exc.errors() if isinstance(exc, ValidationError) else []
+        raise RequestValidationError(errors) from exc
+
+
+def _exact_json_numbers(value: object) -> object:
     if isinstance(value, Decimal):
-        return float(value)
-    raise TypeError
+        return orjson.Fragment(format(value, "f"))
+    if isinstance(value, dict):
+        return {key: _exact_json_numbers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_exact_json_numbers(item) for item in value]
+    return value
 
 
 def _encrypt_json(value: object, settings: Settings) -> bytes:
