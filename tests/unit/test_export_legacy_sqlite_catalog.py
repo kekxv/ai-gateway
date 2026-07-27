@@ -145,6 +145,19 @@ def test_exports_legacy_prices_and_default_multipliers(tmp_path: Path) -> None:
     assert bundle["providers"][0]["price_multiplier"] == "1.00"
 
 
+@pytest.mark.parametrize(
+    ("source_price", "expected_price"),
+    [(100, "10"), (300, "30"), (1000, "100")],
+)
+def test_legacy_integer_prices_keep_significant_trailing_zeros(
+    source_price: int,
+    expected_price: str,
+) -> None:
+    """Trimming the integer portion would reduce common legacy prices by powers of ten."""
+
+    assert _exporter_module()._legacy_price(source_price) == expected_price
+
+
 def test_exports_provider_protocols_with_legacy_fallbacks_and_deduplication(tmp_path: Path) -> None:
     """Ignoring type precedence or duplicates creates invalid provider protocol configurations."""
     database_path = tmp_path / "legacy.sqlite"

@@ -1202,6 +1202,49 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('以认证 JSON 请求原样发送目录文本并保留最大价格精度', async () => {
+    const catalogText =
+      '{"format":"ai-gateway.catalog","version":1,"providers":[],"models":[{"canonical_name":"precision-model","display_name":"Precision model","input_price_per_million":999999999999.12345678}]}'
+    let receivedBody = ''
+    let receivedAuthorization: string | null = null
+    let receivedContentType: string | null = null
+    sessionStorage.setItem('gateway.access_token', 'catalog-access-token')
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
+      value: '',
+      action: 'confirm',
+    } as MessageBoxData)
+    server.use(
+      http.post('/admin/configuration/import', async ({ request }) => {
+        receivedBody = await request.text()
+        receivedAuthorization = request.headers.get('authorization')
+        receivedContentType = request.headers.get('content-type')
+        return HttpResponse.json({
+          providers_created: 0,
+          providers_updated: 0,
+          models_created: 1,
+          models_updated: 0,
+          routes_created: 0,
+          routes_updated: 0,
+        })
+      }),
+    )
+    const wrapper = await mountProviders()
+    const file = new File([catalogText], 'precision-catalog.json', {
+      type: 'application/json',
+    })
+    const input = wrapper.get<HTMLInputElement>('[data-test="import-catalog-input"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+
+    await input.trigger('change')
+    await waitForCatalogFile()
+
+    expect(receivedBody).toBe(catalogText)
+    expect(receivedBody).toContain('999999999999.12345678')
+    expect(receivedAuthorization).toBe('Bearer catalog-access-token')
+    expect(receivedContentType).toBe('application/json')
+    wrapper.unmount()
+  })
+
   it('本地目录 JSON 无效时显示错误且不发送导入请求', async () => {
     let importRequests = 0
     const confirm = vi.spyOn(ElMessageBox, 'confirm')

@@ -300,7 +300,8 @@ def _legacy_price(value: object) -> str:
         raise LegacyExportError(f"Invalid legacy token price: {value!r}") from error
     if not price.is_finite() or price < 0:
         raise LegacyExportError(f"Invalid legacy token price: {value!r}")
-    return format(price, "f").rstrip("0").rstrip(".") or "0"
+    formatted = format(price, "f")
+    return formatted.rstrip("0").rstrip(".") if "." in formatted else formatted
 
 
 def _model_aliases(

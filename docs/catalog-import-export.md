@@ -10,9 +10,11 @@ The bundle contains provider names and settings, provider protocols, canonical m
 model prices and multipliers, and routes. References use stable names and protocol/base-URL pairs,
 not database IDs.
 
-It deliberately excludes database IDs, users, API keys and their scopes, balances, ledger entries,
-request and audit logs, sessions, and route runtime/health state. It is a catalog backup, not a
-full database backup.
+It deliberately excludes database IDs; users and their passwords or TOTP configuration; API keys
+and their scopes; balances and ledger entries; request and audit logs; sessions; conversations;
+skills; tools; source channels; and route runtime/health state. It is a catalog backup, not a full
+database backup. Legacy channels are used only to select the provider/model graph and are never
+emitted in the bundle.
 
 ## Exporting and importing in the console
 
@@ -21,8 +23,10 @@ requesting a secret-bearing export, then downloads `ai-gateway-catalog-v1.json`.
 redacted exports by default (`GET /admin/configuration/export`); secrets are included only with
 `?include_secrets=true`.
 
-The import picker parses JSON locally before it asks for confirmation. After confirmation it sends
-the unmodified object to `POST /admin/configuration/import` and refreshes the provider list.
+The import picker parses JSON locally only to validate its syntax before it asks for confirmation.
+After confirmation it sends the original JSON text unchanged as `application/json` to
+`POST /admin/configuration/import`, preserving all supported decimal price precision, and refreshes
+the provider list.
 
 Import is transactional and merge-only:
 

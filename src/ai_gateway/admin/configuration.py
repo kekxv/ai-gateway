@@ -435,6 +435,7 @@ async def _merge_catalog_bundle(
                 route.upstream_model = route_payload.upstream_model
                 route.weight = route_payload.weight
                 route.enabled = route_payload.enabled
+                route.source = RouteSource.MANUAL
 
     return CatalogImportResult(
         providers_created=providers_created,

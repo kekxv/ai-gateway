@@ -170,9 +170,10 @@ async function importCatalogFile(event: Event): Promise<void> {
   const file = input.files?.[0]
   try {
     if (file === undefined || catalogOperationActive.value) return
-    let bundle: unknown
+    let bundleText: string
     try {
-      bundle = JSON.parse(await fileText(file)) as unknown
+      bundleText = await fileText(file)
+      JSON.parse(bundleText) as unknown
     } catch {
       notice.value = { type: 'error', text: '目录文件 JSON 格式不正确，未发送导入请求。' }
       return
@@ -189,7 +190,7 @@ async function importCatalogFile(event: Event): Promise<void> {
     }
 
     catalogImporting.value = true
-    const result = await importCatalog(bundle)
+    const result = await importCatalog(bundleText)
     await load()
     notice.value = {
       type: 'success',

@@ -9,7 +9,11 @@ export async function exportCatalog(includeSecrets: boolean): Promise<Blob> {
   return data
 }
 
-export async function importCatalog(bundle: unknown): Promise<CatalogImportResult> {
-  const { data } = await apiClient.post<CatalogImportResult>('/admin/configuration/import', bundle)
+export async function importCatalog(bundleText: string): Promise<CatalogImportResult> {
+  const { data } = await apiClient.post<CatalogImportResult>(
+    '/admin/configuration/import',
+    bundleText,
+    { headers: { 'Content-Type': 'application/json' } },
+  )
   return data
 }

@@ -1,10 +1,13 @@
+from datetime import datetime
 from decimal import Decimal
 
+import httpx
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ai_gateway.admin.model_sync import sync_provider_models
 from ai_gateway.core.enums import Protocol, RouteRuntimeState, RouteSource
 from ai_gateway.core.security import decrypt_secret, encrypt_secret
 from ai_gateway.db.models import Model, ModelAlias, ModelRoute, Provider, ProviderProtocol
@@ -460,6 +463,88 @@ async def test_admin_import_merges_without_duplicates_and_preserves_redacted_exi
     )
     assert untouched_provider is not None and untouched_provider.enabled is False
     assert untouched_model is not None and untouched_model.enabled is False
+
+
+async def test_admin_import_claims_discovered_route_and_preserves_health_through_model_sync(
+    admin_client: AsyncClient,
+    admin_settings,
+    session: AsyncSession,
+) -> None:
+    disabled_until = datetime(2026, 7, 27, 14, 0, 0)
+    last_error_at = datetime(2026, 7, 27, 13, 0, 0)
+    provider = Provider(
+        name="import-provider",
+        credential_encrypted=encrypt_secret("{}", settings=admin_settings),
+        protocols=[
+            ProviderProtocol(
+                protocol=Protocol.OPENAI,
+                base_url="https://import-provider.example/v1",
+            )
+        ],
+    )
+    model = Model(canonical_name="import-model", display_name="Discovered Model")
+    route = ModelRoute(
+        model=model,
+        provider=provider,
+        provider_protocol=provider.protocols[0],
+        upstream_model="discovered-upstream-model",
+        weight=25,
+        enabled=True,
+        source=RouteSource.DISCOVERED,
+        runtime_state=RouteRuntimeState.OPEN,
+        consecutive_failures=7,
+        disabled_until=disabled_until,
+        last_error_code="upstream_failure",
+        last_error_at=last_error_at,
+    )
+    session.add_all([provider, model])
+    await session.flush()
+
+    imported = await admin_client.post(
+        "/admin/configuration/import",
+        json=_import_bundle(
+            model_enabled=False,
+            route_upstream_model="import-owned-upstream-model",
+            route_weight=777,
+        ),
+    )
+    assert imported.status_code == 200, imported.text
+    assert imported.json()["routes_updated"] == 1
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/models"
+        return httpx.Response(
+            200,
+            json={"data": [{"id": "import-model"}], "has_more": False},
+            request=request,
+        )
+
+    class HttpClientFactory:
+        def __init__(self, client: httpx.AsyncClient) -> None:
+            self.client = client
+
+        async def client_for(self, url: str | httpx.URL) -> httpx.AsyncClient:
+            return self.client
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as upstream_client:
+        sync_result = await sync_provider_models(
+            provider.id,
+            session=session,
+            http_client_factory=HttpClientFactory(upstream_client),
+            settings=admin_settings,
+        )
+
+    await session.refresh(route)
+    assert sync_result.updated_routes == 0
+    assert route.source is RouteSource.MANUAL
+    assert route.upstream_model == "import-owned-upstream-model"
+    assert route.weight == 777
+    assert route.enabled is False
+    assert route.runtime_state is RouteRuntimeState.OPEN
+    assert route.consecutive_failures == 7
+    assert route.disabled_until == disabled_until
+    assert route.last_error_code == "upstream_failure"
+    assert route.last_error_at == last_error_at
 
 
 async def test_admin_import_conflict_rolls_back_all_bundle_changes(
