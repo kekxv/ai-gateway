@@ -319,6 +319,98 @@ def test_exports_valid_routes_with_legacy_model_name_and_rejects_invalid_weight(
         exporter.export_legacy_catalog(database_path, "1", False, False)
 
 
+def test_rejects_duplicate_selected_provider_names(tmp_path: Path) -> None:
+    """Duplicate provider names make route targets ambiguous in the v1 bundle."""
+    database_path = tmp_path / "legacy.sqlite"
+    _legacy_database(database_path)
+    connection = sqlite3.connect(database_path)
+    connection.execute(
+        'INSERT INTO "Provider" (id, name, "baseURL", disabled, "userId") VALUES (?, ?, ?, ?, ?)',
+        (11, "selected-provider", "https://second.example/v1", 0, 1),
+    )
+    connection.commit()
+    connection.close()
+
+    exporter = _exporter_module()
+
+    with pytest.raises(exporter.LegacyExportError, match="Duplicate provider name"):
+        exporter.export_legacy_catalog(database_path, "1", False, False)
+
+
+def test_rejects_alias_equal_to_another_selected_model_canonical_name(tmp_path: Path) -> None:
+    """An alias matching a canonical name makes the Task 1 import catalog ambiguous."""
+    database_path = tmp_path / "legacy.sqlite"
+    _legacy_database(database_path)
+    connection = sqlite3.connect(database_path)
+    connection.execute(
+        'INSERT INTO "ModelAlias" ("modelId", alias) VALUES (?, ?)',
+        (1000, "selected-direct-model"),
+    )
+    connection.commit()
+    connection.close()
+
+    exporter = _exporter_module()
+
+    with pytest.raises(exporter.LegacyExportError, match="Alias conflict"):
+        exporter.export_legacy_catalog(database_path, "1", False, False)
+
+
+def test_rejects_unsupported_legacy_provider_protocol(tmp_path: Path) -> None:
+    """A protocol outside the Task 1 enum would make the exported bundle unimportable."""
+    database_path = tmp_path / "legacy.sqlite"
+    _legacy_database(database_path)
+    connection = sqlite3.connect(database_path)
+    connection.execute('UPDATE "Provider" SET types = ? WHERE id = 10', ('["azure"]',))
+    connection.commit()
+    connection.close()
+
+    exporter = _exporter_module()
+
+    with pytest.raises(exporter.LegacyExportError, match="Unsupported provider protocol"):
+        exporter.export_legacy_catalog(database_path, "1", False, False)
+
+
+@pytest.mark.parametrize("non_finite_price", ["NaN", "Infinity"])
+def test_rejects_non_finite_legacy_prices(tmp_path: Path, non_finite_price: str) -> None:
+    """Non-finite prices cannot be represented by the Task 1 decimal price contract."""
+    database_path = tmp_path / "legacy.sqlite"
+    _legacy_database(database_path)
+    connection = sqlite3.connect(database_path)
+    connection.execute(
+        'UPDATE "Model" SET "inputTokenPrice" = ? WHERE id = 1001', (non_finite_price,)
+    )
+    connection.commit()
+    connection.close()
+
+    exporter = _exporter_module()
+
+    with pytest.raises(exporter.LegacyExportError, match="Invalid legacy token price"):
+        exporter.export_legacy_catalog(database_path, "1", False, False)
+
+
+def test_cli_reports_non_finite_legacy_price_without_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Malformed non-finite price data must return CLI exit 1 rather than a Decimal traceback."""
+    database_path = tmp_path / "legacy.sqlite"
+    output_path = tmp_path / "catalog.json"
+    _legacy_database(database_path)
+    connection = sqlite3.connect(database_path)
+    connection.execute('UPDATE "Model" SET "inputTokenPrice" = ? WHERE id = 1001', ("NaN",))
+    connection.commit()
+    connection.close()
+
+    result = _exporter_module().main(
+        [str(database_path), "--user", "1", "--output", str(output_path)]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "Invalid legacy token price" in captured.err
+    assert "Traceback" not in captured.err
+    assert not output_path.exists()
+
+
 def test_cli_writes_private_catalog_output_without_printing_secrets(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

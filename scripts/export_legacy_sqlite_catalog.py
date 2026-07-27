@@ -53,12 +53,14 @@ def export_legacy_catalog(
             user_id,
             include_unowned,
         )
-        providers = _providers(connection, tables, selected_provider_ids, include_secrets)
+        provider_entries = _providers(connection, tables, selected_provider_ids, include_secrets)
+        providers = [provider for _, provider in provider_entries]
+        _validate_unique_provider_names(providers)
         models = _models(
             connection,
             tables,
             selected_model_ids,
-            {str(provider["name"]): provider for provider in providers},
+            dict(provider_entries),
         )
         return {
             "format": "ai-gateway.catalog",
@@ -167,7 +169,7 @@ def _providers(
     tables: set[str],
     provider_ids: set[int],
     include_secrets: bool,
-) -> list[dict[str, object]]:
+) -> list[tuple[int, dict[str, object]]]:
     if not provider_ids:
         return []
     placeholders = ", ".join("?" for _ in provider_ids)
@@ -175,7 +177,13 @@ def _providers(
         f'SELECT * FROM "Provider" WHERE id IN ({placeholders}) ORDER BY name, id',
         tuple(sorted(provider_ids)),
     ).fetchall()
-    return [_provider(connection, tables, row, include_secrets) for row in rows]
+    return [(int(row["id"]), _provider(connection, tables, row, include_secrets)) for row in rows]
+
+
+def _validate_unique_provider_names(providers: list[dict[str, object]]) -> None:
+    names = [str(provider["name"]) for provider in providers]
+    if len(names) != len(set(names)):
+        raise LegacyExportError("Duplicate provider name in selected catalog")
 
 
 def _provider(
@@ -247,14 +255,17 @@ def _legacy_provider_types(provider: sqlite3.Row) -> list[str]:
 
 def _normalize_protocol(protocol: str) -> str:
     normalized = protocol.lower()
-    return "claude" if normalized == "anthropic" else normalized
+    normalized = "claude" if normalized == "anthropic" else normalized
+    if normalized not in {"openai", "claude", "gemini"}:
+        raise LegacyExportError(f"Unsupported provider protocol: {protocol}")
+    return normalized
 
 
 def _models(
     connection: sqlite3.Connection,
     tables: set[str],
     model_ids: set[int],
-    providers: dict[str, dict[str, object]],
+    providers: dict[int, dict[str, object]],
 ) -> list[dict[str, object]]:
     if not model_ids:
         return []
@@ -287,7 +298,7 @@ def _legacy_price(value: object) -> str:
         price = Decimal(str(value or 0)) / Decimal("10")
     except (InvalidOperation, ValueError) as error:
         raise LegacyExportError(f"Invalid legacy token price: {value!r}") from error
-    if price < 0:
+    if not price.is_finite() or price < 0:
         raise LegacyExportError(f"Invalid legacy token price: {value!r}")
     return format(price, "f").rstrip("0").rstrip(".") or "0"
 
@@ -307,9 +318,12 @@ def _model_aliases(
     for model in models:
         if model["alias"]:
             aliases[int(model["id"])].add(str(model["alias"]))
+    canonical_names = {str(model["name"]): int(model["id"]) for model in models}
     seen: dict[str, int] = {}
     for model_id, model_aliases in aliases.items():
         for alias in model_aliases:
+            if alias in canonical_names:
+                raise LegacyExportError(f"Alias conflict for {alias}")
             owner = seen.setdefault(alias, model_id)
             if owner != model_id:
                 raise LegacyExportError(f"Alias conflict for {alias}")
@@ -323,7 +337,7 @@ def _routes(
     connection: sqlite3.Connection,
     tables: set[str],
     model: sqlite3.Row,
-    providers: dict[str, dict[str, object]],
+    providers: dict[int, dict[str, object]],
 ) -> list[dict[str, object]]:
     if "ModelRoute" not in tables or not providers:
         return []
@@ -337,7 +351,7 @@ def _routes(
     ).fetchall()
     converted: list[dict[str, object]] = []
     for row in rows:
-        provider = providers.get(str(row["provider_name"]))
+        provider = providers.get(int(row["providerId"]))
         if provider is None:
             continue
         weight = int(row["weight"])
