@@ -131,6 +131,8 @@ class _RecoveredModel:
     canonical_name: str
     input_price_per_million: Decimal
     output_price_per_million: Decimal
+    cache_read_price_per_million: Decimal = Decimal("0")
+    cache_write_price_per_million: Decimal = Decimal("0")
 
 
 class BillingService:
@@ -157,7 +159,7 @@ class BillingService:
         idempotency_key: str,
         request_id: UUID | str | None = None,
         recovery: ReservationRecovery | None = None,
-        provider: "Provider | None" = None,
+        provider: Provider | None = None,
     ) -> BalanceReservation:
         if estimated_input_tokens < 0:
             raise ValueError("estimated_input_tokens must be nonnegative")
@@ -245,6 +247,8 @@ class BillingService:
                         "model": _model_name(model),
                         "input_price_per_million": str(model.input_price_per_million),
                         "output_price_per_million": str(model.output_price_per_million),
+                        "cache_read_price_per_million": str(_cache_read_price(model)),
+                        "cache_write_price_per_million": str(_cache_write_price(model)),
                         "reserved_amount": str(reserved_amount),
                         "reservation_fingerprint": fingerprint,
                     }
@@ -284,7 +288,7 @@ class BillingService:
         usage_source: UsageSource | None = None,
         expected_recovery_version: int | None = None,
         expected_recovery_claim: str | None = None,
-        provider: "Provider | None" = None,
+        provider: Provider | None = None,
     ) -> SettlementResult:
         normalized_key = _normalize_idempotency_key(
             idempotency_key,
@@ -670,6 +674,12 @@ class BillingService:
                     output_price_per_million=Decimal(
                         str(reservation.metadata_json["output_price_per_million"])
                     ),
+                    cache_read_price_per_million=_cache_price_or_zero(
+                        reservation.metadata_json.get("cache_read_price_per_million")
+                    ),
+                    cache_write_price_per_million=_cache_price_or_zero(
+                        reservation.metadata_json.get("cache_write_price_per_million")
+                    ),
                 )
                 await session.flush()
                 return recovery, model, claim_token
@@ -771,7 +781,7 @@ async def reserve_balance(
     request_id: UUID | str | None = None,
     default_max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     recovery: ReservationRecovery | None = None,
-    provider: "Provider | None" = None,
+    provider: Provider | None = None,
 ) -> BalanceReservation:
     return await BillingService(
         mutation_session_factory_for(session),
@@ -797,7 +807,7 @@ async def settle_request(
     usage: CanonicalUsage | None = None,
     cost: Decimal | None = None,
     usage_source: UsageSource | None = None,
-    provider: "Provider | None" = None,
+    provider: Provider | None = None,
 ) -> SettlementResult:
     return await BillingService(mutation_session_factory_for(session)).settle_request(
         reservation_id=reservation_id,
@@ -937,7 +947,7 @@ def _settlement_cost(
     model: PricedModel | None,
     usage: CanonicalUsage | None,
     cost: Decimal | None,
-    provider: "Provider | None" = None,
+    provider: Provider | None = None,
 ) -> Decimal:
     if cost is not None:
         if model is not None:
@@ -1015,6 +1025,8 @@ def _recovery_metadata(
         ),
         "recovery_input_tokens": recovery.usage.input_tokens,
         "recovery_output_tokens": recovery.usage.output_tokens,
+        "recovery_cache_read_tokens": recovery.usage.cache_read_tokens,
+        "recovery_cache_write_tokens": recovery.usage.cache_write_tokens,
         "recovery_usage_source": recovery.usage_source.value,
         "recovery_expires_at": expires_at.isoformat(timespec="microseconds"),
     }
@@ -1034,6 +1046,8 @@ def _reservation_recovery(metadata: dict[str, Any]) -> ReservationRecovery | Non
         settlement_key = str(metadata["recovery_settlement_key"])
         input_tokens = int(metadata["recovery_input_tokens"])
         output_tokens = int(metadata["recovery_output_tokens"])
+        cache_read_tokens = int(metadata.get("recovery_cache_read_tokens", 0))
+        cache_write_tokens = int(metadata.get("recovery_cache_write_tokens", 0))
         usage_source = UsageSource(str(metadata["recovery_usage_source"]))
         expires_at = datetime.fromisoformat(str(metadata["recovery_expires_at"]))
         version = int(metadata.get("recovery_version", 0))
@@ -1041,13 +1055,20 @@ def _reservation_recovery(metadata: dict[str, Any]) -> ReservationRecovery | Non
         cost = Decimal(str(raw_cost)) if raw_cost is not None else None
     except (KeyError, TypeError, ValueError):
         return None
-    if input_tokens < 0 or output_tokens < 0 or version < 0 or (cost is not None and cost < 0):
+    if (
+        input_tokens < 0
+        or output_tokens < 0
+        or cache_read_tokens < 0
+        or cache_write_tokens < 0
+        or version < 0
+        or (cost is not None and cost < 0)
+    ):
         return None
     if expires_at.tzinfo is not None:
         expires_at = expires_at.astimezone(UTC).replace(tzinfo=None)
     return ReservationRecovery(
         settlement_key,
-        CanonicalUsage(input_tokens, output_tokens),
+        CanonicalUsage(input_tokens, output_tokens, cache_read_tokens, cache_write_tokens),
         usage_source,
         expires_at,
         cost,
@@ -1073,6 +1094,8 @@ def _reservation_fingerprint(
             "model": _model_name(model),
             "input_price_per_million": str(model.input_price_per_million),
             "output_price_per_million": str(model.output_price_per_million),
+            "cache_read_price_per_million": str(_cache_read_price(model)),
+            "cache_write_price_per_million": str(_cache_write_price(model)),
             "estimated_input_tokens": estimated_input_tokens,
             "max_output_tokens": max_output_tokens,
             "reserved_amount": str(reserved_amount),
@@ -1093,6 +1116,8 @@ def _settlement_fingerprint(
             "actual_cost": str(actual_cost),
             "input_tokens": usage.input_tokens if usage is not None else None,
             "output_tokens": usage.output_tokens if usage is not None else None,
+            "cache_read_tokens": usage.cache_read_tokens if usage is not None else None,
+            "cache_write_tokens": usage.cache_write_tokens if usage is not None else None,
             "usage_source": usage_source.value if usage_source is not None else None,
         }
     )
@@ -1104,6 +1129,20 @@ def _fingerprint(value: dict[str, Any]) -> str:
 
 def _model_name(model: PricedModel) -> str:
     return str(getattr(model, "canonical_name", type(model).__qualname__))
+
+
+def _cache_price_or_zero(value: object) -> Decimal:
+    if value is None or value == "None":
+        return Decimal("0")
+    return Decimal(str(value))
+
+
+def _cache_read_price(model: PricedModel) -> Decimal:
+    return _cache_price_or_zero(getattr(model, "cache_read_price_per_million", None))
+
+
+def _cache_write_price(model: PricedModel) -> Decimal:
+    return _cache_price_or_zero(getattr(model, "cache_write_price_per_million", None))
 
 
 def _normalize_idempotency_key(value: str, *, suffix_length: int = 0) -> str:

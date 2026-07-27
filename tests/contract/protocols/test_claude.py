@@ -5,7 +5,13 @@ import pytest
 from ai_gateway.protocols.base import UnsupportedFeatureError
 from ai_gateway.protocols.claude import ClaudeAdapter
 from ai_gateway.protocols.openai import OpenAIAdapter
-from ai_gateway.protocols.types import CanonicalMessage, CanonicalRequest, TextPart, ToolResultPart
+from ai_gateway.protocols.types import (
+    CanonicalMessage,
+    CanonicalRequest,
+    CanonicalUsage,
+    TextPart,
+    ToolResultPart,
+)
 
 
 def test_claude_golden_request_round_trips(load_fixture) -> None:
@@ -60,6 +66,21 @@ def test_claude_golden_response_and_stream(load_fixture, load_bytes) -> None:
     decoder = adapter.create_stream_decoder()
     decoded = tuple(item for frame in encoded for item in decoder.decode(frame))
     assert next(event for event in decoded if event.type == "content_delta").text == "Hello"
+
+
+def test_claude_response_preserves_mutually_exclusive_cache_usage(load_fixture) -> None:
+    payload = load_fixture("claude", "response.json")
+    payload["usage"] = {
+        "input_tokens": 6,
+        "output_tokens": 7,
+        "cache_read_input_tokens": 10,
+        "cache_creation_input_tokens": 4,
+    }
+
+    response = ClaudeAdapter().decode_response(payload)
+
+    assert response.usage == CanonicalUsage(6, 7, 10, 4)
+    assert ClaudeAdapter().encode_response(response)["usage"] == payload["usage"]
 
 
 def test_impossible_tool_result_conversion_is_422_and_names_field() -> None:

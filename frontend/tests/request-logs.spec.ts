@@ -37,6 +37,8 @@ const firstLog: RequestLogSummary = {
   http_status: 502,
   prompt_tokens: 1234,
   completion_tokens: 56,
+  cache_read_tokens: 789,
+  cache_write_tokens: 123,
   usage_source: 'provider',
   cost: '0.000000019876543210',
   latency_ms: 2430,
@@ -229,6 +231,7 @@ describe('请求日志搜索与详情检查', () => {
     expect(row.text()).toContain('http / 是')
     expect(row.text()).toContain(`¥${firstLog.cost}`)
     expect(row.text()).toContain('1234 / 56')
+    expect(row.text()).toContain('缓存 789 / 123')
     wrapper.unmount()
   })
 
@@ -253,6 +256,8 @@ describe('请求日志搜索与详情检查', () => {
     expect(detailCalls).toBe(1)
     expect(document.body.textContent).toContain('敏感字段已由服务端脱敏')
     expect(document.body.textContent).toContain('[REDACTED]')
+    expect(document.body.textContent).toContain('缓存读取 / 写入令牌')
+    expect(document.body.textContent).toContain('789 / 123')
     expect(document.body.textContent).toContain('<script>window.__unsafe = true</script>')
     expect(document.body.querySelector('script')).toBeNull()
     const requestDetails = document.body.querySelector('[data-test="request-json-section"]')

@@ -196,6 +196,8 @@ async def test_request_lifecycle_writes_started_completion_and_redacted_details(
             http_status=200,
             prompt_tokens=1250,
             completion_tokens=375,
+            cache_read_tokens=1000,
+            cache_write_tokens=250,
             usage_source=UsageSource.PROVIDER,
             cost=Decimal("0.00041250"),
             latency_ms=321,
@@ -214,6 +216,8 @@ async def test_request_lifecycle_writes_started_completion_and_redacted_details(
     assert started.http_status == 200
     assert started.prompt_tokens == 1250
     assert started.completion_tokens == 375
+    assert started.cache_read_tokens == 1000
+    assert started.cache_write_tokens == 250
     assert started.usage_source is UsageSource.PROVIDER
     assert started.cost == Decimal("0.00041250")
     assert started.latency_ms == 321
@@ -608,6 +612,8 @@ async def test_admin_list_filters_cursor_and_detail_are_safe(
         assert first_body["next_cursor"] is not None
         assert all("request_detail" not in item for item in first_body["items"])
         assert all("response_detail" not in item for item in first_body["items"])
+        assert all("cache_read_tokens" in item for item in first_body["items"])
+        assert all("cache_write_tokens" in item for item in first_body["items"])
 
         second = await client.get(
             "/admin/request-logs",

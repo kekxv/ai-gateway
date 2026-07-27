@@ -89,6 +89,8 @@ def test_schema_contains_exact_tables_and_columns() -> None:
             "enabled",
             "input_price_per_million",
             "output_price_per_million",
+            "cache_read_price_per_million",
+            "cache_write_price_per_million",
             "price_multiplier",
             "routing_strategy",
             "created_at",
@@ -136,6 +138,8 @@ def test_schema_contains_exact_tables_and_columns() -> None:
             "http_status",
             "prompt_tokens",
             "completion_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
             "usage_source",
             "cost",
             "latency_ms",
@@ -196,6 +200,8 @@ async def test_mysql_reflection_preserves_security_and_decimal_column_types(
         ("ledger_entries", "balance_after"),
         ("models", "input_price_per_million"),
         ("models", "output_price_per_million"),
+        ("models", "cache_read_price_per_million"),
+        ("models", "cache_write_price_per_million"),
         ("request_logs", "cost"),
     ):
         column_type = reflected[table][column]

@@ -71,7 +71,7 @@ class AuditLogCleanupScheduler:
                 delete(RequestLogDetail).where(RequestLogDetail.created_at < cutoff)
             )
             await session.commit()
-            deleted_count = result.rowcount
+            deleted_count = int(getattr(result, "rowcount", 0))
 
         if deleted_count > 0:
             logger.info(

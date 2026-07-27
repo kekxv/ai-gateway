@@ -1,18 +1,5 @@
-import pytest
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
-
-
-@pytest.mark.asyncio
-async def test_migration_0006_can_be_applied(session: AsyncSession):
-    """Verify migration 0006 can be applied successfully."""
-    # Check current version is 0005
-    result = await session.execute(text("SELECT version_num FROM alembic_version"))
-    current_version = result.scalar()
-    assert current_version == "0005", f"Expected version 0005, got {current_version}"
-
-    # Migration will be applied by the test fixture if configured,
-    # or we can verify the migration file exists and is valid
+def test_migration_0006_declares_expected_revision_chain():
+    """Verify migration 0006 still follows migration 0005."""
     from pathlib import Path
     migration_file = Path("migrations/versions/0006_add_price_multipliers.py")
     assert migration_file.exists(), "Migration file should exist"
@@ -26,8 +13,7 @@ async def test_migration_0006_can_be_applied(session: AsyncSession):
     assert "ck_models_price_multiplier_range" in content
 
 
-@pytest.mark.asyncio
-async def test_migration_0006_has_correct_structure():
+def test_migration_0006_has_correct_structure():
     """Verify migration file has correct structure."""
     from pathlib import Path
     migration_file = Path("migrations/versions/0006_add_price_multipliers.py")

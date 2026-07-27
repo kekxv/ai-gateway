@@ -57,6 +57,8 @@ async def create_model(payload: ModelCreate, session: Session, _: AdminUser) -> 
         display_name=payload.display_name,
         input_price_per_million=payload.input_price_per_million,
         output_price_per_million=payload.output_price_per_million,
+        cache_read_price_per_million=payload.cache_read_price_per_million,
+        cache_write_price_per_million=payload.cache_write_price_per_million,
         enabled=payload.enabled,
         routing_strategy=payload.routing_strategy,
         price_multiplier=payload.price_multiplier,
@@ -116,6 +118,10 @@ async def update_model(
         model.input_price_per_million = payload.input_price_per_million
     if payload.output_price_per_million is not None:
         model.output_price_per_million = payload.output_price_per_million
+    if payload.cache_read_price_per_million is not None:
+        model.cache_read_price_per_million = payload.cache_read_price_per_million
+    if payload.cache_write_price_per_million is not None:
+        model.cache_write_price_per_million = payload.cache_write_price_per_million
     if payload.enabled is not None:
         model.enabled = payload.enabled
     if payload.routing_strategy is not None:
@@ -376,6 +382,8 @@ def _model_response(model: Model) -> ModelResponse:
         display_name=model.display_name,
         input_price_per_million=model.input_price_per_million,
         output_price_per_million=model.output_price_per_million,
+        cache_read_price_per_million=model.cache_read_price_per_million,
+        cache_write_price_per_million=model.cache_write_price_per_million,
         enabled=model.enabled,
         aliases=[
             ModelAliasResponse(id=alias.id, alias=alias.alias, enabled=alias.enabled)

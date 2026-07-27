@@ -1053,24 +1053,41 @@ def _decode_usage(value: Any) -> CanonicalUsage | None:
     if value is None:
         return None
     usage = require_object(value, "usageMetadata")
-    input_tokens = nonnegative_int(
+    total_input = nonnegative_int(
         usage.get("promptTokenCount", usage.get("prompt_token_count", 0)),
         "usageMetadata.promptTokenCount",
     )
+    cache_read_tokens = nonnegative_int(
+        usage.get(
+            "cachedContentTokenCount",
+            usage.get("cached_content_token_count", 0),
+        ),
+        "usageMetadata.cachedContentTokenCount",
+    )
+    input_tokens = total_input - cache_read_tokens
+    if input_tokens < 0:
+        raise UnsupportedFeatureError(
+            "usageMetadata.promptTokenCount",
+            "cache token details exceed total input tokens",
+        )
     output_tokens = nonnegative_int(
         usage.get("candidatesTokenCount", usage.get("candidates_token_count", 0)),
         "usageMetadata.candidatesTokenCount",
     )
-    return CanonicalUsage(input_tokens=input_tokens, output_tokens=output_tokens)
+    return CanonicalUsage(input_tokens, output_tokens, cache_read_tokens)
 
 
 def _encode_usage(usage: CanonicalUsage) -> dict[str, int]:
     validate_usage(usage)
-    return {
-        "promptTokenCount": usage.input_tokens,
+    total_input = usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens
+    encoded = {
+        "promptTokenCount": total_input,
         "candidatesTokenCount": usage.output_tokens,
-        "totalTokenCount": usage.input_tokens + usage.output_tokens,
+        "totalTokenCount": total_input + usage.output_tokens,
     }
+    if usage.cache_read_tokens:
+        encoded["cachedContentTokenCount"] = usage.cache_read_tokens
+    return encoded
 
 
 def _decode_finish_reason(value: Any) -> FinishReason:

@@ -341,7 +341,10 @@ onBeforeUnmount(() => {
                   <span>{{ log.http_status ?? '—' }}</span>
                 </div>
               </td>
-              <td>{{ log.prompt_tokens }} / {{ log.completion_tokens }}</td>
+              <td>
+                <div>{{ log.prompt_tokens }} / {{ log.completion_tokens }}</div>
+                <small>缓存 {{ log.cache_read_tokens }} / {{ log.cache_write_tokens }}</small>
+              </td>
               <td class="exact-value">{{ formatMoney(log.cost) }}</td>
               <td>{{ formatDuration(log.latency_ms) }} / {{ formatDuration(log.first_token_ms) }}</td>
               <td>{{ log.error_code ?? '—' }}</td>

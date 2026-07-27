@@ -8,11 +8,46 @@ import pytest
 from pydantic import ValidationError
 
 from ai_gateway.catalog.schemas import (
+    ModelCreate,
     ModelResponse,
     ModelUpdate,
     ProviderResponse,
     ProviderUpdate,
 )
+
+
+class TestModelCachePrices:
+    def test_model_create_defaults_cache_prices_to_zero(self) -> None:
+        model = ModelCreate(canonical_name="test-model", display_name="Test Model")
+
+        assert model.cache_read_price_per_million == Decimal("0")
+        assert model.cache_write_price_per_million == Decimal("0")
+
+    def test_model_update_accepts_cache_prices(self) -> None:
+        update = ModelUpdate(
+            cache_read_price_per_million=Decimal("1.25"),
+            cache_write_price_per_million=Decimal("2.50"),
+        )
+
+        assert update.cache_read_price_per_million == Decimal("1.25")
+        assert update.cache_write_price_per_million == Decimal("2.50")
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("cache_read_price_per_million", Decimal("-0.00000001")),
+            ("cache_read_price_per_million", Decimal("0.000000001")),
+            ("cache_write_price_per_million", Decimal("-1")),
+            ("cache_write_price_per_million", Decimal("1.123456789")),
+        ],
+    )
+    def test_model_cache_prices_use_catalog_price_validation(
+        self,
+        field: str,
+        value: Decimal,
+    ) -> None:
+        with pytest.raises(ValidationError):
+            ModelUpdate(**{field: value})
 
 
 class TestProviderResponsePriceMultiplier:
@@ -63,6 +98,8 @@ class TestModelResponsePriceMultiplier:
             display_name="Test Model",
             input_price_per_million=Decimal("10.00"),
             output_price_per_million=Decimal("20.00"),
+            cache_read_price_per_million=Decimal("5.00"),
+            cache_write_price_per_million=Decimal("8.00"),
             enabled=True,
             aliases=[],
             routing_strategy="weighted_random",
@@ -72,6 +109,8 @@ class TestModelResponsePriceMultiplier:
         )
         assert hasattr(model, "price_multiplier")
         assert model.price_multiplier == Decimal("2.00")
+        assert model.cache_read_price_per_million == Decimal("5.00")
+        assert model.cache_write_price_per_million == Decimal("8.00")
 
     def test_model_response_requires_price_multiplier(self) -> None:
         """ModelResponse must require price_multiplier (no default)."""
@@ -85,6 +124,8 @@ class TestModelResponsePriceMultiplier:
                 display_name="Test Model",
                 input_price_per_million=Decimal("10.00"),
                 output_price_per_million=Decimal("20.00"),
+                cache_read_price_per_million=Decimal("5.00"),
+                cache_write_price_per_million=Decimal("8.00"),
                 enabled=True,
                 aliases=[],
                 routing_strategy="weighted_random",

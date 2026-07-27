@@ -98,6 +98,21 @@ def test_openai_encode_response_uses_native_finish_reason(load_fixture) -> None:
     assert encoded["usage"] == {"prompt_tokens": 42, "completion_tokens": 7, "total_tokens": 49}
 
 
+def test_openai_response_normalizes_and_reencodes_cache_usage(load_fixture) -> None:
+    payload = load_fixture("openai", "response.json")
+    payload["usage"] = {
+        "prompt_tokens": 100,
+        "completion_tokens": 7,
+        "total_tokens": 107,
+        "prompt_tokens_details": {"cached_tokens": 10, "cache_write_tokens": 4},
+    }
+
+    response = OpenAIAdapter().decode_response(payload)
+
+    assert response.usage == CanonicalUsage(86, 7, 10, 4)
+    assert OpenAIAdapter().encode_response(response)["usage"] == payload["usage"]
+
+
 @pytest.mark.parametrize(
     ("native", "canonical"),
     [

@@ -34,6 +34,8 @@ const modelFixture: ModelResponse = {
   display_name: 'GPT 4.1',
   input_price_per_million: '2.00000000',
   output_price_per_million: '8.00000000',
+  cache_read_price_per_million: '0.50000000',
+  cache_write_price_per_million: '2.50000000',
   price_multiplier: 1.0,
   enabled: true,
   aliases: [
@@ -52,6 +54,8 @@ const scientificZeroFixture: ModelResponse = {
   display_name: '零价格模型',
   input_price_per_million: '0E-8',
   output_price_per_million: '0E-8',
+  cache_read_price_per_million: '0E-8',
+  cache_write_price_per_million: '0E-8',
   aliases: [],
 }
 
@@ -152,6 +156,8 @@ describe('模型与别名管理', () => {
     await wrapper.get('[data-test="model-display-name"]').setValue('GPT 4.1')
     await wrapper.get('[data-test="model-input-price"]').setValue('2.00000000')
     await wrapper.get('[data-test="model-output-price"]').setValue('8.00000000')
+    await wrapper.get('[data-test="model-cache-read-price"]').setValue('0.50000000')
+    await wrapper.get('[data-test="model-cache-write-price"]').setValue('2.50000000')
     await wrapper.get('[data-test="add-model-alias"]').trigger('click')
     await wrapper.get('[data-test="model-alias-0"]').setValue('fast-chat')
     await wrapper.get('[data-test="model-alias-enabled-0"]').trigger('click')
@@ -162,11 +168,80 @@ describe('模型与别名管理', () => {
       display_name: 'GPT 4.1',
       input_price_per_million: '2.00000000',
       output_price_per_million: '8.00000000',
+      cache_read_price_per_million: '0.50000000',
+      cache_write_price_per_million: '2.50000000',
       price_multiplier: 1.0,
       enabled: true,
       aliases: [{ alias: 'fast-chat', enabled: false }],
       routing_strategy: 'weighted_random',
     })
+    wrapper.unmount()
+  })
+
+  it('在模型卡片展示缓存读写价格', async () => {
+    useCatalog()
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('缓存读取价格：')
+    expect(wrapper.text()).toContain('缓存写入价格：')
+    expect(wrapper.text()).toContain('¥0.50000000')
+    expect(wrapper.text()).toContain('¥2.50000000')
+    wrapper.unmount()
+  })
+
+  it('拒绝非法缓存价格并聚焦对应输入框', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ModelFormDrawer, {
+      props: { modelValue: true, model: null, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="model-canonical-name"]').setValue('cache-priced')
+    await wrapper.get('[data-test="model-display-name"]').setValue('缓存价格')
+    const cacheReadPrice = wrapper.get('[data-test="model-cache-read-price"]')
+    await cacheReadPrice.setValue('-1')
+    await wrapper.get('[data-test="model-submit"]').trigger('click')
+    await waitForFormErrors()
+
+    expect(
+      wrapper.get('[data-validation="model-cache-read-price"] .el-form-item__error').text(),
+    ).toContain('最多 12 位整数和 8 位小数')
+    expect(document.activeElement).toBe(cacheReadPrice.element)
+    expect(onSubmit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('编辑时只提交变化的缓存价格，并规范等价科学计数值', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ModelFormDrawer, {
+      props: {
+        modelValue: true,
+        model: {
+          ...modelFixture,
+          cache_read_price_per_million: '5E-1',
+          cache_write_price_per_million: '2.5E+0',
+        },
+        submitting: false,
+        onSubmit,
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="model-cache-read-price"]').element).toHaveProperty(
+      'value',
+      '0.5',
+    )
+    expect(wrapper.get('[data-test="model-cache-write-price"]').element).toHaveProperty(
+      'value',
+      '2.5',
+    )
+    await wrapper.get('[data-test="model-cache-read-price"]').setValue('0.75000000')
+    await wrapper.get('[data-test="model-submit"]').trigger('click')
+
+    expect(onSubmit).toHaveBeenCalledWith({ cache_read_price_per_million: '0.75000000' })
     wrapper.unmount()
   })
 
@@ -185,6 +260,8 @@ describe('模型与别名管理', () => {
 
     expect(wrapper.get('[data-test="model-input-price"]').element).toHaveProperty('value', '0')
     expect(wrapper.get('[data-test="model-output-price"]').element).toHaveProperty('value', '0')
+    expect(wrapper.get('[data-test="model-cache-read-price"]').element).toHaveProperty('value', '0')
+    expect(wrapper.get('[data-test="model-cache-write-price"]').element).toHaveProperty('value', '0')
     await wrapper.get('[data-test="model-display-name"]').setValue('免费模型')
     await wrapper.get('[data-test="model-submit"]').trigger('click')
 

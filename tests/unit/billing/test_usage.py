@@ -9,6 +9,7 @@ from ai_gateway.billing.usage import (
     resolve_usage,
 )
 from ai_gateway.core.enums import Protocol, UsageSource
+from ai_gateway.protocols.base import UnsupportedFeatureError
 from ai_gateway.protocols.types import (
     CanonicalMessage,
     CanonicalRequest,
@@ -37,6 +38,64 @@ from ai_gateway.protocols.types import (
 )
 def test_extracts_provider_usage(protocol: Protocol, payload: dict[str, object]) -> None:
     assert extract_provider_usage(protocol, payload) == CanonicalUsage(17, 5)
+
+
+@pytest.mark.parametrize(
+    ("protocol", "payload", "expected"),
+    [
+        (
+            Protocol.OPENAI,
+            {
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 7,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 10,
+                        "cache_write_tokens": 4,
+                    },
+                }
+            },
+            (86, 7, 10, 4),
+        ),
+        (
+            Protocol.CLAUDE,
+            {
+                "usage": {
+                    "input_tokens": 6,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 10,
+                    "cache_creation_input_tokens": 4,
+                }
+            },
+            (6, 7, 10, 4),
+        ),
+        (
+            Protocol.GEMINI,
+            {
+                "usageMetadata": {
+                    "promptTokenCount": 100,
+                    "candidatesTokenCount": 7,
+                    "cachedContentTokenCount": 10,
+                }
+            },
+            (90, 7, 10, 0),
+        ),
+    ],
+)
+def test_extracts_mutually_exclusive_cache_usage(
+    protocol: Protocol,
+    payload: dict[str, object],
+    expected: tuple[int, int, int, int],
+) -> None:
+    usage = extract_provider_usage(protocol, payload)
+
+    assert usage is not None
+    assert (
+        usage.input_tokens,
+        usage.output_tokens,
+        getattr(usage, "cache_read_tokens", None),
+        getattr(usage, "cache_write_tokens", None),
+    ) == expected
 
 
 def test_estimate_request_tokens_counts_text_and_tool_schema_json() -> None:
@@ -116,6 +175,65 @@ def test_extracts_usage_for_each_native_openai_operation(
     expected: CanonicalUsage,
 ) -> None:
     assert extract_native_openai_usage(operation, payload) == expected
+
+
+def test_extracts_native_openai_responses_cache_usage() -> None:
+    payload = {
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "input_tokens_details": {
+                "cached_tokens": 10,
+                "cache_write_tokens": 4,
+            },
+        }
+    }
+
+    usage = extract_native_openai_usage("responses", payload)
+
+    assert usage is not None
+    assert (
+        usage.input_tokens,
+        usage.output_tokens,
+        getattr(usage, "cache_read_tokens", None),
+        getattr(usage, "cache_write_tokens", None),
+    ) == (86, 20, 10, 4)
+
+
+@pytest.mark.parametrize(
+    ("protocol", "payload"),
+    [
+        (
+            Protocol.OPENAI,
+            {
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 1,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 8,
+                        "cache_write_tokens": 4,
+                    },
+                }
+            },
+        ),
+        (
+            Protocol.GEMINI,
+            {
+                "usageMetadata": {
+                    "promptTokenCount": 5,
+                    "candidatesTokenCount": 1,
+                    "cachedContentTokenCount": 6,
+                }
+            },
+        ),
+    ],
+)
+def test_rejects_cache_details_larger_than_total_input(
+    protocol: Protocol,
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(UnsupportedFeatureError, match="cache token details exceed"):
+        extract_provider_usage(protocol, payload)
 
 
 @pytest.mark.parametrize(

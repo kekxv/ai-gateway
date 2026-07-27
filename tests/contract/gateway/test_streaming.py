@@ -31,7 +31,7 @@ from ai_gateway.protocols.base import decode_sse
 from ai_gateway.protocols.registry import get_adapter
 from ai_gateway.protocols.types import CanonicalUsage, StreamEvent
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate
-from ai_gateway.transport.sse import GatewayContext, SSEDecoder, stream_gateway_response
+from ai_gateway.transport.sse import GatewayContext, SSEDecoder, SSEEvent, stream_gateway_response
 
 RAW_KEY = "sk-gw-stream-key-123456789"
 
@@ -566,6 +566,110 @@ def test_provider_usage_never_regresses_component_wise() -> None:
     context.observe(StreamEvent(type="usage", usage=CanonicalUsage(12, 6)))
 
     assert context.observed_usage == CanonicalUsage(12, 7)
+    assert context.provider_usage_complete
+
+
+def test_provider_cache_usage_never_regresses_component_wise() -> None:
+    context = GatewayContext(Protocol.OPENAI, Protocol.CLAUDE)
+
+    context.observe(StreamEvent(type="usage", usage=CanonicalUsage(10, 5, 7, 3)))
+    context.observe(StreamEvent(type="usage", usage=CanonicalUsage(8, 7, 9, 2)))
+    context.observe(StreamEvent(type="usage", usage=CanonicalUsage(12, 6, 8, 4)))
+
+    assert context.observed_usage == CanonicalUsage(12, 7, 9, 4)
+    assert context.estimated_usage() == CanonicalUsage(12, 0, 9, 4)
+
+
+@pytest.mark.parametrize(
+    ("protocol", "payload", "expected"),
+    [
+        (
+            Protocol.OPENAI,
+            {
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 7,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 10,
+                        "cache_write_tokens": 4,
+                    },
+                },
+                "choices": [],
+            },
+            CanonicalUsage(86, 7, 10, 4),
+        ),
+        (
+            Protocol.GEMINI,
+            {
+                "usageMetadata": {
+                    "promptTokenCount": 100,
+                    "candidatesTokenCount": 7,
+                    "cachedContentTokenCount": 10,
+                },
+                "candidates": [],
+            },
+            CanonicalUsage(90, 7, 10),
+        ),
+    ],
+)
+def test_same_protocol_passthrough_observes_cache_usage(
+    protocol: Protocol,
+    payload: dict[str, object],
+    expected: CanonicalUsage,
+) -> None:
+    context = GatewayContext(protocol, protocol)
+
+    context.observe_passthrough(SSEEvent(data=orjson.dumps(payload), raw=b""))
+
+    assert context.observed_usage == expected
+    assert context.provider_usage_complete
+
+
+def test_native_responses_passthrough_observes_cache_usage() -> None:
+    context = GatewayContext(
+        Protocol.OPENAI,
+        Protocol.OPENAI,
+        openai_operation="responses",
+        native_openai_passthrough=True,
+    )
+    payload = {
+        "type": "response.completed",
+        "response": {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 7,
+                "input_tokens_details": {
+                    "cached_tokens": 10,
+                    "cache_write_tokens": 4,
+                },
+            }
+        },
+    }
+
+    context.observe_passthrough(SSEEvent(data=orjson.dumps(payload), raw=b""))
+
+    assert context.observed_usage == CanonicalUsage(86, 7, 10, 4)
+    assert context.provider_usage_complete
+
+
+def test_claude_passthrough_combines_cache_input_with_final_output_usage() -> None:
+    context = GatewayContext(Protocol.CLAUDE, Protocol.CLAUDE)
+    start = {
+        "type": "message_start",
+        "message": {
+            "usage": {
+                "input_tokens": 6,
+                "cache_read_input_tokens": 10,
+                "cache_creation_input_tokens": 4,
+            }
+        },
+    }
+    end = {"type": "message_delta", "usage": {"output_tokens": 7}}
+
+    context.observe_passthrough(SSEEvent(data=orjson.dumps(start), raw=b""))
+    context.observe_passthrough(SSEEvent(data=orjson.dumps(end), raw=b""))
+
+    assert context.observed_usage == CanonicalUsage(6, 7, 10, 4)
     assert context.provider_usage_complete
 
 

@@ -209,7 +209,14 @@ def _response(protocol: Protocol, model: str) -> dict[str, Any]:
                     "finish_reason": "stop",
                 }
             ],
-            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 2,
+                "prompt_tokens_details": {
+                    "cached_tokens": 1,
+                    "cache_write_tokens": 1,
+                },
+            },
         }
     if protocol is Protocol.CLAUDE:
         return {
@@ -220,7 +227,12 @@ def _response(protocol: Protocol, model: str) -> dict[str, Any]:
             "content": [{"type": "text", "text": "world"}],
             "stop_reason": "end_turn",
             "stop_sequence": None,
-            "usage": {"input_tokens": 3, "output_tokens": 2},
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 2,
+                "cache_read_input_tokens": 1,
+                "cache_creation_input_tokens": 1,
+            },
         }
     return {
         "modelVersion": model,
@@ -232,7 +244,11 @@ def _response(protocol: Protocol, model: str) -> dict[str, Any]:
                 "finishReason": "STOP",
             }
         ],
-        "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 2},
+        "usageMetadata": {
+            "promptTokenCount": 4,
+            "candidatesTokenCount": 2,
+            "cachedContentTokenCount": 1,
+        },
     }
 
 
@@ -322,6 +338,8 @@ async def test_all_protocol_pairs_bind_alias_to_selected_upstream_model(
     assert audit.completed is not None
     assert audit.completed.prompt_tokens == 3
     assert audit.completed.completion_tokens == 2
+    assert audit.completed.cache_read_tokens == 1
+    assert audit.completed.cache_write_tokens == (0 if outbound is Protocol.GEMINI else 1)
     assert billing.settlements == 1
 
 

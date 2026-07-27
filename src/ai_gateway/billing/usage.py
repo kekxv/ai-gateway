@@ -10,7 +10,7 @@ import tiktoken
 from tiktoken import Encoding
 
 from ai_gateway.core.enums import Protocol, UsageSource
-from ai_gateway.protocols.base import nonnegative_int, thaw
+from ai_gateway.protocols.base import UnsupportedFeatureError, nonnegative_int, thaw
 from ai_gateway.protocols.types import (
     CanonicalRequest,
     CanonicalUsage,
@@ -37,9 +37,18 @@ def extract_native_openai_usage(
     if operation == "responses":
         if not _has_fields(usage, "input_tokens", "output_tokens"):
             return None
+        total_input = nonnegative_int(usage["input_tokens"], "usage.input_tokens")
+        cache_read, cache_write = _openai_cache_tokens(usage, "input_tokens_details")
         return CanonicalUsage(
-            input_tokens=nonnegative_int(usage["input_tokens"], "usage.input_tokens"),
+            input_tokens=_exclusive_input(
+                total_input,
+                cache_read,
+                cache_write,
+                "usage.input_tokens",
+            ),
             output_tokens=nonnegative_int(usage["output_tokens"], "usage.output_tokens"),
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
         )
     if operation == "embeddings":
         if "prompt_tokens" not in usage:
@@ -50,9 +59,13 @@ def extract_native_openai_usage(
         )
     if not _has_fields(usage, "prompt_tokens", "completion_tokens"):
         return None
+    total_input = nonnegative_int(usage["prompt_tokens"], "usage.prompt_tokens")
+    cache_read, cache_write = _openai_cache_tokens(usage, "prompt_tokens_details")
     return CanonicalUsage(
-        input_tokens=nonnegative_int(usage["prompt_tokens"], "usage.prompt_tokens"),
+        input_tokens=_exclusive_input(total_input, cache_read, cache_write, "usage.prompt_tokens"),
         output_tokens=nonnegative_int(usage["completion_tokens"], "usage.completion_tokens"),
+        cache_read_tokens=cache_read,
+        cache_write_tokens=cache_write,
     )
 
 
@@ -65,9 +78,18 @@ def extract_provider_usage(
         usage = _mapping(payload.get("usage"))
         if usage is None or not _has_fields(usage, "prompt_tokens", "completion_tokens"):
             return None
+        total_input = nonnegative_int(usage["prompt_tokens"], "usage.prompt_tokens")
+        cache_read, cache_write = _openai_cache_tokens(usage, "prompt_tokens_details")
         return CanonicalUsage(
-            input_tokens=nonnegative_int(usage["prompt_tokens"], "usage.prompt_tokens"),
+            input_tokens=_exclusive_input(
+                total_input,
+                cache_read,
+                cache_write,
+                "usage.prompt_tokens",
+            ),
             output_tokens=nonnegative_int(usage["completion_tokens"], "usage.completion_tokens"),
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
         )
     if selected_protocol is Protocol.CLAUDE:
         usage = _mapping(payload.get("usage"))
@@ -76,6 +98,14 @@ def extract_provider_usage(
         return CanonicalUsage(
             input_tokens=nonnegative_int(usage["input_tokens"], "usage.input_tokens"),
             output_tokens=nonnegative_int(usage["output_tokens"], "usage.output_tokens"),
+            cache_read_tokens=nonnegative_int(
+                usage.get("cache_read_input_tokens", 0),
+                "usage.cache_read_input_tokens",
+            ),
+            cache_write_tokens=nonnegative_int(
+                usage.get("cache_creation_input_tokens", 0),
+                "usage.cache_creation_input_tokens",
+            ),
         )
 
     usage = _mapping(payload.get("usageMetadata"))
@@ -85,15 +115,28 @@ def extract_provider_usage(
     output_key = _first_present(usage, "candidatesTokenCount", "candidates_token_count")
     if input_key is None or output_key is None:
         return None
+    total_input = nonnegative_int(usage[input_key], "usageMetadata.promptTokenCount")
+    cached_key = _first_present(
+        usage,
+        "cachedContentTokenCount",
+        "cached_content_token_count",
+    )
+    cache_read = nonnegative_int(
+        usage[cached_key] if cached_key is not None else 0,
+        "usageMetadata.cachedContentTokenCount",
+    )
     return CanonicalUsage(
-        input_tokens=nonnegative_int(
-            usage[input_key],
+        input_tokens=_exclusive_input(
+            total_input,
+            cache_read,
+            0,
             "usageMetadata.promptTokenCount",
         ),
         output_tokens=nonnegative_int(
             usage[output_key],
             "usageMetadata.candidatesTokenCount",
         ),
+        cache_read_tokens=cache_read,
     )
 
 
@@ -166,6 +209,29 @@ def _has_fields(value: Mapping[str, Any], *fields: str) -> bool:
 
 def _first_present(value: Mapping[str, Any], *fields: str) -> str | None:
     return next((field for field in fields if field in value), None)
+
+
+def _openai_cache_tokens(
+    usage: Mapping[str, Any],
+    details_field: str,
+) -> tuple[int, int]:
+    details = _mapping(usage.get(details_field))
+    if details is None:
+        return 0, 0
+    return (
+        nonnegative_int(details.get("cached_tokens", 0), f"usage.{details_field}.cached_tokens"),
+        nonnegative_int(
+            details.get("cache_write_tokens", 0),
+            f"usage.{details_field}.cache_write_tokens",
+        ),
+    )
+
+
+def _exclusive_input(total: int, cache_read: int, cache_write: int, field: str) -> int:
+    uncached = total - cache_read - cache_write
+    if uncached < 0:
+        raise UnsupportedFeatureError(field, "cache token details exceed total input tokens")
+    return uncached
 
 
 @lru_cache

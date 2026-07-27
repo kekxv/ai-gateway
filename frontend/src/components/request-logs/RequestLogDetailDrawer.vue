@@ -141,6 +141,7 @@ onBeforeUnmount(() => {
           <div><dt>传输 / 流式</dt><dd>{{ detail.transport }} / {{ detail.stream ? '是' : '否' }}</dd></div>
           <div><dt>HTTP 状态</dt><dd>{{ detail.http_status ?? '—' }}</dd></div>
           <div><dt>输入 / 输出令牌</dt><dd>{{ detail.prompt_tokens }} / {{ detail.completion_tokens }}</dd></div>
+          <div><dt>缓存读取 / 写入令牌</dt><dd>{{ detail.cache_read_tokens }} / {{ detail.cache_write_tokens }}</dd></div>
           <div><dt>用量来源</dt><dd>{{ detail.usage_source === 'provider' ? '供应商' : detail.usage_source === 'estimated' ? '估算' : '—' }}</dd></div>
           <div><dt>精确费用</dt><dd class="exact-value">{{ formatMoney(detail.cost) }}</dd></div>
           <div><dt>延迟 / 首个令牌</dt><dd>{{ formatDuration(detail.latency_ms) }} / {{ formatDuration(detail.first_token_ms) }}</dd></div>

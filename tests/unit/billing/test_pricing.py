@@ -32,6 +32,41 @@ def test_cost_accepts_catalog_model_prices() -> None:
     assert cost == Decimal("0.00800000")
 
 
+def test_cost_prices_cache_read_and_write_tokens_independently() -> None:
+    model = Model(
+        canonical_name="cache-priced-model",
+        display_name="Cache priced model",
+        input_price_per_million=Decimal("2.00000000"),
+        output_price_per_million=Decimal("20.00000000"),
+    )
+    model.cache_read_price_per_million = Decimal("5.00000000")
+    model.cache_write_price_per_million = Decimal("10.00000000")
+
+    cost = calculate_cost(
+        model,
+        CanonicalUsage(
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            cache_read_tokens=1_000_000,
+            cache_write_tokens=1_000_000,
+        ),
+    )
+
+    assert cost == Decimal("37.00000000")
+
+
+def test_cost_accepts_explicit_cache_prices() -> None:
+    cost = calculate_cost(
+        input_price=Decimal("2.00000000"),
+        output_price=Decimal("20.00000000"),
+        cache_read_price=Decimal("5.00000000"),
+        cache_write_price=Decimal("10.00000000"),
+        usage=CanonicalUsage(1_000_000, 1_000_000, 1_000_000, 1_000_000),
+    )
+
+    assert cost == Decimal("37.00000000")
+
+
 def test_cost_quantizes_half_up_to_eight_decimal_places() -> None:
     cost = calculate_cost(
         input_price=Decimal("0.00500000"),

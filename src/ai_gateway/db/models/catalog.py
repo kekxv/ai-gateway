@@ -108,6 +108,16 @@ class Model(Base):
         default=Decimal("0"),
         server_default=text("0.00000000"),
     )
+    cache_read_price_per_million: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8),
+        default=Decimal("0"),
+        server_default=text("0.00000000"),
+    )
+    cache_write_price_per_million: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8),
+        default=Decimal("0"),
+        server_default=text("0.00000000"),
+    )
     price_multiplier: Mapped[Decimal] = mapped_column(
         Numeric(4, 2),
         default=Decimal("1.00"),

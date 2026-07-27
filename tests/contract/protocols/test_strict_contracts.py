@@ -339,3 +339,26 @@ def test_canonical_usage_token_counts_are_validated(protocol, load_fixture) -> N
     encoder = adapter.create_stream_encoder()
     with pytest.raises(UnsupportedFeatureError, match="usage"):
         encoder.encode(StreamEvent(type="usage", usage=CanonicalUsage(1, -2)))
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        CanonicalUsage(1, 2, cache_read_tokens=-1),
+        CanonicalUsage(1, 2, cache_write_tokens=-1),
+    ],
+)
+@pytest.mark.parametrize("protocol", tuple(Protocol))
+def test_canonical_cache_usage_token_counts_are_validated(
+    protocol: Protocol,
+    usage: CanonicalUsage,
+    load_fixture,
+) -> None:
+    adapter = get_adapter(protocol)
+    response = replace(
+        adapter.decode_response(load_fixture(protocol.value, "response.json")),
+        usage=usage,
+    )
+
+    with pytest.raises(UnsupportedFeatureError, match="usage"):
+        adapter.encode_response(response)

@@ -148,6 +148,8 @@ def nonnegative_int(value: Any, field: str) -> int:
 def validate_usage(usage: CanonicalUsage, field: str = "usage") -> CanonicalUsage:
     nonnegative_int(usage.input_tokens, f"{field}.input_tokens")
     nonnegative_int(usage.output_tokens, f"{field}.output_tokens")
+    nonnegative_int(usage.cache_read_tokens, f"{field}.cache_read_tokens")
+    nonnegative_int(usage.cache_write_tokens, f"{field}.cache_write_tokens")
     return usage
 
 

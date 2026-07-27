@@ -14,7 +14,7 @@ from ai_gateway.billing.service import (
     SettlementResult,
 )
 from ai_gateway.core.enums import Protocol, UsageSource
-from ai_gateway.gateway.websocket import WebSocketBillingCycle, WebSocketUsage
+from ai_gateway.gateway.websocket import WebSocketBillingCycle, WebSocketUsage, _usage_delta
 from ai_gateway.protocols.types import CanonicalUsage
 
 
@@ -150,6 +150,24 @@ def test_openai_usage_sums_responses_dedupes_and_retains_estimated_tail() -> Non
     assert tailed.usage_source is UsageSource.ESTIMATED
 
 
+def test_openai_usage_normalizes_cache_reads_and_writes() -> None:
+    usage = WebSocketUsage(Protocol.OPENAI)
+    usage.observe_upstream(
+        '{"type":"response.done","response":{"id":"r1","usage":'
+        '{"input_tokens":100,"output_tokens":7,"input_tokens_details":'
+        '{"cached_tokens":10,"cache_write_tokens":4}}}}'
+    )
+
+    assert usage.snapshot().usage == CanonicalUsage(86, 7, 10, 4)
+
+
+def test_usage_delta_includes_cache_buckets() -> None:
+    assert _usage_delta(
+        CanonicalUsage(10, 5, 7, 3),
+        CanonicalUsage(4, 2, 5, 1),
+    ) == CanonicalUsage(6, 3, 2, 2)
+
+
 def test_gemini_cumulative_usage_applies_positive_deltas_and_handles_counter_reset() -> None:
     usage = WebSocketUsage(Protocol.GEMINI)
     usage.observe_upstream('{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}')
@@ -159,6 +177,26 @@ def test_gemini_cumulative_usage_applies_positive_deltas_and_handles_counter_res
 
     usage.observe_upstream('{"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2}}')
     assert usage.snapshot().usage == CanonicalUsage(18, 9)
+
+
+def test_gemini_cumulative_usage_tracks_cached_content_separately() -> None:
+    usage = WebSocketUsage(Protocol.GEMINI)
+    usage.observe_upstream(
+        '{"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":7,'
+        '"cachedContentTokenCount":10}}'
+    )
+    usage.observe_upstream(
+        '{"usageMetadata":{"promptTokenCount":120,"candidatesTokenCount":9,'
+        '"cachedContentTokenCount":30}}'
+    )
+
+    assert usage.snapshot().usage == CanonicalUsage(90, 9, 30)
+
+    usage.observe_upstream(
+        '{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":1,'
+        '"cachedContentTokenCount":2}}'
+    )
+    assert usage.snapshot().usage == CanonicalUsage(98, 10, 32)
 
 
 @pytest.mark.asyncio

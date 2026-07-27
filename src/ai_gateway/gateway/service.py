@@ -447,6 +447,8 @@ class GatewayService:
                     http_status=output.status_code,
                     prompt_tokens=usage_result.usage.input_tokens,
                     completion_tokens=usage_result.usage.output_tokens,
+                    cache_read_tokens=usage_result.usage.cache_read_tokens,
+                    cache_write_tokens=usage_result.usage.cache_write_tokens,
                     usage_source=usage_result.usage_source,
                     cost=settlement.actual_cost,
                     latency_ms=_elapsed_ms(started_at),
@@ -674,6 +676,8 @@ class GatewayService:
                         http_status=upstream.status_code,
                         prompt_tokens=usage_result.usage.input_tokens,
                         completion_tokens=usage_result.usage.output_tokens,
+                        cache_read_tokens=usage_result.usage.cache_read_tokens,
+                        cache_write_tokens=usage_result.usage.cache_write_tokens,
                         usage_source=usage_result.usage_source,
                         cost=settlement_cost,
                         latency_ms=_elapsed_ms(started_at),
@@ -704,6 +708,8 @@ class GatewayService:
                         http_status=upstream.status_code,
                         prompt_tokens=usage_result.usage.input_tokens,
                         completion_tokens=usage_result.usage.output_tokens,
+                        cache_read_tokens=usage_result.usage.cache_read_tokens,
+                        cache_write_tokens=usage_result.usage.cache_write_tokens,
                         usage_source=usage_result.usage_source,
                         cost=settlement_cost,
                         latency_ms=_elapsed_ms(started_at),
@@ -796,6 +802,16 @@ class GatewayService:
                     ),
                     completion_tokens=(
                         charged_usage_result.usage.output_tokens
+                        if charged_usage_result is not None
+                        else 0
+                    ),
+                    cache_read_tokens=(
+                        charged_usage_result.usage.cache_read_tokens
+                        if charged_usage_result is not None
+                        else 0
+                    ),
+                    cache_write_tokens=(
+                        charged_usage_result.usage.cache_write_tokens
                         if charged_usage_result is not None
                         else 0
                     ),

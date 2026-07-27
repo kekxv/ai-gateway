@@ -5,6 +5,7 @@ import pytest
 from ai_gateway.protocols.claude import ClaudeAdapter
 from ai_gateway.protocols.gemini import GeminiAdapter
 from ai_gateway.protocols.openai import OpenAIAdapter
+from ai_gateway.protocols.types import CanonicalUsage
 
 
 def test_gemini_golden_request_round_trips(load_fixture) -> None:
@@ -100,3 +101,18 @@ def test_gemini_golden_response_and_stream(load_fixture, load_bytes) -> None:
         item for frame in encoded for item in adapter.create_stream_decoder().decode(frame)
     )
     assert next(event for event in decoded if event.type == "content_delta").text == "Hello"
+
+
+def test_gemini_response_normalizes_and_reencodes_cached_content(load_fixture) -> None:
+    payload = load_fixture("gemini", "response.json")
+    payload["usageMetadata"] = {
+        "promptTokenCount": 100,
+        "candidatesTokenCount": 7,
+        "cachedContentTokenCount": 10,
+        "totalTokenCount": 107,
+    }
+
+    response = GeminiAdapter().decode_response(payload)
+
+    assert response.usage == CanonicalUsage(90, 7, 10, 0)
+    assert GeminiAdapter().encode_response(response)["usageMetadata"] == payload["usageMetadata"]

@@ -62,6 +62,8 @@ class RequestLog(Base):
         default=0,
         server_default=text("0"),
     )
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     usage_source: Mapped[UsageSource | None] = mapped_column(
         Enum(UsageSource, name="usage_source", values_callable=enum_values),
         nullable=True,

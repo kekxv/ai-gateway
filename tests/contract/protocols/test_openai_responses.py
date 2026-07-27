@@ -130,6 +130,26 @@ def test_responses_response_marks_token_limit_as_incomplete() -> None:
     }
 
 
+def test_responses_response_encodes_cache_usage_details() -> None:
+    encoded = OpenAIAdapter().encode_responses_api_response(
+        CanonicalResponse(
+            model="gpt-5.6",
+            message=CanonicalMessage(role="assistant", content=(TextPart("done"),)),
+            finish_reason="stop",
+            usage=CanonicalUsage(86, 7, 10, 4),
+            metadata={},
+        )
+    )
+
+    assert encoded["usage"] == {
+        "input_tokens": 100,
+        "input_tokens_details": {"cached_tokens": 10, "cache_write_tokens": 4},
+        "output_tokens": 7,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 107,
+    }
+
+
 def _payloads(frames: tuple[bytes, ...]) -> list[dict[str, object]]:
     return [decode_sse(frame)[1] for frame in frames]
 

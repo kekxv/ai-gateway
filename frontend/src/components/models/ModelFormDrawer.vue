@@ -47,6 +47,8 @@ const canonicalName = ref('')
 const displayName = ref('')
 const inputPrice = ref('0')
 const outputPrice = ref('0')
+const cacheReadPrice = ref('0')
+const cacheWritePrice = ref('0')
 const priceMultiplier = ref(1.0)
 const enabled = ref(true)
 const aliases = ref<AliasRow[]>([])
@@ -54,6 +56,8 @@ const canonicalNameError = ref('')
 const displayNameError = ref('')
 const inputPriceError = ref('')
 const outputPriceError = ref('')
+const cacheReadPriceError = ref('')
+const cacheWritePriceError = ref('')
 const formContent = ref<HTMLElement | null>(null)
 let nextAliasKey = 1
 
@@ -113,6 +117,8 @@ function resetErrors(): void {
   displayNameError.value = ''
   inputPriceError.value = ''
   outputPriceError.value = ''
+  cacheReadPriceError.value = ''
+  cacheWritePriceError.value = ''
   for (const row of aliases.value) row.error = ''
 }
 
@@ -121,6 +127,8 @@ function clearDraft(): void {
   displayName.value = ''
   inputPrice.value = '0'
   outputPrice.value = '0'
+  cacheReadPrice.value = '0'
+  cacheWritePrice.value = '0'
   priceMultiplier.value = 1.0
   enabled.value = true
   aliases.value = []
@@ -133,6 +141,8 @@ function resetForm(): void {
   displayName.value = model?.display_name ?? ''
   inputPrice.value = normalizeDecimalInput(model?.input_price_per_million ?? '0')
   outputPrice.value = normalizeDecimalInput(model?.output_price_per_million ?? '0')
+  cacheReadPrice.value = normalizeDecimalInput(model?.cache_read_price_per_million ?? '0')
+  cacheWritePrice.value = normalizeDecimalInput(model?.cache_write_price_per_million ?? '0')
   priceMultiplier.value = model?.price_multiplier ?? 1.0
   enabled.value = model?.enabled ?? true
   aliases.value =
@@ -214,6 +224,12 @@ function validate(): string | null {
   if (!decimalPattern.test(outputPrice.value)) {
     outputPriceError.value = '请输入非负价格，最多 12 位整数和 8 位小数'
   }
+  if (!decimalPattern.test(cacheReadPrice.value)) {
+    cacheReadPriceError.value = '请输入非负价格，最多 12 位整数和 8 位小数'
+  }
+  if (!decimalPattern.test(cacheWritePrice.value)) {
+    cacheWritePriceError.value = '请输入非负价格，最多 12 位整数和 8 位小数'
+  }
 
   const seen = new Set<string>()
   for (const row of aliases.value) {
@@ -228,6 +244,12 @@ function validate(): string | null {
   if (displayNameError.value !== '') return '[data-validation="model-display-name"] input'
   if (inputPriceError.value !== '') return '[data-validation="model-input-price"] input'
   if (outputPriceError.value !== '') return '[data-validation="model-output-price"] input'
+  if (cacheReadPriceError.value !== '') {
+    return '[data-validation="model-cache-read-price"] input'
+  }
+  if (cacheWritePriceError.value !== '') {
+    return '[data-validation="model-cache-write-price"] input'
+  }
   const invalidAlias = aliases.value.findIndex((row) => row.error !== '')
   return invalidAlias === -1
     ? null
@@ -254,6 +276,8 @@ function submitForm(): void {
       display_name: display,
       input_price_per_million: inputPrice.value,
       output_price_per_million: outputPrice.value,
+      cache_read_price_per_million: cacheReadPrice.value,
+      cache_write_price_per_million: cacheWritePrice.value,
       price_multiplier: priceMultiplier.value,
       enabled: enabled.value,
       aliases: aliasPayload,
@@ -272,6 +296,12 @@ function submitForm(): void {
   }
   if (outputPrice.value !== normalizeDecimalInput(model.output_price_per_million)) {
     payload.output_price_per_million = outputPrice.value
+  }
+  if (cacheReadPrice.value !== normalizeDecimalInput(model.cache_read_price_per_million)) {
+    payload.cache_read_price_per_million = cacheReadPrice.value
+  }
+  if (cacheWritePrice.value !== normalizeDecimalInput(model.cache_write_price_per_million)) {
+    payload.cache_write_price_per_million = cacheWritePrice.value
   }
   if (priceMultiplier.value !== model.price_multiplier) {
     payload.price_multiplier = priceMultiplier.value
@@ -337,6 +367,30 @@ function submitForm(): void {
             <ElInput
               v-model="outputPrice"
               data-test="model-output-price"
+              inputmode="decimal"
+              spellcheck="false"
+            />
+          </ElFormItem>
+          <ElFormItem
+            data-validation="model-cache-read-price"
+            label="缓存读取价格（每百万令牌）"
+            :error="cacheReadPriceError"
+          >
+            <ElInput
+              v-model="cacheReadPrice"
+              data-test="model-cache-read-price"
+              inputmode="decimal"
+              spellcheck="false"
+            />
+          </ElFormItem>
+          <ElFormItem
+            data-validation="model-cache-write-price"
+            label="缓存写入价格（每百万令牌）"
+            :error="cacheWritePriceError"
+          >
+            <ElInput
+              v-model="cacheWritePrice"
+              data-test="model-cache-write-price"
               inputmode="decimal"
               spellcheck="false"
             />

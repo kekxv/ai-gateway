@@ -13,6 +13,8 @@ TOKENS_PER_MILLION = Decimal("1000000")
 class PricedModel(Protocol):
     input_price_per_million: Decimal
     output_price_per_million: Decimal
+    cache_read_price_per_million: Decimal
+    cache_write_price_per_million: Decimal
 
 
 @overload
@@ -31,6 +33,8 @@ def calculate_cost(
     *,
     input_price: Decimal,
     output_price: Decimal,
+    cache_read_price: Decimal = Decimal("0"),
+    cache_write_price: Decimal = Decimal("0"),
     usage: CanonicalUsage,
     model_multiplier: Decimal | None = None,
     provider_multiplier: Decimal | None = None,
@@ -43,6 +47,8 @@ def calculate_cost(
     *,
     input_price: Decimal | None = None,
     output_price: Decimal | None = None,
+    cache_read_price: Decimal | None = None,
+    cache_write_price: Decimal | None = None,
     model_multiplier: Decimal | None = None,
     provider_multiplier: Decimal | None = None,
 ) -> Decimal:
@@ -61,17 +67,40 @@ def calculate_cost(
         raise TypeError("usage is required")
     validate_usage(usage)
     if model is not None:
-        if input_price is not None or output_price is not None:
+        if any(
+            price is not None
+            for price in (
+                input_price,
+                output_price,
+                cache_read_price,
+                cache_write_price,
+            )
+        ):
             raise TypeError("provide either model or explicit prices, not both")
         input_price = model.input_price_per_million
         output_price = model.output_price_per_million
+        cache_read_price = getattr(model, "cache_read_price_per_million", Decimal("0"))
+        cache_write_price = getattr(model, "cache_write_price_per_million", Decimal("0"))
     if input_price is None or output_price is None:
         raise TypeError("model or both input_price and output_price are required")
-    if input_price < 0 or output_price < 0:
+    cache_read_price = Decimal("0") if cache_read_price is None else cache_read_price
+    cache_write_price = Decimal("0") if cache_write_price is None else cache_write_price
+    if any(
+        price < 0
+        for price in (
+            input_price,
+            output_price,
+            cache_read_price,
+            cache_write_price,
+        )
+    ):
         raise ValueError("token prices must be nonnegative")
 
     unrounded = (
-        Decimal(usage.input_tokens) * input_price + Decimal(usage.output_tokens) * output_price
+        Decimal(usage.input_tokens) * input_price
+        + Decimal(usage.output_tokens) * output_price
+        + Decimal(usage.cache_read_tokens) * cache_read_price
+        + Decimal(usage.cache_write_tokens) * cache_write_price
     ) / TOKENS_PER_MILLION
 
     if model_multiplier is not None:

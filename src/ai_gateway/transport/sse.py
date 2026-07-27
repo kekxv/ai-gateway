@@ -7,7 +7,9 @@ from time import monotonic
 import httpx
 import orjson
 
+from ai_gateway.billing.usage import extract_native_openai_usage, extract_provider_usage
 from ai_gateway.core.enums import Protocol
+from ai_gateway.core.errors import GatewayError
 from ai_gateway.protocols.base import StreamEncoder
 from ai_gateway.protocols.registry import get_adapter
 from ai_gateway.protocols.types import CanonicalUsage, StreamEvent
@@ -204,12 +206,12 @@ class GatewayContext:
                     if event_type == "response.failed":
                         self.error_observed = True
                     response = payload.get("response")
-                    native_usage = response.get("usage") if isinstance(response, dict) else None
-                    if isinstance(native_usage, dict):
-                        input_tokens = native_usage.get("input_tokens")
-                        output_tokens = native_usage.get("output_tokens")
-                        if isinstance(input_tokens, int) and isinstance(output_tokens, int):
-                            usage = CanonicalUsage(input_tokens, output_tokens)
+                    if isinstance(response, dict):
+                        try:
+                            usage = extract_native_openai_usage("responses", response)
+                        except (GatewayError, ValueError):
+                            usage = None
+                        if usage is not None:
                             self.provider_usage_complete = True
                 if event_type == "response.output_text.delta" and isinstance(
                     payload.get("delta"), str
@@ -219,13 +221,12 @@ class GatewayContext:
                     self._merge_usage(usage)
                 self._observe_content(content)
                 return
-            native_usage = payload.get("usage")
-            if isinstance(native_usage, dict):
-                input_tokens = native_usage.get("prompt_tokens")
-                output_tokens = native_usage.get("completion_tokens")
-                if isinstance(input_tokens, int) and isinstance(output_tokens, int):
-                    usage = CanonicalUsage(input_tokens, output_tokens)
-                    self.provider_usage_complete = True
+            try:
+                usage = extract_native_openai_usage("chat_completions", payload)
+            except (GatewayError, ValueError):
+                usage = None
+            if usage is not None:
+                self.provider_usage_complete = True
             choices = payload.get("choices")
             if isinstance(choices, list):
                 for choice in choices:
@@ -253,17 +254,24 @@ class GatewayContext:
                 self.terminal_done_observed = True
             if event_type == "message_start" and isinstance(payload.get("message"), dict):
                 native_usage = payload["message"].get("usage")
-                if isinstance(native_usage, dict) and isinstance(
-                    native_usage.get("input_tokens"), int
-                ):
-                    usage = CanonicalUsage(native_usage["input_tokens"], 0)
+                if isinstance(native_usage, dict):
+                    try:
+                        usage = extract_provider_usage(
+                            Protocol.CLAUDE,
+                            {"usage": {**native_usage, "output_tokens": 0}},
+                        )
+                    except (GatewayError, ValueError):
+                        usage = None
             elif event_type == "message_delta" and isinstance(payload.get("usage"), dict):
                 output_tokens = payload["usage"].get("output_tokens")
                 if isinstance(output_tokens, int):
-                    input_tokens = (
-                        self.observed_usage.input_tokens if self.observed_usage is not None else 0
+                    observed = self.observed_usage or CanonicalUsage(0, 0)
+                    usage = CanonicalUsage(
+                        observed.input_tokens,
+                        output_tokens,
+                        observed.cache_read_tokens,
+                        observed.cache_write_tokens,
                     )
-                    usage = CanonicalUsage(input_tokens, output_tokens)
                     self.provider_usage_complete = True
             delta = payload.get("delta")
             if isinstance(delta, dict):
@@ -276,13 +284,12 @@ class GatewayContext:
                     if isinstance(block.get(key), str):
                         content += block[key]
         else:
-            native_usage = payload.get("usageMetadata")
-            if isinstance(native_usage, dict):
-                input_tokens = native_usage.get("promptTokenCount")
-                output_tokens = native_usage.get("candidatesTokenCount")
-                if isinstance(input_tokens, int) and isinstance(output_tokens, int):
-                    usage = CanonicalUsage(input_tokens, output_tokens)
-                    self.provider_usage_complete = True
+            try:
+                usage = extract_provider_usage(Protocol.GEMINI, payload)
+            except (GatewayError, ValueError):
+                usage = None
+            if usage is not None:
+                self.provider_usage_complete = True
             candidates = payload.get("candidates")
             if isinstance(candidates, list):
                 for candidate in candidates:
@@ -324,6 +331,14 @@ class GatewayContext:
         self.observed_usage = CanonicalUsage(
             input_tokens=max(self.observed_usage.input_tokens, usage.input_tokens),
             output_tokens=max(self.observed_usage.output_tokens, usage.output_tokens),
+            cache_read_tokens=max(
+                self.observed_usage.cache_read_tokens,
+                usage.cache_read_tokens,
+            ),
+            cache_write_tokens=max(
+                self.observed_usage.cache_write_tokens,
+                usage.cache_write_tokens,
+            ),
         )
 
     def estimated_usage(self) -> CanonicalUsage:
@@ -332,7 +347,12 @@ class GatewayContext:
             if self.observed_usage is not None
             else (self.initial_input_tokens or 0)
         )
-        return CanonicalUsage(input_tokens, self.estimated_output_tokens)
+        return CanonicalUsage(
+            input_tokens,
+            self.estimated_output_tokens,
+            self.observed_usage.cache_read_tokens if self.observed_usage is not None else 0,
+            self.observed_usage.cache_write_tokens if self.observed_usage is not None else 0,
+        )
 
     def _observe_content(self, content: str) -> None:
         if not content:

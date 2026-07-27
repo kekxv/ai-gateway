@@ -178,6 +178,14 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
           <span class="label">输出价格：</span>
           <span class="value">{{ formatMoney(model.output_price_per_million) }}</span>
         </div>
+        <div class="info-item">
+          <span class="label">缓存读取价格：</span>
+          <span class="value">{{ formatMoney(model.cache_read_price_per_million) }}</span>
+        </div>
+        <div class="info-item">
+          <span class="label">缓存写入价格：</span>
+          <span class="value">{{ formatMoney(model.cache_write_price_per_million) }}</span>
+        </div>
         <div v-if="parseFloat(String(model.price_multiplier ?? 1)) !== 1.00" class="info-item multiplier">
           <span class="label">价格倍率：</span>
           <ElTag type="warning" size="small">

@@ -18,9 +18,8 @@ from ai_gateway.auth.dependencies import admin_user
 from ai_gateway.auth.service import raise_auth_error
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import Protocol, RequestStatus, UsageSource
-from ai_gateway.db.models import RequestLog
+from ai_gateway.db.models import RequestLog, User
 from ai_gateway.db.models import RequestLogDetail as RequestLogDetailRecord
-from ai_gateway.db.models import User
 from ai_gateway.db.session import get_session
 
 router = APIRouter(prefix="/admin/request-logs", tags=["admin-request-logs"])
@@ -45,6 +44,8 @@ class RequestLogSummary(BaseModel):
     http_status: int | None
     prompt_tokens: int
     completion_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
     usage_source: UsageSource | None
     cost: Decimal
     latency_ms: int | None
@@ -79,6 +80,8 @@ _SUMMARY_COLUMNS = (
     RequestLog.http_status,
     RequestLog.prompt_tokens,
     RequestLog.completion_tokens,
+    RequestLog.cache_read_tokens,
+    RequestLog.cache_write_tokens,
     RequestLog.usage_source,
     RequestLog.cost,
     RequestLog.latency_ms,
@@ -276,4 +279,4 @@ async def cleanup_audit_details(
         delete(RequestLogDetailRecord).where(RequestLogDetailRecord.created_at < cutoff)
     )
     await session.commit()
-    return CleanupResponse(deleted_count=result.rowcount)
+    return CleanupResponse(deleted_count=int(getattr(result, "rowcount", 0)))

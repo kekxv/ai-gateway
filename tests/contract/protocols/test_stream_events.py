@@ -102,6 +102,25 @@ def test_openai_encodes_each_canonical_event_to_the_expected_native_shape() -> N
     assert bodies[5] == {"error": {"message": "bad"}}
 
 
+def test_openai_stream_usage_round_trips_cache_details() -> None:
+    adapter = OpenAIAdapter()
+    encoded = adapter.encode_stream_event(
+        StreamEvent(type="usage", usage=CanonicalUsage(86, 7, 10, 4), model="m")
+    )
+
+    payload = decode_sse(encoded)[1]
+    assert payload["usage"] == {
+        "prompt_tokens": 100,
+        "completion_tokens": 7,
+        "total_tokens": 107,
+        "prompt_tokens_details": {"cached_tokens": 10, "cache_write_tokens": 4},
+    }
+    usage = next(
+        event for event in adapter.decode_stream_event(encoded) if event.type == "usage"
+    ).usage
+    assert usage == CanonicalUsage(86, 7, 10, 4)
+
+
 def test_claude_all_native_event_shapes_have_independent_canonical_sequences() -> None:
     adapter = ClaudeAdapter()
     decoder = adapter.create_stream_decoder()
@@ -345,3 +364,22 @@ def test_gemini_encodes_content_tool_finish_and_usage_native_shapes() -> None:
     assert native[2]["candidates"][0]["finishReason"] == "MAX_TOKENS"
     assert native[3]["candidates"] == []
     assert native[3]["usageMetadata"]["candidatesTokenCount"] == 3
+
+
+def test_gemini_stream_usage_round_trips_cached_content() -> None:
+    adapter = GeminiAdapter()
+    encoded = adapter.encode_stream_event(
+        StreamEvent(type="usage", usage=CanonicalUsage(90, 7, 10), model="m")
+    )
+
+    payload = decode_sse(encoded)[1]
+    assert payload["usageMetadata"] == {
+        "promptTokenCount": 100,
+        "cachedContentTokenCount": 10,
+        "candidatesTokenCount": 7,
+        "totalTokenCount": 107,
+    }
+    usage = next(
+        event for event in adapter.decode_stream_event(encoded) if event.type == "usage"
+    ).usage
+    assert usage == CanonicalUsage(90, 7, 10)

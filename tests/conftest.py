@@ -12,6 +12,7 @@ from ai_gateway.db.test_safety import (
     clean_test_database,
     create_test_engine,
 )
+from ai_gateway.main import REQUIRED_MIGRATION_HEAD
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -28,7 +29,10 @@ async def test_engine() -> AsyncIterator[AsyncEngine]:
         await connection.execute(
             text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
         )
-        await connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0005')"))
+        await connection.execute(
+            text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
+            {"revision": REQUIRED_MIGRATION_HEAD},
+        )
 
     yield engine
 

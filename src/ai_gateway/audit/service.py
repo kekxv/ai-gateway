@@ -58,6 +58,8 @@ class RequestResult:
     http_status: int | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     usage_source: UsageSource | None = None
     cost: Decimal = Decimal("0")
     latency_ms: int | None = None
@@ -77,6 +79,8 @@ class RequestFailure:
     http_status: int | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     usage_source: UsageSource | None = None
     cost: Decimal = Decimal("0")
     latency_ms: int | None = None
@@ -149,6 +153,8 @@ class AuditService:
             http_status=result.http_status,
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
+            cache_read_tokens=result.cache_read_tokens,
+            cache_write_tokens=result.cache_write_tokens,
             usage_source=result.usage_source,
             cost=result.cost,
             latency_ms=result.latency_ms,
@@ -174,6 +180,8 @@ class AuditService:
             http_status=failure.http_status,
             prompt_tokens=failure.prompt_tokens,
             completion_tokens=failure.completion_tokens,
+            cache_read_tokens=failure.cache_read_tokens,
+            cache_write_tokens=failure.cache_write_tokens,
             usage_source=failure.usage_source,
             cost=failure.cost,
             latency_ms=failure.latency_ms,
@@ -195,6 +203,8 @@ class AuditService:
         http_status: int | None,
         prompt_tokens: int,
         completion_tokens: int,
+        cache_read_tokens: int,
+        cache_write_tokens: int,
         usage_source: UsageSource | None,
         cost: Decimal,
         latency_ms: int | None,
@@ -223,6 +233,8 @@ class AuditService:
                         http_status=http_status,
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
+                        cache_read_tokens=cache_read_tokens,
+                        cache_write_tokens=cache_write_tokens,
                         usage_source=usage_source,
                         cost=cost,
                         latency_ms=latency_ms,

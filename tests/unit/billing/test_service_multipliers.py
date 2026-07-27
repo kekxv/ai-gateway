@@ -7,28 +7,35 @@ settling requests.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from sqlalchemy.exc import IntegrityError
 
 from ai_gateway.billing.service import (
     Account,
     BalanceReservation,
     BillingService,
     LedgerEntry,
+    ReservationRecovery,
     SettlementResult,
+    _recovery_metadata,
+    _reservation_fingerprint,
+    _reservation_recovery,
     _settlement_cost,
+    _settlement_fingerprint,
+)
+from ai_gateway.billing.service import (
     reserve_balance as module_reserve_balance,
+)
+from ai_gateway.billing.service import (
     settle_request as module_settle_request,
 )
 from ai_gateway.core.enums import LedgerKind, UsageSource
-from ai_gateway.core.errors import GatewayError
 from ai_gateway.db.models import Model, Provider
 from ai_gateway.protocols.types import CanonicalUsage
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -47,7 +54,7 @@ def _make_account(*, user_id: int = 1, account_id: int = 100, balance: Decimal |
 
 
 def _make_model(*, price_multiplier: Decimal = Decimal("1.50")) -> Model:
-    return Model(
+    model = Model(
         id=1,
         canonical_name="test-model",
         display_name="Test Model",
@@ -56,6 +63,9 @@ def _make_model(*, price_multiplier: Decimal = Decimal("1.50")) -> Model:
         price_multiplier=price_multiplier,
         enabled=True,
     )
+    model.cache_read_price_per_million = Decimal("5.00000000")
+    model.cache_write_price_per_million = Decimal("8.00000000")
+    return model
 
 
 def _make_provider(*, price_multiplier: Decimal = Decimal("2.00")) -> Provider:
@@ -241,6 +251,28 @@ class TestReserveWithMultipliers:
             model_multiplier=Decimal("1.50"),
             provider_multiplier=Decimal("2.00"),
         )
+
+    @patch("ai_gateway.billing.service._locked_account_for_user", new_callable=AsyncMock)
+    async def test_reservation_snapshots_cache_prices(
+        self,
+        mock_locked_account: AsyncMock,
+    ) -> None:
+        model = _make_model(price_multiplier=Decimal("1.00"))
+        mock_locked_account.return_value = _make_account()
+        mock_session = _build_session_mock(scalar_returns=[None, None])
+        service = BillingService(_build_session_factory(mock_session))
+
+        await service.reserve_balance(
+            user_id=1,
+            model=model,
+            estimated_input_tokens=1000,
+            max_output_tokens=500,
+            idempotency_key=f"reserve-cache-prices-{uuid4().hex[:8]}",
+        )
+
+        entry = mock_session.add.call_args.args[0]
+        assert entry.metadata_json["cache_read_price_per_million"] == "5.00000000"
+        assert entry.metadata_json["cache_write_price_per_million"] == "8.00000000"
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +628,83 @@ class TestBackwardCompatibility:
         mock_get.assert_called_once_with(recovered, None)
         # base cost = (1000*10 + 500*20) / 1_000_000 = 0.02, multipliers both 1.00
         assert result == Decimal("0.02000000")
+
+
+class TestCacheRecoveryMetadata:
+    def test_recovery_usage_round_trips_cache_buckets(self) -> None:
+        recovery = ReservationRecovery(
+            settlement_key="cache-recovery",
+            usage=CanonicalUsage(10, 5, 7, 3),
+            usage_source=UsageSource.PROVIDER,
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        )
+
+        metadata = _recovery_metadata(recovery)
+        restored = _reservation_recovery(metadata)
+
+        assert metadata["recovery_cache_read_tokens"] == 7
+        assert metadata["recovery_cache_write_tokens"] == 3
+        assert restored is not None
+        assert restored.usage == CanonicalUsage(10, 5, 7, 3)
+
+    def test_legacy_recovery_metadata_defaults_cache_buckets_to_zero(self) -> None:
+        metadata = {
+            "recovery_pending": True,
+            "recovery_settlement_key": "legacy-recovery",
+            "recovery_input_tokens": 10,
+            "recovery_output_tokens": 5,
+            "recovery_usage_source": UsageSource.PROVIDER.value,
+            "recovery_expires_at": datetime.now(UTC).isoformat(),
+            "recovery_version": 1,
+            "recovery_cost": None,
+        }
+
+        restored = _reservation_recovery(metadata)
+
+        assert restored is not None
+        assert restored.usage == CanonicalUsage(10, 5, 0, 0)
+
+    def test_reservation_fingerprint_includes_cache_prices(self) -> None:
+        first = _make_model(price_multiplier=Decimal("1.00"))
+        second = _make_model(price_multiplier=Decimal("1.00"))
+        second.cache_read_price_per_million = Decimal("6.00000000")
+
+        first_fingerprint = _reservation_fingerprint(
+            account_id=1,
+            user_id=2,
+            request_id="request",
+            model=first,
+            estimated_input_tokens=10,
+            max_output_tokens=5,
+            reserved_amount=Decimal("0.1"),
+        )
+        second_fingerprint = _reservation_fingerprint(
+            account_id=1,
+            user_id=2,
+            request_id="request",
+            model=second,
+            estimated_input_tokens=10,
+            max_output_tokens=5,
+            reserved_amount=Decimal("0.1"),
+        )
+
+        assert first_fingerprint != second_fingerprint
+
+    def test_settlement_fingerprint_includes_cache_usage(self) -> None:
+        first = _settlement_fingerprint(
+            reservation_id=1,
+            actual_cost=Decimal("0.1"),
+            usage=CanonicalUsage(10, 5, 7, 3),
+            usage_source=UsageSource.PROVIDER,
+        )
+        second = _settlement_fingerprint(
+            reservation_id=1,
+            actual_cost=Decimal("0.1"),
+            usage=CanonicalUsage(10, 5, 8, 2),
+            usage_source=UsageSource.PROVIDER,
+        )
+
+        assert first != second
 
 
 # ---------------------------------------------------------------------------

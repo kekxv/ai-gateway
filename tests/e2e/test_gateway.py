@@ -21,7 +21,7 @@ import uvicorn
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 from websockets.asyncio.client import connect
@@ -42,9 +42,10 @@ from ai_gateway.db.models import (
     Provider,
     ProviderProtocol,
     RequestLog,
+    RequestLogDetail,
     User,
 )
-from ai_gateway.main import create_app
+from ai_gateway.main import REQUIRED_MIGRATION_HEAD, create_app
 
 ADMIN_PASSWORD = "e2e-admin-password"
 USER_PASSWORD = "e2e-user-password"
@@ -916,13 +917,24 @@ async def assert_durable_results(
         state.gemini_route_id,
     }
 
+    async with AsyncSession(engine) as session:
+        stored_details = {
+            item.id: item
+            for item in await session.scalars(
+                select(RequestLogDetail).where(
+                    RequestLogDetail.id.in_([item.id for item in request_logs])
+                )
+            )
+        }
+
     request_details: list[dict[str, Any]] = []
     response_details: list[dict[str, Any]] = []
     for item in request_logs:
-        assert item.request_detail_gzip is not None
-        assert item.response_detail_gzip is not None
-        request_detail = orjson.loads(gzip.decompress(item.request_detail_gzip))
-        response_detail = orjson.loads(gzip.decompress(item.response_detail_gzip))
+        stored_detail = stored_details[item.id]
+        assert stored_detail.request_detail_gzip is not None
+        assert stored_detail.response_detail_gzip is not None
+        request_detail = orjson.loads(gzip.decompress(stored_detail.request_detail_gzip))
+        response_detail = orjson.loads(gzip.decompress(stored_detail.response_detail_gzip))
         assert isinstance(request_detail, dict)
         assert isinstance(response_detail, dict)
         for detail in (request_detail, response_detail):
@@ -1111,6 +1123,17 @@ async def test_gateway_end_to_end_against_mysql_and_local_provider() -> None:
     engine = create_async_engine(database_url, pool_pre_ping=True, poolclass=NullPool)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        await connection.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS alembic_version "
+                "(version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
+            )
+        )
+        await connection.execute(text("DELETE FROM alembic_version"))
+        await connection.execute(
+            text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
+            {"revision": REQUIRED_MIGRATION_HEAD},
+        )
     settings = Settings(
         _env_file=None,
         environment="test",

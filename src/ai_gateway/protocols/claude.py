@@ -196,10 +196,7 @@ class ClaudeAdapter(ProtocolAdapter):
         )
         if response.usage is not None:
             validate_usage(response.usage)
-            payload["usage"] = {
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-            }
+            payload["usage"] = _encode_usage(response.usage)
         return payload
 
     def create_stream_decoder(self) -> StreamDecoder:
@@ -529,6 +526,8 @@ class _ClaudeStreamDecoder(StreamDecoder):
         self._next_tool_index = 0
         self._input_tokens = 0
         self._output_tokens = 0
+        self._cache_read_tokens = 0
+        self._cache_write_tokens = 0
         self._saw_usage = False
         self._usage_emitted = False
 
@@ -559,12 +558,18 @@ class _ClaudeStreamDecoder(StreamDecoder):
                 if raw.usage is not None:
                     self._input_tokens = raw.usage.input_tokens
                     self._output_tokens = raw.usage.output_tokens
+                    self._cache_read_tokens = raw.usage.cache_read_tokens
+                    self._cache_write_tokens = raw.usage.cache_write_tokens
                     self._saw_usage = True
                 events.append(raw)
             elif raw.type == "usage":
                 if raw.usage is not None:
                     if raw.usage.input_tokens:
                         self._input_tokens = raw.usage.input_tokens
+                    if raw.usage.cache_read_tokens:
+                        self._cache_read_tokens = raw.usage.cache_read_tokens
+                    if raw.usage.cache_write_tokens:
+                        self._cache_write_tokens = raw.usage.cache_write_tokens
                     self._output_tokens = raw.usage.output_tokens
                     self._saw_usage = True
                     usage_metadata = raw.metadata
@@ -604,7 +609,12 @@ class _ClaudeStreamDecoder(StreamDecoder):
         if (terminal or done) and self._saw_usage and not self._usage_emitted:
             usage_event = StreamEvent(
                 type="usage",
-                usage=CanonicalUsage(self._input_tokens, self._output_tokens),
+                usage=CanonicalUsage(
+                    self._input_tokens,
+                    self._output_tokens,
+                    self._cache_read_tokens,
+                    self._cache_write_tokens,
+                ),
                 metadata=usage_metadata,
             )
             if done and events and events[-1].type == "done":
@@ -623,6 +633,8 @@ class _ClaudeStreamEncoder(StreamEncoder):
         self._used_indices: set[int] = set()
         self._input_tokens: int | None = None
         self._output_tokens: int | None = None
+        self._cache_read_tokens = 0
+        self._cache_write_tokens = 0
         self._pending_end: StreamEvent | None = None
         self._usage_metadata: Mapping[str, Any] = {}
 
@@ -673,8 +685,18 @@ class _ClaudeStreamEncoder(StreamEncoder):
         if event.usage is not None:
             validate_usage(event.usage, "stream_event.usage")
             self._input_tokens = event.usage.input_tokens
+            self._cache_read_tokens = event.usage.cache_read_tokens
+            self._cache_write_tokens = event.usage.cache_write_tokens
         if self._input_tokens is not None:
-            message["usage"] = {"input_tokens": self._input_tokens}
+            usage = {"input_tokens": self._input_tokens}
+            if self._cache_read_tokens or self._cache_write_tokens:
+                usage.update(
+                    {
+                        "cache_read_input_tokens": self._cache_read_tokens,
+                        "cache_creation_input_tokens": self._cache_write_tokens,
+                    }
+                )
+            message["usage"] = usage
         payload.update({"type": "message_start", "message": message})
         return self._frame(payload)
 
@@ -825,6 +847,8 @@ class _ClaudeStreamEncoder(StreamEncoder):
             validate_usage(event.usage, "stream_event.usage")
             if self._input_tokens is None:
                 self._input_tokens = event.usage.input_tokens
+                self._cache_read_tokens = event.usage.cache_read_tokens
+                self._cache_write_tokens = event.usage.cache_write_tokens
             self._output_tokens = event.usage.output_tokens
             self._usage_metadata = event.metadata
             frame = self._terminal_frame()
@@ -1152,12 +1176,28 @@ def _decode_usage(value: Any) -> CanonicalUsage | None:
     usage = require_object(value, "usage")
     input_tokens = nonnegative_int(usage.get("input_tokens", 0), "usage.input_tokens")
     output_tokens = nonnegative_int(usage.get("output_tokens", 0), "usage.output_tokens")
-    return CanonicalUsage(input_tokens=input_tokens, output_tokens=output_tokens)
+    cache_read_tokens = nonnegative_int(
+        usage.get("cache_read_input_tokens", 0),
+        "usage.cache_read_input_tokens",
+    )
+    cache_write_tokens = nonnegative_int(
+        usage.get("cache_creation_input_tokens", 0),
+        "usage.cache_creation_input_tokens",
+    )
+    return CanonicalUsage(input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
 
 
 def _encode_usage(usage: CanonicalUsage) -> dict[str, int]:
     validate_usage(usage)
-    return {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}
+    encoded = {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}
+    if usage.cache_read_tokens or usage.cache_write_tokens:
+        encoded.update(
+            {
+                "cache_read_input_tokens": usage.cache_read_tokens,
+                "cache_creation_input_tokens": usage.cache_write_tokens,
+            }
+        )
+    return encoded
 
 
 def _decode_finish_reason(value: Any) -> FinishReason:

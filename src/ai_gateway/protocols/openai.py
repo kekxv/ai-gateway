@@ -368,11 +368,7 @@ class OpenAIAdapter(ProtocolAdapter):
             payload["created"] = response.metadata["created"]
         if response.usage is not None:
             validate_usage(response.usage)
-            payload["usage"] = {
-                "prompt_tokens": response.usage.input_tokens,
-                "completion_tokens": response.usage.output_tokens,
-                "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
-            }
+            payload["usage"] = _encode_usage(response.usage)
         return payload
 
     def encode_responses_api_response(self, response: CanonicalResponse) -> dict[str, Any]:
@@ -695,11 +691,7 @@ class OpenAIAdapter(ProtocolAdapter):
             }
         )
         if event.usage is not None:
-            payload["usage"] = {
-                "prompt_tokens": event.usage.input_tokens,
-                "completion_tokens": event.usage.output_tokens,
-                "total_tokens": event.usage.input_tokens + event.usage.output_tokens,
-            }
+            payload["usage"] = _encode_usage(event.usage)
         return encode_sse(payload)
 
 
@@ -1566,9 +1558,40 @@ def _decode_usage(value: Any) -> CanonicalUsage | None:
     if value is None:
         return None
     usage = require_object(value, "usage")
-    input_tokens = nonnegative_int(usage.get("prompt_tokens", 0), "usage.prompt_tokens")
+    total_input = nonnegative_int(usage.get("prompt_tokens", 0), "usage.prompt_tokens")
     output_tokens = nonnegative_int(usage.get("completion_tokens", 0), "usage.completion_tokens")
-    return CanonicalUsage(input_tokens=input_tokens, output_tokens=output_tokens)
+    details = require_object(usage.get("prompt_tokens_details", {}), "usage.prompt_tokens_details")
+    cache_read = nonnegative_int(
+        details.get("cached_tokens", 0),
+        "usage.prompt_tokens_details.cached_tokens",
+    )
+    cache_write = nonnegative_int(
+        details.get("cache_write_tokens", 0),
+        "usage.prompt_tokens_details.cache_write_tokens",
+    )
+    input_tokens = total_input - cache_read - cache_write
+    if input_tokens < 0:
+        raise UnsupportedFeatureError(
+            "usage.prompt_tokens",
+            "cache token details exceed total input tokens",
+        )
+    return CanonicalUsage(input_tokens, output_tokens, cache_read, cache_write)
+
+
+def _encode_usage(usage: CanonicalUsage) -> dict[str, Any]:
+    validate_usage(usage)
+    total_input = usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens
+    encoded: dict[str, Any] = {
+        "prompt_tokens": total_input,
+        "completion_tokens": usage.output_tokens,
+        "total_tokens": total_input + usage.output_tokens,
+    }
+    if usage.cache_read_tokens or usage.cache_write_tokens:
+        encoded["prompt_tokens_details"] = {
+            "cached_tokens": usage.cache_read_tokens,
+            "cache_write_tokens": usage.cache_write_tokens,
+        }
+    return encoded
 
 
 def _decode_finish_reason(value: Any) -> FinishReason:
@@ -1615,12 +1638,16 @@ def _responses_incomplete_details(finish_reason: FinishReason) -> dict[str, str]
 
 def _encode_responses_usage(usage: CanonicalUsage) -> dict[str, Any]:
     validate_usage(usage)
+    total_input = usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens
+    input_details = {"cached_tokens": usage.cache_read_tokens}
+    if usage.cache_write_tokens:
+        input_details["cache_write_tokens"] = usage.cache_write_tokens
     return {
-        "input_tokens": usage.input_tokens,
-        "input_tokens_details": {"cached_tokens": 0},
+        "input_tokens": total_input,
+        "input_tokens_details": input_details,
         "output_tokens": usage.output_tokens,
         "output_tokens_details": {"reasoning_tokens": 0},
-        "total_tokens": usage.input_tokens + usage.output_tokens,
+        "total_tokens": total_input + usage.output_tokens,
     }
 
 

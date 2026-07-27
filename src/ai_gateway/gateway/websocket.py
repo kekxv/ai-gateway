@@ -27,11 +27,17 @@ from ai_gateway.billing.service import (
     ReservationRecovery,
     SettlementResult,
 )
-from ai_gateway.billing.usage import UsageResult, estimate_text_tokens
+from ai_gateway.billing.usage import (
+    UsageResult,
+    estimate_text_tokens,
+    extract_native_openai_usage,
+    extract_provider_usage,
+)
 from ai_gateway.catalog.repository import CatalogRepository
 from ai_gateway.catalog.schemas import ResolvedModel
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import Protocol, UsageSource
+from ai_gateway.core.errors import GatewayError
 from ai_gateway.db.models import Model, Provider
 from ai_gateway.db.session import get_session
 from ai_gateway.protocols.types import CanonicalUsage
@@ -128,6 +134,8 @@ class WebSocketUsage:
         self._estimated_output = 0
         self._native_input = 0
         self._native_output = 0
+        self._native_cache_read = 0
+        self._native_cache_write = 0
         self._native_estimated_input = 0
         self._native_estimated_output = 0
         self._has_native = False
@@ -171,6 +179,8 @@ class WebSocketUsage:
                 CanonicalUsage(
                     self._native_input + estimated_tail.input_tokens,
                     self._native_output + estimated_tail.output_tokens,
+                    self._native_cache_read,
+                    self._native_cache_write,
                 ),
                 source,
             )
@@ -186,7 +196,15 @@ class WebSocketUsage:
                 event.usage.output_tokens,
                 self._gemini_last.output_tokens,
             )
-            if input_delta == 0 and output_delta == 0:
+            cache_read_delta = _counter_delta(
+                event.usage.cache_read_tokens,
+                self._gemini_last.cache_read_tokens,
+            )
+            cache_write_delta = _counter_delta(
+                event.usage.cache_write_tokens,
+                self._gemini_last.cache_write_tokens,
+            )
+            if input_delta == output_delta == cache_read_delta == cache_write_delta == 0:
                 return False
             self._gemini_last = event.usage
         else:
@@ -195,8 +213,12 @@ class WebSocketUsage:
             self._openai_response_ids.add(event.identity)
             input_delta = event.usage.input_tokens
             output_delta = event.usage.output_tokens
+            cache_read_delta = event.usage.cache_read_tokens
+            cache_write_delta = event.usage.cache_write_tokens
         self._native_input += input_delta
         self._native_output += output_delta
+        self._native_cache_read += cache_read_delta
+        self._native_cache_write += cache_write_delta
         self._has_native = True
         return True
 
@@ -206,6 +228,8 @@ class WebSocketUsage:
         copied._estimated_output = self._estimated_output
         copied._native_input = self._native_input
         copied._native_output = self._native_output
+        copied._native_cache_read = self._native_cache_read
+        copied._native_cache_write = self._native_cache_write
         copied._native_estimated_input = self._native_estimated_input
         copied._native_estimated_output = self._native_estimated_output
         copied._has_native = self._has_native
@@ -723,6 +747,8 @@ class WebSocketGatewayService:
                                 outbound_protocol=route.protocol if route is not None else None,
                                 prompt_tokens=usage_result.usage.input_tokens,
                                 completion_tokens=usage_result.usage.output_tokens,
+                                cache_read_tokens=usage_result.usage.cache_read_tokens,
+                                cache_write_tokens=usage_result.usage.cache_write_tokens,
                                 usage_source=usage_result.usage_source,
                                 cost=cost,
                                 latency_ms=_elapsed_ms(started_at),
@@ -738,6 +764,8 @@ class WebSocketGatewayService:
                                 outbound_protocol=route.protocol if route is not None else None,
                                 prompt_tokens=usage_result.usage.input_tokens,
                                 completion_tokens=usage_result.usage.output_tokens,
+                                cache_read_tokens=usage_result.usage.cache_read_tokens,
+                                cache_write_tokens=usage_result.usage.cache_write_tokens,
                                 usage_source=usage_result.usage_source,
                                 cost=cost,
                                 latency_ms=_elapsed_ms(started_at),
@@ -869,11 +897,11 @@ def _native_usage_event(protocol: Protocol, frame: Frame) -> _NativeUsageEvent |
         usage = response.get("usage") if isinstance(response, Mapping) else payload.get("usage")
         if not isinstance(usage, Mapping):
             return None
-        parsed = _usage_from_fields(
-            usage,
-            ("input_tokens", "prompt_tokens"),
-            ("output_tokens", "completion_tokens"),
-        )
+        operation = "responses" if "input_tokens" in usage else "chat_completions"
+        try:
+            parsed = extract_native_openai_usage(operation, {"usage": usage})
+        except (GatewayError, ValueError):
+            parsed = None
         if parsed is None:
             return None
         response_id = response.get("id") if isinstance(response, Mapping) else None
@@ -887,34 +915,21 @@ def _native_usage_event(protocol: Protocol, frame: Frame) -> _NativeUsageEvent |
         usage = server_content.get("usageMetadata") or server_content.get("usage_metadata")
     if not isinstance(usage, Mapping):
         return None
-    parsed = _usage_from_fields(
-        usage,
-        ("promptTokenCount", "prompt_token_count", "input_tokens"),
-        ("candidatesTokenCount", "candidates_token_count", "output_tokens"),
-    )
+    try:
+        parsed = extract_provider_usage(Protocol.GEMINI, {"usageMetadata": usage})
+    except (GatewayError, ValueError):
+        parsed = None
     if parsed is None:
         return None
     return _NativeUsageEvent(parsed, _frame_digest(frame), True)
-
-
-def _usage_from_fields(
-    usage: Mapping[str, Any],
-    input_fields: tuple[str, ...],
-    output_fields: tuple[str, ...],
-) -> CanonicalUsage | None:
-    input_value = next((usage[name] for name in input_fields if name in usage), None)
-    output_value = next((usage[name] for name in output_fields if name in usage), None)
-    if not isinstance(input_value, int) or isinstance(input_value, bool) or input_value < 0:
-        return None
-    if not isinstance(output_value, int) or isinstance(output_value, bool) or output_value < 0:
-        return None
-    return CanonicalUsage(input_value, output_value)
 
 
 def _usage_delta(current: CanonicalUsage, settled: CanonicalUsage) -> CanonicalUsage:
     return CanonicalUsage(
         max(0, current.input_tokens - settled.input_tokens),
         max(0, current.output_tokens - settled.output_tokens),
+        max(0, current.cache_read_tokens - settled.cache_read_tokens),
+        max(0, current.cache_write_tokens - settled.cache_write_tokens),
     )
 
 
@@ -928,7 +943,12 @@ def _frame_digest(frame: Frame) -> str:
 
 
 def _total_tokens(usage: CanonicalUsage) -> int:
-    return usage.input_tokens + usage.output_tokens
+    return (
+        usage.input_tokens
+        + usage.output_tokens
+        + usage.cache_read_tokens
+        + usage.cache_write_tokens
+    )
 
 
 def _normalize_requested_model(model: str, protocol: Protocol) -> str:

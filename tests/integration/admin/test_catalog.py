@@ -58,6 +58,8 @@ async def _create_model(
             "display_name": "Fast Chat",
             "input_price_per_million": "0.15000000",
             "output_price_per_million": "0.60000000",
+            "cache_read_price_per_million": "0.03000000",
+            "cache_write_price_per_million": "0.18000000",
             "enabled": True,
             "aliases": aliases if aliases is not None else ["fast-chat"],
             "routing_strategy": "weighted_random",
@@ -330,6 +332,10 @@ async def test_protocol_header_update_omission_preserves_and_null_clears(
         ("input_price_per_million", "0.000000001"),
         ("output_price_per_million", "-1"),
         ("output_price_per_million", "1.123456789"),
+        ("cache_read_price_per_million", "-0.00000001"),
+        ("cache_read_price_per_million", "0.000000001"),
+        ("cache_write_price_per_million", "-1"),
+        ("cache_write_price_per_million", "1.123456789"),
     ],
 )
 async def test_model_prices_are_non_negative_with_at_most_eight_decimal_places(
@@ -342,6 +348,8 @@ async def test_model_prices_are_non_negative_with_at_most_eight_decimal_places(
         "display_name": "Invalid Price",
         "input_price_per_million": "0",
         "output_price_per_million": "0",
+        "cache_read_price_per_million": "0",
+        "cache_write_price_per_million": "0",
         "aliases": [],
     }
     payload[field] = value
@@ -517,6 +525,25 @@ async def test_models_and_routes_have_list_and_detail_crud_views(
     assert route_listing.status_code == route_detail.status_code == 200
     assert route_listing.json() == [route_body]
     assert route_detail.json() == route_body
+
+
+async def test_model_cache_prices_round_trip_and_update(admin_client: AsyncClient) -> None:
+    model = await _create_model(admin_client, canonical_name=f"cache-model-{uuid4().hex}")
+
+    assert model["cache_read_price_per_million"] == "0.03000000"
+    assert model["cache_write_price_per_million"] == "0.18000000"
+
+    updated = await admin_client.patch(
+        f"/admin/models/{model['id']}",
+        json={
+            "cache_read_price_per_million": "0.04000000",
+            "cache_write_price_per_million": "0.20000000",
+        },
+    )
+
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["cache_read_price_per_million"] == "0.04000000"
+    assert updated.json()["cache_write_price_per_million"] == "0.20000000"
 
 
 async def test_provider_and_model_deletion_with_request_history_returns_conflict(

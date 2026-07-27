@@ -203,6 +203,8 @@ export interface ModelCreate {
   display_name: string
   input_price_per_million?: string
   output_price_per_million?: string
+  cache_read_price_per_million?: string
+  cache_write_price_per_million?: string
   price_multiplier?: number
   enabled?: boolean
   aliases?: AliasInput[]
@@ -214,6 +216,8 @@ export interface ModelUpdate {
   display_name?: string | null
   input_price_per_million?: string | null
   output_price_per_million?: string | null
+  cache_read_price_per_million?: string | null
+  cache_write_price_per_million?: string | null
   price_multiplier?: number | null
   enabled?: boolean | null
   aliases?: AliasInput[] | null
@@ -232,6 +236,8 @@ export interface ModelResponse {
   display_name: string
   input_price_per_million: string
   output_price_per_million: string
+  cache_read_price_per_million: string
+  cache_write_price_per_million: string
   price_multiplier: number
   enabled: boolean
   aliases: ModelAliasResponse[]
@@ -353,6 +359,8 @@ export interface RequestLogSummary {
   http_status: number | null
   prompt_tokens: number
   completion_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
   usage_source: UsageSource | null
   cost: string
   latency_ms: number | null

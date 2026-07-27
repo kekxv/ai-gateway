@@ -121,6 +121,19 @@ class TestBothMultipliers:
         # 0.02 * 1.5 * 2.0 = 0.06
         assert cost == Decimal("0.06000000")
 
+    def test_both_multipliers_apply_after_all_cache_buckets(self) -> None:
+        cost = calculate_cost(
+            input_price=Decimal("2.00000000"),
+            output_price=Decimal("20.00000000"),
+            cache_read_price=Decimal("5.00000000"),
+            cache_write_price=Decimal("10.00000000"),
+            usage=CanonicalUsage(1_000_000, 1_000_000, 1_000_000, 1_000_000),
+            model_multiplier=Decimal("1.50"),
+            provider_multiplier=Decimal("2.00"),
+        )
+
+        assert cost == Decimal("111.00000000")
+
 
 # ---------------------------------------------------------------------------
 # Edge / special cases

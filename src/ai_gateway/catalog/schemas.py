@@ -121,6 +121,8 @@ class ModelCreate(BaseModel):
     display_name: CatalogName
     input_price_per_million: Price = Decimal("0")
     output_price_per_million: Price = Decimal("0")
+    cache_read_price_per_million: Price = Decimal("0")
+    cache_write_price_per_million: Price = Decimal("0")
     enabled: bool = True
     aliases: list[AliasInput] = Field(default_factory=list)
     routing_strategy: RoutingStrategy = "weighted_random"
@@ -139,6 +141,8 @@ class ModelUpdate(BaseModel):
     display_name: CatalogName | None = None
     input_price_per_million: Price | None = None
     output_price_per_million: Price | None = None
+    cache_read_price_per_million: Price | None = None
+    cache_write_price_per_million: Price | None = None
     enabled: bool | None = None
     aliases: list[AliasInput] | None = None
     routing_strategy: RoutingStrategy | None = None
@@ -163,6 +167,8 @@ class ModelResponse(BaseModel):
     display_name: str
     input_price_per_million: Decimal
     output_price_per_million: Decimal
+    cache_read_price_per_million: Decimal
+    cache_write_price_per_million: Decimal
     enabled: bool
     aliases: list[ModelAliasResponse]
     routing_strategy: RoutingStrategy
