@@ -126,7 +126,9 @@ function downloadCatalog(blob: Blob): void {
 function fileText(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
-    reader.onerror = () => reject(new Error('文件读取失败'))
+    reader.onerror = () => {
+      reject(new Error('文件读取失败'))
+    }
     reader.onload = () => {
       if (typeof reader.result === 'string') resolve(reader.result)
       else reject(new Error('文件读取失败'))

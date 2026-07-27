@@ -392,4 +392,3 @@
   git add <only-files-changed-to-fix-quality-gate>
   git commit -m "fix: satisfy catalog import export quality gate"
   ```
-
