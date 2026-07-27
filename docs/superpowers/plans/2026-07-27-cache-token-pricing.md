@@ -259,4 +259,3 @@ Run: `npm run build`
 Run: `git diff --check && git status --short && git diff --stat`
 
 Confirm no unrelated worktree or main-branch files are included.
-
