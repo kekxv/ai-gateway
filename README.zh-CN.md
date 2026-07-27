@@ -10,7 +10,8 @@ Lean AI Gateway 是一个专注于多 AI 提供商的网关，支持 OpenAI、Cl
 
 - 兼容 OpenAI、Claude 和 Gemini 的 HTTP API，并支持 SSE 流式响应。
 - 支持 OpenAI Realtime 与 Gemini Live WebSocket 中继。
-- 自动转换 OpenAI、Claude、Gemini 三种请求/响应协议；协议相同时直接透传。
+- 自动转换 OpenAI、Claude、Gemini 三种请求/响应协议；OpenAI Responses 默认原生透传，
+  其他按下述端点规则处理。
 - 基于权重的随机路由，使用 MySQL 保存健康状态、冷却时间和半开探测，并自动避开故障路由。
 - 单个提供商可配置多种协议、可选模型自动发现、HTTP/HTTPS 代理，以及支持主机、端口、
   IPv4/IPv6 和 CIDR 的 `NO_PROXY` 规则。
@@ -49,7 +50,7 @@ Lean AI Gateway 是一个专注于多 AI 提供商的网关，支持 OpenAI、Cl
 网关支持多种 OpenAI API 格式，以兼容各种 CLI 工具和应用程序：
 
 - **Chat Completions API** (`/v1/chat/completions`)：标准的聊天补全端点
-- **Responses API** (`/v1/responses`)：新的统一 API，支持简单字符串输入和结构化对话历史。兼容 Claude CLI 等现代工具。
+- **Responses API** (`/v1/responses`)：OpenAI 后端默认原生透传；Claude、Gemini 或明确不支持 Responses 的 OpenAI 兼容后端使用可移植转换。
 - **Embeddings API** (`/v1/embeddings`)：生成文本嵌入，用于 RAG 和向量操作
 - **Completions API** (`/v1/completions`)：向后兼容的旧版文本补全端点
 
@@ -62,9 +63,11 @@ Responses API 接受两种格式：
 {"model": "gpt-4", "input": [{"role": "user", "content": "你好"}]}
 ```
 
-所有端点都会自动转换为规范格式并路由到适当的上游提供商。
-
-### OpenAI API 兼容性
+OpenAI 提供商协议默认支持原生 Responses。仅当 OpenAI 兼容后端只提供 Chat Completions
+而不提供 Responses 时，才设置 `supports_responses=false`，启用 Responses 到 Chat 的可移植
+回退。其他情况下，Responses 原生字段会转发到 `/v1/responses`。Embeddings 和 Legacy
+Completions 必须选择 OpenAI 路由，并分别转发到 `/v1/embeddings` 和 `/v1/completions`；
+不会转换为 Chat、Claude 或 Gemini。可移植字段范围见[协议兼容性](docs/protocol-compatibility.md)。
 
 ## 环境要求
 

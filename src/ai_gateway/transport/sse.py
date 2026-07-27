@@ -8,6 +8,7 @@ import httpx
 import orjson
 
 from ai_gateway.core.enums import Protocol
+from ai_gateway.protocols.base import StreamEncoder
 from ai_gateway.protocols.registry import get_adapter
 from ai_gateway.protocols.types import CanonicalUsage, StreamEvent
 
@@ -127,6 +128,8 @@ class GatewayContext:
     source_protocol: Protocol
     target_protocol: Protocol
     endpoint_path: str = "/v1/chat/completions"
+    openai_operation: str = "chat_completions"
+    native_openai_passthrough: bool = False
     initial_input_tokens: int | None = None
     audit_body_limit_bytes: int = 1_048_576
     started_at: float = field(default_factory=monotonic)
@@ -193,6 +196,29 @@ class GatewayContext:
         content = ""
         usage: CanonicalUsage | None = None
         if self.source_protocol is Protocol.OPENAI:
+            if self.openai_operation == "responses" and self.native_openai_passthrough:
+                event_type = payload.get("type")
+                if event_type in {"response.completed", "response.incomplete", "response.failed"}:
+                    self.semantic_finish_observed = True
+                    self.terminal_done_observed = True
+                    if event_type == "response.failed":
+                        self.error_observed = True
+                    response = payload.get("response")
+                    native_usage = response.get("usage") if isinstance(response, dict) else None
+                    if isinstance(native_usage, dict):
+                        input_tokens = native_usage.get("input_tokens")
+                        output_tokens = native_usage.get("output_tokens")
+                        if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+                            usage = CanonicalUsage(input_tokens, output_tokens)
+                            self.provider_usage_complete = True
+                if event_type == "response.output_text.delta" and isinstance(
+                    payload.get("delta"), str
+                ):
+                    content = payload["delta"]
+                if usage is not None:
+                    self._merge_usage(usage)
+                self._observe_content(content)
+                return
             native_usage = payload.get("usage")
             if isinstance(native_usage, dict):
                 input_tokens = native_usage.get("prompt_tokens")
@@ -338,8 +364,10 @@ async def stream_gateway_response(
     is_responses_api = (
         context.target_protocol is Protocol.OPENAI
         and context.endpoint_path == "/v1/responses"
+        and not context.native_openai_passthrough
     )
 
+    stream_encoder: StreamEncoder
     if is_responses_api:
         from ai_gateway.protocols.openai import _ResponsesAPIStreamEncoder
         stream_encoder = _ResponsesAPIStreamEncoder()

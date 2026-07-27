@@ -18,6 +18,7 @@ class RouteCandidate:
     websocket_url: str | None
     upstream_model: str
     weight: int
+    supports_responses: bool = True
     runtime_state: RouteRuntimeState = RouteRuntimeState.CLOSED
     disabled_until: datetime | None = None
     provider_credential_encrypted: bytes = b""

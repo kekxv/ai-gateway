@@ -57,6 +57,19 @@ The standard chat completions endpoint compatible with OpenAI's Chat API.
 
 The newer unified API that supports both simple string input and structured conversation history. This is the recommended API for new integrations and is compatible with Claude CLI and other modern tools.
 
+OpenAI provider protocols default to native Responses support. On such routes, the gateway calls
+the upstream `/v1/responses` endpoint, changes only the model alias in the request JSON, and
+forwards non-streaming response bytes or streaming SSE bytes unchanged. This preserves stateful
+fields, built-in tools, vendor events, event IDs, and other native OpenAI features.
+
+Set `supports_responses=false` only for an OpenAI-compatible provider that exposes Chat
+Completions but not Responses. That route uses `/v1/chat/completions` and converts the portable
+subset. Claude and Gemini routes use the same portable conversion path. Portable conversion
+supports string/message input, text and image content, function tools, function calls/results,
+tool choice, sampling controls, output limits, and streaming equivalents. Stateful fields such as
+`previous_response_id` and `conversation`, background execution, and built-in tools return
+`422 unsupported_feature` on converted routes before an upstream request is sent.
+
 **Simple String Input:**
 ```json
 {
@@ -85,7 +98,8 @@ The newer unified API that supports both simple string input and structured conv
     {"type": "message", "role": "user", "content": "What's the weather in Paris?"},
     {
       "type": "function_call",
-      "id": "call_123",
+      "id": "fc_123",
+      "call_id": "call_123",
       "name": "get_weather",
       "arguments": "{\"city\": \"Paris\"}"
     },
@@ -145,32 +159,23 @@ The newer unified API that supports both simple string input and structured conv
 
 **Streaming Response:**
 
-When `stream: true` is set, the response is sent as Server-Sent Events (SSE) with the following event types:
+When `stream: true` is set, native Responses routes preserve the upstream SSE bytes. Converted
+routes synthesize official Responses events. Every converted event has an SSE `event:` name that
+matches its JSON `type`, a monotonically increasing `sequence_number`, and the required response,
+item, output, and content identifiers. A shortened text sequence looks like this:
 
-```
+```text
 event: response.created
-data: {"type": "response.created", "response": {"id": "resp_...", "object": "response", "created_at": 1677652288, "model": "gpt-4", "output": [], "status": "in_progress"}}
-
-event: response.in_progress
-data: {"type": "response.in_progress", "response": {"id": "resp_...", "object": "response", "created_at": 1677652288, "model": "gpt-4", "output": [], "status": "in_progress"}}
-
-event: response.output_item.added
-data: {"type": "response.output_item.added", "output_index": 0, "item": {"type": "message", "id": "msg_...", "role": "assistant", "status": "in_progress", "content": []}}
-
-event: response.content_part.added
-data: {"type": "response.content_part.added", "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": "", "annotations": []}}
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_...","object":"response","status":"in_progress","output":[]}}
 
 event: response.output_text.delta
-data: {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "Hello"}
+data: {"type":"response.output_text.delta","sequence_number":4,"response_id":"resp_...","item_id":"msg_...","output_index":0,"content_index":0,"delta":"Hello"}
 
-event: response.content_part.done
-data: {"type": "response.content_part.done", "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": "Hello! How can I help you today?", "annotations": []}}
-
-event: response.output_item.done
-data: {"type": "response.output_item.done", "output_index": 0, "item": {"type": "message", "id": "msg_...", "role": "assistant", "status": "completed", "content": []}}
+event: response.output_text.done
+data: {"type":"response.output_text.done","sequence_number":5,"response_id":"resp_...","item_id":"msg_...","output_index":0,"content_index":0,"text":"Hello"}
 
 event: response.completed
-data: {"type": "response.completed", "response": {"id": "resp_...", "object": "response", "created_at": 1677652288, "model": "gpt-4", "output": [], "status": "completed", "usage": {"input_tokens": 9, "output_tokens": 12, "total_tokens": 21}}}
+data: {"type":"response.completed","sequence_number":8,"response":{"id":"resp_...","object":"response","status":"completed","output":[{"type":"message","id":"msg_...","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Hello","annotations":[]}]}],"usage":{"input_tokens":9,"output_tokens":1,"total_tokens":10}}}
 ```
 
 ### Embeddings API
@@ -178,6 +183,10 @@ data: {"type": "response.completed", "response": {"id": "resp_...", "object": "r
 **Endpoint:** `POST /v1/embeddings`
 
 Generate text embeddings for RAG (Retrieval-Augmented Generation) and vector operations.
+
+This endpoint requires an eligible OpenAI provider protocol and calls the upstream
+`/v1/embeddings` endpoint. The gateway rewrites the model alias but does not convert the request or
+response to Chat, Claude, or Gemini.
 
 **Request:**
 ```json
@@ -209,6 +218,9 @@ Generate text embeddings for RAG (Retrieval-Augmented Generation) and vector ope
 **Endpoint:** `POST /v1/completions`
 
 Legacy text completions endpoint for backward compatibility with older applications.
+
+This endpoint requires an eligible OpenAI provider protocol and calls the upstream
+`/v1/completions` endpoint. It is not rewritten as Chat Completions.
 
 **Request:**
 ```json
@@ -243,7 +255,12 @@ Legacy text completions endpoint for backward compatibility with older applicati
 
 ## Protocol Conversion
 
-All OpenAI API requests are automatically converted to the gateway's canonical format and routed to the appropriate upstream provider (OpenAI, Claude, or Gemini). The gateway handles all protocol differences transparently, so you can use the OpenAI API format regardless of which upstream provider you're using.
+Chat Completions can be converted among OpenAI, Claude, and Gemini routes. Responses uses native
+OpenAI pass-through whenever the selected OpenAI provider protocol has
+`supports_responses=true` (the default); only explicit OpenAI fallback or a Claude/Gemini route
+uses the portable conversion subset. Embeddings and Legacy Completions are OpenAI-only native
+operations. Provider-specific fields outside a portable subset are not claimed to work across
+protocols and return `422 unsupported_feature` when conversion would be unsafe.
 
 ## Authentication
 

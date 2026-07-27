@@ -30,6 +30,7 @@ async def _create_provider(
                     "protocol": "openai",
                     "base_url": "https://api.example.com/v1",
                     "extra_headers": {"z-header": "last", "a-header": "first"},
+                    "supports_responses": False,
                     "enabled": True,
                 },
                 {
@@ -77,6 +78,8 @@ async def test_provider_crud_supports_multiple_protocols_and_hides_secrets(
     assert body["has_credential"] is True
     assert len(body["protocols"]) == 2
     assert body["protocols"][0]["has_extra_headers"] is True
+    assert body["protocols"][0]["supports_responses"] is False
+    assert body["protocols"][1]["supports_responses"] is True
     serialized = str(body).lower()
     assert "secret" not in serialized
     assert "credential_encrypted" not in serialized

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import orjson
 import pytest
 
-from ai_gateway.transport.sse import SSEDecoder, SSEEvent
+from ai_gateway.core.enums import Protocol
+from ai_gateway.protocols.types import CanonicalUsage
+from ai_gateway.transport.sse import GatewayContext, SSEDecoder, SSEEvent
 
 
 def test_decodes_lf_and_crlf_frames_and_preserves_raw_bytes() -> None:
@@ -75,3 +78,56 @@ def test_ignores_unknown_fields_and_utf8_bom() -> None:
     wire = b"\xef\xbb\xbfignored: value\nid: 7\ndata: ok\n\n"
 
     assert SSEDecoder().feed(wire) == [SSEEvent(data=b"ok", event_id="7", raw=wire)]
+
+
+def test_native_responses_terminal_event_supplies_usage_and_completion() -> None:
+    context = GatewayContext(
+        Protocol.OPENAI,
+        Protocol.OPENAI,
+        endpoint_path="/v1/responses",
+        openai_operation="responses",
+        native_openai_passthrough=True,
+    )
+    context.observe_passthrough(
+        SSEEvent(
+            data=orjson.dumps(
+                {
+                    "type": "response.output_text.delta",
+                    "response_id": "resp_123",
+                    "item_id": "msg_123",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "hello",
+                    "sequence_number": 3,
+                }
+            ),
+            raw=b"",
+        )
+    )
+    context.observe_passthrough(
+        SSEEvent(
+            data=orjson.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_123",
+                        "object": "response",
+                        "status": "completed",
+                        "usage": {
+                            "input_tokens": 8,
+                            "output_tokens": 3,
+                            "total_tokens": 11,
+                        },
+                    },
+                    "sequence_number": 4,
+                }
+            ),
+            raw=b"",
+        )
+    )
+
+    assert context.semantic_finish_observed is True
+    assert context.terminal_done_observed is True
+    assert context.provider_usage_complete is True
+    assert context.observed_usage == CanonicalUsage(8, 3)
+    assert context.estimated_output_tokens == 2

@@ -45,6 +45,8 @@ def proxy_settings(
             http_proxy=http_proxy,
             https_proxy=https_proxy,
             no_proxy=no_proxy,
+            audit_log_cleanup_interval_seconds=3600,
+            audit_log_retention_days=30,
         ),
     )
 
@@ -404,9 +406,13 @@ async def test_fastapi_lifespan_publishes_and_closes_the_factory_once(
             self.stop_calls += 1
             self.stopped.set()
 
+    async def verify_database(*_: object, **__: object) -> None:
+        return None
+
     monkeypatch.setattr(main, "HttpClientFactory", StubHttpClientFactory)
     monkeypatch.setattr(main, "ModelSyncScheduler", StubModelSyncScheduler)
     monkeypatch.setattr(main, "BillingRecoveryScheduler", StubBillingRecoveryScheduler)
+    monkeypatch.setattr(main, "verify_database", verify_database)
     settings = proxy_settings()
     app = main.create_app(settings=settings)
 

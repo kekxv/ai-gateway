@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from time import monotonic
-from typing import Any
+from typing import Any, Literal
 from typing import Protocol as TypingProtocol
 from urllib.parse import quote
 from uuid import UUID, uuid4
@@ -39,6 +39,7 @@ from ai_gateway.billing.service import (
 from ai_gateway.billing.usage import (
     UsageResult,
     estimate_request_tokens,
+    extract_native_openai_usage,
     resolve_usage,
 )
 from ai_gateway.catalog.repository import CatalogRepository
@@ -53,7 +54,13 @@ from ai_gateway.protocols.base import (
     rewrite_passthrough_request,
 )
 from ai_gateway.protocols.registry import get_adapter
-from ai_gateway.protocols.types import CanonicalRequest, CanonicalResponse, CanonicalUsage, TextPart
+from ai_gateway.protocols.types import (
+    CanonicalMessage,
+    CanonicalRequest,
+    CanonicalResponse,
+    CanonicalUsage,
+    TextPart,
+)
 from ai_gateway.routing.service import router_for_settings
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFailure
 from ai_gateway.transport.sse import GatewayContext, stream_gateway_response
@@ -62,6 +69,13 @@ from ai_gateway.transport.upstream import build_upstream_request
 logger = logging.getLogger(__name__)
 
 _SAFE_NATIVE_ERROR_HEADERS = frozenset({"retry-after", "www-authenticate"})
+
+type OpenAIOperation = Literal[
+    "chat_completions",
+    "responses",
+    "embeddings",
+    "completions",
+]
 
 
 class HttpClientProvider(TypingProtocol):
@@ -172,6 +186,8 @@ class _PreparedRequest:
     requested_model: str
     inbound_protocol: Protocol
     endpoint_path: str = "/v1/chat/completions"
+    openai_operation: OpenAIOperation = "chat_completions"
+    required_protocol: Protocol | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +226,8 @@ class GatewayService:
         path_model: str | None = None,
         force_stream: bool = False,
         endpoint_path: str = "/v1/chat/completions",
+        openai_operation: OpenAIOperation = "chat_completions",
+        required_protocol: Protocol | None = None,
     ) -> GatewayOutput | GatewayStreamOutput:
         started_at = monotonic()
 
@@ -221,7 +239,7 @@ class GatewayService:
             payload["stream"] = True
 
         resolved = await CatalogRepository(self._session).resolve_model(requested_model)
-        canonical = get_adapter(inbound_protocol).decode_request(payload)
+        canonical = _decode_gateway_request(payload, inbound_protocol, openai_operation)
         prepared = _PreparedRequest(
             raw_body,
             payload,
@@ -229,6 +247,8 @@ class GatewayService:
             requested_model,
             inbound_protocol,
             endpoint_path,
+            openai_operation,
+            required_protocol,
         )
 
         priced_model = await self._session.get(Model, resolved.model_id)
@@ -384,6 +404,7 @@ class GatewayService:
             output, response_payload, canonical_response = _convert_response(
                 inbound_protocol=inbound_protocol,
                 endpoint_path=prepared.endpoint_path,
+                openai_operation=prepared.openai_operation,
                 route=route,
                 upstream=upstream,
             )
@@ -393,6 +414,8 @@ class GatewayService:
                 request=replace(canonical, model=route.upstream_model),
                 canonical_response=canonical_response,
                 response_body=upstream.content,
+                openai_operation=prepared.openai_operation,
+                native_openai_operation=_route_uses_native_openai_operation(prepared, route),
             )
             pending_usage_result = usage_result
             await self._persist_recovery(
@@ -519,6 +542,10 @@ class GatewayService:
                 source_protocol=attempt.route.protocol,
                 target_protocol=inbound_protocol,
                 endpoint_path=prepared.endpoint_path,
+                openai_operation=prepared.openai_operation,
+                native_openai_passthrough=_route_uses_native_openai_operation(
+                    prepared, attempt.route
+                ),
                 initial_input_tokens=estimated_input_tokens,
                 audit_body_limit_bytes=self._settings.audit_body_limit_bytes,
                 started_at=started_at,
@@ -812,6 +839,7 @@ class GatewayService:
                 route = await router.select_route(
                     model_id,
                     principal,
+                    required_protocol=prepared.required_protocol,
                     requested_model=prepared.requested_model,
                     excluded_route_ids=attempted_route_ids,
                 )
@@ -833,12 +861,17 @@ class GatewayService:
             attempted_route_ids.add(route.route_id)
             last_route = route
             try:
-                body = _upstream_body(prepared, route)
+                body = _upstream_body(
+                    prepared,
+                    route,
+                    default_max_output_tokens=self._settings.billing_default_max_output_tokens,
+                )
                 url = upstream_url(
                     route.protocol,
                     route.base_url,
                     route.upstream_model,
                     stream=prepared.canonical.stream,
+                    openai_operation=_outbound_openai_operation(prepared, route),
                 )
                 upstream_request = build_upstream_request(
                     route,
@@ -1133,11 +1166,18 @@ def upstream_url(
     upstream_model: str,
     *,
     stream: bool = False,
+    openai_operation: OpenAIOperation = "chat_completions",
 ) -> str:
     selected = Protocol(protocol)
     base = base_url.rstrip("/")
     if selected is Protocol.OPENAI:
-        return f"{base}/chat/completions" if base.endswith("/v1") else f"{base}/v1/chat/completions"
+        suffix = {
+            "chat_completions": "chat/completions",
+            "responses": "responses",
+            "embeddings": "embeddings",
+            "completions": "completions",
+        }[openai_operation]
+        return f"{base}/{suffix}" if base.endswith("/v1") else f"{base}/v1/{suffix}"
     if selected is Protocol.CLAUDE:
         return f"{base}/messages" if base.endswith("/v1") else f"{base}/v1/messages"
     encoded_model = quote(upstream_model.removeprefix("models/"), safe="")
@@ -1176,8 +1216,118 @@ def _request_payload(
     return payload, normalized_model
 
 
-def _upstream_body(prepared: _PreparedRequest, route: RouteCandidate) -> bytes:
-    if route.protocol is prepared.inbound_protocol:
+def _decode_gateway_request(
+    payload: Mapping[str, Any],
+    inbound_protocol: Protocol,
+    openai_operation: OpenAIOperation,
+) -> CanonicalRequest:
+    if inbound_protocol is Protocol.OPENAI and openai_operation in {"embeddings", "completions"}:
+        return _native_openai_billing_request(payload, openai_operation)
+    if inbound_protocol is Protocol.OPENAI and openai_operation == "responses":
+        return _native_responses_billing_request(payload)
+    return get_adapter(inbound_protocol).decode_request(payload)
+
+
+def _native_openai_billing_request(
+    payload: Mapping[str, Any],
+    operation: Literal["embeddings", "completions"],
+) -> CanonicalRequest:
+    model = payload.get("model")
+    if not isinstance(model, str):
+        raise InvalidRequestError("A non-empty model is required")
+    source = payload.get("input") if operation == "embeddings" else payload.get("prompt")
+    texts = _native_text_values(source)
+    messages = (
+        (CanonicalMessage(role="user", content=tuple(TextPart(value) for value in texts)),)
+        if texts
+        else ()
+    )
+    max_tokens = payload.get("max_tokens")
+    max_output_tokens = (
+        max_tokens if isinstance(max_tokens, int) and not isinstance(max_tokens, bool) else None
+    )
+    stop = payload.get("stop")
+    stop_sequences = (
+        (stop,)
+        if isinstance(stop, str)
+        else tuple(value for value in stop if isinstance(value, str))
+        if isinstance(stop, list)
+        else ()
+    )
+    temperature = payload.get("temperature")
+    top_p = payload.get("top_p")
+    return CanonicalRequest(
+        model=model,
+        messages=messages,
+        system=(),
+        tools=(),
+        tool_choice=None,
+        temperature=(
+            float(temperature)
+            if isinstance(temperature, (int, float)) and not isinstance(temperature, bool)
+            else None
+        ),
+        top_p=(
+            float(top_p)
+            if isinstance(top_p, (int, float)) and not isinstance(top_p, bool)
+            else None
+        ),
+        max_output_tokens=max_output_tokens,
+        stop_sequences=stop_sequences,
+        stream=payload.get("stream") is True,
+        metadata={},
+    )
+
+
+def _native_text_values(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, list):
+        return tuple(item for item in value if isinstance(item, str))
+    return ()
+
+
+def _native_responses_billing_request(payload: Mapping[str, Any]) -> CanonicalRequest:
+    model = payload.get("model")
+    if not isinstance(model, str):
+        raise InvalidRequestError("A non-empty model is required")
+    texts = _native_text_values(payload.get("input"))
+    instructions = payload.get("instructions")
+    max_tokens = payload.get("max_output_tokens")
+    return CanonicalRequest(
+        model=model,
+        messages=(
+            (CanonicalMessage(role="user", content=tuple(TextPart(value) for value in texts)),)
+            if texts
+            else ()
+        ),
+        system=(TextPart(instructions),) if isinstance(instructions, str) else (),
+        tools=(),
+        tool_choice=None,
+        temperature=None,
+        top_p=None,
+        max_output_tokens=(
+            max_tokens
+            if isinstance(max_tokens, int) and not isinstance(max_tokens, bool)
+            else None
+        ),
+        stop_sequences=(),
+        stream=payload.get("stream") is True,
+        metadata={},
+    )
+
+
+def _upstream_body(
+    prepared: _PreparedRequest,
+    route: RouteCandidate,
+    *,
+    default_max_output_tokens: int = 4096,
+) -> bytes:
+    if route.protocol is prepared.inbound_protocol and not (
+        prepared.openai_operation == "responses"
+        and route.protocol is Protocol.OPENAI
+        and not route.supports_responses
+    ):
         if route.protocol is Protocol.GEMINI:
             payload = prepared.payload.copy()
             payload.pop("model", None)
@@ -1189,8 +1339,18 @@ def _upstream_body(prepared: _PreparedRequest, route: RouteCandidate) -> bytes:
             route.upstream_model,
         )
         return rewritten
-    canonical = replace(prepared.canonical, model=route.upstream_model)
-    payload = get_adapter(route.protocol).encode_request(canonical)
+    canonical = prepared.canonical
+    if prepared.openai_operation == "responses":
+        from ai_gateway.protocols.openai import OpenAIAdapter
+
+        canonical = OpenAIAdapter().decode_responses_request(prepared.payload)
+    canonical = replace(canonical, model=route.upstream_model)
+    if route.protocol is Protocol.CLAUDE:
+        from ai_gateway.protocols.claude import ClaudeAdapter
+
+        payload = ClaudeAdapter(default_max_output_tokens).encode_request(canonical)
+    else:
+        payload = get_adapter(route.protocol).encode_request(canonical)
     if route.protocol is Protocol.GEMINI:
         payload.pop("model", None)
         payload.pop("stream", None)
@@ -1207,6 +1367,7 @@ def _convert_response(
     *,
     inbound_protocol: Protocol,
     endpoint_path: str,
+    openai_operation: OpenAIOperation,
     route: RouteCandidate,
     upstream: httpx.Response,
 ) -> tuple[GatewayOutput, dict[str, Any], CanonicalResponse | None]:
@@ -1215,6 +1376,15 @@ def _convert_response(
     source_adapter = get_adapter(route.protocol)
     canonical_response: CanonicalResponse | None = None
     if route.protocol is inbound_protocol:
+        if inbound_protocol is Protocol.OPENAI and (
+            openai_operation in {"embeddings", "completions"}
+            or (openai_operation == "responses" and route.supports_responses)
+        ):
+            return (
+                GatewayOutput(upstream.content, upstream.status_code, content_type),
+                payload,
+                None,
+            )
         try:
             canonical_response = source_adapter.decode_response(payload)
         except (GatewayError, ValueError):
@@ -1262,7 +1432,13 @@ def _resolve_response_usage(
     request: CanonicalRequest,
     canonical_response: CanonicalResponse | None,
     response_body: bytes,
+    openai_operation: OpenAIOperation,
+    native_openai_operation: bool,
 ) -> UsageResult:
+    if route.protocol is Protocol.OPENAI and native_openai_operation:
+        native_usage = extract_native_openai_usage(openai_operation, response_payload)
+        if native_usage is not None:
+            return UsageResult(native_usage, UsageSource.PROVIDER)
     response_text = _canonical_response_text(canonical_response)
     if not response_text:
         response_text = response_body.decode("utf-8", errors="replace")
@@ -1280,6 +1456,37 @@ def _resolve_response_usage(
             request=request,
             response_text=response_text,
         )
+
+
+def route_uses_native_responses(prepared: _PreparedRequest, route: RouteCandidate) -> bool:
+    return (
+        prepared.inbound_protocol is Protocol.OPENAI
+        and prepared.openai_operation == "responses"
+        and route.protocol is Protocol.OPENAI
+        and route.supports_responses
+    )
+
+
+def _route_uses_native_openai_operation(
+    prepared: _PreparedRequest,
+    route: RouteCandidate,
+) -> bool:
+    if route.protocol is not Protocol.OPENAI or prepared.inbound_protocol is not Protocol.OPENAI:
+        return False
+    if prepared.openai_operation == "responses":
+        return route_uses_native_responses(prepared, route)
+    return prepared.openai_operation in {"embeddings", "completions"}
+
+
+def _outbound_openai_operation(
+    prepared: _PreparedRequest,
+    route: RouteCandidate,
+) -> OpenAIOperation:
+    if route.protocol is not Protocol.OPENAI:
+        return "chat_completions"
+    if prepared.openai_operation == "responses" and not route.supports_responses:
+        return "chat_completions"
+    return prepared.openai_operation
 
 
 def _stream_usage_result(context: GatewayContext, request: CanonicalRequest) -> UsageResult:

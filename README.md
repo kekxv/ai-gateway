@@ -14,8 +14,8 @@ scale containers horizontally.
 
 - OpenAI, Claude, and Gemini compatible HTTP APIs, including streaming SSE responses.
 - OpenAI Realtime and Gemini Live WebSocket relays.
-- Automatic conversion among OpenAI, Claude, and Gemini request/response protocols; matching
-  protocols are passed through without conversion.
+- Automatic conversion among OpenAI, Claude, and Gemini request/response protocols. Native OpenAI
+  Responses is passed through by default; operation-specific exceptions are documented below.
 - Weighted-random routing with MySQL-backed health state, cooldowns, half-open probes, and
   automatic failover away from unhealthy routes.
 - Providers with multiple protocols, optional model discovery, HTTP/HTTPS proxy support, and
@@ -59,7 +59,7 @@ For detailed information about the OpenAI API endpoints, see the [OpenAI API Ref
 The gateway supports multiple OpenAI API formats for compatibility with various CLI tools and applications:
 
 - **Chat Completions API** (`/v1/chat/completions`): The standard chat completions endpoint
-- **Responses API** (`/v1/responses`): The newer unified API that supports both simple string input and structured conversation history. Compatible with Claude CLI and other modern tools.
+- **Responses API** (`/v1/responses`): Native OpenAI Responses pass-through by default, with portable conversion for Claude, Gemini, or explicitly incompatible OpenAI backends.
 - **Embeddings API** (`/v1/embeddings`): Generate text embeddings for RAG and vector operations
 - **Completions API** (`/v1/completions`): Legacy text completions endpoint for backward compatibility
 
@@ -72,7 +72,12 @@ The Responses API accepts both formats:
 {"model": "gpt-4", "input": [{"role": "user", "content": "Hello"}]}
 ```
 
-All endpoints are automatically converted to the canonical format and routed to the appropriate upstream provider.
+OpenAI provider protocols default to native Responses support. Set `supports_responses=false` only
+for OpenAI-compatible backends that expose Chat Completions but not Responses; this enables the
+portable Responses-to-Chat fallback. Native Responses fields are otherwise forwarded to
+`/v1/responses`. Embeddings and Legacy Completions require an OpenAI route and are forwarded to
+`/v1/embeddings` and `/v1/completions` respectively; they are never converted to Chat, Claude, or
+Gemini. See [protocol compatibility](docs/protocol-compatibility.md) for portable feature limits.
 
 
 ## Requirements

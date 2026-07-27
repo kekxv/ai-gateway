@@ -4,6 +4,7 @@ import pytest
 
 from ai_gateway.protocols.base import UnsupportedFeatureError
 from ai_gateway.protocols.claude import ClaudeAdapter
+from ai_gateway.protocols.openai import OpenAIAdapter
 from ai_gateway.protocols.types import CanonicalMessage, CanonicalRequest, TextPart, ToolResultPart
 
 
@@ -15,6 +16,19 @@ def test_claude_golden_request_round_trips(load_fixture) -> None:
     assert decoded_again == canonical
     assert canonical.max_output_tokens == 128
     assert canonical.metadata["vendor_extensions"]["claude"]["service_tier"] == "auto"
+
+
+def test_cross_protocol_request_without_limit_uses_configured_claude_default() -> None:
+    canonical = OpenAIAdapter().decode_request(
+        {
+            "model": "model",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    )
+
+    encoded = ClaudeAdapter(default_max_output_tokens=3072).encode_request(canonical)
+
+    assert encoded["max_tokens"] == 3072
 
 
 @pytest.mark.parametrize(

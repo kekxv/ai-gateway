@@ -79,6 +79,12 @@ class ProviderProtocol(Base):
     base_url: Mapped[str] = mapped_column(String(512))
     websocket_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     extra_headers_encrypted: Mapped[bytes | None] = mapped_column(LONGBLOB, nullable=True)
+    supports_responses: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default=text("1"),
+        nullable=False,
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
 
     provider: Mapped[Provider] = relationship(back_populates="protocols")

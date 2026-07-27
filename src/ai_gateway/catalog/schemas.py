@@ -54,6 +54,7 @@ class ProviderProtocolInput(BaseModel):
     base_url: BaseUrl
     websocket_url: WebsocketUrl | None = None
     extra_headers: JsonObject | None = None
+    supports_responses: bool = True
     enabled: bool = True
 
 
@@ -87,6 +88,7 @@ class ProviderProtocolResponse(BaseModel):
     base_url: str
     websocket_url: str | None
     has_extra_headers: bool
+    supports_responses: bool
     enabled: bool
 
 

@@ -163,18 +163,6 @@ class GeminiAdapter(ProtocolAdapter):
 
     def decode_response(self, payload: Mapping[str, Any]) -> CanonicalResponse:
         candidates = payload.get("candidates")
-        if not isinstance(candidates, list) or len(candidates) != 1:
-            raise UnsupportedFeatureError("candidates", "must contain exactly one candidate")
-        candidate = require_object(candidates[0], "candidates[0]")
-        content = require_object(candidate.get("content", {}), "candidates[0].content")
-        if content.get("role") != "model":
-            raise UnsupportedFeatureError("candidates[0].content.role", "must be model")
-        parts = _decode_parts(content.get("parts"), "candidates[0].content.parts", role="assistant")
-        finish_reason = _decode_finish_reason(candidate.get("finishReason"))
-        if candidate.get("finishReason") == "STOP" and any(
-            isinstance(part, ToolCallPart) for part in parts
-        ):
-            finish_reason = "tool_call"
         model = payload.get("modelVersion")
         metadata = vendor_metadata(
             self.protocol,
@@ -182,6 +170,37 @@ class GeminiAdapter(ProtocolAdapter):
             _RESPONSE_FIELDS,
             response_id=payload.get("responseId"),
         )
+        if candidates in (None, []):
+            prompt_feedback = require_object(payload.get("promptFeedback", {}), "promptFeedback")
+            block_reason = prompt_feedback.get("blockReason")
+            if not isinstance(block_reason, str) or block_reason in {
+                "",
+                "BLOCK_REASON_UNSPECIFIED",
+            }:
+                raise UnsupportedFeatureError(
+                    "candidates", "must contain exactly one candidate or a blocked prompt"
+                )
+            return CanonicalResponse(
+                model=model if isinstance(model, str) else "",
+                message=CanonicalMessage(role="assistant", content=()),
+                finish_reason="content_filter",
+                usage=_decode_usage(payload.get("usageMetadata")),
+                metadata=metadata,
+            )
+        if not isinstance(candidates, list) or len(candidates) != 1:
+            raise UnsupportedFeatureError("candidates", "must contain exactly one candidate")
+        candidate = require_object(candidates[0], "candidates[0]")
+        finish_reason = _decode_finish_reason(candidate.get("finishReason"))
+        content = require_object(candidate.get("content", {}), "candidates[0].content")
+        if content.get("role") != "model" and not (
+            finish_reason == "content_filter" and content.get("role") is None
+        ):
+            raise UnsupportedFeatureError("candidates[0].content.role", "must be model")
+        parts = _decode_parts(content.get("parts"), "candidates[0].content.parts", role="assistant")
+        if candidate.get("finishReason") == "STOP" and any(
+            isinstance(part, ToolCallPart) for part in parts
+        ):
+            finish_reason = "tool_call"
         add_vendor_scope(
             metadata,
             self.protocol,

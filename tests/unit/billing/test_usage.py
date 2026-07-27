@@ -4,6 +4,7 @@ import tiktoken
 
 from ai_gateway.billing.usage import (
     estimate_request_tokens,
+    extract_native_openai_usage,
     extract_provider_usage,
     resolve_usage,
 )
@@ -87,6 +88,34 @@ def test_provider_usage_wins_over_estimation() -> None:
 
     assert result.usage == CanonicalUsage(31, 9)
     assert result.usage_source is UsageSource.PROVIDER
+
+
+@pytest.mark.parametrize(
+    ("operation", "payload", "expected"),
+    [
+        (
+            "responses",
+            {"usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18}},
+            CanonicalUsage(11, 7),
+        ),
+        (
+            "embeddings",
+            {"usage": {"prompt_tokens": 9, "total_tokens": 9}},
+            CanonicalUsage(9, 0),
+        ),
+        (
+            "completions",
+            {"usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}},
+            CanonicalUsage(4, 2),
+        ),
+    ],
+)
+def test_extracts_usage_for_each_native_openai_operation(
+    operation: str,
+    payload: dict[str, object],
+    expected: CanonicalUsage,
+) -> None:
+    assert extract_native_openai_usage(operation, payload) == expected
 
 
 @pytest.mark.parametrize(

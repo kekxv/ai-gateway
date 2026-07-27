@@ -27,6 +27,35 @@ class UsageResult:
     usage_source: UsageSource
 
 
+def extract_native_openai_usage(
+    operation: str,
+    payload: Mapping[str, Any],
+) -> CanonicalUsage | None:
+    usage = _mapping(payload.get("usage"))
+    if usage is None:
+        return None
+    if operation == "responses":
+        if not _has_fields(usage, "input_tokens", "output_tokens"):
+            return None
+        return CanonicalUsage(
+            input_tokens=nonnegative_int(usage["input_tokens"], "usage.input_tokens"),
+            output_tokens=nonnegative_int(usage["output_tokens"], "usage.output_tokens"),
+        )
+    if operation == "embeddings":
+        if "prompt_tokens" not in usage:
+            return None
+        return CanonicalUsage(
+            input_tokens=nonnegative_int(usage["prompt_tokens"], "usage.prompt_tokens"),
+            output_tokens=0,
+        )
+    if not _has_fields(usage, "prompt_tokens", "completion_tokens"):
+        return None
+    return CanonicalUsage(
+        input_tokens=nonnegative_int(usage["prompt_tokens"], "usage.prompt_tokens"),
+        output_tokens=nonnegative_int(usage["completion_tokens"], "usage.completion_tokens"),
+    )
+
+
 def extract_provider_usage(
     protocol: Protocol | str,
     payload: Mapping[str, Any],

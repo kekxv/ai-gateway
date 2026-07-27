@@ -44,6 +44,7 @@ const providerFixture: ProviderResponse = {
       base_url: 'https://api.openai.com/v1',
       websocket_url: null,
       has_extra_headers: true,
+      supports_responses: true,
       enabled: true,
     },
     {
@@ -52,6 +53,7 @@ const providerFixture: ProviderResponse = {
       base_url: 'https://claude.example.com',
       websocket_url: 'wss://claude.example.com/ws',
       has_extra_headers: false,
+      supports_responses: true,
       enabled: false,
     },
   ],
@@ -70,6 +72,7 @@ const geminiFixture: ProviderResponse = {
       base_url: 'https://generativelanguage.googleapis.com',
       websocket_url: null,
       has_extra_headers: false,
+      supports_responses: true,
       enabled: true,
     },
   ],
@@ -215,6 +218,58 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('OpenAI 协议可显式关闭 Responses 原生支持', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: null, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-name"]').setValue('旧版 OpenAI 后端')
+    await wrapper
+      .get('[data-test="protocol-base-url-0"]')
+      .setValue('https://legacy-openai.example/v1')
+    await wrapper
+      .get('[data-test="protocol-supports-responses-0"] input')
+      .setValue(false)
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        protocols: [
+          expect.objectContaining({
+            protocol: 'openai',
+            supports_responses: false,
+          }),
+        ],
+      }),
+    )
+    wrapper.unmount()
+  })
+
+  it('非 OpenAI 协议始终归一化为支持 Responses', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: null, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-name"]').setValue('Claude 后端')
+    await wrapper.get('[data-test="protocol-type-0"]').setValue('claude')
+    await wrapper.get('[data-test="protocol-base-url-0"]').setValue('https://claude.example.com')
+    expect(wrapper.find('[data-test="protocol-supports-responses-0"]').exists()).toBe(false)
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        protocols: [expect.objectContaining({ protocol: 'claude', supports_responses: true })],
+      }),
+    )
+    wrapper.unmount()
+  })
+
   it('创建时支持多条协议，并把高级对象凭据与请求头发送到接口', async () => {
     const requests: unknown[] = []
     useProviderList([])
@@ -278,6 +333,7 @@ describe('供应商与协议管理', () => {
           protocol: 'openai',
           base_url: 'http://ollama:11434/v1',
           websocket_url: null,
+          supports_responses: true,
           enabled: true,
         },
       ],

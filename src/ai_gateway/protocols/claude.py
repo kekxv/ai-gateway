@@ -69,6 +69,11 @@ _RESPONSE_FIELDS = {
 class ClaudeAdapter(ProtocolAdapter):
     protocol = Protocol.CLAUDE
 
+    def __init__(self, default_max_output_tokens: int = 4096) -> None:
+        if default_max_output_tokens < 1:
+            raise ValueError("default_max_output_tokens must be positive")
+        self.default_max_output_tokens = default_max_output_tokens
+
     def decode_request(self, payload: Mapping[str, Any]) -> CanonicalRequest:
         model = payload.get("model")
         if not isinstance(model, str):
@@ -134,7 +139,16 @@ class ClaudeAdapter(ProtocolAdapter):
             payload["tool_choice"] = _encode_tool_choice(request.tool_choice, request.metadata)
         _set_optional(payload, "temperature", request.temperature)
         _set_optional(payload, "top_p", request.top_p)
-        _set_optional(payload, "max_tokens", request.max_output_tokens)
+        max_output_tokens = (
+            self.default_max_output_tokens
+            if request.max_output_tokens is None
+            else request.max_output_tokens
+        )
+        if max_output_tokens < 1:
+            raise UnsupportedFeatureError(
+                "max_output_tokens", "must be positive when converting to Claude"
+            )
+        payload["max_tokens"] = max_output_tokens
         if request.stop_sequences:
             payload["stop_sequences"] = list(request.stop_sequences)
         payload["stream"] = request.stream

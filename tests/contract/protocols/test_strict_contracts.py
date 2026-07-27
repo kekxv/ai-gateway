@@ -131,7 +131,7 @@ def test_claude_preserves_tool_result_error_flag() -> None:
     encoded = adapter.encode_request(request)
 
     assert encoded["messages"][0]["content"][0]["is_error"] is True
-    assert adapter.decode_request(encoded) == request
+    assert adapter.decode_request(encoded) == replace(request, max_output_tokens=4096)
 
 
 @pytest.mark.parametrize("text", ["123", '"scalar"', '{"x":1}', "plain text"])

@@ -59,24 +59,42 @@ _REQUEST_FIELDS = {
     "stream",
 }
 _RESPONSE_FIELDS = {"id", "object", "created", "model", "choices", "usage"}
+_RESPONSES_PORTABLE_FIELDS = {
+    "model",
+    "input",
+    "instructions",
+    "tools",
+    "tool_choice",
+    "temperature",
+    "top_p",
+    "max_output_tokens",
+    "stream",
+    "metadata",
+    "parallel_tool_calls",
+    "store",
+    "background",
+}
+_RESPONSES_CANONICAL_FIELDS = {
+    "model",
+    "input",
+    "instructions",
+    "tools",
+    "tool_choice",
+    "temperature",
+    "top_p",
+    "max_output_tokens",
+    "stream",
+    "store",
+    "background",
+}
 
 
 class OpenAIAdapter(ProtocolAdapter):
     protocol = Protocol.OPENAI
 
     def decode_request(self, payload: Mapping[str, Any]) -> CanonicalRequest:
-        # Support both Chat Completions and Responses API formats
-        # Responses API uses 'input' instead of 'messages'
         if "input" in payload and "messages" not in payload:
-            # Convert Responses API format to Chat Completions format
-            input_data = payload.get("input")
-            if isinstance(input_data, str):
-                # Simple string input
-                payload = {**payload, "messages": [{"role": "user", "content": input_data}]}
-            elif isinstance(input_data, list):
-                # Structured input - convert Responses API typed items to Chat Completions messages
-                messages = _convert_responses_api_input(input_data)
-                payload = {**payload, "messages": messages}
+            return self.decode_responses_request(payload)
 
         model = payload.get("model")
         if not isinstance(model, str):
@@ -197,6 +215,41 @@ class OpenAIAdapter(ProtocolAdapter):
             stop_sequences=string_list(payload.get("stop"), "stop"),
             stream=required_bool(payload.get("stream"), "stream"),
             metadata=metadata,
+        )
+
+    def decode_responses_request(self, payload: Mapping[str, Any]) -> CanonicalRequest:
+        _validate_responses_portable_fields(payload)
+        model = payload.get("model")
+        if not isinstance(model, str):
+            raise UnsupportedFeatureError("model", "must be a string")
+        system: list[ContentPart] = []
+        instructions = payload.get("instructions")
+        if instructions is not None:
+            if not isinstance(instructions, str):
+                raise UnsupportedFeatureError(
+                    "instructions", "portable conversion requires a string"
+                )
+            system.append(TextPart(instructions))
+        messages, input_system = _decode_responses_input(payload.get("input", ""))
+        system.extend(input_system)
+        return CanonicalRequest(
+            model=model,
+            messages=messages,
+            system=system,
+            tools=_decode_responses_tools(payload.get("tools")),
+            tool_choice=_decode_responses_tool_choice(payload.get("tool_choice")),
+            temperature=optional_float(payload.get("temperature"), "temperature"),
+            top_p=optional_float(payload.get("top_p"), "top_p"),
+            max_output_tokens=optional_int(
+                payload.get("max_output_tokens"), "max_output_tokens"
+            ),
+            stop_sequences=(),
+            stream=required_bool(payload.get("stream"), "stream"),
+            metadata=vendor_metadata(
+                self.protocol,
+                payload,
+                _RESPONSES_CANONICAL_FIELDS,
+            ),
         )
 
     def encode_request(self, request: CanonicalRequest) -> dict[str, Any]:
@@ -335,15 +388,17 @@ class OpenAIAdapter(ProtocolAdapter):
         # Build output items
         output_items = []
         message_item = self._encode_responses_api_message_item(response.message)
-        output_items.append(message_item)
+        if message_item["content"]:
+            output_items.append(message_item)
 
         # Handle tool calls as separate function_call items
         tool_calls = [part for part in response.message.content if isinstance(part, ToolCallPart)]
         for tool_call in tool_calls:
+            call_id = tool_call.id or f"call_{uuid4().hex[:24]}"
             function_call_item = {
                 "type": "function_call",
-                "id": tool_call.id or f"call_{uuid4().hex[:24]}",
-                "call_id": tool_call.id or f"call_{uuid4().hex[:24]}",
+                "id": f"fc_{uuid4().hex[:24]}",
+                "call_id": call_id,
                 "name": tool_call.name,
                 "arguments": orjson.dumps(thaw(tool_call.arguments)).decode(),
                 "status": "completed",
@@ -355,19 +410,31 @@ class OpenAIAdapter(ProtocolAdapter):
             "id": response_id,
             "object": "response",
             "created_at": response.metadata.get("created", int(time.time())),
+            "error": None,
+            "incomplete_details": _responses_incomplete_details(response.finish_reason),
+            "instructions": None,
+            "max_output_tokens": None,
             "model": response.model,
             "output": output_items,
+            "parallel_tool_calls": True,
+            "previous_response_id": None,
+            "reasoning": {"effort": None, "summary": None},
             "status": _map_finish_reason_to_status(response.finish_reason),
+            "store": False,
+            "temperature": 1.0,
+            "text": {"format": {"type": "text"}},
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "truncation": "disabled",
+            "metadata": {},
         }
 
         # Add usage if present
         if response.usage is not None:
-            validate_usage(response.usage)
-            payload["usage"] = {
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-                "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
-            }
+            payload["usage"] = _encode_responses_usage(response.usage)
+        else:
+            payload["usage"] = None
 
         return payload
 
@@ -751,205 +818,272 @@ class _OpenAIStreamEncoder(StreamEncoder):
 
 
 class _ResponsesAPIStreamEncoder(StreamEncoder):
-    """Stream encoder for OpenAI Responses API format."""
+    """Stateful encoder for official OpenAI Responses SSE event shapes."""
 
     def __init__(self) -> None:
-        self._response_id: str | None = None
-        self._message_id: str | None = None
-        self._created_at: int | None = None
-        self._model: str | None = None
-        self._emitted_response_created = False
-        self._emitted_output_item_added = False
-        self._emitted_content_part_added = False
-        self._final_usage: CanonicalUsage | None = None
+        self._response_id = f"resp_{uuid4().hex[:24]}"
+        self._message_id = f"msg_{uuid4().hex[:24]}"
+        self._created_at = int(time.time())
+        self._model = "unknown"
+        self._sequence_number = 0
+        self._started = False
+        self._text_started = False
+        self._text_done = False
+        self._text = ""
+        self._message_output_index: int | None = None
+        self._tools: dict[tuple[int | None, str | None], dict[str, Any]] = {}
+        self._output: list[dict[str, Any]] = []
+        self._usage: CanonicalUsage | None = None
+        self._finish_reason: FinishReason = "stop"
 
     def set_initial_usage(self, input_tokens: int) -> None:
-        # Responses API doesn't use initial usage in the same way
-        pass
+        self._usage = CanonicalUsage(input_tokens, 0)
+
+    def _frame(self, payload: dict[str, Any]) -> bytes:
+        payload["sequence_number"] = self._sequence_number
+        self._sequence_number += 1
+        return encode_sse(payload, payload["type"])
+
+    def _response(self, status: str) -> dict[str, Any]:
+        return {
+            "id": self._response_id,
+            "object": "response",
+            "created_at": self._created_at,
+            "error": None,
+            "incomplete_details": (
+                _responses_incomplete_details(self._finish_reason)
+                if status == "incomplete"
+                else None
+            ),
+            "instructions": None,
+            "max_output_tokens": None,
+            "model": self._model,
+            "output": [dict(item) for item in self._output],
+            "parallel_tool_calls": True,
+            "previous_response_id": None,
+            "reasoning": {"effort": None, "summary": None},
+            "status": status,
+            "store": False,
+            "temperature": 1.0,
+            "text": {"format": {"type": "text"}},
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "truncation": "disabled",
+            "usage": _encode_responses_usage(self._usage) if self._usage is not None else None,
+            "metadata": {},
+        }
+
+    def _ensure_started(self, model: str | None) -> list[bytes]:
+        if model:
+            self._model = model
+        if self._started:
+            return []
+        self._started = True
+        return [
+            self._frame({"type": "response.created", "response": self._response("in_progress")}),
+            self._frame(
+                {"type": "response.in_progress", "response": self._response("in_progress")}
+            ),
+        ]
+
+    def _start_text(self) -> list[bytes]:
+        if self._text_started:
+            return []
+        self._text_started = True
+        self._message_output_index = len(self._output)
+        item = {
+            "type": "message",
+            "id": self._message_id,
+            "role": "assistant",
+            "status": "in_progress",
+            "content": [],
+        }
+        self._output.append(item)
+        return [
+            self._frame(
+                {
+                    "type": "response.output_item.added",
+                    "response_id": self._response_id,
+                    "output_index": self._message_output_index,
+                    "item": dict(item),
+                }
+            ),
+            self._frame(
+                {
+                    "type": "response.content_part.added",
+                    "response_id": self._response_id,
+                    "item_id": self._message_id,
+                    "output_index": self._message_output_index,
+                    "content_index": 0,
+                    "part": {"type": "output_text", "text": "", "annotations": []},
+                }
+            ),
+        ]
+
+    def _finish_text(self) -> list[bytes]:
+        if not self._text_started or self._text_done or self._message_output_index is None:
+            return []
+        self._text_done = True
+        part = {"type": "output_text", "text": self._text, "annotations": []}
+        item = {
+            "type": "message",
+            "id": self._message_id,
+            "role": "assistant",
+            "status": "completed",
+            "content": [part],
+        }
+        self._output[self._message_output_index] = item
+        common = {
+            "response_id": self._response_id,
+            "item_id": self._message_id,
+            "output_index": self._message_output_index,
+            "content_index": 0,
+        }
+        return [
+            self._frame({"type": "response.output_text.done", **common, "text": self._text}),
+            self._frame({"type": "response.content_part.done", **common, "part": part}),
+            self._frame(
+                {
+                    "type": "response.output_item.done",
+                    "response_id": self._response_id,
+                    "output_index": self._message_output_index,
+                    "item": item,
+                }
+            ),
+        ]
+
+    def _tool_state(self, event: StreamEvent) -> tuple[dict[str, Any], list[bytes]]:
+        key = (event.tool_index, event.tool_call_id)
+        state = self._tools.get(key)
+        if state is not None:
+            if event.tool_name:
+                state["name"] = event.tool_name
+            return state, []
+        state = {
+            "id": f"fc_{uuid4().hex[:24]}",
+            "call_id": event.tool_call_id or f"call_{uuid4().hex[:24]}",
+            "name": event.tool_name or "unknown",
+            "arguments": "",
+            "output_index": len(self._output),
+            "done": False,
+        }
+        self._tools[key] = state
+        item = {
+            "type": "function_call",
+            "id": state["id"],
+            "call_id": state["call_id"],
+            "name": state["name"],
+            "arguments": "",
+            "status": "in_progress",
+        }
+        self._output.append(item)
+        return state, [
+            self._frame(
+                {
+                    "type": "response.output_item.added",
+                    "response_id": self._response_id,
+                    "output_index": state["output_index"],
+                    "item": item,
+                }
+            )
+        ]
+
+    def _finish_tools(self) -> list[bytes]:
+        frames: list[bytes] = []
+        for state in self._tools.values():
+            if state["done"]:
+                continue
+            state["done"] = True
+            item = {
+                "type": "function_call",
+                "id": state["id"],
+                "call_id": state["call_id"],
+                "name": state["name"],
+                "arguments": state["arguments"],
+                "status": "completed",
+            }
+            self._output[state["output_index"]] = item
+            frames.append(
+                self._frame(
+                    {
+                        "type": "response.function_call_arguments.done",
+                        "response_id": self._response_id,
+                        "item_id": state["id"],
+                        "output_index": state["output_index"],
+                        "arguments": state["arguments"],
+                    }
+                )
+            )
+            frames.append(
+                self._frame(
+                    {
+                        "type": "response.output_item.done",
+                        "response_id": self._response_id,
+                        "output_index": state["output_index"],
+                        "item": item,
+                    }
+                )
+            )
+        return frames
 
     def encode(self, event: StreamEvent) -> tuple[bytes, ...]:
-        frames: list[bytes] = []
-
-        # Initialize response metadata on first event
-        if self._response_id is None:
-            self._response_id = f"resp_{uuid4().hex[:24]}"
-            self._message_id = f"msg_{uuid4().hex[:24]}"
-            self._created_at = int(time.time())
-            self._model = event.model or "unknown"
-
-        # Track final usage
         if event.type == "usage" and event.usage is not None:
-            self._final_usage = event.usage
+            self._usage = event.usage
             return ()
-
-        # Emit response.created on first event
-        if not self._emitted_response_created:
-            response_created = {
-                "type": "response.created",
-                "response": {
-                    "id": self._response_id,
-                    "object": "response",
-                    "created_at": self._created_at,
-                    "model": self._model,
-                    "output": [],
-                    "status": "in_progress",
-                },
-            }
-            frames.append(encode_sse(response_created))
-            self._emitted_response_created = True
-
-        # Handle different event types
-        if event.type == "message_start":
-            # Emit response.in_progress
-            response_in_progress = {
-                "type": "response.in_progress",
-                "response": {
-                    "id": self._response_id,
-                    "object": "response",
-                    "created_at": self._created_at,
-                    "model": self._model,
-                    "output": [],
-                    "status": "in_progress",
-                },
-            }
-            frames.append(encode_sse(response_in_progress))
-
-            # Emit response.output_item.added
-            output_item_added = {
-                "type": "response.output_item.added",
-                "output_index": 0,
-                "item": {
-                    "type": "message",
-                    "id": self._message_id,
-                    "role": "assistant",
-                    "status": "in_progress",
-                    "content": [],
-                },
-            }
-            frames.append(encode_sse(output_item_added))
-            self._emitted_output_item_added = True
-
-        elif event.type == "content_delta" and event.text:
-            # Emit content_part.added on first content
-            if not self._emitted_content_part_added:
-                content_part_added = {
-                    "type": "response.content_part.added",
-                    "output_index": 0,
-                    "content_index": 0,
-                    "part": {
-                        "type": "output_text",
-                        "text": "",
-                        "annotations": [],
-                    },
-                }
-                frames.append(encode_sse(content_part_added))
-                self._emitted_content_part_added = True
-
-            # Emit output_text.delta
-            output_text_delta = {
-                "type": "response.output_text.delta",
-                "output_index": 0,
-                "content_index": 0,
-                "delta": event.text,
-            }
-            frames.append(encode_sse(output_text_delta))
-
+        frames = self._ensure_started(event.model)
+        if event.type in {"message_start", "content_start", "content_end", "heartbeat"}:
+            return tuple(frames)
+        if event.type == "content_delta" and event.text is not None:
+            frames.extend(self._start_text())
+            self._text += event.text
+            frames.append(
+                self._frame(
+                    {
+                        "type": "response.output_text.delta",
+                        "response_id": self._response_id,
+                        "item_id": self._message_id,
+                        "output_index": self._message_output_index,
+                        "content_index": 0,
+                        "delta": event.text,
+                    }
+                )
+            )
         elif event.type == "tool_call_delta":
-            # For tool calls, we need to emit function_call items
-            # This is simplified - full implementation would track tool call state
-            if event.tool_name:
-                function_call_added = {
-                    "type": "response.output_item.added",
-                    "output_index": 1,  # After message
-                    "item": {
-                        "type": "function_call",
-                        "id": event.tool_call_id or f"call_{uuid4().hex[:24]}",
-                        "call_id": event.tool_call_id or f"call_{uuid4().hex[:24]}",
-                        "name": event.tool_name,
-                        "arguments": "",
-                        "status": "in_progress",
-                    },
-                }
-                frames.append(encode_sse(function_call_added))
-
+            state, added = self._tool_state(event)
+            frames.extend(added)
             if event.arguments_delta:
-                function_call_delta = {
-                    "type": "response.function_call_arguments.delta",
-                    "output_index": 1,
-                    "delta": event.arguments_delta,
-                }
-                frames.append(encode_sse(function_call_delta))
-
+                state["arguments"] += event.arguments_delta
+                frames.append(
+                    self._frame(
+                        {
+                            "type": "response.function_call_arguments.delta",
+                            "response_id": self._response_id,
+                            "item_id": state["id"],
+                            "output_index": state["output_index"],
+                            "delta": event.arguments_delta,
+                        }
+                    )
+                )
         elif event.type == "message_end":
-            # Emit content_part.done
-            if self._emitted_content_part_added:
-                content_part_done = {
-                    "type": "response.content_part.done",
-                    "output_index": 0,
-                    "content_index": 0,
-                    "part": {
-                        "type": "output_text",
-                        "text": "",  # Full text would be accumulated
-                        "annotations": [],
-                    },
-                }
-                frames.append(encode_sse(content_part_done))
-
-            # Emit message.done
-            message_done = {
-                "type": "response.output_item.done",
-                "output_index": 0,
-                "item": {
-                    "type": "message",
-                    "id": self._message_id,
-                    "role": "assistant",
-                    "status": "completed",
-                    "content": [],
-                },
-            }
-            frames.append(encode_sse(message_done))
-
+            if event.finish_reason is not None:
+                self._finish_reason = event.finish_reason
+            frames.extend(self._finish_text())
+            frames.extend(self._finish_tools())
         elif event.type == "done":
-            # Emit response.completed
-            status = "completed"
-            if self._final_usage is None:
-                status = "incomplete"
-
-            response_completed = {
-                "type": "response.completed",
-                "response": {
-                    "id": self._response_id,
-                    "object": "response",
-                    "created_at": self._created_at,
-                    "model": self._model,
-                    "output": [],
-                    "status": status,
-                },
-            }
-            if self._final_usage is not None:
-                response_completed["response"]["usage"] = {
-                    "input_tokens": self._final_usage.input_tokens,
-                    "output_tokens": self._final_usage.output_tokens,
-                    "total_tokens": self._final_usage.input_tokens + self._final_usage.output_tokens,
-                }
-            frames.append(encode_sse(response_completed))
-
+            frames.extend(self._finish_text())
+            frames.extend(self._finish_tools())
+            status = _map_finish_reason_to_status(self._finish_reason)
+            terminal_type = {
+                "completed": "response.completed",
+                "incomplete": "response.incomplete",
+                "failed": "response.failed",
+            }[status]
+            frames.append(self._frame({"type": terminal_type, "response": self._response(status)}))
         elif event.type == "error":
-            # Emit response.failed
-            response_failed = {
-                "type": "response.failed",
-                "response": {
-                    "id": self._response_id,
-                    "object": "response",
-                    "created_at": self._created_at,
-                    "model": self._model,
-                    "output": [],
-                    "status": "failed",
-                    "error": event.metadata,
-                },
-            }
-            frames.append(encode_sse(response_failed))
-
+            response = self._response("failed")
+            response["error"] = thaw(event.metadata)
+            frames.append(self._frame({"type": "response.failed", "response": response}))
         return tuple(frames)
 
 
@@ -1039,63 +1173,174 @@ def _decode_result_content(value: Any, field: str) -> tuple[TextPart | ImagePart
     return cast(tuple[TextPart | ImagePart, ...], parts)
 
 
-def _convert_responses_api_input(input_items: list[Any]) -> list[dict[str, Any]]:
-    """Convert Responses API typed input items to Chat Completions messages.
-
-    Handles:
-    - {"type": "message", ...} - Explicit message items
-    - {"type": "function_call", ...} - Previous tool calls
-    - {"type": "function_call_output", ...} - Tool results
-    - Plain message dicts (backward compatibility)
-    """
-    messages: list[dict[str, Any]] = []
-
-    for item in input_items:
-        if not isinstance(item, Mapping):
+def _validate_responses_portable_fields(payload: Mapping[str, Any]) -> None:
+    for field, value in payload.items():
+        if field in _RESPONSES_PORTABLE_FIELDS:
+            if field in {"store", "background"} and value not in {None, False}:
+                raise UnsupportedFeatureError(field, "is not portable to this upstream")
             continue
+        if value is not None:
+            raise UnsupportedFeatureError(field, "is not portable to this upstream")
 
-        item_type = item.get("type")
 
+def _decode_responses_input(
+    value: Any,
+) -> tuple[tuple[CanonicalMessage, ...], tuple[ContentPart, ...]]:
+    if isinstance(value, str):
+        return (CanonicalMessage(role="user", content=(TextPart(value),)),), ()
+    if not isinstance(value, list):
+        raise UnsupportedFeatureError("input", "must be a string or list of input items")
+    messages: list[CanonicalMessage] = []
+    system: list[ContentPart] = []
+    for index, raw_item in enumerate(value):
+        item = require_object(raw_item, f"input[{index}]")
+        item_type = item.get("type", "message")
         if item_type == "message":
-            # Explicit message item
-            role = item.get("role", "user")
-            content = item.get("content", "")
-            messages.append({
-                "role": role,
-                "content": content,
-            })
-
+            role = item.get("role")
+            content = _decode_responses_content(item.get("content"), f"input[{index}].content")
+            if role in {"system", "developer"}:
+                if not all(isinstance(part, TextPart) for part in content):
+                    raise UnsupportedFeatureError(
+                        f"input[{index}].content", "system input supports text only"
+                    )
+                system.extend(content)
+            elif role in {"user", "assistant"}:
+                messages.append(CanonicalMessage(role=cast(Any, role), content=content))
+            else:
+                raise UnsupportedFeatureError(
+                    f"input[{index}].role", f"unsupported role {role!r}"
+                )
         elif item_type == "function_call":
-            # Previous tool call - convert to assistant message with tool_calls
-            tool_call = {
-                "id": item.get("id") or item.get("call_id"),
-                "type": "function",
-                "function": {
-                    "name": item.get("name", ""),
-                    "arguments": item.get("arguments", "{}"),
-                },
-            }
-            messages.append({
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [tool_call],
-            })
-
+            call_id = item.get("call_id", item.get("id"))
+            name = item.get("name")
+            if not isinstance(call_id, str):
+                raise UnsupportedFeatureError(f"input[{index}].call_id", "must be a string")
+            if not isinstance(name, str):
+                raise UnsupportedFeatureError(f"input[{index}].name", "must be a string")
+            messages.append(
+                CanonicalMessage(
+                    role="assistant",
+                    content=(
+                        ToolCallPart(
+                            id=call_id,
+                            name=name,
+                            arguments=json_arguments(
+                                item.get("arguments", "{}"), f"input[{index}].arguments"
+                            ),
+                        ),
+                    ),
+                )
+            )
         elif item_type == "function_call_output":
-            # Tool result - convert to tool message
-            tool_call_id = item.get("call_id") or item.get("tool_call_id")
+            call_id = item.get("call_id")
+            if not isinstance(call_id, str):
+                raise UnsupportedFeatureError(f"input[{index}].call_id", "must be a string")
             output = item.get("output", "")
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call_id,
-                "content": output if isinstance(output, str) else orjson.dumps(output).decode(),
-            })
-
+            text = output if isinstance(output, str) else orjson.dumps(output).decode()
+            messages.append(
+                CanonicalMessage(
+                    role="user",
+                    content=(
+                        ToolResultPart(
+                            tool_call_id=call_id,
+                            name=None,
+                            content=(TextPart(text),),
+                        ),
+                    ),
+                )
+            )
         else:
-            # Plain message dict or unknown type - pass through
-            messages.append(dict(item))
+            raise UnsupportedFeatureError(
+                f"input[{index}].type", f"unsupported item {item_type!r}"
+            )
+    return tuple(messages), tuple(system)
 
-    return messages
+
+def _decode_responses_content(value: Any, field: str) -> tuple[ContentPart, ...]:
+    if isinstance(value, str):
+        return (TextPart(value),)
+    if not isinstance(value, list):
+        raise UnsupportedFeatureError(field, "must be a string or content list")
+    parts: list[ContentPart] = []
+    for index, raw_part in enumerate(value):
+        part = require_object(raw_part, f"{field}[{index}]")
+        part_type = part.get("type")
+        if part_type in {"input_text", "output_text"} and isinstance(part.get("text"), str):
+            parts.append(TextPart(part["text"]))
+        elif part_type == "input_image":
+            image_url = part.get("image_url")
+            if not isinstance(image_url, str):
+                raise UnsupportedFeatureError(
+                    f"{field}[{index}].image_url", "portable images require a URL"
+                )
+            detail = part.get("detail")
+            if image_url.startswith("data:"):
+                header, separator, data = image_url.partition(",")
+                if not separator or ";base64" not in header:
+                    raise UnsupportedFeatureError(
+                        f"{field}[{index}].image_url", "must be a base64 data URL"
+                    )
+                parts.append(ImagePart(media_type=header[5:].split(";", 1)[0], data=data))
+            else:
+                parts.append(
+                    ImagePart(
+                        url=image_url,
+                        detail=detail if isinstance(detail, str) else None,
+                    )
+                )
+        else:
+            raise UnsupportedFeatureError(
+                f"{field}[{index}].type", f"unsupported content {part_type!r}"
+            )
+    return tuple(parts)
+
+
+def _decode_responses_tools(value: Any) -> tuple[CanonicalTool, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise UnsupportedFeatureError("tools", "must be a list")
+    tools: list[CanonicalTool] = []
+    for index, raw_tool in enumerate(value):
+        tool = require_object(raw_tool, f"tools[{index}]")
+        if tool.get("type") != "function":
+            raise UnsupportedFeatureError(
+                f"tools[{index}].type", "only function tools are portable"
+            )
+        name = tool.get("name")
+        if not isinstance(name, str):
+            raise UnsupportedFeatureError(f"tools[{index}].name", "must be a string")
+        metadata: dict[str, Any] = {}
+        if "strict" in tool:
+            add_vendor_scope(
+                metadata,
+                Protocol.OPENAI,
+                "__function__",
+                {"strict": tool["strict"]},
+            )
+        tools.append(
+            CanonicalTool(
+                name=name,
+                description=(
+                    tool["description"] if isinstance(tool.get("description"), str) else None
+                ),
+                input_schema=require_object(
+                    tool.get("parameters", {}), f"tools[{index}].parameters"
+                ),
+                metadata=metadata,
+            )
+        )
+    return tuple(tools)
+
+
+def _decode_responses_tool_choice(value: Any) -> str | dict[str, Any] | None:
+    if value is None or isinstance(value, str):
+        return _decode_tool_choice(value)
+    choice = require_object(value, "tool_choice")
+    name = choice.get("name")
+    if choice.get("type") != "function" or not isinstance(name, str):
+        raise UnsupportedFeatureError("tool_choice", "unsupported portable tool selection")
+    return {"name": name}
 
 
 def _decode_tool_calls(value: Any, field: str) -> tuple[ToolCallPart, ...]:
@@ -1353,11 +1598,30 @@ def _map_finish_reason_to_status(finish_reason: FinishReason) -> str:
     """Map canonical finish reason to Responses API status."""
     return {
         "stop": "completed",
-        "length": "completed",
+        "length": "incomplete",
         "tool_call": "completed",
-        "content_filter": "completed",
+        "content_filter": "incomplete",
         "error": "failed",
     }[finish_reason]
+
+
+def _responses_incomplete_details(finish_reason: FinishReason) -> dict[str, str] | None:
+    if finish_reason == "length":
+        return {"reason": "max_output_tokens"}
+    if finish_reason == "content_filter":
+        return {"reason": "content_filter"}
+    return None
+
+
+def _encode_responses_usage(usage: CanonicalUsage) -> dict[str, Any]:
+    validate_usage(usage)
+    return {
+        "input_tokens": usage.input_tokens,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens": usage.output_tokens,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": usage.input_tokens + usage.output_tokens,
+    }
 
 
 def _encode_tool(tool: CanonicalTool) -> dict[str, Any]:

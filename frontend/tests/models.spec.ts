@@ -71,6 +71,7 @@ const providerFixture: ProviderResponse = {
       base_url: 'https://api.example.com/v1',
       websocket_url: null,
       has_extra_headers: false,
+      supports_responses: true,
       enabled: true,
     },
   ],

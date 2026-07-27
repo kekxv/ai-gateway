@@ -214,6 +214,7 @@ async def _replace_protocols(
         protocol.protocol = payload.protocol
         protocol.base_url = payload.base_url
         protocol.websocket_url = payload.websocket_url
+        protocol.supports_responses = payload.supports_responses
         if "extra_headers" in payload.model_fields_set:
             protocol.extra_headers_encrypted = (
                 _encrypt_json(payload.extra_headers, settings)
@@ -249,6 +250,7 @@ def _new_protocol(payload: ProviderProtocolInput, settings: Settings) -> Provide
         protocol=payload.protocol,
         base_url=payload.base_url,
         websocket_url=payload.websocket_url,
+        supports_responses=payload.supports_responses,
         extra_headers_encrypted=(
             _encrypt_json(payload.extra_headers, settings)
             if payload.extra_headers is not None
@@ -299,6 +301,7 @@ def _provider_response(provider: Provider, settings: Settings) -> ProviderRespon
                 base_url=protocol.base_url,
                 websocket_url=protocol.websocket_url,
                 has_extra_headers=protocol.extra_headers_encrypted is not None,
+                supports_responses=protocol.supports_responses,
                 enabled=protocol.enabled,
             )
             for protocol in protocols

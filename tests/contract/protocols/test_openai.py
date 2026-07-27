@@ -6,9 +6,23 @@ import orjson
 import pytest
 
 from ai_gateway.core.enums import Protocol
-from ai_gateway.protocols.base import rewrite_passthrough_request, rewrite_passthrough_sse
-from ai_gateway.protocols.openai import OpenAIAdapter
-from ai_gateway.protocols.types import ImagePart, TextPart, ToolCallPart, ToolResultPart
+from ai_gateway.gateway.openai import router
+from ai_gateway.protocols.base import (
+    decode_sse,
+    rewrite_passthrough_request,
+    rewrite_passthrough_sse,
+)
+from ai_gateway.protocols.openai import OpenAIAdapter, _ResponsesAPIStreamEncoder
+from ai_gateway.protocols.types import (
+    CanonicalMessage,
+    CanonicalResponse,
+    CanonicalUsage,
+    ImagePart,
+    StreamEvent,
+    TextPart,
+    ToolCallPart,
+    ToolResultPart,
+)
 
 
 def test_openai_golden_request_decodes_all_contract_fields(load_fixture) -> None:
@@ -164,7 +178,7 @@ def test_openai_responses_api_preserves_other_fields() -> None:
         "model": "gpt-4",
         "input": "Hello",
         "temperature": 0.7,
-        "max_tokens": 100,
+        "max_output_tokens": 100,
         "stream": True,
     }
 
@@ -200,9 +214,6 @@ def test_openai_completions_api_basic() -> None:
 
 def test_openai_responses_api_endpoint_registered() -> None:
     """Test that responses API endpoint exists and can be routed."""
-    # This test verifies that the responses endpoint is registered
-    from ai_gateway.gateway.openai import router
-
     # Verify the endpoint is registered
     routes = [route.path for route in router.routes]
     assert "/v1/responses" in routes
@@ -210,9 +221,6 @@ def test_openai_responses_api_endpoint_registered() -> None:
 
 def test_responses_api_encode_response() -> None:
     """Test that Responses API response encoding produces correct format."""
-    from ai_gateway.protocols.openai import OpenAIAdapter
-    from ai_gateway.protocols.types import CanonicalMessage, CanonicalResponse, TextPart, CanonicalUsage
-
     adapter = OpenAIAdapter()
     response = CanonicalResponse(
         model="gpt-4",
@@ -328,15 +336,12 @@ def test_responses_api_input_types() -> None:
     assert len(canonical.messages) == 3
     assert canonical.messages[0].role == "user"
     assert canonical.messages[1].role == "assistant"
-    assert canonical.messages[2].role == "user"  # Tool results become user messages with ToolResultPart
+    # Tool results become user messages with ToolResultPart.
+    assert canonical.messages[2].role == "user"
 
 
 def test_responses_api_streaming_encoder() -> None:
     """Test that Responses API streaming encoder produces correct events."""
-    from ai_gateway.protocols.openai import _ResponsesAPIStreamEncoder
-    from ai_gateway.protocols.types import StreamEvent
-    from ai_gateway.protocols.base import decode_sse
-
     encoder = _ResponsesAPIStreamEncoder()
 
     # Test message_start event

@@ -36,6 +36,7 @@ interface ProtocolRow {
   baseUrl: string
   websocketUrl: string
   extraHeadersText: string
+  supportsResponses: boolean
   enabled: boolean
   baseUrlError: string
   extraHeadersError: string
@@ -101,6 +102,7 @@ function newProtocolRow(): ProtocolRow {
     baseUrl: '',
     websocketUrl: '',
     extraHeadersText: '',
+    supportsResponses: true,
     enabled: true,
     baseUrlError: '',
     extraHeadersError: '',
@@ -129,6 +131,7 @@ function resetForm(): void {
           baseUrl: protocol.base_url,
           websocketUrl: protocol.websocket_url ?? '',
           extraHeadersText: '',
+          supportsResponses: protocol.supports_responses,
           enabled: protocol.enabled,
           baseUrlError: '',
           extraHeadersError: '',
@@ -276,6 +279,7 @@ function normalizedProtocol(row: ProtocolRow): ProviderProtocolInput {
     protocol: row.protocol,
     base_url: row.baseUrl.trim(),
     websocket_url: row.websocketUrl.trim() || null,
+    supports_responses: row.protocol === 'openai' ? row.supportsResponses : true,
     enabled: row.enabled,
   }
   if (row.id !== undefined) protocol.id = row.id
@@ -293,6 +297,8 @@ function protocolsChanged(): boolean {
       row.protocol !== original.protocol ||
       row.baseUrl.trim() !== original.base_url ||
       (row.websocketUrl.trim() || null) !== original.websocket_url ||
+      (row.protocol === 'openai' ? row.supportsResponses : true) !==
+        original.supports_responses ||
       row.enabled !== original.enabled ||
       row.extraHeadersText.trim() !== ''
     )
@@ -593,6 +599,12 @@ function submitForm(): void {
             </ElFormItem>
             <ElFormItem label="启用此协议">
               <ElSwitch v-model="row.enabled" :data-test="`protocol-enabled-${String(index)}`" />
+            </ElFormItem>
+            <ElFormItem v-if="row.protocol === 'openai'" label="原生支持 Responses API">
+              <ElSwitch
+                v-model="row.supportsResponses"
+                :data-test="`protocol-supports-responses-${String(index)}`"
+              />
             </ElFormItem>
           </div>
 

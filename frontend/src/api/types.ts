@@ -136,6 +136,7 @@ export interface ProviderProtocolInput {
   base_url: string
   websocket_url?: string | null
   extra_headers?: JsonObject | null
+  supports_responses?: boolean
   enabled?: boolean
 }
 
@@ -165,6 +166,7 @@ export interface ProviderProtocolResponse {
   base_url: string
   websocket_url: string | null
   has_extra_headers: boolean
+  supports_responses: boolean
   enabled: boolean
 }
 

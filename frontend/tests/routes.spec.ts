@@ -60,6 +60,7 @@ const providers: ProviderResponse[] = [
         base_url: 'https://openai.example.com/v1',
         websocket_url: null,
         has_extra_headers: false,
+        supports_responses: true,
         enabled: true,
       },
       {
@@ -68,6 +69,7 @@ const providers: ProviderResponse[] = [
         base_url: 'https://claude.example.com',
         websocket_url: null,
         has_extra_headers: false,
+        supports_responses: true,
         enabled: true,
       },
     ],
@@ -88,6 +90,7 @@ const providers: ProviderResponse[] = [
         base_url: 'https://gemini.example.com',
         websocket_url: null,
         has_extra_headers: false,
+        supports_responses: true,
         enabled: true,
       },
     ],

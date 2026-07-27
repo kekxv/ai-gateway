@@ -16,7 +16,14 @@ async def chat_completions(
     service: Annotated[GatewayService, Depends(get_gateway_service)],
 ) -> Response:
     try:
-        return (await service.handle(request, Protocol.OPENAI, endpoint_path="/v1/chat/completions")).response()
+        return (
+            await service.handle(
+                request,
+                Protocol.OPENAI,
+                endpoint_path="/v1/chat/completions",
+                openai_operation="chat_completions",
+            )
+        ).response()
     except Exception as exc:
         return native_error_response(Protocol.OPENAI, exc)
 
@@ -28,7 +35,14 @@ async def responses(
 ) -> Response:
     """OpenAI Responses API - unified interface for chat completions and other features."""
     try:
-        return (await service.handle(request, Protocol.OPENAI, endpoint_path="/v1/responses")).response()
+        return (
+            await service.handle(
+                request,
+                Protocol.OPENAI,
+                endpoint_path="/v1/responses",
+                openai_operation="responses",
+            )
+        ).response()
     except Exception as exc:
         return native_error_response(Protocol.OPENAI, exc)
 
@@ -40,7 +54,15 @@ async def embeddings(
 ) -> Response:
     """OpenAI Embeddings API - generate text embeddings."""
     try:
-        return (await service.handle(request, Protocol.OPENAI)).response()
+        return (
+            await service.handle(
+                request,
+                Protocol.OPENAI,
+                endpoint_path="/v1/embeddings",
+                openai_operation="embeddings",
+                required_protocol=Protocol.OPENAI,
+            )
+        ).response()
     except Exception as exc:
         return native_error_response(Protocol.OPENAI, exc)
 
@@ -52,6 +74,14 @@ async def completions(
 ) -> Response:
     """OpenAI Completions API (Legacy) - text completions."""
     try:
-        return (await service.handle(request, Protocol.OPENAI)).response()
+        return (
+            await service.handle(
+                request,
+                Protocol.OPENAI,
+                endpoint_path="/v1/completions",
+                openai_operation="completions",
+                required_protocol=Protocol.OPENAI,
+            )
+        ).response()
     except Exception as exc:
         return native_error_response(Protocol.OPENAI, exc)

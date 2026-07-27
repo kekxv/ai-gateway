@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from ai_gateway.protocols.claude import ClaudeAdapter
 from ai_gateway.protocols.gemini import GeminiAdapter
+from ai_gateway.protocols.openai import OpenAIAdapter
 
 
 def test_gemini_golden_request_round_trips(load_fixture) -> None:
@@ -37,6 +39,51 @@ def test_gemini_finish_reasons(native: str, canonical: str, load_fixture) -> Non
 def test_gemini_function_call_stop_is_normalized_to_tool_call(load_fixture) -> None:
     payload = load_fixture("gemini", "response.json")
     assert GeminiAdapter().decode_response(payload).finish_reason == "tool_call"
+
+
+def test_gemini_blocked_prompt_decodes_as_empty_content_filter_response() -> None:
+    response = GeminiAdapter().decode_response(
+        {
+            "modelVersion": "gemini-test",
+            "promptFeedback": {
+                "blockReason": "SAFETY",
+                "safetyRatings": [{"category": "HARM_CATEGORY_DANGEROUS_CONTENT"}],
+            },
+            "usageMetadata": {"promptTokenCount": 3, "totalTokenCount": 3},
+        }
+    )
+
+    assert response.finish_reason == "content_filter"
+    assert response.message.content == ()
+    assert response.usage is not None
+    assert response.usage.input_tokens == 3
+    assert response.metadata["vendor_extensions"]["gemini"]["promptFeedback"] == {
+        "blockReason": "SAFETY",
+        "safetyRatings": ({"category": "HARM_CATEGORY_DANGEROUS_CONTENT"},),
+    }
+
+
+def test_gemini_safety_candidate_without_content_decodes_and_cross_encodes() -> None:
+    response = GeminiAdapter().decode_response(
+        {
+            "modelVersion": "gemini-test",
+            "candidates": [
+                {
+                    "index": 0,
+                    "finishReason": "SAFETY",
+                    "safetyRatings": [{"category": "HARM_CATEGORY_HARASSMENT"}],
+                }
+            ],
+        }
+    )
+
+    assert response.finish_reason == "content_filter"
+    assert response.message.content == ()
+    assert response.metadata["vendor_extensions"]["gemini"]["__candidate__"] == {
+        "safetyRatings": ({"category": "HARM_CATEGORY_HARASSMENT"},),
+    }
+    assert OpenAIAdapter().encode_response(response)["choices"][0]["message"]["content"] is None
+    assert ClaudeAdapter().encode_response(response)["content"] == []
 
 
 def test_gemini_golden_response_and_stream(load_fixture, load_bytes) -> None:

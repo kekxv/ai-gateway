@@ -79,6 +79,7 @@ def test_schema_contains_exact_tables_and_columns() -> None:
             "base_url",
             "websocket_url",
             "extra_headers_encrypted",
+            "supports_responses",
             "enabled",
         },
         "models": {
