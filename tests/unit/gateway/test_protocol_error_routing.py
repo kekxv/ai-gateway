@@ -83,6 +83,7 @@ def _assert_native_error(
     [
         (Protocol.OPENAI, "/v1/chat/completions", {"model": "test"}),
         (Protocol.CLAUDE, "/v1/messages", {"model": "test"}),
+        (Protocol.CLAUDE, "/anthropic/v1/messages", {"model": "test"}),
         (Protocol.GEMINI, "/v1beta/models/test:generateContent", {"contents": []}),
     ],
 )
@@ -137,6 +138,8 @@ async def test_gateway_routes_use_safe_native_runtime_errors(
     [
         (Protocol.OPENAI, "/v1/models"),
         (Protocol.OPENAI, "/v1/models/test-model"),
+        (Protocol.CLAUDE, "/anthropic/v1/models"),
+        (Protocol.CLAUDE, "/anthropic/v1/models/test-model"),
         (Protocol.GEMINI, "/v1beta/models"),
     ],
 )

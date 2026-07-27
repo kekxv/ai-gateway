@@ -526,6 +526,57 @@ async def test_claude_endpoint_returns_claude_format_with_anthropic_version_head
     }
 
 
+async def test_dedicated_anthropic_model_routes_do_not_require_version_header(
+    session: AsyncSession,
+) -> None:
+    claude_provider = _provider("dedicated-claude", Protocol.CLAUDE)
+    openai_provider = _provider("dedicated-openai", Protocol.OPENAI)
+    claude_model = _model("claude-dedicated")
+    claude_model.display_name = "Claude Dedicated"
+    claude_model.aliases.append(ModelAlias(alias="claude-friendly"))
+    openai_model = _model("openai-only")
+    session.add_all(
+        [
+            _route(claude_model, claude_provider, Protocol.CLAUDE),
+            _route(openai_model, openai_provider, Protocol.OPENAI),
+        ]
+    )
+    user, _, raw_key = _api_key(ApiKeyScope.ALL)
+    session.add(user)
+    await session.flush()
+
+    async with _client(session, headers={"x-api-key": raw_key}) as client:
+        listing = await client.get("/anthropic/v1/models")
+        alias = await client.get("/anthropic/v1/models/claude-friendly")
+        canonical = await client.get("/anthropic/v1/models/claude-dedicated")
+        openai_only = await client.get("/anthropic/v1/models/openai-only")
+        missing = await client.get("/anthropic/v1/models/missing")
+
+    assert listing.status_code == 200
+    assert listing.json() == {
+        "data": [
+            {
+                "id": "claude-dedicated",
+                "display_name": "Claude Dedicated",
+                "created_at": "2024-01-01T00:00:00Z",
+            },
+            {
+                "id": "claude-friendly",
+                "display_name": "Claude Dedicated",
+                "created_at": "2024-01-01T00:00:00Z",
+            },
+        ]
+    }
+    assert alias.status_code == 200
+    assert alias.json()["id"] == "claude-friendly"
+    assert canonical.status_code == 200
+    assert canonical.json()["id"] == "claude-dedicated"
+    for response in (openai_only, missing):
+        assert response.status_code == 404
+        assert response.json()["type"] == "error"
+        assert response.json()["error"]["type"] == "model_not_found"
+
+
 async def test_openai_endpoint_without_anthropic_version_returns_openai_format(
     session: AsyncSession,
 ) -> None:

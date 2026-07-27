@@ -15,6 +15,18 @@ model rewrite, but whitespace, object-key order, and duplicate-key behavior are 
 The gateway deliberately parses and re-encodes JSON instead of doing unsafe byte replacement.
 Cross-protocol requests/responses and every cross-protocol stream are mapped as described below.
 
+### Protocol-specific public base URLs
+
+Anthropic clients should use the gateway origin plus `/anthropic` as their public base URL. The
+Anthropic SDK then calls `/anthropic/v1/messages`, `/anthropic/v1/models`, and
+`/anthropic/v1/models/{model}`. These dedicated routes determine Claude request, response, model,
+and error formats from the URL and do not require `anthropic-version` for protocol detection.
+
+The legacy `/v1/messages` route remains an alias. The shared `/v1/models` route also remains for
+backward compatibility and returns Claude format when `anthropic-version` is present; without that
+header it returns OpenAI format. Public path prefixes are independent of the per-provider-protocol
+upstream `base_url` stored in the catalog.
+
 ### OpenAI operation-specific routing
 
 - OpenAI provider protocols default to `supports_responses=true`. A Responses request selected for

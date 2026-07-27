@@ -66,6 +66,29 @@ async def list_models(request: Request, session: Session) -> Response:
         return native_error_response(protocol, exc)
 
 
+@router.get("/anthropic/v1/models")
+async def list_anthropic_models(request: Request, session: Session) -> Response:
+    try:
+        principal = await authenticate_api_key(extract_api_key(request), session)
+        models = await _list_selectable_models(session, principal, Protocol.CLAUDE)
+        return JSONResponse(content={"data": [_claude_model(model) for model in models]})
+    except Exception as exc:
+        return native_error_response(Protocol.CLAUDE, exc)
+
+
+@router.get("/anthropic/v1/models/{model_id:path}")
+async def get_anthropic_model(model_id: str, request: Request, session: Session) -> Response:
+    try:
+        principal = await authenticate_api_key(extract_api_key(request), session)
+        models = await _list_selectable_models(session, principal, Protocol.CLAUDE)
+        model = next((item for item in models if item.selectable_id == model_id), None)
+        if model is None:
+            raise ModelNotFound(model_id)
+        return JSONResponse(content=_claude_model(model))
+    except Exception as exc:
+        return native_error_response(Protocol.CLAUDE, exc)
+
+
 @router.get("/v1/models/{model_id:path}")
 async def get_openai_model(model_id: str, request: Request, session: Session) -> Response:
     try:

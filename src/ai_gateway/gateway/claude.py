@@ -11,6 +11,7 @@ router = APIRouter()
 
 
 @router.post("/v1/messages")
+@router.post("/anthropic/v1/messages")
 async def messages(
     request: Request,
     service: Annotated[GatewayService, Depends(get_gateway_service)],

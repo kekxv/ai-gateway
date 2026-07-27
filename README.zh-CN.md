@@ -34,8 +34,8 @@ Lean AI Gateway 是一个专注于多 AI 提供商的网关，支持 OpenAI、Cl
 | OpenAI Completions (Legacy) | `/v1/completions` | HTTP |
 | OpenAI 模型目录 | `/v1/models`、`/v1/models/{model}` | HTTP |
 | OpenAI Realtime | `/v1/realtime` | WebSocket |
-| Claude Messages | `/v1/messages` | HTTP、SSE |
-| Claude 模型目录 | `/v1/models`（通过 `anthropic-version` 头区分） | HTTP |
+| Claude Messages | `/anthropic/v1/messages`（推荐）、`/v1/messages`（兼容别名） | HTTP、SSE |
+| Claude 模型目录 | `/anthropic/v1/models`、`/anthropic/v1/models/{model}`；旧 `/v1/models` 通过 `anthropic-version` 区分 | HTTP |
 | Gemini Generate Content | `/v1beta/models/{model}:generateContent` | HTTP |
 | Gemini Stream Generate Content | `/v1beta/models/{model}:streamGenerateContent` | SSE |
 | Gemini 模型目录 | `/v1beta/models` | HTTP |
@@ -277,10 +277,19 @@ curl --no-buffer --fail "$GATEWAY_URL/v1/chat/completions" \
 
 ## Claude 兼容的 HTTP 和 SSE
 
+Anthropic SDK 建议使用独立的 Base URL。SDK 会继续追加 `/v1/messages` 等原生资源路径：
+
+```bash
+export ANTHROPIC_BASE_URL="$GATEWAY_URL/anthropic"
+```
+
+原有 `/v1/messages` 继续作为向后兼容别名。每个提供商协议仍使用自己的上游
+`base_url`，新增的公共路径前缀不会改变上游配置。
+
 非流式：
 
 ```bash
-curl --fail "$GATEWAY_URL/v1/messages" \
+curl --fail "$ANTHROPIC_BASE_URL/v1/messages" \
   -H "x-api-key: $GATEWAY_API_KEY" \
   -H 'anthropic-version: 2023-06-01' \
   -H 'content-type: application/json' \
@@ -290,7 +299,7 @@ curl --fail "$GATEWAY_URL/v1/messages" \
 流式：
 
 ```bash
-curl --no-buffer --fail "$GATEWAY_URL/v1/messages" \
+curl --no-buffer --fail "$ANTHROPIC_BASE_URL/v1/messages" \
   -H "x-api-key: $GATEWAY_API_KEY" \
   -H 'anthropic-version: 2023-06-01' \
   -H 'content-type: application/json' \

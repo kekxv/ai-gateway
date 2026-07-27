@@ -43,8 +43,8 @@ scale containers horizontally.
 | OpenAI completions (Legacy) | `/v1/completions` | HTTP |
 | OpenAI model catalog | `/v1/models`, `/v1/models/{model}` | HTTP |
 | OpenAI Realtime | `/v1/realtime` | WebSocket |
-| Claude messages | `/v1/messages` | HTTP, SSE |
-| Claude model catalog | `/v1/models` (distinguished by `anthropic-version` header) | HTTP |
+| Claude messages | `/anthropic/v1/messages` (recommended), `/v1/messages` (legacy alias) | HTTP, SSE |
+| Claude model catalog | `/anthropic/v1/models`, `/anthropic/v1/models/{model}`; legacy `/v1/models` uses `anthropic-version` | HTTP |
 | Gemini generate content | `/v1beta/models/{model}:generateContent` | HTTP |
 | Gemini stream generate content | `/v1beta/models/{model}:streamGenerateContent` | SSE |
 | Gemini model catalog | `/v1beta/models` | HTTP |
@@ -318,10 +318,20 @@ curl --no-buffer --fail "$GATEWAY_URL/v1/chat/completions" \
 
 ## Claude-compatible HTTP and SSE
 
+Use the dedicated Anthropic base URL with Anthropic SDKs. The SDK appends `/v1/messages` and
+other native resource paths:
+
+```bash
+export ANTHROPIC_BASE_URL="$GATEWAY_URL/anthropic"
+```
+
+`/v1/messages` remains available as a backward-compatible alias. Provider protocol rows keep
+their own upstream `base_url`; this public namespace does not change upstream configuration.
+
 Non-streaming:
 
 ```bash
-curl --fail "$GATEWAY_URL/v1/messages" \
+curl --fail "$ANTHROPIC_BASE_URL/v1/messages" \
   -H "x-api-key: $GATEWAY_API_KEY" \
   -H 'anthropic-version: 2023-06-01' \
   -H 'content-type: application/json' \
@@ -331,7 +341,7 @@ curl --fail "$GATEWAY_URL/v1/messages" \
 Streaming:
 
 ```bash
-curl --no-buffer --fail "$GATEWAY_URL/v1/messages" \
+curl --no-buffer --fail "$ANTHROPIC_BASE_URL/v1/messages" \
   -H "x-api-key: $GATEWAY_API_KEY" \
   -H 'anthropic-version: 2023-06-01' \
   -H 'content-type: application/json' \
