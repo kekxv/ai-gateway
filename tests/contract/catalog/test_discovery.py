@@ -27,7 +27,7 @@ def settings() -> Settings:
     )
 
 
-def _encrypted_json(value: dict[str, str], settings: Settings) -> bytes:
+def _encrypted_json(value: dict[str, object], settings: Settings) -> bytes:
     return encrypt_secret(orjson.dumps(value).decode(), settings=settings)
 
 
@@ -35,6 +35,7 @@ def _route(
     protocol: Protocol,
     settings: Settings,
     *,
+    credentials: dict[str, object] | None = None,
     extra_headers: dict[str, str] | None = None,
 ) -> RouteCandidate:
     return RouteCandidate(
@@ -47,7 +48,10 @@ def _route(
         websocket_url=None,
         upstream_model="provider-model",
         weight=100,
-        provider_credential_encrypted=_encrypted_json({"api_key": "provider-secret"}, settings),
+        provider_credential_encrypted=_encrypted_json(
+            {"api_key": "provider-secret"} if credentials is None else credentials,
+            settings,
+        ),
         extra_headers_encrypted=(
             _encrypted_json(extra_headers, settings) if extra_headers is not None else None
         ),
@@ -146,13 +150,64 @@ def test_build_upstream_request_strips_hop_headers_and_merges_configured_headers
     assert request.url.host == "provider.example"
 
 
+@pytest.mark.parametrize(
+    ("auth_scheme", "expected_value"),
+    [("Bearer", "Bearer provider-secret"), ("ApiKey", "provider-secret")],
+)
+def test_build_upstream_request_honors_guided_custom_auth_header(
+    auth_scheme: str,
+    expected_value: str,
+    settings: Settings,
+) -> None:
+    request = build_upstream_request(
+        _route(
+            Protocol.OPENAI,
+            settings,
+            credentials={
+                "api_key": "provider-secret",
+                "auth_scheme": auth_scheme,
+                "auth_header": "X-Provider-Key",
+            },
+        ),
+        {"authorization": "Bearer inbound-gateway-key"},
+        b"{}",
+        settings=settings,
+    )
+
+    assert request.headers["x-provider-key"] == expected_value
+    assert "authorization" not in request.headers
+
+
+def test_build_upstream_request_honors_explicit_no_auth_with_api_key(
+    settings: Settings,
+) -> None:
+    request = build_upstream_request(
+        _route(
+            Protocol.OPENAI,
+            settings,
+            credentials={"api_key": "unused-secret", "auth_scheme": "none"},
+        ),
+        {"authorization": "Bearer inbound-gateway-key"},
+        b"{}",
+        settings=settings,
+    )
+
+    assert "authorization" not in request.headers
+    assert "unused-secret" not in str(request.headers)
+
+
 def _protocol(
     protocol: Protocol,
     base_url: str,
     settings: Settings,
+    *,
+    credentials: dict[str, object] | None = None,
 ) -> SimpleNamespace:
     provider = SimpleNamespace(
-        credential_encrypted=_encrypted_json({"api_key": "discovery-secret"}, settings)
+        credential_encrypted=_encrypted_json(
+            {"api_key": "discovery-secret"} if credentials is None else credentials,
+            settings,
+        )
     )
     return SimpleNamespace(
         protocol=protocol,
@@ -210,6 +265,33 @@ async def test_openai_discovery_uses_models_endpoint_and_native_cursor(
 
     assert models == ["gpt-4.1-mini", "gpt-4.1"]
     assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_openai_discovery_sends_credentialless_request_without_authorization(
+    settings: Settings,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/v1/models"
+        assert "authorization" not in request.headers
+        return httpx.Response(200, json={"data": [{"id": "ollama-model"}]})
+
+    models = await _discover_with_handler(
+        _protocol(
+            Protocol.OPENAI,
+            "http://ollama.example/v1",
+            settings,
+            credentials={},
+        ),
+        settings,
+        handler,
+    )
+
+    assert models == ["ollama-model"]
+    assert len(requests) == 1
 
 
 @pytest.mark.asyncio

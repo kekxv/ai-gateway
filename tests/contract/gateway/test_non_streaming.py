@@ -325,6 +325,53 @@ async def test_all_protocol_pairs_bind_alias_to_selected_upstream_model(
     assert billing.settlements == 1
 
 
+async def test_openai_compatible_credentialless_route_sends_normal_upstream_request(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    route = RouteCandidate(
+        route_id=111,
+        model_id=model.id,
+        provider_id=121,
+        provider_protocol_id=131,
+        protocol=Protocol.OPENAI,
+        base_url="http://ollama.example/v1",
+        websocket_url=None,
+        upstream_model="ollama-native-model",
+        weight=100,
+        provider_credential_encrypted=encrypt_secret("{}", settings=settings),
+    )
+    seen: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=_response(Protocol.OPENAI, route.upstream_model))
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([route]),
+    )
+    path, body = _request(Protocol.OPENAI, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200, response.text
+    assert len(seen) == 1
+    assert "authorization" not in seen[0].headers
+    assert RAW_KEY not in str(seen[0].headers)
+
+
 @pytest.mark.parametrize("protocol", list(Protocol))
 async def test_same_protocol_preserves_vendor_json_and_response_bytes(
     session: AsyncSession,

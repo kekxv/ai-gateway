@@ -6,6 +6,7 @@ from typing import Protocol as TypingProtocol
 import httpx
 import orjson
 
+from ai_gateway.catalog.credentials import ProviderCredential
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import Protocol
 from ai_gateway.core.security import decrypt_secret
@@ -60,7 +61,7 @@ def build_upstream_request(
     method: str = "POST",
     url: str | httpx.URL | None = None,
 ) -> httpx.Request:
-    """Build one authenticated upstream request without forwarding client credentials."""
+    """Build one upstream request without forwarding client credentials."""
 
     headers = build_upstream_headers(route, inbound_headers, settings=settings)
     return httpx.Request(method, url or route.base_url, headers=headers, content=body)
@@ -82,7 +83,7 @@ def build_upstream_headers(
         else {}
     )
     headers = httpx.Headers(_sanitize_inbound_headers(inbound_headers, configured_headers))
-    headers.update(_protocol_auth_headers(route.protocol, credentials))
+    headers.update(ProviderCredential.from_mapping(credentials).auth_headers(route.protocol))
     headers.update(configured_headers)
     return headers
 
@@ -105,25 +106,6 @@ def _sanitize_inbound_headers(
         if name.lower() not in blocked:
             sanitized[name] = value
     return sanitized
-
-
-def _protocol_auth_headers(
-    protocol: Protocol,
-    credentials: Mapping[str, object],
-) -> dict[str, str]:
-    api_key = credentials.get("api_key")
-    if not isinstance(api_key, str) or not api_key:
-        raise ValueError("Provider credential must contain a non-empty api_key")
-    if protocol is Protocol.OPENAI:
-        return {"authorization": f"Bearer {api_key}"}
-    if protocol is Protocol.CLAUDE:
-        version = credentials.get("anthropic_version", "2023-06-01")
-        if not isinstance(version, str) or not version:
-            raise ValueError("Provider credential contains an invalid anthropic_version")
-        return {"x-api-key": api_key, "anthropic-version": version}
-    if protocol is Protocol.GEMINI:
-        return {"x-goog-api-key": api_key}
-    raise ValueError("Unsupported provider protocol")
 
 
 def _decrypt_header_object(encrypted: bytes, *, settings: Settings) -> dict[str, str]:

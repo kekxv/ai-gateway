@@ -5,8 +5,17 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StringConstraints,
+    model_validator,
+)
 
+from ai_gateway.catalog.credentials import validate_provider_credential
 from ai_gateway.core.enums import Protocol, RouteRuntimeState, RouteSource
 
 CatalogName = Annotated[
@@ -22,6 +31,7 @@ WebsocketUrl = Annotated[
     StringConstraints(strip_whitespace=True, min_length=1, max_length=2048),
 ]
 JsonObject = dict[str, JsonValue]
+ProviderCredentialObject = Annotated[JsonObject, AfterValidator(validate_provider_credential)]
 Price = Annotated[Decimal, Field(ge=0, max_digits=20, decimal_places=8)]
 PriceMultiplier = Annotated[
     Decimal, Field(ge=Decimal("0.10"), le=Decimal("10.00"), max_digits=20, decimal_places=8)
@@ -51,7 +61,7 @@ class ProviderCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: CatalogName
-    credential: JsonObject = Field(default_factory=dict)
+    credential: ProviderCredentialObject = Field(default_factory=dict)
     enabled: bool = True
     auto_load_models: bool = False
     model_sync_interval_seconds: int | None = Field(default=None, ge=1)
@@ -63,7 +73,7 @@ class ProviderUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: CatalogName | None = None
-    credential: JsonObject | None = None
+    credential: ProviderCredentialObject | None = None
     enabled: bool | None = None
     auto_load_models: bool | None = None
     model_sync_interval_seconds: int | None = Field(default=None, ge=1)

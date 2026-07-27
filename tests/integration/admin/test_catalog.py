@@ -125,6 +125,31 @@ async def test_provider_create_without_credential_persists_empty_encrypted_objec
     assert detail.json() == body
 
 
+@pytest.mark.parametrize(
+    "credential",
+    [
+        {"api_key": "secret", "auth_scheme": "Basic"},
+        {
+            "api_key": "secret",
+            "auth_scheme": "Bearer",
+            "auth_header": "X-Provider-Key\r\nInjected",
+        },
+        {"api_key": "secret", "auth_scheme": "ApiKey", "auth_header": "Host"},
+    ],
+)
+async def test_provider_rejects_unsafe_guided_auth_configuration(
+    credential: dict[str, object],
+    admin_client: AsyncClient,
+) -> None:
+    response = await admin_client.post(
+        "/admin/providers",
+        json={"name": f"unsafe-auth-{uuid4().hex}", "credential": credential},
+    )
+
+    assert response.status_code == 422
+    assert "secret" not in response.text
+
+
 async def test_provider_uses_runtime_model_sync_interval_default(
     admin_client: AsyncClient,
     admin_settings,

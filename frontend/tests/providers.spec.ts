@@ -314,6 +314,52 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('选择无授权时把明确的 none 与 API 密钥一起提交且不提交授权头', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: null, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-name"]').setValue('本地受保护 Ollama')
+    await wrapper.get('[data-test="provider-api-key"]').setValue('locally-unused-secret')
+    await wrapper.get('[data-test="provider-auth-scheme"]').setValue('none')
+    await wrapper.get('[data-test="protocol-base-url-0"]').setValue('http://ollama:11434/v1')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: {
+          api_key: 'locally-unused-secret',
+          auth_scheme: 'none',
+        },
+      }),
+    )
+    wrapper.unmount()
+  })
+
+  it('拒绝不安全的自定义授权头名称', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: null, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-name"]').setValue('无效授权头')
+    await wrapper.get('[data-test="provider-api-key"]').setValue('secret')
+    await wrapper.get('[data-test="provider-auth-header"]').setValue('custom')
+    await wrapper.get('[data-test="provider-custom-header"]').setValue('Bad Header')
+    await wrapper.get('[data-test="protocol-base-url-0"]').setValue('https://api.example.com')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+    await waitForFormErrors()
+
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('授权头名称格式不正确')
+    wrapper.unmount()
+  })
+
   it('分别在凭据字段和协议请求头字段拒绝非对象 JSON', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(ProviderFormDrawer, {

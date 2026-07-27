@@ -68,13 +68,31 @@ const priceMultiplier = ref(1.0)
 const protocols = ref<ProtocolRow[]>([])
 const nameError = ref('')
 const advancedCredentialError = ref('')
+const authHeaderError = ref('')
 const syncIntervalError = ref('')
 const formContent = ref<HTMLElement | null>(null)
 let nextProtocolKey = 1
 
 const editing = computed(() => props.provider !== null)
 const drawerTitle = computed(() => (editing.value ? '编辑供应商' : '新建供应商'))
-const showCustomHeaderInput = computed(() => authHeader.value === 'custom')
+const showCustomHeaderInput = computed(
+  () => authScheme.value !== 'none' && authHeader.value === 'custom',
+)
+
+const validAuthHeaderName = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
+const disallowedAuthHeaders = new Set([
+  'connection',
+  'content-length',
+  'cookie',
+  'host',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+])
 
 function newProtocolRow(): ProtocolRow {
   return {
@@ -117,6 +135,7 @@ function resetForm(): void {
         }))
   nameError.value = ''
   advancedCredentialError.value = ''
+  authHeaderError.value = ''
   syncIntervalError.value = ''
 }
 
@@ -179,17 +198,32 @@ function buildCredential(): JsonObject | undefined {
   const credential: JsonObject = { ...(advancedCredential ?? {}) }
 
   if (key !== '') credential.api_key = key
+  if (typeof credential.api_key !== 'string' || credential.api_key.trim() === '') return credential
 
-  if (authScheme.value !== 'none') {
-    credential.auth_scheme = authScheme.value === 'bearer' ? 'Bearer' : 'ApiKey'
+  credential.auth_scheme =
+    authScheme.value === 'none'
+      ? 'none'
+      : authScheme.value === 'bearer'
+        ? 'Bearer'
+        : 'ApiKey'
+  if (authScheme.value === 'none') {
+    delete credential.auth_header
+    return credential
   }
 
-  if (authHeader.value === 'authorization') {
-    credential.auth_header = 'Authorization'
-  } else if (authHeader.value === 'x-api-key') {
-    credential.auth_header = 'x-api-key'
-  } else if (customAuthHeader.value.trim() !== '') {
-    credential.auth_header = customAuthHeader.value.trim()
+  if (authHeader.value === 'authorization') credential.auth_header = 'Authorization'
+  else if (authHeader.value === 'x-api-key') credential.auth_header = 'x-api-key'
+  else {
+    const header = customAuthHeader.value.trim()
+    if (
+      !validAuthHeaderName.test(header) ||
+      header.length > 128 ||
+      disallowedAuthHeaders.has(header.toLocaleLowerCase('en-US'))
+    ) {
+      authHeaderError.value = '授权头名称格式不正确'
+      return undefined
+    }
+    credential.auth_header = header
   }
 
   return credential
@@ -283,6 +317,7 @@ function submitForm(): void {
   if (props.submitting) return
   nameError.value = ''
   advancedCredentialError.value = ''
+  authHeaderError.value = ''
   syncIntervalError.value = ''
   if (name.value.trim() === '') nameError.value = '请输入供应商名称'
   const interval = syncInterval.value
@@ -295,6 +330,7 @@ function submitForm(): void {
   if (
     nameError.value !== '' ||
     advancedCredentialError.value !== '' ||
+    authHeaderError.value !== '' ||
     syncIntervalError.value !== '' ||
     protocolPayload === undefined
   ) {
@@ -307,6 +343,13 @@ function submitForm(): void {
       advancedCredentialError.value !== ''
     ) {
       selector = '[data-validation="credential"] textarea'
+    } else if (
+      nameError.value === '' &&
+      syncIntervalError.value === '' &&
+      advancedCredentialError.value === '' &&
+      authHeaderError.value !== ''
+    ) {
+      selector = '[data-validation="auth-header"] input'
     } else if (
       nameError.value === '' &&
       syncIntervalError.value === '' &&
@@ -460,7 +503,11 @@ function submitForm(): void {
             </ElFormItem>
 
             <ElFormItem label="授权头">
-              <select v-model="authHeader" data-test="provider-auth-header">
+              <select
+                v-model="authHeader"
+                data-test="provider-auth-header"
+                :disabled="authScheme === 'none'"
+              >
                 <option value="authorization">Authorization</option>
                 <option value="x-api-key">x-api-key</option>
                 <option value="custom">自定义</option>
@@ -468,7 +515,12 @@ function submitForm(): void {
             </ElFormItem>
           </div>
 
-          <ElFormItem v-if="showCustomHeaderInput" label="自定义授权头名称">
+          <ElFormItem
+            v-if="showCustomHeaderInput"
+            data-validation="auth-header"
+            label="自定义授权头名称"
+            :error="authHeaderError"
+          >
             <ElInput
               v-model="customAuthHeader"
               data-test="provider-custom-header"
