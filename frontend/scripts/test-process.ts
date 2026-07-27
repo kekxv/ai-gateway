@@ -1,5 +1,10 @@
-import { spawn, spawnSync, type ChildProcess, type StdioOptions } from 'node:child_process'
+import { spawn, type ChildProcess, type StdioOptions } from 'node:child_process'
 import { constants } from 'node:os'
+
+import {
+  createWindowsProcessTreeController,
+  type WindowsProcessTreeController,
+} from './windows-process-tree'
 
 export interface RunWithDeadlineOptions {
   command: string
@@ -40,7 +45,7 @@ export async function runWithDeadline(options: RunWithDeadlineOptions): Promise<
     let timedOut = false
     let forwardedSignal: NodeJS.Signals | undefined
     let forceKillTimer: NodeJS.Timeout | undefined
-    let windowsTreeTerminationSucceeded = false
+    let windowsProcessTree: WindowsProcessTreeController | undefined
 
     const completionCode = (): number =>
       timedOut ? 124 : signalExitCode(forwardedSignal ?? 'SIGTERM')
@@ -57,28 +62,26 @@ export async function runWithDeadline(options: RunWithDeadlineOptions): Promise<
       }
     }
 
-    const terminateWindowsTree = (force: boolean): boolean => {
-      if (child.pid === undefined) return false
-      const args = ['/pid', String(child.pid), '/t']
-      if (force) args.push('/f')
-      const result = spawnSync('taskkill', args, { stdio: 'ignore' })
-      if (result.error !== undefined) {
-        writeError(`Unable to terminate frontend test process tree: ${result.error.message}`)
-        return false
-      }
-      if (result.status !== 0) {
-        writeError(
-          `Unable to terminate frontend test process tree: taskkill exited with status ${String(result.status)}`,
-        )
-        return false
-      }
-      return true
+    const getWindowsProcessTree = (): WindowsProcessTreeController | undefined => {
+      if (windowsProcessTree !== undefined) return windowsProcessTree
+      if (child.pid === undefined) return undefined
+      windowsProcessTree = createWindowsProcessTreeController({
+        rootPid: child.pid,
+        writeError,
+      })
+      return windowsProcessTree
     }
 
     const signalTree = (signal: NodeJS.Signals): boolean => {
       if (child.pid === undefined) return false
       if (process.platform === 'win32') {
-        return terminateWindowsTree(signal === 'SIGKILL')
+        const processTree = getWindowsProcessTree()
+        if (processTree === undefined) return false
+        if (signal === 'SIGKILL') {
+          const rootIsAlive = child.exitCode === null && child.signalCode === null
+          return processTree.forceTerminate(rootIsAlive)
+        }
+        return processTree.beginGracefulTermination()
       }
       try {
         process.kill(-child.pid, signal)
@@ -93,7 +96,7 @@ export async function runWithDeadline(options: RunWithDeadlineOptions): Promise<
     const deadlineTimer = setTimeout(() => {
       timedOut = true
       writeError(`Frontend test suite timed out after ${String(options.timeoutMs)}ms`)
-      windowsTreeTerminationSucceeded = signalTree('SIGTERM')
+      signalTree('SIGTERM')
       scheduleForcedKill()
     }, options.timeoutMs)
 
@@ -109,21 +112,7 @@ export async function runWithDeadline(options: RunWithDeadlineOptions): Promise<
     const scheduleForcedKill = (): void => {
       if (forceKillTimer !== undefined) return
       forceKillTimer = setTimeout(() => {
-        const treeKilled = signalTree('SIGKILL')
-        if (
-          process.platform === 'win32' &&
-          !treeKilled &&
-          child.exitCode === null &&
-          child.signalCode === null
-        ) {
-          try {
-            if (!child.kill('SIGKILL')) {
-              writeError('Unable to force-terminate the frontend test process')
-            }
-          } catch (error) {
-            writeError(`Unable to force-terminate the frontend test process: ${describeError(error)}`)
-          }
-        }
+        signalTree('SIGKILL')
         finish(completionCode())
       }, options.killGraceMs)
     }
@@ -133,7 +122,7 @@ export async function runWithDeadline(options: RunWithDeadlineOptions): Promise<
         if (timedOut || forwardedSignal !== undefined) return
         forwardedSignal = signal
         clearTimeout(deadlineTimer)
-        windowsTreeTerminationSucceeded = signalTree(signal)
+        signalTree(signal)
         scheduleForcedKill()
       }
       handlers.set(signal, handler)
@@ -147,7 +136,10 @@ export async function runWithDeadline(options: RunWithDeadlineOptions): Promise<
     child.once('close', (code, signal) => {
       if (timedOut || forwardedSignal !== undefined) {
         if (process.platform === 'win32') {
-          if (windowsTreeTerminationSucceeded) finish(completionCode())
+          const processTree = getWindowsProcessTree()
+          if (processTree !== undefined && !processTree.hasLiveRetainedProcesses()) {
+            finish(completionCode())
+          }
         } else if (!posixProcessGroupExists()) finish(completionCode())
       } else if (code !== null) finish(code)
       else if (signal !== null) finish(signalExitCode(signal))
