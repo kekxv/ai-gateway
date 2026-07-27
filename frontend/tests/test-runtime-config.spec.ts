@@ -20,4 +20,9 @@ describe('frontend test runtime policy', () => {
       },
     })
   })
+
+  it('retains default file parallelism and continues after test failures', () => {
+    expect(viteConfig.test).not.toHaveProperty('fileParallelism')
+    expect(viteConfig.test).not.toHaveProperty('bail')
+  })
 })
