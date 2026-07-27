@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { Plus, Search } from '@element-plus/icons-vue'
 import {
   ElAlert,
@@ -26,6 +26,7 @@ import { ApiError } from '@/api/client'
 import {
   createProvider,
   deleteProvider,
+  getProvider,
   listProviders,
   syncProviderModels,
   updateProvider,
@@ -44,6 +45,13 @@ import ProviderCard from '@/components/providers/ProviderCard.vue'
 type NoticeType = 'success' | 'warning' | 'error'
 type ProviderOperation = 'edit' | 'sync' | 'delete'
 
+interface ProviderSyncSession {
+  token: symbol
+  provider: ProviderResponse
+  controller?: AbortController
+  submitting: boolean
+}
+
 const providers = ref<ProviderResponse[]>([])
 const searchText = ref('')
 const loading = ref(true)
@@ -55,8 +63,10 @@ const submitting = ref(false)
 const providerOperations = ref(new Map<number, ProviderOperation>())
 const nonDeletableIds = ref(new Set<number>())
 const deletedIds = new Set<number>()
-const syncDialogOpen = ref(false)
-const syncTargetProvider = ref<ProviderResponse | null>(null)
+const syncSession = shallowRef<ProviderSyncSession | null>(null)
+const syncDialogOpen = computed(() => syncSession.value !== null)
+const syncTargetProvider = computed(() => syncSession.value?.provider ?? null)
+const syncSubmitting = computed(() => syncSession.value?.submitting === true)
 let requestController: AbortController | undefined
 let saveController: AbortController | undefined
 const operationControllers = new Set<AbortController>()
@@ -226,6 +236,9 @@ async function saveProvider(payload: ProviderCreate | ProviderUpdate): Promise<v
         ? await createProvider(payload as ProviderCreate, controller.signal)
         : await updateProvider(providerId, payload, controller.signal)
     if (!isCurrentSave(controller, token, session, providerId)) return
+    if (providerId !== undefined && updated.id !== providerId) {
+      throw new Error('供应商更新响应供应商不匹配')
+    }
     replaceProvider(updated)
     drawerSessionGeneration += 1
     drawerOpen.value = false
@@ -254,40 +267,70 @@ async function saveProvider(payload: ProviderCreate | ProviderUpdate): Promise<v
 }
 
 function openSyncDialog(provider: ProviderResponse): void {
+  if (syncSession.value !== null) return
   if (!beginProviderOperation(provider.id, 'sync')) return
-  syncTargetProvider.value = provider
-  syncDialogOpen.value = true
+  syncSession.value = {
+    token: Symbol('provider-sync'),
+    provider,
+    submitting: false,
+  }
 }
 
 function setSyncDialogOpen(open: boolean): void {
   if (open) return
-  const providerId = syncTargetProvider.value?.id
-  syncDialogOpen.value = false
-  syncTargetProvider.value = null
-  if (providerId !== undefined) finishProviderOperation(providerId, 'sync')
+  const session = syncSession.value
+  if (session === null || session.submitting) return
+  syncSession.value = null
+  finishProviderOperation(session.provider.id, 'sync')
+}
+
+function isCurrentSyncSession(session: ProviderSyncSession): boolean {
+  return (
+    mounted &&
+    session.controller?.signal.aborted === false &&
+    syncSession.value?.token === session.token &&
+    syncSession.value.controller === session.controller &&
+    syncSession.value.submitting
+  )
 }
 
 async function confirmSyncModels(models: string[]): Promise<void> {
-  const provider = syncTargetProvider.value
-  if (provider === null) return
+  const pendingSession = syncSession.value
+  if (pendingSession === null || pendingSession.submitting) return
   const controller = operationController()
+  const session: ProviderSyncSession = {
+    ...pendingSession,
+    controller,
+    submitting: true,
+  }
+  syncSession.value = session
+  const provider = session.provider
   try {
     const result = await syncProviderModels(provider.id, models, controller.signal)
-    if (!mounted || controller.signal.aborted) return
+    if (!isCurrentSyncSession(session)) return
+    if (result.provider_id !== provider.id) {
+      throw new Error('模型同步响应供应商不匹配')
+    }
+    const refreshed = await getProvider(provider.id, controller.signal)
+    if (!isCurrentSyncSession(session)) return
+    if (refreshed.id !== provider.id) {
+      throw new Error('供应商刷新响应供应商不匹配')
+    }
+    replaceProvider(refreshed)
     notice.value = {
       type: 'success',
       text: `供应商”${provider.name}”同步完成：发现 ${String(result.discovered_models)} 个，新增模型 ${String(result.created_models)} 个，新增路由 ${String(result.created_routes)} 条，更新路由 ${String(result.updated_routes)} 条，停用路由 ${String(result.disabled_routes)} 条`,
     }
-    await load()
   } catch (error: unknown) {
-    if (mounted && !controller.signal.aborted) {
+    if (isCurrentSyncSession(session)) {
       notice.value = { type: 'error', text: errorText(error, '模型同步失败') }
     }
   } finally {
     operationControllers.delete(controller)
-    syncDialogOpen.value = false
-    syncTargetProvider.value = null
-    if (mounted) finishProviderOperation(provider.id, 'sync')
+    if (isCurrentSyncSession(session)) {
+      syncSession.value = null
+      finishProviderOperation(provider.id, 'sync')
+    }
   }
 }
 
@@ -444,6 +487,7 @@ onBeforeUnmount(() => {
       :model-value="syncDialogOpen"
       :provider-id="syncTargetProvider?.id ?? null"
       :provider-name="syncTargetProvider?.name ?? ''"
+      :submitting="syncSubmitting"
       @update:model-value="setSyncDialogOpen"
       @confirm="confirmSyncModels"
     />

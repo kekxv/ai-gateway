@@ -12,6 +12,18 @@ export async function listProviders(signal?: AbortSignal): Promise<ProviderRespo
   return data
 }
 
+export async function getProvider(
+  providerId: number,
+  signal?: AbortSignal,
+): Promise<ProviderResponse> {
+  const config = signal === undefined ? undefined : { signal }
+  const { data } = await apiClient.get<ProviderResponse>(
+    `/admin/providers/${String(providerId)}`,
+    config,
+  )
+  return data
+}
+
 export async function createProvider(
   payload: ProviderCreate,
   signal?: AbortSignal,

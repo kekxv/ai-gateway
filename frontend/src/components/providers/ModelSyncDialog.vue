@@ -23,6 +23,7 @@ const props = defineProps<{
   modelValue: boolean
   providerId: number | null
   providerName: string
+  submitting: boolean
 }>()
 
 const emit = defineEmits<{
@@ -45,6 +46,7 @@ const allModels = computed(() => {
 })
 
 const totalModels = computed(() => allModels.value.length)
+const busy = computed(() => loading.value || props.submitting)
 const selectedCount = computed(() => selectedModels.value.size)
 const allSelected = computed(
   () => totalModels.value > 0 && selectedModels.value.size === totalModels.value,
@@ -101,7 +103,18 @@ function toggleAll(): void {
 }
 
 function handleConfirm(): void {
+  if (busy.value) return
   emit('confirm', [...selectedModels.value])
+}
+
+function requestClose(): void {
+  if (busy.value) return
+  emit('update:modelValue', false)
+}
+
+function handleModelValueUpdate(value: boolean): void {
+  if (!value && busy.value) return
+  emit('update:modelValue', value)
 }
 
 watch(
@@ -126,11 +139,11 @@ onBeforeUnmount(() => {
     :model-value="modelValue"
     :title="`选择同步的模型 — ${providerName}`"
     width="min(90vw, 40rem)"
-    :close-on-click-modal="!loading"
-    :close-on-press-escape="!loading"
-    :show-close="!loading"
+    :close-on-click-modal="!busy"
+    :close-on-press-escape="!busy"
+    :show-close="!busy"
     destroy-on-close
-    @update:model-value="emit('update:modelValue', $event)"
+    @update:model-value="handleModelValueUpdate"
   >
     <div v-if="loading" class="dialog-loading" aria-label="正在发现模型">
       <ElSkeleton v-for="index in 5" :key="index" animated>
@@ -149,6 +162,7 @@ onBeforeUnmount(() => {
         <ElCheckbox
           :model-value="allSelected"
           :indeterminate="someSelected"
+          :disabled="submitting"
           @change="toggleAll"
         >
           全选 ({{ selectedCount }}/{{ totalModels }})
@@ -166,6 +180,7 @@ onBeforeUnmount(() => {
             v-for="model in models"
             :key="model"
             :model-value="selectedModels.has(model)"
+            :disabled="submitting"
             @change="toggleModel(model)"
           >
             <code>{{ model }}</code>
@@ -176,12 +191,13 @@ onBeforeUnmount(() => {
 
     <template #footer>
       <div class="dialog-actions">
-        <ElButton :disabled="loading" @click="emit('update:modelValue', false)">
+        <ElButton :disabled="busy" @click="requestClose">
           取消
         </ElButton>
         <ElButton
           type="primary"
-          :disabled="loading || selectedCount === 0 || error !== ''"
+          :loading="submitting"
+          :disabled="busy || selectedCount === 0 || error !== ''"
           @click="handleConfirm"
         >
           同步选中的模型 ({{ selectedCount }})

@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import type { ProviderResponse } from '@/api/types'
 import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
+import ModelSyncDialog from '@/components/providers/ModelSyncDialog.vue'
 import { routes } from '@/router'
 import ProvidersView from '@/views/ProvidersView.vue'
 
@@ -84,6 +85,9 @@ beforeEach(() => {
   server.use(
     http.get('/admin/providers/:providerId/discover-models', () =>
       HttpResponse.json({ openai: ['gpt-4.1'] }),
+    ),
+    http.get('/admin/providers/:providerId', ({ params }) =>
+      HttpResponse.json(Number(params.providerId) === 2 ? geminiFixture : providerFixture),
     ),
   )
 })
@@ -536,7 +540,29 @@ describe('供应商与协议管理', () => {
     replacement.unmount()
   })
 
-  it('同一供应商的编辑、同步和删除互斥，并拦截重复同步', async () => {
+  it('编辑供应商时拒绝响应中的其他供应商编号且不改写列表', async () => {
+    server.use(
+      http.patch('/admin/providers/1', () =>
+        HttpResponse.json({ ...geminiFixture, name: '错误注入线路' }),
+      ),
+    )
+    const wrapper = await mountProviders([providerFixture, geminiFixture])
+
+    await wrapper.get('[data-test="edit-provider-1"]').trigger('click')
+    const drawer = wrapper.getComponent(ProviderFormDrawer)
+    await drawer.get('[data-test="provider-name"]').setValue('OpenAI 修改线路')
+    await drawer.get('[data-test="provider-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(drawer.props('modelValue')).toBe(true)
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('响应供应商不匹配')
+    expect(wrapper.get('[data-test="provider-card-1"]').text()).toContain('OpenAI 主线路')
+    expect(wrapper.get('[data-test="provider-card-2"]').text()).toContain('Gemini 备用线路')
+    expect(wrapper.text()).not.toContain('错误注入线路')
+    wrapper.unmount()
+  })
+
+  it('同步确认被快速点击两次时只发送一个 POST', async () => {
     const syncResponse = deferred<{
       provider_id: number
       discovered_models: number
@@ -546,10 +572,6 @@ describe('供应商与协议管理', () => {
       disabled_routes: number
     }>()
     let syncRequests = 0
-    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
-      value: '',
-      action: 'confirm',
-    } as MessageBoxData)
     server.use(
       http.post('/admin/providers/1/sync-models', async () => {
         syncRequests += 1
@@ -559,18 +581,19 @@ describe('供应商与协议管理', () => {
     const wrapper = await mountProviders()
 
     await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
-    await confirmSelectedModels(wrapper)
-    expect(wrapper.get('[data-test="sync-provider-1"]').attributes('disabled')).toBeDefined()
-    await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
-    await wrapper.get('[data-test="edit-provider-1"]').trigger('click')
-    await wrapper.get('[data-test="delete-provider-1"]').trigger('click')
     await flushPromises()
-
-    expect(syncRequests).toBe(1)
-    expect(confirm).not.toHaveBeenCalled()
-    expect(wrapper.findComponent(ProviderFormDrawer).props('modelValue')).toBe(false)
-    expect(wrapper.get('[data-test="edit-provider-1"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-test="delete-provider-1"]').attributes('disabled')).toBeDefined()
+    const confirmButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('同步选中的模型'))
+    if (confirmButton === undefined) throw new Error('未找到模型同步确认按钮')
+    await Promise.all([confirmButton.trigger('click'), confirmButton.trigger('click')])
+    await flushPromises()
+    const requestCountWhilePending = syncRequests
+    const pendingConfirmButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('同步选中的模型'))
+    if (pendingConfirmButton === undefined) throw new Error('模型同步确认按钮提前消失')
+    const confirmDisabledWhilePending = pendingConfirmButton.attributes('disabled')
 
     syncResponse.resolve({
       provider_id: 1,
@@ -582,13 +605,133 @@ describe('供应商与协议管理', () => {
     })
     await flushPromises()
 
-    await wrapper.get('[data-test="edit-provider-1"]').trigger('click')
-    expect(wrapper.get('[data-test="sync-provider-1"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-test="delete-provider-1"]').attributes('disabled')).toBeDefined()
-    await wrapper
-      .getComponent(ProviderFormDrawer)
-      .get('[data-test="provider-cancel"]')
-      .trigger('click')
+    expect(requestCountWhilePending).toBe(1)
+    expect(confirmDisabledWhilePending).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('同步 POST 期间取消按钮不能关闭对话框或释放供应商锁', async () => {
+    const syncResponse = deferred<{
+      provider_id: number
+      discovered_models: number
+      created_models: number
+      created_routes: number
+      updated_routes: number
+      disabled_routes: number
+    }>()
+    server.use(
+      http.post('/admin/providers/1/sync-models', async () =>
+        HttpResponse.json(await syncResponse.promise),
+      ),
+    )
+    const wrapper = await mountProviders()
+
+    await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
+    await confirmSelectedModels(wrapper)
+    const cancelButton = wrapper
+      .getComponent(ModelSyncDialog)
+      .findAll('button')
+      .find((button) => button.text() === '取消')
+    if (cancelButton === undefined) throw new Error('未找到模型同步取消按钮')
+    const cancelDisabledWhilePending = cancelButton.attributes('disabled')
+    const closeButtonWhilePending = wrapper
+      .getComponent(ModelSyncDialog)
+      .find('.el-dialog__headerbtn')
+      .exists()
+    await cancelButton.trigger('click')
+    await flushPromises()
+    const dialogStayedOpen = wrapper.getComponent(ModelSyncDialog).props('modelValue')
+    const providerStayedLocked = wrapper
+      .get('[data-test="edit-provider-1"]')
+      .attributes('disabled')
+
+    syncResponse.resolve({
+      provider_id: 1,
+      discovered_models: 1,
+      created_models: 0,
+      created_routes: 0,
+      updated_routes: 0,
+      disabled_routes: 0,
+    })
+    await flushPromises()
+
+    expect(cancelDisabledWhilePending).toBeDefined()
+    expect(closeButtonWhilePending).toBe(false)
+    expect(dialogStayedOpen).toBe(true)
+    expect(providerStayedLocked).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('供应商 A 同步 POST 期间不能用供应商 B 替换对话框目标', async () => {
+    const syncResponse = deferred<{
+      provider_id: number
+      discovered_models: number
+      created_models: number
+      created_routes: number
+      updated_routes: number
+      disabled_routes: number
+    }>()
+    server.use(
+      http.post('/admin/providers/1/sync-models', async () =>
+        HttpResponse.json(await syncResponse.promise),
+      ),
+    )
+    const wrapper = await mountProviders([providerFixture, geminiFixture])
+
+    await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
+    await confirmSelectedModels(wrapper)
+    await wrapper.get('[data-test="sync-provider-2"]').trigger('click')
+    await flushPromises()
+    const targetWhilePending = wrapper.getComponent(ModelSyncDialog).props('providerName')
+    const secondProviderLockWhilePending = wrapper
+      .get('[data-test="sync-provider-2"]')
+      .attributes('disabled')
+
+    syncResponse.resolve({
+      provider_id: 1,
+      discovered_models: 1,
+      created_models: 0,
+      created_routes: 0,
+      updated_routes: 0,
+      disabled_routes: 0,
+    })
+    await flushPromises()
+    const secondProviderLockAfterSync = wrapper
+      .get('[data-test="sync-provider-2"]')
+      .attributes('disabled')
+
+    expect(targetWhilePending).toBe('OpenAI 主线路')
+    expect(secondProviderLockWhilePending).toBeUndefined()
+    expect(secondProviderLockAfterSync).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('同步响应供应商编号不匹配时显示错误且不刷新记录', async () => {
+    let detailRequests = 0
+    server.use(
+      http.post('/admin/providers/1/sync-models', () =>
+        HttpResponse.json({
+          provider_id: 2,
+          discovered_models: 1,
+          created_models: 0,
+          created_routes: 0,
+          updated_routes: 0,
+          disabled_routes: 0,
+        }),
+      ),
+      http.get('/admin/providers/1', () => {
+        detailRequests += 1
+        return HttpResponse.json(providerFixture)
+      }),
+    )
+    const wrapper = await mountProviders()
+
+    await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
+    await confirmSelectedModels(wrapper)
+
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('响应供应商不匹配')
+    expect(wrapper.get('[data-test="provider-notice"]').text()).not.toContain('同步完成')
+    expect(detailRequests).toBe(0)
     wrapper.unmount()
   })
 
@@ -665,14 +808,23 @@ describe('供应商与协议管理', () => {
     expect(document.body.textContent).not.toContain('已删除')
   })
 
-  it('删除成功后保留本地删除结果，不允许较早的列表响应恢复该行', async () => {
-    const staleList = deferred<ProviderResponse[]>()
+  it('同步 A 的记录刷新与删除 B 独立合并', async () => {
+    const refreshReady = deferred<null>()
+    const refreshedProvider = {
+      ...providerFixture,
+      last_model_sync_at: '2031-11-19T09:45:00Z',
+    }
     let listRequests = 0
     server.use(
       http.get('/admin/providers', async () => {
         listRequests += 1
         if (listRequests === 1) return HttpResponse.json([providerFixture, geminiFixture])
-        return HttpResponse.json(await staleList.promise)
+        await refreshReady.promise
+        return HttpResponse.json([refreshedProvider, geminiFixture])
+      }),
+      http.get('/admin/providers/1', async () => {
+        await refreshReady.promise
+        return HttpResponse.json(refreshedProvider)
       }),
       http.post('/admin/providers/1/sync-models', () =>
         HttpResponse.json({
@@ -699,49 +851,11 @@ describe('供应商与协议管理', () => {
     expect(wrapper.find('[data-test="delete-provider-2"]').exists()).toBe(false)
     expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('已删除')
 
-    staleList.resolve([providerFixture, geminiFixture])
+    refreshReady.resolve(null)
     await flushPromises()
     expect(wrapper.find('[data-test="delete-provider-2"]').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('本地删除成功后忽略较早列表的迟到失败并继续显示有效列表', async () => {
-    const staleList = deferred<Response>()
-    let listRequests = 0
-    server.use(
-      http.get('/admin/providers', () => {
-        listRequests += 1
-        if (listRequests === 1) return HttpResponse.json([providerFixture, geminiFixture])
-        return staleList.promise
-      }),
-      http.post('/admin/providers/1/sync-models', () =>
-        HttpResponse.json({
-          provider_id: 1,
-          discovered_models: 2,
-          created_models: 0,
-          created_routes: 0,
-          updated_routes: 0,
-          disabled_routes: 0,
-        }),
-      ),
-      http.delete('/admin/providers/2', () => new HttpResponse(null, { status: 204 })),
-    )
-    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
-      value: '',
-      action: 'confirm',
-    } as MessageBoxData)
-    const wrapper = await mountProvidersView()
-
-    await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
-    await confirmSelectedModels(wrapper)
-    await wrapper.get('[data-test="delete-provider-2"]').trigger('click')
-    await flushPromises()
-    staleList.resolve(HttpResponse.json(null, { status: 500 }))
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('OpenAI 主线路')
-    expect(wrapper.find('[data-test="delete-provider-2"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('供应商列表加载失败')
+    expect(wrapper.get('[data-test="provider-card-1"]').text()).toContain('2031')
+    expect(wrapper.get('[data-test="provider-card-1"]').text()).not.toContain('2026')
     wrapper.unmount()
   })
 
