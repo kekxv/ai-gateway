@@ -194,180 +194,182 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <PageHeader title="请求日志" description="按审计字段搜索网关请求，并检查服务端已脱敏的请求与响应详情。">
-    <template #actions>
-      <ElButton :loading="loading" aria-label="刷新请求日志" @click="load">
-        <ElIcon><Refresh /></ElIcon>
-        刷新
-      </ElButton>
-    </template>
-  </PageHeader>
-
-  <section class="filter-panel" aria-labelledby="request-log-filter-title">
-    <div class="filter-heading">
-      <div>
-        <h2 id="request-log-filter-title">搜索条件</h2>
-        <p>条件变化后从第一页重新查询。</p>
-      </div>
-      <div class="filter-actions">
-        <ElButton @click="clearFilters">清空条件</ElButton>
-        <ElButton type="primary" @click="applyFilters">
-          <ElIcon><Search /></ElIcon>
-          查询
+  <div class="route-page">
+    <PageHeader title="请求日志" description="按审计字段搜索网关请求，并检查服务端已脱敏的请求与响应详情。">
+      <template #actions>
+        <ElButton :loading="loading" aria-label="刷新请求日志" @click="load">
+          <ElIcon><Refresh /></ElIcon>
+          刷新
         </ElButton>
+      </template>
+    </PageHeader>
+
+    <section class="filter-panel" aria-labelledby="request-log-filter-title">
+      <div class="filter-heading">
+        <div>
+          <h2 id="request-log-filter-title">搜索条件</h2>
+          <p>条件变化后从第一页重新查询。</p>
+        </div>
+        <div class="filter-actions">
+          <ElButton @click="clearFilters">清空条件</ElButton>
+          <ElButton type="primary" @click="applyFilters">
+            <ElIcon><Search /></ElIcon>
+            查询
+          </ElButton>
+        </div>
       </div>
-    </div>
 
-    <div class="filter-grid">
-      <label>
-        <span>请求 ID</span>
-        <input v-model="filters.requestId" data-test="log-request-id" type="search" placeholder="输入完整请求 ID" @change="applyFilters">
-      </label>
-      <label>
-        <span>用户 ID</span>
-        <input v-model="filters.userId" data-test="log-user-id" type="number" min="1" placeholder="例如 2" @change="applyFilters">
-      </label>
-      <label>
-        <span>密钥 ID</span>
-        <input v-model="filters.apiKeyId" data-test="log-api-key-id" type="number" min="1" placeholder="例如 31" @change="applyFilters">
-      </label>
-      <label>
-        <span>模型 ID</span>
-        <input v-model="filters.modelId" data-test="log-model-id" type="number" min="1" placeholder="例如 21" @change="applyFilters">
-      </label>
-      <label>
-        <span>供应商 ID</span>
-        <input v-model="filters.providerId" data-test="log-provider-id" type="number" min="1" placeholder="例如 11" @change="applyFilters">
-      </label>
-      <label>
-        <span>状态</span>
-        <select v-model="filters.status" data-test="log-status" @change="applyFilters">
-          <option value="">全部状态</option>
-          <option value="started">处理中</option>
-          <option value="completed">已完成</option>
-          <option value="failed">失败</option>
-          <option value="client_disconnected">客户端已断开</option>
-        </select>
-      </label>
-      <label>
-        <span>协议</span>
-        <select v-model="filters.protocol" data-test="log-protocol" @change="applyFilters">
-          <option value="">全部协议</option>
-          <option value="openai">OpenAI</option>
-          <option value="claude">Claude</option>
-          <option value="gemini">Gemini</option>
-        </select>
-      </label>
-      <label>
-        <span>开始时间</span>
-        <input v-model="filters.createdFrom" data-test="log-created-from" type="datetime-local" @change="applyFilters">
-      </label>
-      <label>
-        <span>结束时间</span>
-        <input v-model="filters.createdTo" data-test="log-created-to" type="datetime-local" @change="applyFilters">
-      </label>
-      <label>
-        <span>每页条数</span>
-        <select v-model.number="pageSize" data-test="log-page-size" @change="applyFilters">
-          <option :value="25">25 条</option>
-          <option :value="50">50 条</option>
-          <option :value="100">100 条</option>
-          <option :value="200">200 条</option>
-        </select>
-      </label>
-    </div>
-  </section>
-
-  <ElAlert
-    v-if="loadError !== ''"
-    class="load-alert"
-    :title="loadError"
-    type="error"
-    :closable="false"
-    show-icon
-  />
-
-  <section class="log-panel" aria-labelledby="request-log-list-title">
-    <div class="list-heading">
-      <div>
-        <h2 id="request-log-list-title">日志列表</h2>
-        <p>当前页 {{ logs.length }} 条；列表接口不提供总数。</p>
+      <div class="filter-grid">
+        <label>
+          <span>请求 ID</span>
+          <input v-model="filters.requestId" data-test="log-request-id" type="search" placeholder="输入完整请求 ID" @change="applyFilters">
+        </label>
+        <label>
+          <span>用户 ID</span>
+          <input v-model="filters.userId" data-test="log-user-id" type="number" min="1" placeholder="例如 2" @change="applyFilters">
+        </label>
+        <label>
+          <span>密钥 ID</span>
+          <input v-model="filters.apiKeyId" data-test="log-api-key-id" type="number" min="1" placeholder="例如 31" @change="applyFilters">
+        </label>
+        <label>
+          <span>模型 ID</span>
+          <input v-model="filters.modelId" data-test="log-model-id" type="number" min="1" placeholder="例如 21" @change="applyFilters">
+        </label>
+        <label>
+          <span>供应商 ID</span>
+          <input v-model="filters.providerId" data-test="log-provider-id" type="number" min="1" placeholder="例如 11" @change="applyFilters">
+        </label>
+        <label>
+          <span>状态</span>
+          <select v-model="filters.status" data-test="log-status" @change="applyFilters">
+            <option value="">全部状态</option>
+            <option value="started">处理中</option>
+            <option value="completed">已完成</option>
+            <option value="failed">失败</option>
+            <option value="client_disconnected">客户端已断开</option>
+          </select>
+        </label>
+        <label>
+          <span>协议</span>
+          <select v-model="filters.protocol" data-test="log-protocol" @change="applyFilters">
+            <option value="">全部协议</option>
+            <option value="openai">OpenAI</option>
+            <option value="claude">Claude</option>
+            <option value="gemini">Gemini</option>
+          </select>
+        </label>
+        <label>
+          <span>开始时间</span>
+          <input v-model="filters.createdFrom" data-test="log-created-from" type="datetime-local" @change="applyFilters">
+        </label>
+        <label>
+          <span>结束时间</span>
+          <input v-model="filters.createdTo" data-test="log-created-to" type="datetime-local" @change="applyFilters">
+        </label>
+        <label>
+          <span>每页条数</span>
+          <select v-model.number="pageSize" data-test="log-page-size" @change="applyFilters">
+            <option :value="25">25 条</option>
+            <option :value="50">50 条</option>
+            <option :value="100">100 条</option>
+            <option :value="200">200 条</option>
+          </select>
+        </label>
       </div>
-      <div class="pagination" aria-label="请求日志分页">
-        <ElButton data-test="logs-previous" :disabled="loading || cursorStack.length === 0" @click="previousPage">上一页</ElButton>
+    </section>
+
+    <ElAlert
+      v-if="loadError !== ''"
+      class="load-alert"
+      :title="loadError"
+      type="error"
+      :closable="false"
+      show-icon
+    />
+
+    <section class="log-panel" aria-labelledby="request-log-list-title">
+      <div class="list-heading">
+        <div>
+          <h2 id="request-log-list-title">日志列表</h2>
+          <p>当前页 {{ logs.length }} 条；列表接口不提供总数。</p>
+        </div>
+        <div class="pagination" aria-label="请求日志分页">
+          <ElButton data-test="logs-previous" :disabled="loading || cursorStack.length === 0" @click="previousPage">上一页</ElButton>
+          <span>第 {{ cursorStack.length + 1 }} 页</span>
+          <ElButton data-test="logs-next" :disabled="loading || nextCursor === null" @click="nextPage">下一页</ElButton>
+        </div>
+      </div>
+
+      <ElResult v-if="loadError !== ''" icon="error" title="请求日志加载失败" :sub-title="loadError">
+        <template #extra><ElButton type="primary" @click="load">重新加载</ElButton></template>
+      </ElResult>
+      <ElSkeleton v-else-if="loading" animated>
+        <template #template><ElSkeletonItem variant="rect" class="table-skeleton" /></template>
+      </ElSkeleton>
+      <ElEmpty v-else-if="logs.length === 0" description="暂无匹配的请求日志" />
+      <div v-else class="table-scroll">
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>请求 ID</th>
+              <th>用户 / 密钥</th>
+              <th>模型 / 供应商 / 路由</th>
+              <th>入站 → 出站协议</th>
+              <th>传输 / 流式</th>
+              <th>状态 / HTTP</th>
+              <th>令牌</th>
+              <th>精确费用</th>
+              <th>延迟 / 首个令牌</th>
+              <th>错误代码</th>
+              <th>创建时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="log in logs" :key="log.id" :data-test="`request-log-${log.id}`">
+              <td class="id-cell"><strong>{{ log.id }}</strong></td>
+              <td>{{ entityLabel('用户', log.user_id) }} / {{ entityLabel('密钥', log.api_key_id) }}</td>
+              <td>{{ entityLabel('模型', log.model_id) }} / {{ entityLabel('供应商', log.provider_id) }} / {{ entityLabel('路由', log.model_route_id) }}</td>
+              <td>{{ log.inbound_protocol }} → {{ log.outbound_protocol ?? '无出站协议' }}</td>
+              <td>{{ log.transport }} / {{ log.stream ? '是' : '否' }}</td>
+              <td>
+                <div class="status-cell">
+                  <ElTag effect="light" :type="log.status === 'completed' ? 'success' : log.status === 'failed' ? 'danger' : 'info'">
+                    {{ statusLabels[log.status] }}
+                  </ElTag>
+                  <span>{{ log.http_status ?? '—' }}</span>
+                </div>
+              </td>
+              <td>{{ log.prompt_tokens }} / {{ log.completion_tokens }}</td>
+              <td class="exact-value">{{ formatMoney(log.cost) }}</td>
+              <td>{{ formatDuration(log.latency_ms) }} / {{ formatDuration(log.first_token_ms) }}</td>
+              <td>{{ log.error_code ?? '—' }}</td>
+              <td>{{ formatDateTime(log.created_at) }}</td>
+              <td>
+                <ElButton :data-test="`inspect-log-${log.id}`" size="small" @click="inspect(log.id)">
+                  <ElIcon><View /></ElIcon>
+                  检查详情
+                </ElButton>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="pagination pagination--footer" aria-label="请求日志底部分页">
+        <ElButton :disabled="loading || cursorStack.length === 0" @click="previousPage">上一页</ElButton>
         <span>第 {{ cursorStack.length + 1 }} 页</span>
-        <ElButton data-test="logs-next" :disabled="loading || nextCursor === null" @click="nextPage">下一页</ElButton>
+        <ElButton :disabled="loading || nextCursor === null" @click="nextPage">下一页</ElButton>
       </div>
-    </div>
+    </section>
 
-    <ElResult v-if="loadError !== ''" icon="error" title="请求日志加载失败" :sub-title="loadError">
-      <template #extra><ElButton type="primary" @click="load">重新加载</ElButton></template>
-    </ElResult>
-    <ElSkeleton v-else-if="loading" animated>
-      <template #template><ElSkeletonItem variant="rect" class="table-skeleton" /></template>
-    </ElSkeleton>
-    <ElEmpty v-else-if="logs.length === 0" description="暂无匹配的请求日志" />
-    <div v-else class="table-scroll">
-      <table class="log-table">
-        <thead>
-          <tr>
-            <th>请求 ID</th>
-            <th>用户 / 密钥</th>
-            <th>模型 / 供应商 / 路由</th>
-            <th>入站 → 出站协议</th>
-            <th>传输 / 流式</th>
-            <th>状态 / HTTP</th>
-            <th>令牌</th>
-            <th>精确费用</th>
-            <th>延迟 / 首个令牌</th>
-            <th>错误代码</th>
-            <th>创建时间</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="log in logs" :key="log.id" :data-test="`request-log-${log.id}`">
-            <td class="id-cell"><strong>{{ log.id }}</strong></td>
-            <td>{{ entityLabel('用户', log.user_id) }} / {{ entityLabel('密钥', log.api_key_id) }}</td>
-            <td>{{ entityLabel('模型', log.model_id) }} / {{ entityLabel('供应商', log.provider_id) }} / {{ entityLabel('路由', log.model_route_id) }}</td>
-            <td>{{ log.inbound_protocol }} → {{ log.outbound_protocol ?? '无出站协议' }}</td>
-            <td>{{ log.transport }} / {{ log.stream ? '是' : '否' }}</td>
-            <td>
-              <div class="status-cell">
-                <ElTag effect="light" :type="log.status === 'completed' ? 'success' : log.status === 'failed' ? 'danger' : 'info'">
-                  {{ statusLabels[log.status] }}
-                </ElTag>
-                <span>{{ log.http_status ?? '—' }}</span>
-              </div>
-            </td>
-            <td>{{ log.prompt_tokens }} / {{ log.completion_tokens }}</td>
-            <td class="exact-value">{{ formatMoney(log.cost) }}</td>
-            <td>{{ formatDuration(log.latency_ms) }} / {{ formatDuration(log.first_token_ms) }}</td>
-            <td>{{ log.error_code ?? '—' }}</td>
-            <td>{{ formatDateTime(log.created_at) }}</td>
-            <td>
-              <ElButton :data-test="`inspect-log-${log.id}`" size="small" @click="inspect(log.id)">
-                <ElIcon><View /></ElIcon>
-                检查详情
-              </ElButton>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="pagination pagination--footer" aria-label="请求日志底部分页">
-      <ElButton :disabled="loading || cursorStack.length === 0" @click="previousPage">上一页</ElButton>
-      <span>第 {{ cursorStack.length + 1 }} 页</span>
-      <ElButton :disabled="loading || nextCursor === null" @click="nextPage">下一页</ElButton>
-    </div>
-  </section>
-
-  <RequestLogDetailDrawer
-    :model-value="detailOpen"
-    :request-id="selectedRequestId"
-    @update:model-value="setDetailOpen"
-  />
+    <RequestLogDetailDrawer
+      :model-value="detailOpen"
+      :request-id="selectedRequestId"
+      @update:model-value="setDetailOpen"
+    />
+  </div>
 </template>
 
 <style scoped>

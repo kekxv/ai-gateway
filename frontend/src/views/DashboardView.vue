@@ -237,124 +237,126 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <PageHeader title="控制台概览" description="查看网关资源状态与近期请求趋势。" />
+  <div class="route-page">
+    <PageHeader title="控制台概览" description="查看网关资源状态与近期请求趋势。" />
 
-  <section v-if="initialLoading" data-test="dashboard-skeleton" aria-label="正在加载概览">
-    <div class="resource-grid" aria-hidden="true">
-      <ElCard v-for="index in 5" :key="index" shadow="never">
-        <ElSkeleton animated>
-          <template #template>
-            <ElSkeletonItem variant="text" style="width: 45%" />
-            <ElSkeletonItem variant="h1" style="width: 72%; margin-top: 1rem" />
-            <ElSkeletonItem variant="text" style="width: 58%; margin-top: 0.75rem" />
-          </template>
-        </ElSkeleton>
-      </ElCard>
-    </div>
-  </section>
-
-  <ElResult
-    v-else-if="summary === null && errorMessage"
-    data-test="dashboard-error"
-    icon="error"
-    title="概览数据加载失败"
-    :sub-title="errorMessage"
-  >
-    <template #extra>
-      <ElButton
-        data-test="dashboard-retry"
-        type="primary"
-        :loading="retrying"
-        @click="loadSummary"
-      >
-        重新加载
-      </ElButton>
-    </template>
-  </ElResult>
-
-  <template v-else-if="summary !== null">
-    <ElAlert
-      v-if="summary.routes.unavailable > 0"
-      class="route-alert"
-      type="warning"
-      :title="`${formatInteger(summary.routes.unavailable)} 条路由处于熔断状态`"
-      description="请检查上游提供商健康状态与最近请求日志。"
-      :closable="false"
-      show-icon
-    />
-
-    <section aria-labelledby="resource-heading">
-      <div class="section-heading">
-        <div>
-          <p class="section-heading__eyebrow">资源状态</p>
-          <h2 id="resource-heading">网关资源</h2>
-        </div>
-      </div>
-      <div class="resource-grid">
-        <ElCard v-for="card in resourceCards" :key="card.label" shadow="never">
-          <p class="resource-card__summary">{{ card.label }} {{ card.value }}</p>
-          <p class="resource-card__note">{{ card.note }}</p>
+    <section v-if="initialLoading" data-test="dashboard-skeleton" aria-label="正在加载概览">
+      <div class="resource-grid" aria-hidden="true">
+        <ElCard v-for="index in 5" :key="index" shadow="never">
+          <ElSkeleton animated>
+            <template #template>
+              <ElSkeletonItem variant="text" style="width: 45%" />
+              <ElSkeletonItem variant="h1" style="width: 72%; margin-top: 1rem" />
+              <ElSkeletonItem variant="text" style="width: 58%; margin-top: 0.75rem" />
+            </template>
+          </ElSkeleton>
         </ElCard>
       </div>
     </section>
 
-    <section class="usage-section" aria-labelledby="usage-heading">
-      <div class="section-heading">
-        <div>
-          <p class="section-heading__eyebrow">近 24 小时</p>
-          <h2 id="usage-heading">使用情况</h2>
-        </div>
-      </div>
-      <div class="usage-grid">
-        <div v-for="card in usageCards" :key="card.label" class="usage-card page-card">
-          <p>{{ card.label }} {{ card.value }}</p>
-        </div>
-      </div>
-    </section>
+    <ElResult
+      v-else-if="summary === null && errorMessage"
+      data-test="dashboard-error"
+      icon="error"
+      title="概览数据加载失败"
+      :sub-title="errorMessage"
+    >
+      <template #extra>
+        <ElButton
+          data-test="dashboard-retry"
+          type="primary"
+          :loading="retrying"
+          @click="loadSummary"
+        >
+          重新加载
+        </ElButton>
+      </template>
+    </ElResult>
 
-    <section class="chart-card page-card" aria-labelledby="chart-heading">
-      <div class="section-heading chart-heading">
-        <div>
-          <p class="section-heading__eyebrow">近 7 天</p>
-          <h2 id="chart-heading">请求与费用趋势</h2>
-        </div>
-        <span class="chart-heading__note">双轴展示</span>
-      </div>
-      <div v-if="chartEmpty" class="chart-empty" data-test="chart-empty">
-        <span class="chart-empty__mark" aria-hidden="true">○</span>
-        <p>近 7 天暂无请求与费用数据</p>
-        <small>产生网关流量后，这里会展示每日趋势。</small>
-      </div>
-      <VChart
-        v-else
-        class="usage-chart"
-        :option="chartOption"
-        :autoresize="true"
-        aria-hidden="true"
+    <template v-else-if="summary !== null">
+      <ElAlert
+        v-if="summary.routes.unavailable > 0"
+        class="route-alert"
+        type="warning"
+        :title="`${formatInteger(summary.routes.unavailable)} 条路由处于熔断状态`"
+        description="请检查上游提供商健康状态与最近请求日志。"
+        :closable="false"
+        show-icon
       />
-      <table class="visually-hidden" data-test="daily-usage-table">
-        <caption>
-          近 7 天每日请求、失败与费用明细
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">日期</th>
-            <th scope="col">请求数</th>
-            <th scope="col">失败数</th>
-            <th scope="col">费用</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="point in summary.daily_usage" :key="point.date">
-            <td>{{ point.date }}</td>
-            <td>{{ formatInteger(point.requests) }}</td>
-            <td>{{ formatInteger(point.failures) }}</td>
-            <td>{{ formatMoney(point.cost) }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </section>
-  </template>
+
+      <section aria-labelledby="resource-heading">
+        <div class="section-heading">
+          <div>
+            <p class="section-heading__eyebrow">资源状态</p>
+            <h2 id="resource-heading">网关资源</h2>
+          </div>
+        </div>
+        <div class="resource-grid">
+          <ElCard v-for="card in resourceCards" :key="card.label" shadow="never">
+            <p class="resource-card__summary">{{ card.label }} {{ card.value }}</p>
+            <p class="resource-card__note">{{ card.note }}</p>
+          </ElCard>
+        </div>
+      </section>
+
+      <section class="usage-section" aria-labelledby="usage-heading">
+        <div class="section-heading">
+          <div>
+            <p class="section-heading__eyebrow">近 24 小时</p>
+            <h2 id="usage-heading">使用情况</h2>
+          </div>
+        </div>
+        <div class="usage-grid">
+          <div v-for="card in usageCards" :key="card.label" class="usage-card page-card">
+            <p>{{ card.label }} {{ card.value }}</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="chart-card page-card" aria-labelledby="chart-heading">
+        <div class="section-heading chart-heading">
+          <div>
+            <p class="section-heading__eyebrow">近 7 天</p>
+            <h2 id="chart-heading">请求与费用趋势</h2>
+          </div>
+          <span class="chart-heading__note">双轴展示</span>
+        </div>
+        <div v-if="chartEmpty" class="chart-empty" data-test="chart-empty">
+          <span class="chart-empty__mark" aria-hidden="true">○</span>
+          <p>近 7 天暂无请求与费用数据</p>
+          <small>产生网关流量后，这里会展示每日趋势。</small>
+        </div>
+        <VChart
+          v-else
+          class="usage-chart"
+          :option="chartOption"
+          :autoresize="true"
+          aria-hidden="true"
+        />
+        <table class="visually-hidden" data-test="daily-usage-table">
+          <caption>
+            近 7 天每日请求、失败与费用明细
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">日期</th>
+              <th scope="col">请求数</th>
+              <th scope="col">失败数</th>
+              <th scope="col">费用</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="point in summary.daily_usage" :key="point.date">
+              <td>{{ point.date }}</td>
+              <td>{{ formatInteger(point.requests) }}</td>
+              <td>{{ formatInteger(point.failures) }}</td>
+              <td>{{ formatMoney(point.cost) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </template>
+  </div>
 </template>
 
 <style scoped>

@@ -686,150 +686,152 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <PageHeader title="模型管理" description="管理统一模型、调用别名与加权上游路由。">
-    <template #actions>
-      <ElButton
-        data-test="create-model"
-        type="primary"
-        :disabled="!catalogReady || loading || controlsLocked"
-        @click="openCreateModel"
-      >
-        <ElIcon><Plus /></ElIcon>
-        新建模型
-      </ElButton>
-    </template>
-  </PageHeader>
-
-  <div v-if="modelNotice" data-test="model-notice" class="notice-row">
-    <ElAlert
-      :type="modelNotice.type"
-      :title="modelNotice.text"
-      show-icon
-      closable
-      @close="modelNotice = null"
-    />
-    <ElButton
-      v-if="modelNotice.conflictId !== undefined"
-      :data-test="`disable-model-${String(modelNotice.conflictId)}`"
-      type="warning"
-      plain
-      :loading="modelOperations.get(modelNotice.conflictId) === 'disable'"
-      :disabled="controlsLocked"
-      @click="disableModel(modelNotice.conflictId)"
-    >
-      改为停用
-    </ElButton>
-  </div>
-
-  <div v-if="routeNotice" data-test="route-notice" class="notice-row">
-    <ElAlert
-      :type="routeNotice.type"
-      :title="routeNotice.text"
-      show-icon
-      closable
-      @close="routeNotice = null"
-    />
-    <ElButton
-      v-if="routeNotice.conflictId !== undefined"
-      :data-test="`disable-route-conflict-${String(routeNotice.conflictId)}`"
-      type="warning"
-      plain
-      :loading="routeOperations.get(routeNotice.conflictId)?.operation === 'disable'"
-      :disabled="controlsLocked"
-      @click="disableRoute(routeNotice.conflictId, routeNotice.modelId)"
-    >
-      改为停用
-    </ElButton>
-  </div>
-
-  <section class="model-panel page-card" aria-labelledby="model-list-heading">
-    <div class="panel-toolbar">
-      <div>
-        <h2 id="model-list-heading">模型列表</h2>
-        <p>共 {{ models.length }} 个模型</p>
-      </div>
-      <div class="toolbar-filters">
-        <select
-          v-model="providerFilter"
-          data-test="provider-filter"
-          class="provider-filter-select"
+  <div class="route-page">
+    <PageHeader title="模型管理" description="管理统一模型、调用别名与加权上游路由。">
+      <template #actions>
+        <ElButton
+          data-test="create-model"
+          type="primary"
+          :disabled="!catalogReady || loading || controlsLocked"
+          @click="openCreateModel"
         >
-          <option :value="null">全部供应商</option>
-          <option
-            v-for="provider in providers"
-            :key="provider.id"
-            :value="provider.id"
-          >
-            {{ provider.name }}
-          </option>
-        </select>
-        <ElInput
-          v-model="searchText"
-          data-test="model-search"
-          class="model-search"
-          clearable
-          placeholder="搜索显示名称、规范名称或别名"
-          aria-label="搜索模型"
-        >
-          <template #prefix><ElIcon><Search /></ElIcon></template>
-        </ElInput>
-      </div>
-    </div>
+          <ElIcon><Plus /></ElIcon>
+          新建模型
+        </ElButton>
+      </template>
+    </PageHeader>
 
-    <div v-if="loading" class="loading-grid" aria-label="正在加载模型">
-      <ElSkeleton v-for="index in 3" :key="index" animated>
-        <template #template><ElSkeletonItem variant="rect" class="card-skeleton" /></template>
-      </ElSkeleton>
-    </div>
-
-    <ElResult v-else-if="loadError" icon="error" title="模型列表加载失败" :sub-title="loadError">
-      <template #extra><ElButton type="primary" @click="load">重新加载</ElButton></template>
-    </ElResult>
-
-    <div v-else-if="filteredModels.length > 0" class="models-grid">
-      <ModelCard
-        v-for="model in filteredModels"
-        :key="model.id"
-        :data-test="`model-card-${String(model.id)}`"
-        :model="model"
-        :routes="routesByModel.get(model.id) ?? []"
-        :providers="providers"
-        :loading="controlsLocked"
-        :routes-loading="routesLoading"
-        :non-deletable="nonDeletableModelIds.has(model.id)"
-        :non-deletable-route-ids="nonDeletableRouteIds"
-        @edit="openEditModel"
-        @delete="removeModel"
-        @disable="disableModel"
-        @edit-route="openEditRoute"
-        @delete-route="removeRoute"
-        @disable-route="disableRoute"
-        @create-route="openCreateRouteForModel(model.id)"
+    <div v-if="modelNotice" data-test="model-notice" class="notice-row">
+      <ElAlert
+        :type="modelNotice.type"
+        :title="modelNotice.text"
+        show-icon
+        closable
+        @close="modelNotice = null"
       />
+      <ElButton
+        v-if="modelNotice.conflictId !== undefined"
+        :data-test="`disable-model-${String(modelNotice.conflictId)}`"
+        type="warning"
+        plain
+        :loading="modelOperations.get(modelNotice.conflictId) === 'disable'"
+        :disabled="controlsLocked"
+        @click="disableModel(modelNotice.conflictId)"
+      >
+        改为停用
+      </ElButton>
     </div>
 
-    <ElEmpty
-      v-else
-      :description="searchText.trim() === '' && providerFilter === null ? '暂无模型' : '没有匹配的模型'"
-    />
-  </section>
+    <div v-if="routeNotice" data-test="route-notice" class="notice-row">
+      <ElAlert
+        :type="routeNotice.type"
+        :title="routeNotice.text"
+        show-icon
+        closable
+        @close="routeNotice = null"
+      />
+      <ElButton
+        v-if="routeNotice.conflictId !== undefined"
+        :data-test="`disable-route-conflict-${String(routeNotice.conflictId)}`"
+        type="warning"
+        plain
+        :loading="routeOperations.get(routeNotice.conflictId)?.operation === 'disable'"
+        :disabled="controlsLocked"
+        @click="disableRoute(routeNotice.conflictId, routeNotice.modelId)"
+      >
+        改为停用
+      </ElButton>
+    </div>
 
-  <ModelFormDrawer
-    :model-value="modelDrawerOpen"
-    :model="editingModel"
-    :submitting="modelSubmitting"
-    @update:model-value="setModelDrawerOpen"
-    @submit="saveModel"
-  />
-  <RouteFormDrawer
-    :model-value="routeDrawerOpen"
-    :model="models.find((m) => m.id === routeDrawerModelId) ?? null"
-    :route="editingRoute"
-    :providers="providers"
-    :submitting="routeSubmitting"
-    @update:model-value="setRouteDrawerOpen"
-    @submit="saveRoute"
-  />
+    <section class="model-panel page-card" aria-labelledby="model-list-heading">
+      <div class="panel-toolbar">
+        <div>
+          <h2 id="model-list-heading">模型列表</h2>
+          <p>共 {{ models.length }} 个模型</p>
+        </div>
+        <div class="toolbar-filters">
+          <select
+            v-model="providerFilter"
+            data-test="provider-filter"
+            class="provider-filter-select"
+          >
+            <option :value="null">全部供应商</option>
+            <option
+              v-for="provider in providers"
+              :key="provider.id"
+              :value="provider.id"
+            >
+              {{ provider.name }}
+            </option>
+          </select>
+          <ElInput
+            v-model="searchText"
+            data-test="model-search"
+            class="model-search"
+            clearable
+            placeholder="搜索显示名称、规范名称或别名"
+            aria-label="搜索模型"
+          >
+            <template #prefix><ElIcon><Search /></ElIcon></template>
+          </ElInput>
+        </div>
+      </div>
+
+      <div v-if="loading" class="loading-grid" aria-label="正在加载模型">
+        <ElSkeleton v-for="index in 3" :key="index" animated>
+          <template #template><ElSkeletonItem variant="rect" class="card-skeleton" /></template>
+        </ElSkeleton>
+      </div>
+
+      <ElResult v-else-if="loadError" icon="error" title="模型列表加载失败" :sub-title="loadError">
+        <template #extra><ElButton type="primary" @click="load">重新加载</ElButton></template>
+      </ElResult>
+
+      <div v-else-if="filteredModels.length > 0" class="models-grid">
+        <ModelCard
+          v-for="model in filteredModels"
+          :key="model.id"
+          :data-test="`model-card-${String(model.id)}`"
+          :model="model"
+          :routes="routesByModel.get(model.id) ?? []"
+          :providers="providers"
+          :loading="controlsLocked"
+          :routes-loading="routesLoading"
+          :non-deletable="nonDeletableModelIds.has(model.id)"
+          :non-deletable-route-ids="nonDeletableRouteIds"
+          @edit="openEditModel"
+          @delete="removeModel"
+          @disable="disableModel"
+          @edit-route="openEditRoute"
+          @delete-route="removeRoute"
+          @disable-route="disableRoute"
+          @create-route="openCreateRouteForModel(model.id)"
+        />
+      </div>
+
+      <ElEmpty
+        v-else
+        :description="searchText.trim() === '' && providerFilter === null ? '暂无模型' : '没有匹配的模型'"
+      />
+    </section>
+
+    <ModelFormDrawer
+      :model-value="modelDrawerOpen"
+      :model="editingModel"
+      :submitting="modelSubmitting"
+      @update:model-value="setModelDrawerOpen"
+      @submit="saveModel"
+    />
+    <RouteFormDrawer
+      :model-value="routeDrawerOpen"
+      :model="models.find((m) => m.id === routeDrawerModelId) ?? null"
+      :route="editingRoute"
+      :providers="providers"
+      :submitting="routeSubmitting"
+      @update:model-value="setRouteDrawerOpen"
+      @submit="saveRoute"
+    />
+  </div>
 </template>
 
 <style scoped>

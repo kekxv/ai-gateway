@@ -653,249 +653,251 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <PageHeader title="接口密钥" description="管理用户密钥、访问作用域、有效期与安全轮换。">
-    <template #actions>
-      <ElButton
-        data-test="toggle-examples"
-        :type="examplesOpen ? 'info' : 'default'"
-        @click="examplesOpen = !examplesOpen"
-      >
-        <ElIcon><Document /></ElIcon>
-        {{ examplesOpen ? '隐藏示例' : '使用示例' }}
-      </ElButton>
-      <ElButton
-        data-test="create-api-key"
-        type="primary"
-        :disabled="secretOpen || secretOperationActive"
-        @click="openCreate"
-      >
-        <ElIcon><Plus /></ElIcon>
-        新建密钥
-      </ElButton>
-    </template>
-  </PageHeader>
-
-  <section v-if="examplesOpen" class="examples-panel page-card">
-    <div class="examples-header">
-      <h3>API 使用示例</h3>
-      <p>输入你的 API 密钥，示例命令会自动更新</p>
-    </div>
-    <div class="test-input-grid">
-      <div class="test-input-row">
-        <ElInput
-          v-model="testApiKey"
-          placeholder="sk-gw-..."
-          clearable
-          type="password"
-          show-password
-        >
-          <template #prepend>API 密钥</template>
-        </ElInput>
-      </div>
-      <div class="test-input-row test-input-row--split">
-        <ElInput
-          v-model="testModel"
-          placeholder="gpt-4（留空使用默认）"
-          clearable
-          class="test-model-input"
-        >
-          <template #prepend>模型</template>
-          <template #append>
-            <select v-model="testModel" class="model-pick-select">
-              <option value="">从列表选择...</option>
-              <option v-for="name in availableModelNames" :key="name" :value="name">
-                {{ name }}
-              </option>
-            </select>
-          </template>
-        </ElInput>
+  <div class="route-page">
+    <PageHeader title="接口密钥" description="管理用户密钥、访问作用域、有效期与安全轮换。">
+      <template #actions>
         <ElButton
-          v-if="!testChatLoading"
+          data-test="toggle-examples"
+          :type="examplesOpen ? 'info' : 'default'"
+          @click="examplesOpen = !examplesOpen"
+        >
+          <ElIcon><Document /></ElIcon>
+          {{ examplesOpen ? '隐藏示例' : '使用示例' }}
+        </ElButton>
+        <ElButton
+          data-test="create-api-key"
           type="primary"
-          :disabled="!testApiKey.trim() || !testMessage.trim()"
-          @click="testChat"
+          :disabled="secretOpen || secretOperationActive"
+          @click="openCreate"
         >
-          测试聊天
+          <ElIcon><Plus /></ElIcon>
+          新建密钥
         </ElButton>
-        <ElButton
-          v-else
-          type="danger"
-          @click="stopTestChat"
-        >
-          停止
-        </ElButton>
-      </div>
-      <div class="test-input-row">
-        <ElInput
-          v-model="testMessage"
-          type="textarea"
-          :rows="2"
-          placeholder="输入要测试的消息..."
-          maxlength="500"
-          show-word-limit
-        />
-      </div>
-      <div v-if="testChatResult" class="test-result" :class="[testChatResult.success ? 'success' : 'error', testChatLoading ? 'test-result--streaming' : '']">
-        <strong>{{ testChatResult.success ? '✓ 成功' : '✗ 失败' }}：</strong>
-        <pre class="test-result-message">{{ testChatResult.message }}</pre>
-      </div>
-    </div>
-    <ElTabs v-model="examplesTab" class="examples-tabs">
-      <ElTabPane label="OpenAI" name="openai">
-        <div class="code-block-wrapper">
-          <pre class="code-block">{{ curlExamples.openai }}</pre>
-          <ElButton size="small" class="copy-btn" @click="copyCurlExample('openai')">
-            复制
-          </ElButton>
-        </div>
-      </ElTabPane>
-      <ElTabPane label="Claude" name="claude">
-        <div class="code-block-wrapper">
-          <pre class="code-block">{{ curlExamples.claude }}</pre>
-          <ElButton size="small" class="copy-btn" @click="copyCurlExample('claude')">
-            复制
-          </ElButton>
-        </div>
-      </ElTabPane>
-      <ElTabPane label="Gemini" name="gemini">
-        <div class="code-block-wrapper">
-          <pre class="code-block">{{ curlExamples.gemini }}</pre>
-          <ElButton size="small" class="copy-btn" @click="copyCurlExample('gemini')">
-            复制
-          </ElButton>
-        </div>
-      </ElTabPane>
-      <ElTabPane label="WebSocket" name="websocket">
-        <div class="code-block-wrapper">
-          <pre class="code-block">{{ curlExamples.websocket }}</pre>
-          <ElButton size="small" class="copy-btn" @click="copyCurlExample('websocket')">
-            复制
-          </ElButton>
-        </div>
-      </ElTabPane>
-    </ElTabs>
-    <div v-if="copyStatus" class="copy-status">{{ copyStatus }}</div>
-  </section>
+      </template>
+    </PageHeader>
 
-  <ElAlert
-    v-if="notice !== null"
-    data-test="api-key-notice"
-    class="notice"
-    :title="notice.text"
-    :type="notice.type"
-    show-icon
-    @close="notice = null"
-  />
-
-  <section class="key-panel" aria-labelledby="api-key-list-title">
-    <div class="panel-toolbar">
-      <div>
-        <h2 id="api-key-list-title">密钥列表</h2>
-        <p>共 {{ apiKeys.length }} 个接口密钥</p>
+    <section v-if="examplesOpen" class="examples-panel page-card">
+      <div class="examples-header">
+        <h3>API 使用示例</h3>
+        <p>输入你的 API 密钥，示例命令会自动更新</p>
       </div>
-      <div class="toolbar-actions">
-        <ElInput
-          v-model="searchText"
-          data-test="api-key-search"
-          clearable
-          placeholder="搜索名称、所有者、前缀或作用域"
-        >
-          <template #prefix><ElIcon><Search /></ElIcon></template>
-        </ElInput>
-        <ElButton
-          data-test="refresh-api-keys"
-          :loading="loading"
-          aria-label="刷新接口密钥列表"
-          @click="load"
-        >
-          <ElIcon><Refresh /></ElIcon>
-        </ElButton>
-      </div>
-    </div>
-
-    <ElResult
-      v-if="loadError !== ''"
-      icon="error"
-      title="接口密钥列表加载失败"
-      :sub-title="loadError"
-    >
-      <template #extra><ElButton type="primary" @click="load">重新加载</ElButton></template>
-    </ElResult>
-    <ElSkeleton v-else-if="loading" animated>
-      <template #template><ElSkeletonItem variant="rect" class="table-skeleton" /></template>
-    </ElSkeleton>
-    <ElEmpty v-else-if="filteredApiKeys.length === 0" description="暂无匹配接口密钥" />
-    <div v-else class="table-scroll">
-      <table class="key-table">
-        <thead>
-          <tr>
-            <th>名称</th><th>所有者</th><th>密钥</th><th>作用域</th><th>状态</th>
-            <th>过期时间</th><th>最后使用</th><th>创建时间</th><th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="apiKey in filteredApiKeys"
-            :key="apiKey.id"
-            :data-test="`api-key-row-${String(apiKey.id)}`"
+      <div class="test-input-grid">
+        <div class="test-input-row">
+          <ElInput
+            v-model="testApiKey"
+            placeholder="sk-gw-..."
+            clearable
+            type="password"
+            show-password
           >
-            <td><strong>{{ apiKey.name }}</strong></td>
-            <td>{{ ownerEmail(apiKey.user_id) }}</td>
-            <td class="prefix-cell">{{ apiKey.key_prefix.slice(0, 8) }}****</td>
-            <td><ElTag effect="plain">{{ scopeLabels[apiKey.scope] }}</ElTag></td>
-            <td>
-              <ElTag :type="apiKey.is_active ? 'success' : 'info'" effect="light">
-                {{ apiKey.is_active ? '启用' : '停用' }}
-              </ElTag>
-            </td>
-            <td>{{ formatDateTime(apiKey.expires_at) }}</td>
-            <td>{{ formatDateTime(apiKey.last_used_at) }}</td>
-            <td>{{ formatDateTime(apiKey.created_at) }}</td>
-            <td>
-              <div class="row-actions">
-                <ElButton
-                  :data-test="`edit-api-key-${String(apiKey.id)}`"
-                  size="small"
-                  :disabled="secretOpen || keyOperations.has(apiKey.id)"
-                  @click="openEdit(apiKey)"
-                ><ElIcon><Edit /></ElIcon>编辑</ElButton>
-                <ElButton
-                  :data-test="`rotate-api-key-${String(apiKey.id)}`"
-                  size="small"
-                  :disabled="secretOpen || secretOperationActive || keyOperations.has(apiKey.id)"
-                  @click="rotate(apiKey)"
-                ><ElIcon><Key /></ElIcon>轮换</ElButton>
-                <ElButton
-                  :data-test="`delete-api-key-${String(apiKey.id)}`"
-                  size="small"
-                  type="danger"
-                  plain
-                  :disabled="secretOpen || keyOperations.has(apiKey.id)"
-                  @click="remove(apiKey)"
-                ><ElIcon><Delete /></ElIcon>删除</ElButton>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
+            <template #prepend>API 密钥</template>
+          </ElInput>
+        </div>
+        <div class="test-input-row test-input-row--split">
+          <ElInput
+            v-model="testModel"
+            placeholder="gpt-4（留空使用默认）"
+            clearable
+            class="test-model-input"
+          >
+            <template #prepend>模型</template>
+            <template #append>
+              <select v-model="testModel" class="model-pick-select">
+                <option value="">从列表选择...</option>
+                <option v-for="name in availableModelNames" :key="name" :value="name">
+                  {{ name }}
+                </option>
+              </select>
+            </template>
+          </ElInput>
+          <ElButton
+            v-if="!testChatLoading"
+            type="primary"
+            :disabled="!testApiKey.trim() || !testMessage.trim()"
+            @click="testChat"
+          >
+            测试聊天
+          </ElButton>
+          <ElButton
+            v-else
+            type="danger"
+            @click="stopTestChat"
+          >
+            停止
+          </ElButton>
+        </div>
+        <div class="test-input-row">
+          <ElInput
+            v-model="testMessage"
+            type="textarea"
+            :rows="2"
+            placeholder="输入要测试的消息..."
+            maxlength="500"
+            show-word-limit
+          />
+        </div>
+        <div v-if="testChatResult" class="test-result" :class="[testChatResult.success ? 'success' : 'error', testChatLoading ? 'test-result--streaming' : '']">
+          <strong>{{ testChatResult.success ? '✓ 成功' : '✗ 失败' }}：</strong>
+          <pre class="test-result-message">{{ testChatResult.message }}</pre>
+        </div>
+      </div>
+      <ElTabs v-model="examplesTab" class="examples-tabs">
+        <ElTabPane label="OpenAI" name="openai">
+          <div class="code-block-wrapper">
+            <pre class="code-block">{{ curlExamples.openai }}</pre>
+            <ElButton size="small" class="copy-btn" @click="copyCurlExample('openai')">
+              复制
+            </ElButton>
+          </div>
+        </ElTabPane>
+        <ElTabPane label="Claude" name="claude">
+          <div class="code-block-wrapper">
+            <pre class="code-block">{{ curlExamples.claude }}</pre>
+            <ElButton size="small" class="copy-btn" @click="copyCurlExample('claude')">
+              复制
+            </ElButton>
+          </div>
+        </ElTabPane>
+        <ElTabPane label="Gemini" name="gemini">
+          <div class="code-block-wrapper">
+            <pre class="code-block">{{ curlExamples.gemini }}</pre>
+            <ElButton size="small" class="copy-btn" @click="copyCurlExample('gemini')">
+              复制
+            </ElButton>
+          </div>
+        </ElTabPane>
+        <ElTabPane label="WebSocket" name="websocket">
+          <div class="code-block-wrapper">
+            <pre class="code-block">{{ curlExamples.websocket }}</pre>
+            <ElButton size="small" class="copy-btn" @click="copyCurlExample('websocket')">
+              复制
+            </ElButton>
+          </div>
+        </ElTabPane>
+      </ElTabs>
+      <div v-if="copyStatus" class="copy-status">{{ copyStatus }}</div>
+    </section>
 
-  <ApiKeyFormDrawer
-    :model-value="formOpen"
-    :api-key="editingApiKey"
-    :users="users"
-    :providers="providers"
-    :models="models"
-    :submitting="formSubmitting"
-    @submit="saveApiKey"
-    @update:model-value="setFormOpen"
-  />
-  <SecretResultDialog
-    :model-value="secretOpen"
-    :secret="oneTimeSecret"
-    @close="closeSecret"
-  />
+    <ElAlert
+      v-if="notice !== null"
+      data-test="api-key-notice"
+      class="notice"
+      :title="notice.text"
+      :type="notice.type"
+      show-icon
+      @close="notice = null"
+    />
+
+    <section class="key-panel" aria-labelledby="api-key-list-title">
+      <div class="panel-toolbar">
+        <div>
+          <h2 id="api-key-list-title">密钥列表</h2>
+          <p>共 {{ apiKeys.length }} 个接口密钥</p>
+        </div>
+        <div class="toolbar-actions">
+          <ElInput
+            v-model="searchText"
+            data-test="api-key-search"
+            clearable
+            placeholder="搜索名称、所有者、前缀或作用域"
+          >
+            <template #prefix><ElIcon><Search /></ElIcon></template>
+          </ElInput>
+          <ElButton
+            data-test="refresh-api-keys"
+            :loading="loading"
+            aria-label="刷新接口密钥列表"
+            @click="load"
+          >
+            <ElIcon><Refresh /></ElIcon>
+          </ElButton>
+        </div>
+      </div>
+
+      <ElResult
+        v-if="loadError !== ''"
+        icon="error"
+        title="接口密钥列表加载失败"
+        :sub-title="loadError"
+      >
+        <template #extra><ElButton type="primary" @click="load">重新加载</ElButton></template>
+      </ElResult>
+      <ElSkeleton v-else-if="loading" animated>
+        <template #template><ElSkeletonItem variant="rect" class="table-skeleton" /></template>
+      </ElSkeleton>
+      <ElEmpty v-else-if="filteredApiKeys.length === 0" description="暂无匹配接口密钥" />
+      <div v-else class="table-scroll">
+        <table class="key-table">
+          <thead>
+            <tr>
+              <th>名称</th><th>所有者</th><th>密钥</th><th>作用域</th><th>状态</th>
+              <th>过期时间</th><th>最后使用</th><th>创建时间</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="apiKey in filteredApiKeys"
+              :key="apiKey.id"
+              :data-test="`api-key-row-${String(apiKey.id)}`"
+            >
+              <td><strong>{{ apiKey.name }}</strong></td>
+              <td>{{ ownerEmail(apiKey.user_id) }}</td>
+              <td class="prefix-cell">{{ apiKey.key_prefix.slice(0, 8) }}****</td>
+              <td><ElTag effect="plain">{{ scopeLabels[apiKey.scope] }}</ElTag></td>
+              <td>
+                <ElTag :type="apiKey.is_active ? 'success' : 'info'" effect="light">
+                  {{ apiKey.is_active ? '启用' : '停用' }}
+                </ElTag>
+              </td>
+              <td>{{ formatDateTime(apiKey.expires_at) }}</td>
+              <td>{{ formatDateTime(apiKey.last_used_at) }}</td>
+              <td>{{ formatDateTime(apiKey.created_at) }}</td>
+              <td>
+                <div class="row-actions">
+                  <ElButton
+                    :data-test="`edit-api-key-${String(apiKey.id)}`"
+                    size="small"
+                    :disabled="secretOpen || keyOperations.has(apiKey.id)"
+                    @click="openEdit(apiKey)"
+                  ><ElIcon><Edit /></ElIcon>编辑</ElButton>
+                  <ElButton
+                    :data-test="`rotate-api-key-${String(apiKey.id)}`"
+                    size="small"
+                    :disabled="secretOpen || secretOperationActive || keyOperations.has(apiKey.id)"
+                    @click="rotate(apiKey)"
+                  ><ElIcon><Key /></ElIcon>轮换</ElButton>
+                  <ElButton
+                    :data-test="`delete-api-key-${String(apiKey.id)}`"
+                    size="small"
+                    type="danger"
+                    plain
+                    :disabled="secretOpen || keyOperations.has(apiKey.id)"
+                    @click="remove(apiKey)"
+                  ><ElIcon><Delete /></ElIcon>删除</ElButton>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <ApiKeyFormDrawer
+      :model-value="formOpen"
+      :api-key="editingApiKey"
+      :users="users"
+      :providers="providers"
+      :models="models"
+      :submitting="formSubmitting"
+      @submit="saveApiKey"
+      @update:model-value="setFormOpen"
+    />
+    <SecretResultDialog
+      :model-value="secretOpen"
+      :secret="oneTimeSecret"
+      @close="closeSecret"
+    />
+  </div>
 </template>
 
 <style scoped>

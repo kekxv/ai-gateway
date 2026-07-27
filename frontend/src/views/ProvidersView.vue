@@ -376,98 +376,100 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <PageHeader title="供应商管理" description="管理上游服务、协议入口与模型自动同步。">
-    <template #actions>
-      <ElButton data-test="create-provider" type="primary" @click="openCreate">
-        <ElIcon><Plus /></ElIcon>
-        新建供应商
-      </ElButton>
-    </template>
-  </PageHeader>
-
-  <ElAlert
-    v-if="notice"
-    data-test="provider-notice"
-    class="notice"
-    :type="notice.type"
-    :title="notice.text"
-    show-icon
-    closable
-    @close="notice = null"
-  />
-
-  <section class="provider-panel page-card" aria-labelledby="provider-list-heading">
-    <div class="provider-toolbar">
-      <div>
-        <h2 id="provider-list-heading">供应商列表</h2>
-        <p>共 {{ providers.length }} 个供应商</p>
-      </div>
-      <ElInput
-        v-model="searchText"
-        data-test="provider-search"
-        class="provider-search"
-        clearable
-        placeholder="搜索名称、协议或基础地址"
-        aria-label="搜索供应商"
-      >
-        <template #prefix><ElIcon><Search /></ElIcon></template>
-      </ElInput>
-    </div>
-
-    <div v-if="loading" class="provider-loading" aria-label="正在加载供应商">
-      <ElSkeleton v-for="index in 3" :key="index" animated>
-        <template #template>
-          <ElSkeletonItem variant="rect" class="provider-skeleton" />
-        </template>
-      </ElSkeleton>
-    </div>
-
-    <ElResult
-      v-else-if="loadError"
-      icon="error"
-      title="供应商列表加载失败"
-      :sub-title="loadError"
-    >
-      <template #extra>
-        <ElButton type="primary" @click="load">重新加载</ElButton>
+  <div class="route-page">
+    <PageHeader title="供应商管理" description="管理上游服务、协议入口与模型自动同步。">
+      <template #actions>
+        <ElButton data-test="create-provider" type="primary" @click="openCreate">
+          <ElIcon><Plus /></ElIcon>
+          新建供应商
+        </ElButton>
       </template>
-    </ElResult>
+    </PageHeader>
 
-    <div v-else-if="filteredProviders.length > 0" class="providers-grid">
-      <ProviderCard
-        v-for="provider in filteredProviders"
-        :key="provider.id"
-        :data-test="`provider-card-${String(provider.id)}`"
-        :provider="provider"
-        :loading="providerOperations.has(provider.id)"
-        :non-deletable="nonDeletableIds.has(provider.id)"
-        @edit="openEdit"
-        @delete="removeProvider"
-        @sync="openSyncDialog"
-      />
-    </div>
-
-    <ElEmpty
-      v-else
-      :description="searchText.trim() === '' ? '暂无供应商' : '没有匹配的供应商'"
+    <ElAlert
+      v-if="notice"
+      data-test="provider-notice"
+      class="notice"
+      :type="notice.type"
+      :title="notice.text"
+      show-icon
+      closable
+      @close="notice = null"
     />
-  </section>
 
-  <ProviderFormDrawer
-    :model-value="drawerOpen"
-    :provider="editingProvider"
-    :submitting="submitting"
-    @update:model-value="setDrawerOpen"
-    @submit="saveProvider"
-  />
+    <section class="provider-panel page-card" aria-labelledby="provider-list-heading">
+      <div class="provider-toolbar">
+        <div>
+          <h2 id="provider-list-heading">供应商列表</h2>
+          <p>共 {{ providers.length }} 个供应商</p>
+        </div>
+        <ElInput
+          v-model="searchText"
+          data-test="provider-search"
+          class="provider-search"
+          clearable
+          placeholder="搜索名称、协议或基础地址"
+          aria-label="搜索供应商"
+        >
+          <template #prefix><ElIcon><Search /></ElIcon></template>
+        </ElInput>
+      </div>
 
-  <ModelSyncDialog
-    :model-value="syncDialogOpen"
-    :provider-id="syncTargetProvider?.id ?? null"
-    :provider-name="syncTargetProvider?.name ?? ''"
-    @update:model-value="setSyncDialogOpen"
-    @confirm="confirmSyncModels"
-  />
+      <div v-if="loading" class="provider-loading" aria-label="正在加载供应商">
+        <ElSkeleton v-for="index in 3" :key="index" animated>
+          <template #template>
+            <ElSkeletonItem variant="rect" class="provider-skeleton" />
+          </template>
+        </ElSkeleton>
+      </div>
+
+      <ElResult
+        v-else-if="loadError"
+        icon="error"
+        title="供应商列表加载失败"
+        :sub-title="loadError"
+      >
+        <template #extra>
+          <ElButton type="primary" @click="load">重新加载</ElButton>
+        </template>
+      </ElResult>
+
+      <div v-else-if="filteredProviders.length > 0" class="providers-grid">
+        <ProviderCard
+          v-for="provider in filteredProviders"
+          :key="provider.id"
+          :data-test="`provider-card-${String(provider.id)}`"
+          :provider="provider"
+          :loading="providerOperations.has(provider.id)"
+          :non-deletable="nonDeletableIds.has(provider.id)"
+          @edit="openEdit"
+          @delete="removeProvider"
+          @sync="openSyncDialog"
+        />
+      </div>
+
+      <ElEmpty
+        v-else
+        :description="searchText.trim() === '' ? '暂无供应商' : '没有匹配的供应商'"
+      />
+    </section>
+
+    <ProviderFormDrawer
+      :model-value="drawerOpen"
+      :provider="editingProvider"
+      :submitting="submitting"
+      @update:model-value="setDrawerOpen"
+      @submit="saveProvider"
+    />
+
+    <ModelSyncDialog
+      :model-value="syncDialogOpen"
+      :provider-id="syncTargetProvider?.id ?? null"
+      :provider-name="syncTargetProvider?.name ?? ''"
+      @update:model-value="setSyncDialogOpen"
+      @confirm="confirmSyncModels"
+    />
+  </div>
 </template>
 
 <style scoped>

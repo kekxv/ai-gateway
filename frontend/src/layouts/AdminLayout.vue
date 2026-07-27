@@ -185,7 +185,13 @@ onBeforeUnmount(() => {
         </div>
       </ElHeader>
       <ElMain id="main-content" class="admin-main" tabindex="-1">
-        <RouterView />
+        <RouterView v-slot="{ Component }">
+          <Transition name="page-fade" mode="out-in">
+            <KeepAlive :max="7">
+              <component :is="Component" />
+            </KeepAlive>
+          </Transition>
+        </RouterView>
       </ElMain>
     </ElContainer>
   </ElContainer>
@@ -317,5 +323,15 @@ onBeforeUnmount(() => {
   .admin-main {
     padding: 1rem;
   }
+}
+
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 150ms ease;
+}
+
+.page-fade-enter-from,
+.page-fade-leave-to {
+  opacity: 0;
 }
 </style>

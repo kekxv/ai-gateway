@@ -475,135 +475,137 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <PageHeader title="用户管理" description="管理用户账号、精确余额、累计消费与不可变账本。">
-    <template #actions>
-      <ElButton data-test="create-user" type="primary" @click="openCreate">
-        <ElIcon><Plus /></ElIcon>
-        新建用户
-      </ElButton>
-    </template>
-  </PageHeader>
-
-  <ElAlert
-    v-if="notice !== null"
-    data-test="user-notice"
-    class="notice"
-    :title="notice.text"
-    :type="notice.type"
-    show-icon
-    @close="notice = null"
-  />
-
-  <section class="user-panel" aria-labelledby="user-list-title">
-    <div class="panel-toolbar">
-      <div>
-        <h2 id="user-list-title">用户列表</h2>
-        <p>共 {{ users.length }} 个用户</p>
-      </div>
-      <div class="toolbar-actions">
-        <ElInput
-          v-model="searchText"
-          data-test="user-search"
-          clearable
-          placeholder="搜索邮箱、角色或状态"
-        >
-          <template #prefix><ElIcon><Search /></ElIcon></template>
-        </ElInput>
-        <ElButton :loading="loading" aria-label="刷新用户列表" @click="load">
-          <ElIcon><Refresh /></ElIcon>
+  <div class="route-page">
+    <PageHeader title="用户管理" description="管理用户账号、精确余额、累计消费与不可变账本。">
+      <template #actions>
+        <ElButton data-test="create-user" type="primary" @click="openCreate">
+          <ElIcon><Plus /></ElIcon>
+          新建用户
         </ElButton>
+      </template>
+    </PageHeader>
+
+    <ElAlert
+      v-if="notice !== null"
+      data-test="user-notice"
+      class="notice"
+      :title="notice.text"
+      :type="notice.type"
+      show-icon
+      @close="notice = null"
+    />
+
+    <section class="user-panel" aria-labelledby="user-list-title">
+      <div class="panel-toolbar">
+        <div>
+          <h2 id="user-list-title">用户列表</h2>
+          <p>共 {{ users.length }} 个用户</p>
+        </div>
+        <div class="toolbar-actions">
+          <ElInput
+            v-model="searchText"
+            data-test="user-search"
+            clearable
+            placeholder="搜索邮箱、角色或状态"
+          >
+            <template #prefix><ElIcon><Search /></ElIcon></template>
+          </ElInput>
+          <ElButton :loading="loading" aria-label="刷新用户列表" @click="load">
+            <ElIcon><Refresh /></ElIcon>
+          </ElButton>
+        </div>
       </div>
-    </div>
 
-    <ElResult v-if="loadError !== ''" icon="error" title="用户列表加载失败" :sub-title="loadError">
-      <template #extra><ElButton type="primary" @click="load">重新加载</ElButton></template>
-    </ElResult>
-    <ElSkeleton v-else-if="loading" animated>
-      <template #template><ElSkeletonItem variant="rect" class="table-skeleton" /></template>
-    </ElSkeleton>
-    <ElEmpty v-else-if="filteredUsers.length === 0" description="暂无匹配用户" />
-    <div v-else class="table-scroll">
-      <table class="user-table">
-        <thead>
-          <tr>
-            <th>邮箱</th><th>角色</th><th>状态</th><th>余额</th><th>累计消费</th>
-            <th>创建时间</th><th>更新时间</th><th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="user in filteredUsers" :key="user.id">
-            <td><strong>{{ user.email }}</strong></td>
-            <td>{{ user.role === 'admin' ? '管理员' : '普通用户' }}</td>
-            <td>
-              <ElTag :type="user.is_active ? 'success' : 'info'" effect="light">
-                {{ user.is_active ? '启用' : '停用' }}
-              </ElTag>
-            </td>
-            <td class="money-cell">{{ formatMoney(user.balance) }}</td>
-            <td class="money-cell">{{ formatMoney(user.total_spent) }}</td>
-            <td>{{ formatTime(user.created_at) }}</td>
-            <td>{{ formatTime(user.updated_at) }}</td>
-            <td>
-              <div class="row-actions">
-                <ElButton
-                  :data-test="`edit-user-${String(user.id)}`"
-                  size="small"
-                  :disabled="userOperations.has(user.id)"
-                  @click="openEdit(user)"
-                ><ElIcon><Edit /></ElIcon>编辑</ElButton>
-                <ElButton
-                  :data-test="`adjust-user-${String(user.id)}`"
-                  size="small"
-                  :disabled="userOperations.has(user.id)"
-                  @click="openBalance(user)"
-                ><ElIcon><Money /></ElIcon>调账</ElButton>
-                <ElButton
-                  :data-test="`ledger-user-${String(user.id)}`"
-                  size="small"
-                  :disabled="userOperations.has(user.id)"
-                  @click="openLedger(user)"
-                ><ElIcon><Tickets /></ElIcon>账本</ElButton>
-                <ElButton
-                  :data-test="`delete-user-${String(user.id)}`"
-                  size="small"
-                  type="danger"
-                  plain
-                  :title="user.id === currentUserId ? '不能删除当前登录管理员' : undefined"
-                  :disabled="user.id === currentUserId || userOperations.has(user.id)"
-                  @click="removeUser(user)"
-                ><ElIcon><Delete /></ElIcon>删除</ElButton>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
+      <ElResult v-if="loadError !== ''" icon="error" title="用户列表加载失败" :sub-title="loadError">
+        <template #extra><ElButton type="primary" @click="load">重新加载</ElButton></template>
+      </ElResult>
+      <ElSkeleton v-else-if="loading" animated>
+        <template #template><ElSkeletonItem variant="rect" class="table-skeleton" /></template>
+      </ElSkeleton>
+      <ElEmpty v-else-if="filteredUsers.length === 0" description="暂无匹配用户" />
+      <div v-else class="table-scroll">
+        <table class="user-table">
+          <thead>
+            <tr>
+              <th>邮箱</th><th>角色</th><th>状态</th><th>余额</th><th>累计消费</th>
+              <th>创建时间</th><th>更新时间</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="user in filteredUsers" :key="user.id">
+              <td><strong>{{ user.email }}</strong></td>
+              <td>{{ user.role === 'admin' ? '管理员' : '普通用户' }}</td>
+              <td>
+                <ElTag :type="user.is_active ? 'success' : 'info'" effect="light">
+                  {{ user.is_active ? '启用' : '停用' }}
+                </ElTag>
+              </td>
+              <td class="money-cell">{{ formatMoney(user.balance) }}</td>
+              <td class="money-cell">{{ formatMoney(user.total_spent) }}</td>
+              <td>{{ formatTime(user.created_at) }}</td>
+              <td>{{ formatTime(user.updated_at) }}</td>
+              <td>
+                <div class="row-actions">
+                  <ElButton
+                    :data-test="`edit-user-${String(user.id)}`"
+                    size="small"
+                    :disabled="userOperations.has(user.id)"
+                    @click="openEdit(user)"
+                  ><ElIcon><Edit /></ElIcon>编辑</ElButton>
+                  <ElButton
+                    :data-test="`adjust-user-${String(user.id)}`"
+                    size="small"
+                    :disabled="userOperations.has(user.id)"
+                    @click="openBalance(user)"
+                  ><ElIcon><Money /></ElIcon>调账</ElButton>
+                  <ElButton
+                    :data-test="`ledger-user-${String(user.id)}`"
+                    size="small"
+                    :disabled="userOperations.has(user.id)"
+                    @click="openLedger(user)"
+                  ><ElIcon><Tickets /></ElIcon>账本</ElButton>
+                  <ElButton
+                    :data-test="`delete-user-${String(user.id)}`"
+                    size="small"
+                    type="danger"
+                    plain
+                    :title="user.id === currentUserId ? '不能删除当前登录管理员' : undefined"
+                    :disabled="user.id === currentUserId || userOperations.has(user.id)"
+                    @click="removeUser(user)"
+                  ><ElIcon><Delete /></ElIcon>删除</ElButton>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
-  <UserFormDrawer
-    :model-value="formOpen"
-    :user="editingUser"
-    :submitting="formSubmitting"
-    :current-user-id="currentUserId"
-    @submit="saveUser"
-    @update:model-value="setFormOpen"
-  />
-  <BalanceDialog
-    :model-value="balanceOpen"
-    :user="balanceUser"
-    :submitting="balanceSubmitting"
-    :retry-blocked="balanceRetryBlocked"
-    @submit="saveBalance"
-    @update:model-value="setBalanceOpen"
-  />
-  <LedgerDrawer
-    :model-value="ledgerOpen"
-    :user="ledgerUser"
-    :entries="ledgerEntries"
-    :loading="ledgerLoading"
-    :error="ledgerError"
-    @update:model-value="setLedgerOpen"
-  />
+    <UserFormDrawer
+      :model-value="formOpen"
+      :user="editingUser"
+      :submitting="formSubmitting"
+      :current-user-id="currentUserId"
+      @submit="saveUser"
+      @update:model-value="setFormOpen"
+    />
+    <BalanceDialog
+      :model-value="balanceOpen"
+      :user="balanceUser"
+      :submitting="balanceSubmitting"
+      :retry-blocked="balanceRetryBlocked"
+      @submit="saveBalance"
+      @update:model-value="setBalanceOpen"
+    />
+    <LedgerDrawer
+      :model-value="ledgerOpen"
+      :user="ledgerUser"
+      :entries="ledgerEntries"
+      :loading="ledgerLoading"
+      :error="ledgerError"
+      @update:model-value="setLedgerOpen"
+    />
+  </div>
 </template>
 
 <style scoped>

@@ -50,7 +50,7 @@ function setViewport(width: number): void {
   window.dispatchEvent(new Event('resize'))
 }
 
-async function mountShell(width = 1200): Promise<{
+async function mountShell(width = 1200, warnings?: string[]): Promise<{
   auth: ReturnType<typeof useAuthStore>
   router: Router
   wrapper: VueWrapper
@@ -69,7 +69,19 @@ async function mountShell(width = 1200): Promise<{
   await router.isReady()
   const wrapper = mount(App, {
     attachTo: document.body,
-    global: { plugins: [pinia, router] },
+    global: {
+      plugins: [pinia, router],
+      ...(warnings === undefined
+        ? {}
+        : {
+            stubs: { transition: false },
+            config: {
+              warnHandler(message: string) {
+                warnings.push(message)
+              },
+            },
+          }),
+    },
   }) as unknown as VueWrapper
   mountedWrappers.push(wrapper)
   await flushPromises()
@@ -86,6 +98,23 @@ beforeEach(() => {
 })
 
 describe('管理控制台外壳', () => {
+  it('通过真实过渡渲染缓存页面时不产生 Fragment 根节点警告', async () => {
+    const warnings: string[] = []
+    const { router, wrapper } = await mountShell(1200, warnings)
+
+    await router.push('/providers')
+    await flushPromises()
+
+    expect(
+      warnings.some((message) =>
+        message.includes('Component inside <Transition> renders non-element root node'),
+      ),
+    ).toBe(false)
+    await vi.waitFor(() => {
+      expect(wrapper.get('.route-page').text()).toContain('供应商列表')
+    })
+  })
+
   it('在 768 与 1200 像素边界切换完整侧栏、折叠侧栏和移动抽屉', async () => {
     const { wrapper } = await mountShell(1200)
 
