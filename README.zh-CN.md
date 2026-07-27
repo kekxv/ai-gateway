@@ -168,10 +168,22 @@ TOTP 验证码、密码和完整 API Key 不会持久化，也不会在一次性
 ### 目录备份与旧版迁移
 
 管理员可在“供应商”页面导出或合并提供商/模型目录。默认导出会脱敏；控制台在下载包含上游凭据的
-备份前会明确警告并要求确认。完整的目录范围、合并行为、密钥处理和旧版命令见
-[目录备份与旧版 SQLite 迁移说明](docs/catalog-import-export.md)。从旧版库导出时，`--include-unowned`
-通常必需：旧版本没有始终填写管理员创建记录的 `userId`。使用 `--include-secrets` 生成的文件包含
-上游密钥，必须受保护，并在导入成功后删除。
+备份前会明确警告并要求确认。要从旧 Go 项目
+[`kekxv/ai-gateway`](https://github.com/kekxv/ai-gateway) 的 SQLite 数据库迁移某个用户关联的
+渠道、供应商、模型、别名、路由、价格和倍率，可先生成标准目录包，再从“供应商”页面导入：
+
+```bash
+uv run python scripts/export_legacy_sqlite_catalog.py /path/to/ai-gateway.db \
+  --user admin@example.com \
+  --include-unowned \
+  --include-secrets \
+  --output legacy-user-catalog.json
+```
+
+完整步骤见[目录备份与旧版 SQLite 迁移说明](docs/catalog-import-export.md)，其中包含旧用户查询、
+参数解释、管理 API 导入示例、迁移后校验、密钥处理和回滚限制。`--include-unowned` 通常必需，
+因为旧版本没有始终填写管理员创建记录的 `userId`；使用 `--include-secrets` 生成的文件包含上游
+密钥，必须受保护，并在导入成功后删除或转存到受控的加密备份位置。
 
 ## Docker 部署
 

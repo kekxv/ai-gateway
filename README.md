@@ -198,8 +198,23 @@ their one-time workflow ends.
 
 Administrators can export or merge the provider/model catalog from the Providers page. Exports are
 redacted by default; the console requires an explicit warning confirmation before downloading a
-backup that includes upstream credentials. See [catalog backup and legacy SQLite migration](docs/catalog-import-export.md)
-for the bundle scope, merge behavior, secret handling, and the legacy export command.
+backup that includes upstream credentials.
+
+To migrate one user's channel/provider/model configuration from the legacy Go project
+[`kekxv/ai-gateway`](https://github.com/kekxv/ai-gateway), export its SQLite data to the versioned
+catalog bundle and import that bundle from the Providers page:
+
+```bash
+uv run python scripts/export_legacy_sqlite_catalog.py /path/to/ai-gateway.db \
+  --user admin@example.com \
+  --include-unowned \
+  --include-secrets \
+  --output legacy-user-catalog.json
+```
+
+See the [catalog backup and legacy SQLite migration guide](docs/catalog-import-export.md) for the
+complete procedure, user selection, option meanings, API import example, verification steps,
+secret handling, and rollback limitations.
 
 ## Docker deployment
 
