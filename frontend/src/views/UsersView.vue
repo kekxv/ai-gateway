@@ -87,6 +87,7 @@ let activeFormSave: symbol | undefined
 let activeBalanceSave: symbol | undefined
 
 const currentUserId = computed(() => auth.user?.id ?? null)
+const currentUserTotpEnabled = computed(() => auth.user?.totp_enabled ?? false)
 const filteredUsers = computed(() => {
   const query = searchText.value.trim().toLocaleLowerCase('zh-CN')
   if (query === '') return users.value
@@ -586,6 +587,7 @@ onBeforeUnmount(() => {
       :user="editingUser"
       :submitting="formSubmitting"
       :current-user-id="currentUserId"
+      :current-user-totp-enabled="currentUserTotpEnabled"
       @submit="saveUser"
       @update:model-value="setFormOpen"
     />

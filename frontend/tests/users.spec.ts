@@ -167,6 +167,42 @@ describe('用户、余额与账本管理', () => {
     wrapper.unmount()
   })
 
+  it('启用双重验证的管理员重置密码时提交六码验证码', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(UserFormDrawer, {
+      props: {
+        modelValue: true,
+        user: memberUser,
+        submitting: false,
+        currentUserId: adminUser.id,
+        currentUserTotpEnabled: true,
+        onSubmit,
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const totp = wrapper.find('[data-test="user-admin-totp"]')
+    expect(totp.exists()).toBe(true)
+    await wrapper.get('[data-test="user-password"]').setValue('new-user-password')
+    await totp.setValue('12345')
+    await wrapper.get('[data-test="user-submit"]').trigger('click')
+    await flushPromises()
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('请输入 6 位双重验证验证码')
+
+    await totp.setValue('123456')
+    await wrapper.get('[data-test="user-submit"]').trigger('click')
+    expect(onSubmit).toHaveBeenCalledWith({
+      password: 'new-user-password',
+      admin_totp_code: '123456',
+    })
+
+    await wrapper.get('[data-test="user-cancel"]').trigger('click')
+    expect(totp.element).toHaveProperty('value', '')
+    wrapper.unmount()
+  })
+
   it('创建用户时原样提交初始余额字符串，不经过浮点数转换', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(UserFormDrawer, {

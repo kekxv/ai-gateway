@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import NoReturn
 
 import pyotp
@@ -15,6 +16,8 @@ from ai_gateway.core.security import (
     decrypt_secret,
     hash_password,
     issue_access_token,
+    issue_refresh_token,
+    token_issued_at,
     verify_password,
 )
 from ai_gateway.db.models import Account, RegistrationLock, User
@@ -72,6 +75,13 @@ async def registration_enabled(*, session: AsyncSession) -> bool:
     return True if enabled is None else enabled
 
 
+async def invalidate_user_tokens(*, session: AsyncSession, user_id: int) -> None:
+    """Set the user's token-invalidation timestamp so previously-issued tokens are rejected."""
+    user = await session.get(User, user_id)
+    if user is not None:
+        user.tokens_invalidated_before = datetime.now(UTC).replace(tzinfo=None)
+
+
 async def change_password(
     *,
     session: AsyncSession,
@@ -88,7 +98,58 @@ async def change_password(
             authenticate=True,
         )
     user.password_hash = hash_password(new_password)
+    user.tokens_invalidated_before = datetime.now(UTC).replace(tzinfo=None)
     await session.commit()
+
+
+async def reset_user_password(
+    *,
+    session: AsyncSession,
+    user_id: int,
+    new_password: str,
+) -> None:
+    """Set a user's password (admin-initiated) and revoke their existing sessions.
+
+    Does not commit — callers are responsible for committing the transaction.
+    """
+    user = await _locked_user(session=session, user_id=user_id)
+    user.password_hash = hash_password(new_password)
+    user.tokens_invalidated_before = datetime.now(UTC).replace(tzinfo=None)
+
+
+async def verify_admin_totp(
+    *,
+    admin: User,
+    totp_code: str,
+    settings: Settings,
+) -> None:
+    """Raise 401 if the admin's TOTP code is missing or invalid.
+
+    Only enforced when the admin has TOTP enabled; otherwise returns immediately.
+    """
+    if not admin.totp_enabled:
+        return
+    if admin.totp_secret_encrypted is None:
+        raise_auth_error(
+            status.HTTP_409_CONFLICT,
+            "totp_not_enabled",
+            "TOTP is not properly configured",
+        )
+    if not totp_code or not totp_code.strip():
+        raise_auth_error(
+            status.HTTP_401_UNAUTHORIZED,
+            "totp_required",
+            "TOTP is required to perform this action",
+            authenticate=True,
+        )
+    secret = decrypt_secret(admin.totp_secret_encrypted, settings=settings)
+    if not pyotp.TOTP(secret).verify(totp_code.strip(), valid_window=1):
+        raise_auth_error(
+            status.HTTP_401_UNAUTHORIZED,
+            "invalid_totp",
+            "Invalid TOTP code",
+            authenticate=True,
+        )
 
 
 async def disable_totp(
@@ -209,7 +270,7 @@ async def refresh_access_token(
     session: AsyncSession,
     refresh_token: str,
     settings: Settings,
-) -> str:
+) -> tuple[str, str]:
     try:
         claims = decode_token(refresh_token, expected_type="refresh", settings=settings)
     except InvalidTokenTypeError:
@@ -246,4 +307,24 @@ async def refresh_access_token(
         )
     if not user.is_active:
         raise_auth_error(status.HTTP_403_FORBIDDEN, "user_disabled", "User is disabled")
-    return issue_access_token(user_id=user.id, settings=settings)
+
+    # Check if refresh token was issued before invalidation timestamp
+    invalidated_before = getattr(user, "tokens_invalidated_before", None)
+    if invalidated_before is not None:
+        issued_at = token_issued_at(claims)
+        if issued_at < invalidated_before:
+            raise_auth_error(
+                status.HTTP_401_UNAUTHORIZED,
+                "invalid_token",
+                "Invalid or expired token",
+                authenticate=True,
+            )
+
+    # Rotate: invalidate all previously-issued tokens, then issue a fresh pair
+    user.tokens_invalidated_before = datetime.now(UTC).replace(tzinfo=None)
+    await session.commit()
+
+    return (
+        issue_access_token(user_id=user.id, settings=settings),
+        issue_refresh_token(user_id=user.id, settings=settings),
+    )

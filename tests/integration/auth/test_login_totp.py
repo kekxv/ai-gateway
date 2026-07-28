@@ -9,6 +9,7 @@ import pytest
 import pytest_asyncio
 from cryptography.fernet import Fernet
 from fastapi import Depends
+from freezegun import freeze_time
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -244,24 +245,58 @@ async def test_disabled_user_is_rejected(
     assert error_code(response.json()) == "user_disabled"
 
 
+async def test_login_rate_limit_ignores_spoofed_forwarding_addresses(
+    client: AsyncClient,
+) -> None:
+    responses = [
+        await client.post(
+            "/auth/login",
+            headers={"X-Forwarded-For": f"198.51.100.{attempt}"},
+            json={"email": "missing@example.com", "password": "wrong-password"},
+        )
+        for attempt in range(1, 7)
+    ]
+
+    assert [response.status_code for response in responses] == [401, 401, 401, 401, 401, 429]
+    assert error_code(responses[-1].json()) == "too_many_requests"
+
+
 async def test_refresh_token_returns_new_access_token(
     client: AsyncClient,
     session: AsyncSession,
 ) -> None:
     await create_user(session)
-    login = await client.post(
-        "/auth/login",
-        json={"email": "user@example.com", "password": "correct horse battery staple"},
-    )
+    with freeze_time("2026-07-28 12:00:00.100000"):
+        login = await client.post(
+            "/auth/login",
+            json={"email": "user@example.com", "password": "correct horse battery staple"},
+        )
 
-    response = await client.post(
-        "/auth/refresh",
-        json={"refresh_token": login.json()["refresh_token"]},
-    )
+    with freeze_time("2026-07-28 12:00:00.900000"):
+        response = await client.post(
+            "/auth/refresh",
+            json={"refresh_token": login.json()["refresh_token"]},
+        )
 
     assert response.status_code == 200
     assert response.json()["access_token"]
+    assert response.json()["refresh_token"]
     assert response.json()["token_type"] == "bearer"
+
+    session.expunge_all()
+    with freeze_time("2026-07-28 12:00:00.950000"):
+        replay = await client.post(
+            "/auth/refresh",
+            json={"refresh_token": login.json()["refresh_token"]},
+        )
+        protected = await client.get(
+            "/_test/protected",
+            headers={"Authorization": f"Bearer {response.json()['access_token']}"},
+        )
+
+    assert replay.status_code == 401
+    assert error_code(replay.json()) == "invalid_token"
+    assert protected.status_code == 200
 
 
 async def test_access_token_cannot_be_used_to_refresh(

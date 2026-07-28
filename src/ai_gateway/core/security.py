@@ -1,6 +1,7 @@
 import base64
 import binascii
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import uuid4
@@ -90,6 +91,16 @@ def decode_token(
     return claims
 
 
+def token_issued_at(claims: Mapping[str, Any]) -> datetime:
+    """Return a token's UTC issue time as a naive database-compatible datetime."""
+    issued_at_microseconds = claims.get("iat_us")
+    if isinstance(issued_at_microseconds, int) and not isinstance(issued_at_microseconds, bool):
+        return datetime.fromtimestamp(issued_at_microseconds / 1_000_000, tz=UTC).replace(
+            tzinfo=None
+        )
+    return datetime.fromtimestamp(int(claims["iat"]), tz=UTC).replace(tzinfo=None)
+
+
 def encrypt_secret(secret: str, *, settings: Settings) -> bytes:
     return _fernet(settings).encrypt(secret.encode())
 
@@ -111,6 +122,7 @@ def _issue_token(
         "type": token_type,
         "iss": settings.jwt_issuer,
         "iat": issued_at,
+        "iat_us": int(issued_at.timestamp()) * 1_000_000 + issued_at.microsecond,
         "exp": issued_at + lifetime,
         "jti": str(uuid4()),
     }

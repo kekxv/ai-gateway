@@ -3,13 +3,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, LargeBinary, String, func, text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, LargeBinary, String, func, text
 from sqlalchemy.dialects import mysql
 from sqlalchemy.dialects.mysql import BINARY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ai_gateway.core.enums import ApiKeyScope, enum_values
 from ai_gateway.db.base import Base
+
+DATETIME_FSP6 = DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql")
 
 if TYPE_CHECKING:
     from ai_gateway.db.models.billing import Account
@@ -34,6 +36,10 @@ class User(Base):
         nullable=True,
     )
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
+    tokens_invalidated_before: Mapped[datetime | None] = mapped_column(
+        DATETIME_FSP6,
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -63,6 +69,14 @@ class RegistrationLock(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class AuthRateLimit(Base):
+    __tablename__ = "auth_rate_limits"
+
+    client_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_started_at: Mapped[datetime] = mapped_column(DATETIME_FSP6)
+    request_count: Mapped[int] = mapped_column(Integer)
 
 
 class ApiKey(Base):

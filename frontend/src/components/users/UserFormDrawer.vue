@@ -23,6 +23,7 @@ const props = defineProps<{
   user: UserResponse | null
   submitting: boolean
   currentUserId: number | null
+  currentUserTotpEnabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -32,11 +33,13 @@ const emit = defineEmits<{
 
 const email = ref('')
 const password = ref('')
+const adminTotpCode = ref('')
 const role = ref<UserRole>('user')
 const isActive = ref(true)
 const initialBalance = ref('0.00000000')
 const emailError = ref('')
 const passwordError = ref('')
+const adminTotpError = ref('')
 const initialBalanceError = ref('')
 
 const editing = computed(() => props.user !== null)
@@ -46,17 +49,20 @@ const unsignedMoneyPattern = /^(?:0|[1-9]\d{0,11})(?:\.\d{1,8})?$/
 
 function clearTransientState(): void {
   password.value = ''
+  adminTotpCode.value = ''
 }
 
 function resetForm(): void {
   const user = props.user
   email.value = user?.email ?? ''
   password.value = ''
+  adminTotpCode.value = ''
   role.value = user?.role ?? 'user'
   isActive.value = user?.is_active ?? true
   initialBalance.value = '0.00000000'
   emailError.value = ''
   passwordError.value = ''
+  adminTotpError.value = ''
   initialBalanceError.value = ''
 }
 
@@ -92,15 +98,25 @@ function handleBeforeClose(done: () => void): void {
 function validate(): boolean {
   emailError.value = ''
   passwordError.value = ''
+  adminTotpError.value = ''
   initialBalanceError.value = ''
   if (email.value.trim() === '') emailError.value = '请输入邮箱地址'
   if (!editing.value && password.value.trim() === '') passwordError.value = '请输入初始密码'
+  if (
+    editing.value &&
+    props.currentUserTotpEnabled &&
+    password.value.trim() !== '' &&
+    !/^\d{6}$/.test(adminTotpCode.value.trim())
+  ) {
+    adminTotpError.value = '请输入 6 位双重验证验证码'
+  }
   if (!editing.value && !unsignedMoneyPattern.test(initialBalance.value.trim())) {
     initialBalanceError.value = '请输入非负普通小数，最多 12 位整数和 8 位小数'
   }
   return (
     emailError.value === '' &&
     passwordError.value === '' &&
+    adminTotpError.value === '' &&
     initialBalanceError.value === ''
   )
 }
@@ -120,7 +136,12 @@ function submitForm(): void {
 
   const payload: UserUpdate = {}
   if (email.value.trim() !== user.email) payload.email = email.value.trim()
-  if (password.value.trim() !== '') payload.password = password.value
+  if (password.value.trim() !== '') {
+    payload.password = password.value
+    if (props.currentUserTotpEnabled) {
+      payload.admin_totp_code = adminTotpCode.value.trim()
+    }
+  }
   if (role.value !== user.role) payload.role = role.value
   if (!editingSelf.value && isActive.value !== user.is_active) payload.is_active = isActive.value
   emit('submit', payload)
@@ -160,6 +181,21 @@ function submitForm(): void {
           show-password
           autocomplete="new-password"
         />
+      </ElFormItem>
+      <ElFormItem
+        v-if="editing && currentUserTotpEnabled"
+        label="管理员双重验证验证码（重置密码时必填）"
+        :error="adminTotpError"
+      >
+        <ElInput
+          v-model="adminTotpCode"
+          data-test="user-admin-totp"
+          type="password"
+          maxlength="6"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+        />
+        <p v-if="adminTotpError" class="field-error">{{ adminTotpError }}</p>
       </ElFormItem>
       <ElFormItem label="角色">
         <select v-model="role" data-test="user-role" class="role-select" :disabled="submitting">
@@ -224,6 +260,12 @@ function submitForm(): void {
   display: flex;
   justify-content: flex-end;
   gap: 0.75rem;
+}
+
+.field-error {
+  margin: 0.35rem 0 0;
+  color: var(--el-color-danger);
+  font-size: 0.75rem;
 }
 
 .active-control {

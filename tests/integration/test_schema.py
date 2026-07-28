@@ -36,6 +36,7 @@ from ai_gateway.db.models import (
 def test_schema_contains_exact_tables_and_columns() -> None:
     expected = {
         "registration_locks": {"id", "enabled", "updated_at"},
+        "auth_rate_limits": {"client_key", "window_started_at", "request_count"},
         "users": {
             "id",
             "email",
@@ -45,6 +46,7 @@ def test_schema_contains_exact_tables_and_columns() -> None:
             "totp_secret_encrypted",
             "pending_totp_secret_encrypted",
             "totp_enabled",
+            "tokens_invalidated_before",
             "created_at",
             "updated_at",
         },

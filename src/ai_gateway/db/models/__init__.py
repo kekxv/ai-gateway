@@ -5,6 +5,7 @@ from ai_gateway.db.models.identity import (
     ApiKey,
     ApiKeyModel,
     ApiKeyProvider,
+    AuthRateLimit,
     RegistrationLock,
     User,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "ApiKey",
     "ApiKeyModel",
     "ApiKeyProvider",
+    "AuthRateLimit",
     "ConfigAuditLog",
     "LedgerEntry",
     "Model",

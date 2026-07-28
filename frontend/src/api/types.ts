@@ -135,6 +135,7 @@ export interface UserCreate {
 export interface UserUpdate {
   email?: string | null
   password?: string | null
+  admin_totp_code?: string | null
   role?: UserRole | null
   is_active?: boolean | null
 }

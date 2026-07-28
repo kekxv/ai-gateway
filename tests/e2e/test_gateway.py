@@ -35,6 +35,7 @@ from ai_gateway.db.models import (
     ApiKey,
     ApiKeyModel,
     ApiKeyProvider,
+    AuthRateLimit,
     LedgerEntry,
     Model,
     ModelAlias,
@@ -463,6 +464,7 @@ async def exercise_admin_and_auth_regression(
         json={"refresh_token": state.admin_refresh_token},
     )
     assert refresh.status_code == 200, refresh.text
+    state.admin_headers["Authorization"] = f"Bearer {refresh.json()['access_token']}"
 
     totp_setup = await client.post("/auth/totp/setup", headers=state.admin_headers)
     assert totp_setup.status_code == 200, totp_setup.text
@@ -497,6 +499,7 @@ async def exercise_admin_and_auth_regression(
         json={
             "email": user.json()["email"],
             "password": USER_PASSWORD,
+            "admin_totp_code": pyotp.TOTP(totp_secret).now(),
             "role": "user",
             "is_active": True,
         },
@@ -1038,6 +1041,7 @@ async def assert_durable_results(
 
 async def cleanup_e2e_records(engine: AsyncEngine, suffix: str) -> None:
     async with AsyncSession(engine) as session:
+        await session.execute(delete(AuthRateLimit))
         user_ids = list(
             await session.scalars(
                 select(User.id).where(

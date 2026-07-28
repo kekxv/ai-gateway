@@ -382,7 +382,11 @@ describe('authentication store', () => {
       http.post('/auth/refresh', async () => {
         refreshCalls += 1
         await Promise.resolve()
-        return HttpResponse.json({ access_token: 'renewed', token_type: 'bearer' })
+        return HttpResponse.json({
+          access_token: 'renewed',
+          refresh_token: 'renewed-refresh',
+          token_type: 'bearer',
+        })
       }),
     )
 
@@ -390,6 +394,7 @@ describe('authentication store', () => {
 
     expect(refreshCalls).toBe(1)
     expect(sessionStorage.getItem('gateway.access_token')).toBe('renewed')
+    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('renewed-refresh')
   })
 
   it('does not restore stale tokens when logout happens during refresh', async () => {
@@ -411,7 +416,11 @@ describe('authentication store', () => {
       http.post('/auth/refresh', async () => {
         refreshStarted.resolve()
         await releaseRefresh.promise
-        return HttpResponse.json({ access_token: 'stale-access', token_type: 'bearer' })
+        return HttpResponse.json({
+          access_token: 'stale-access',
+          refresh_token: 'stale-refresh',
+          token_type: 'bearer',
+        })
       }),
     )
 
@@ -463,12 +472,20 @@ describe('authentication store', () => {
           oldRefreshCalls += 1
           refreshStarted.resolve()
           await releaseRefresh.promise
-          return HttpResponse.json({ access_token: 'stale-access', token_type: 'bearer' })
+          return HttpResponse.json({
+            access_token: 'stale-access',
+            refresh_token: 'stale-refresh',
+            token_type: 'bearer',
+          })
         }
         newRefreshCalls += 1
         newRefreshStarted.resolve()
         await releaseNewRefresh.promise
-        return HttpResponse.json({ access_token: 'renewed-new-access', token_type: 'bearer' })
+        return HttpResponse.json({
+          access_token: 'renewed-new-access',
+          refresh_token: 'renewed-new-refresh',
+          token_type: 'bearer',
+        })
       }),
       http.post('/auth/login', () =>
         HttpResponse.json({
@@ -506,7 +523,7 @@ describe('authentication store', () => {
     expect(oldRefreshCalls).toBe(1)
     expect(newRefreshCalls).toBe(1)
     expect(sessionStorage.getItem('gateway.access_token')).toBe('renewed-new-access')
-    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('new-refresh')
+    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('renewed-new-refresh')
     expect(store.user).toEqual(replacementAdmin)
   })
 

@@ -4,7 +4,7 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from 'axios'
 
-import type { AccessToken, ApiErrorBody, ApiValidationError } from './types'
+import type { ApiErrorBody, ApiValidationError, TokenPair } from './types'
 
 export const ACCESS_TOKEN_KEY = 'gateway.access_token'
 export const REFRESH_TOKEN_KEY = 'gateway.refresh_token'
@@ -63,6 +63,15 @@ export function clearSessionTokens(): void {
 
 export function replaceSessionTokens(accessToken: string, refreshToken: string): void {
   advanceSessionGeneration()
+  sessionStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
+  sessionStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+}
+
+/**
+ * Update tokens within the same session (e.g. after refresh-token rotation).
+ * Does NOT advance the session generation — stale-refresh detection still works.
+ */
+function rotateSessionTokens(accessToken: string, refreshToken: string): void {
   sessionStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
   sessionStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
 }
@@ -148,6 +157,7 @@ const apiErrorMessages: Readonly<Record<string, string>> = {
 }
 
 const validationFieldLabels: Readonly<Record<string, string>> = {
+  admin_totp_code: '管理员验证码',
   code: '验证码',
   current_password: '当前密码',
   current_totp_code: '当前验证码',
@@ -237,10 +247,14 @@ async function refreshAccessToken(): Promise<RefreshedSession> {
     generation,
     refreshToken,
     promise: rawClient
-      .post<AccessToken>('/auth/refresh', { refresh_token: refreshToken })
+      .post<TokenPair>('/auth/refresh', { refresh_token: refreshToken })
       .then(({ data }) => {
+        // Only update tokens when the refresh matches the current session.
+        // If a new login happened while this refresh was in flight, the stored
+        // refresh token (and generation) will have changed — leave them alone
+        // so the fresh login tokens are not overwritten by stale refresh data.
         if (!sessionMatches(generation, refreshToken)) throw sessionChangedError()
-        sessionStorage.setItem(ACCESS_TOKEN_KEY, data.access_token)
+        rotateSessionTokens(data.access_token, data.refresh_token)
         return { accessToken: data.access_token, generation }
       })
       .catch((error: unknown) => {
@@ -285,10 +299,7 @@ apiClient.interceptors.response.use(
 
     config._retried = true
     const refreshedSession = await refreshAccessToken()
-    if (
-      refreshedSession.generation !== sessionGeneration ||
-      config._sessionGeneration !== refreshedSession.generation
-    ) {
+    if (config._sessionGeneration !== refreshedSession.generation) {
       throw sessionChangedError()
     }
     config.headers = AxiosHeaders.from(config.headers)

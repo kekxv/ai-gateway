@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import jwt
 import pytest
 from cryptography.fernet import Fernet
+from freezegun import freeze_time
 from jwt import InvalidTokenError
 
 from ai_gateway.core import security
@@ -74,6 +75,18 @@ def test_access_token_has_subject_type_and_expiry(settings: Settings) -> None:
     assert claims["exp"] > claims["iat"]
     assert datetime.fromtimestamp(claims["exp"], tz=UTC) > datetime.now(UTC)
     assert claims["jti"]
+
+
+def test_access_token_preserves_microsecond_issue_time(settings: Settings) -> None:
+    issued_at = datetime(2026, 7, 28, 12, 34, 56, 123456, tzinfo=UTC)
+
+    with freeze_time(issued_at):
+        token = issue_access_token(user_id=7, settings=settings)
+        claims = decode_token(token, expected_type="access", settings=settings)
+
+    assert hasattr(security, "token_issued_at")
+    assert claims["iat_us"] == 1785242096123456
+    assert security.token_issued_at(claims) == issued_at.replace(tzinfo=None)
 
 
 def test_refresh_token_cannot_be_decoded_as_access(settings: Settings) -> None:

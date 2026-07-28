@@ -1,13 +1,12 @@
 from typing import Annotated
 
 import pyotp
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.auth.dependencies import current_user
 from ai_gateway.auth.schemas import (
-    AccessToken,
     CurrentUserResponse,
     LoginRequest,
     PasswordChangeRequest,
@@ -31,6 +30,7 @@ from ai_gateway.auth.service import (
     registration_enabled,
 )
 from ai_gateway.core.config import Settings, get_settings
+from ai_gateway.core.rate_limit import check_rate_limit
 from ai_gateway.core.security import (
     decrypt_secret,
     encrypt_secret,
@@ -47,13 +47,25 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 AppSettings = Annotated[Settings, Depends(get_settings)]
 CurrentUser = Annotated[User, Depends(current_user)]
 
+_AUTH_RATE_LIMIT_MAX_REQUESTS = 5
+_AUTH_RATE_LIMIT_WINDOW_SECONDS = 300
+
 
 @router.post("/register", response_model=TokenPair, status_code=status.HTTP_201_CREATED)
 async def register(
     payload: RegisterRequest,
+    request: Request,
     session: Session,
     settings: AppSettings,
 ) -> TokenPair:
+    await check_rate_limit(
+        request,
+        session,
+        max_requests=_AUTH_RATE_LIMIT_MAX_REQUESTS,
+        window_seconds=_AUTH_RATE_LIMIT_WINDOW_SECONDS,
+        code="too_many_requests",
+        message="Too many registration attempts, please try again later",
+    )
     user = await register_user(
         session=session,
         email=payload.email,
@@ -71,7 +83,20 @@ async def get_registration_status(session: Session) -> RegistrationStatusRespons
 
 
 @router.post("/login", response_model=TokenPair)
-async def login(payload: LoginRequest, session: Session, settings: AppSettings) -> TokenPair:
+async def login(
+    payload: LoginRequest,
+    request: Request,
+    session: Session,
+    settings: AppSettings,
+) -> TokenPair:
+    await check_rate_limit(
+        request,
+        session,
+        max_requests=_AUTH_RATE_LIMIT_MAX_REQUESTS,
+        window_seconds=_AUTH_RATE_LIMIT_WINDOW_SECONDS,
+        code="too_many_requests",
+        message="Too many login attempts, please try again later",
+    )
     user = await authenticate_user(
         session=session,
         email=payload.email,
@@ -85,18 +110,21 @@ async def login(payload: LoginRequest, session: Session, settings: AppSettings) 
     )
 
 
-@router.post("/refresh", response_model=AccessToken)
+@router.post("/refresh", response_model=TokenPair)
 async def refresh(
     payload: RefreshRequest,
     session: Session,
     settings: AppSettings,
-) -> AccessToken:
-    token = await refresh_access_token(
+) -> TokenPair:
+    access_token, refresh_token = await refresh_access_token(
         session=session,
         refresh_token=payload.refresh_token.get_secret_value(),
         settings=settings,
     )
-    return AccessToken(access_token=token)
+    return TokenPair(
+        access_token=access_token,
+        refresh_token=refresh_token,
+    )
 
 
 @router.get("/me", response_model=CurrentUserResponse)

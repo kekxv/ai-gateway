@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from ai_gateway.auth.dependencies import admin_user
-from ai_gateway.auth.service import raise_auth_error
+from ai_gateway.auth.service import raise_auth_error, reset_user_password, verify_admin_totp
+from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.security import hash_password
 from ai_gateway.db.models import Account, LedgerEntry, RequestLog, User
 from ai_gateway.db.session import get_session
@@ -43,6 +44,7 @@ class UserUpdate(BaseModel):
     password: SecretStr | None = None
     role: UserRole | None = None
     is_active: bool | None = None
+    admin_totp_code: SecretStr | None = Field(default=None, min_length=6, max_length=6)
 
 
 class UserResponse(BaseModel):
@@ -100,6 +102,7 @@ async def update_user(
     payload: UserUpdate,
     session: Session,
     administrator: AdminUser,
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> UserResponse:
     if user_id == administrator.id and payload.is_active is False:
         raise_auth_error(
@@ -107,18 +110,30 @@ async def update_user(
             "self_disable_forbidden",
             "Administrators cannot disable their own user",
         )
+    # Require admin TOTP when changing another user's password
+    if payload.password is not None:
+        totp_code = (
+            payload.admin_totp_code.get_secret_value()
+            if payload.admin_totp_code is not None
+            else ""
+        )
+        await verify_admin_totp(admin=administrator, totp_code=totp_code, settings=settings)
     user = await _get_user(session, user_id)
     if payload.email is not None:
         user.email = payload.email
     if payload.password is not None:
-        user.password_hash = hash_password(payload.password.get_secret_value())
+        await reset_user_password(
+            session=session,
+            user_id=user_id,
+            new_password=payload.password.get_secret_value(),
+        )
     if payload.role is not None:
         user.role = payload.role
     if payload.is_active is not None:
         user.is_active = payload.is_active
     try:
         await session.flush()
-        await session.refresh(user, attribute_names=["updated_at"])
+        await session.refresh(user, attribute_names=["updated_at", "account"])
         response = _user_response(user)
         await session.commit()
     except IntegrityError:
