@@ -378,12 +378,114 @@ test('administrator can close and reopen public registration', async ({ page }) 
       () => window.sessionStorage.getItem('gateway.access_token') !== null,
     )
     if (!hasSession) await login(page)
+    const status = await cleanupRequest(page, {
+      body: { enabled: true },
+      method: 'PATCH',
+      path: '/admin/settings/registration',
+    })
+    if (status < 200 || status >= 300) throw new Error('registration setting cleanup failed')
     await page.goto('security')
-    const setting = page.getByTestId('registration-setting')
-    await expect(setting).toBeVisible()
-    if ((await setting.textContent())?.includes('已关闭') === true) {
-      await page.getByTestId('registration-toggle').click()
-      await expect(setting).toContainText('已开启')
+    await expect(page.getByTestId('registration-setting')).toContainText('已开启')
+  }
+})
+
+test('regular user can browse models and manage only their own API key', async ({ page }) => {
+  const unique = crypto.randomUUID()
+  const userEmail = `e2e-self-service-${unique}@example.com`
+  const userPassword = `e2e-password-${unique}`
+  const apiKeyName = `e2e-self-key-${unique}`
+  let apiKeyId: number | undefined
+  let userId: number | undefined
+
+  await page.goto('login')
+  await page.evaluate(() => {
+    window.sessionStorage.clear()
+  })
+  await page.goto('register')
+  await page.getByTestId('register-email').fill(userEmail)
+  await page.getByTestId('register-password').fill(userPassword)
+  await page.getByTestId('register-password-confirm').fill(userPassword)
+  await page.getByTestId('register-submit').click()
+  await expect(page.getByRole('heading', { level: 1, name: '安全设置' })).toBeVisible()
+
+  try {
+    const navigation = page.getByRole('navigation', { name: '控制台导航' })
+    await expect(navigation.getByRole('menuitem', { name: '可用模型' })).toBeVisible()
+    await expect(navigation.getByRole('menuitem', { name: '接口密钥' })).toBeVisible()
+    await expect(navigation.getByRole('menuitem', { name: '安全设置' })).toBeVisible()
+    await expect(navigation.getByRole('menuitem', { name: '供应商管理' })).toHaveCount(0)
+    await expect(navigation.getByRole('menuitem', { name: '用户管理' })).toHaveCount(0)
+    await expect(navigation.getByRole('menuitem', { name: '请求日志' })).toHaveCount(0)
+
+    await page.goto('models')
+    await expect(page.getByRole('heading', { level: 1, name: '可用模型' })).toBeVisible()
+    await expect(page.getByTestId('create-model')).toHaveCount(0)
+    await expect(page.getByText('模型路由')).toHaveCount(0)
+
+    await page.goto('providers')
+    await expect(page.getByRole('heading', { level: 1, name: '安全设置' })).toBeVisible()
+
+    await page.goto('api-keys')
+    await page.getByTestId('create-api-key').click()
+    await expect(page.getByTestId('api-key-owner-summary')).toContainText(userEmail)
+    await expect(page.getByTestId('api-key-owner')).toHaveCount(0)
+    await expect(page.locator('[data-test="api-key-scope"] option[value="providers"]')).toHaveCount(0)
+    await expect(
+      page.locator('[data-test="api-key-scope"] option[value="providers_and_models"]'),
+    ).toHaveCount(0)
+    await page.getByTestId('api-key-name').fill(apiKeyName)
+    const createRequestPromise = page.waitForRequest((request) => {
+      const url = new URL(request.url())
+      return url.pathname === '/user/api-keys' && request.method() === 'POST'
+    })
+    await page.getByTestId('api-key-submit').click()
+    const createRequest = await createRequestPromise
+    expect(createRequest.postDataJSON()).toEqual({
+      name: apiKeyName,
+      scope: 'all',
+      is_active: true,
+      expires_at: null,
+      model_ids: [],
+    })
+    await expectSafeCondition(
+      () => secretIsVisibleAndNonEmpty(page),
+      'Regular-user one-time secret was not visible',
+    )
+    await page.getByTestId('secret-acknowledged').click()
+    await page.getByTestId('secret-confirm-close').click()
+    await expectSafeCondition(() => secretNodeIsAbsent(page), 'Secret node was not removed')
+
+    await page.getByTestId('api-key-search').fill(apiKeyName)
+    const apiKeyRow = page.getByRole('row').filter({ hasText: apiKeyName })
+    await expect(apiKeyRow).toBeVisible()
+    apiKeyId = await numericId(
+      apiKeyRow.locator('[data-test^="delete-api-key-"]'),
+      'delete-api-key-',
+    )
+    await apiKeyRow.locator('[data-test^="delete-api-key-"]').click()
+    await page.getByRole('button', { name: '确认删除', exact: true }).click()
+    await expect(apiKeyRow).toHaveCount(0)
+    apiKeyId = undefined
+  } finally {
+    await closeSecretDialogIfPresent(page)
+    await page.evaluate(() => {
+      window.sessionStorage.clear()
+    })
+    await login(page)
+    if (apiKeyId === undefined) {
+      apiKeyId = await lookupEntityId(page, '/admin/api-keys', 'name', apiKeyName)
+    }
+    if (apiKeyId !== undefined) {
+      await deleteOrDisable(page, `/admin/api-keys/${String(apiKeyId)}`, { is_active: false })
+    }
+    userId = await lookupEntityId(page, '/admin/users', 'email', userEmail)
+    if (userId !== undefined) {
+      const status = await cleanupRequest(page, {
+        body: { is_active: false },
+        method: 'PATCH',
+        path: `/admin/users/${String(userId)}`,
+      })
+      if (status < 200 || status >= 300) throw new Error('regular-user cleanup failed')
     }
   }
 })

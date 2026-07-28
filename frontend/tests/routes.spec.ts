@@ -2,11 +2,13 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { ElMessageBox, type MessageBoxData } from 'element-plus'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { listModelRoutes } from '@/api/models'
-import type { ModelResponse, ModelRouteResponse, ProviderResponse } from '@/api/types'
+import type { CurrentUser, ModelResponse, ModelRouteResponse, ProviderResponse } from '@/api/types'
 import RouteFormDrawer from '@/components/models/RouteFormDrawer.vue'
+import { useAuthStore } from '@/stores/auth'
 import ModelsView from '@/views/ModelsView.vue'
 
 async function waitForFormErrors(): Promise<void> {
@@ -139,6 +141,16 @@ const openRoute: ModelRouteResponse = {
   runtime_state: 'open',
 }
 
+const adminUser: CurrentUser = {
+  id: 1,
+  email: 'admin@example.com',
+  role: 'admin',
+  is_active: true,
+  totp_enabled: false,
+  created_at: '2026-07-22T00:00:00Z',
+  updated_at: '2026-07-22T00:00:00Z',
+}
+
 interface Deferred<T> {
   promise: Promise<T>
   resolve: (value: T) => void
@@ -156,6 +168,11 @@ const server = setupServer()
 
 beforeAll(() => {
   server.listen({ onUnhandledRequest: 'error' })
+})
+
+beforeEach(() => {
+  setActivePinia(createPinia())
+  useAuthStore().user = adminUser
 })
 
 afterEach(() => {

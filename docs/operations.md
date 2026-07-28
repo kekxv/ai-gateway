@@ -78,6 +78,19 @@ job; in that mode, all-empty skips while every partial configuration fails. Pass
 environment-variable names on the command line so secret values are not exposed in process
 arguments.
 
+## Console role boundaries
+
+Every authenticated account can open **Available models**, **API keys**, and **Security settings**.
+The model view contains enabled models and enabled aliases only; it does not expose providers,
+routes, credentials, or upstream model names. A regular user can list, create, edit, rotate, and
+delete only API keys owned by that account. The server derives ownership from the JWT and accepts
+only all-model or selected-model scopes on these self-service endpoints.
+
+Dashboard, provider, route, user, balance, request-log, and provider-scoped API-key administration
+remain administrator-only. The browser navigation is role-aware, but the `/admin/*` server-side
+authorization boundary is authoritative. A request for another user's key through `/user/api-keys`
+returns the same not-found response as an unknown key.
+
 ## Admin console deployment and reverse proxy
 
 The public gateway and compiled administrator console share the FastAPI process on port `8000`.

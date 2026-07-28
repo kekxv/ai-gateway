@@ -28,6 +28,8 @@ scale containers horizontally.
 - Public registration with an exactly-once first administrator, JWT access/refresh
   authentication, role-based authorization, password changes, and TOTP enrollment,
   replacement, or disable.
+- Regular-user console access to the enabled model catalog and self-service API keys; ownership is
+  derived from the authenticated account and provider-scoped keys remain administrator-only.
 - Exact `Decimal` balance accounting, reservations, settlement, adjustments, and an immutable
   ledger.
 - Redacted request logs with cursor pagination and GZIP-compressed request/response details.
@@ -185,11 +187,13 @@ The public model gateway remains on port `8000`; the compiled console uses the s
 does not require a separate production Node process. Port `5173` is only the Vite development
 server.
 
-All authenticated users can access account security settings. Administrator accounts also have:
+All authenticated users can browse enabled models and aliases, manage only their own API keys,
+and access account security settings. Regular-user keys may cover all models or a selected enabled
+model set; they cannot select providers or another owner. Administrator accounts additionally have:
 
 - dashboard usage, cost, health, and resource summaries;
 - provider protocols, credentials, model synchronization, models, aliases, and weighted routes;
-- users, balances, immutable ledger entries, and scoped API keys;
+- users, balances, immutable ledger entries, and global/provider-scoped API-key management;
 - one-time API-key display with explicit copy/download acknowledgement;
 - request-log filters, backend cursor navigation, and redacted JSON detail inspection;
 - password changes plus TOTP enrollment, verified replacement, and verified disable.
