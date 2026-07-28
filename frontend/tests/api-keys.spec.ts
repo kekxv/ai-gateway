@@ -2,7 +2,8 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { ElDialog, ElMessageBox, type MessageBoxData } from 'element-plus'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { listApiKeys } from '@/api/apiKeys'
 import type {
@@ -10,6 +11,7 @@ import type {
   ApiKeyResponse,
   ApiKeyScope,
   ApiKeyUpdate,
+  CurrentUser,
   ModelResponse,
   ProviderResponse,
   UserResponse,
@@ -17,6 +19,7 @@ import type {
 import ApiKeyFormDrawer from '@/components/api-keys/ApiKeyFormDrawer.vue'
 import SecretResultDialog from '@/components/api-keys/SecretResultDialog.vue'
 import { routes } from '@/router'
+import { useAuthStore } from '@/stores/auth'
 import ApiKeysView from '@/views/ApiKeysView.vue'
 
 interface Deferred<T> {
@@ -134,10 +137,39 @@ const secondActiveKey: ApiKeyResponse = {
   key_prefix: 'sk-gw-test12',
 }
 
+const adminUser: CurrentUser = {
+  id: 1,
+  email: 'admin@example.com',
+  role: 'admin',
+  is_active: true,
+  totp_enabled: false,
+  created_at: '2026-07-20T08:00:00Z',
+  updated_at: '2026-07-21T08:00:00Z',
+}
+
+const regularUser: CurrentUser = {
+  ...adminUser,
+  id: 2,
+  email: 'member@example.com',
+  role: 'user',
+}
+
+const ownKey: ApiKeyResponse = {
+  ...activeKey,
+  scope: 'models',
+  provider_ids: [],
+  model_ids: [21],
+}
+
 const server = setupServer()
 
 beforeAll(() => {
   server.listen({ onUnhandledRequest: 'error' })
+})
+
+beforeEach(() => {
+  setActivePinia(createPinia())
+  useAuthStore().user = adminUser
 })
 
 afterEach(() => {
@@ -196,6 +228,137 @@ describe('接口密钥作用域与一次性明文', () => {
     const loadApiKeys = apiKeyRoute.component as () => Promise<{ default: unknown }>
     const loadedModule = await loadApiKeys()
     expect(loadedModule.default).toBe(ApiKeysView)
+  })
+
+  it('普通用户只加载自己的密钥和可用模型，创建请求不携带所有者或供应商', async () => {
+    useAuthStore().user = regularUser
+    let received: unknown
+    let adminRequests = 0
+    server.use(
+      http.get('/user/api-keys', () => HttpResponse.json([ownKey])),
+      http.get('/user/models', () => HttpResponse.json(models)),
+      http.post('/user/api-keys', async ({ request }) => {
+        received = await request.json()
+        return HttpResponse.json(
+          {
+            ...ownKey,
+            id: 41,
+            name: '个人调用',
+            key_prefix: 'sk-gw-own123',
+            key: 'sk-gw-user-once-only',
+          },
+          { status: 201 },
+        )
+      }),
+      http.get('/admin/api-keys', () => {
+        adminRequests += 1
+        return HttpResponse.json([])
+      }),
+      http.get('/admin/users', () => {
+        adminRequests += 1
+        return HttpResponse.json([])
+      }),
+      http.get('/admin/providers', () => {
+        adminRequests += 1
+        return HttpResponse.json([])
+      }),
+      http.get('/admin/models', () => {
+        adminRequests += 1
+        return HttpResponse.json([])
+      }),
+    )
+
+    const wrapper = mount(ApiKeysView, { attachTo: document.body })
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="api-key-row-31"]').text()).toContain('生产调用')
+    expect(wrapper.find('[data-test="api-key-owner-column"]').exists()).toBe(false)
+    expect(adminRequests).toBe(0)
+
+    await wrapper.get('[data-test="create-api-key"]').trigger('click')
+    expect(wrapper.get('[data-test="api-key-owner-summary"]').text()).toContain(regularUser.email)
+    expect(wrapper.find('[data-test="api-key-owner"]').exists()).toBe(false)
+    const scopeOptions = wrapper
+      .get('[data-test="api-key-scope"]')
+      .findAll('option')
+      .map((option) => option.attributes('value'))
+    expect(scopeOptions).toEqual(['all', 'models'])
+    expect(wrapper.find('[data-test^="api-key-provider-"]').exists()).toBe(false)
+
+    await wrapper.get('[data-test="api-key-name"]').setValue('个人调用')
+    await wrapper.get('[data-test="api-key-scope"]').setValue('models')
+    await wrapper.get<HTMLInputElement>('[data-test="api-key-model-21"]').setValue(true)
+    await wrapper.get('[data-test="api-key-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(received).toEqual({
+      name: '个人调用',
+      scope: 'models',
+      is_active: true,
+      expires_at: null,
+      model_ids: [21],
+    })
+    expect(wrapper.text()).toContain('sk-gw-user-once-only')
+    expect(wrapper.get('[data-test="api-key-row-41"]').text()).not.toContain(
+      'sk-gw-user-once-only',
+    )
+    wrapper.unmount()
+  })
+
+  it('普通用户编辑、轮换和删除自己的密钥都使用自助接口', async () => {
+    useAuthStore().user = regularUser
+    let patchBody: unknown
+    let rotateCalls = 0
+    let deleteCalls = 0
+    server.use(
+      http.get('/user/api-keys', () => HttpResponse.json([ownKey])),
+      http.get('/user/models', () => HttpResponse.json(models)),
+      http.patch('/user/api-keys/31', async ({ request }) => {
+        patchBody = await request.json()
+        return HttpResponse.json({ ...ownKey, name: '个人调用 v2' })
+      }),
+      http.post('/user/api-keys/31/rotate', () => {
+        rotateCalls += 1
+        return HttpResponse.json(
+          {
+            ...ownKey,
+            id: 41,
+            name: '个人调用 v2',
+            key_prefix: 'sk-gw-newown',
+            key: 'sk-gw-rotated-user-once',
+          },
+          { status: 201 },
+        )
+      }),
+      http.delete('/user/api-keys/41', () => {
+        deleteCalls += 1
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({} as MessageBoxData)
+    const wrapper = mount(ApiKeysView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="edit-api-key-31"]').trigger('click')
+    await wrapper.get('[data-test="api-key-name"]').setValue('个人调用 v2')
+    await wrapper.get('[data-test="api-key-submit"]').trigger('click')
+    await flushPromises()
+    expect(patchBody).toEqual({ name: '个人调用 v2' })
+    expect(wrapper.get('[data-test="api-key-row-31"]').text()).toContain('个人调用 v2')
+
+    await wrapper.get('[data-test="rotate-api-key-31"]').trigger('click')
+    await flushPromises()
+    expect(rotateCalls).toBe(1)
+    expect(wrapper.text()).toContain('sk-gw-rotated-user-once')
+    await wrapper.get('[data-test="secret-acknowledged"] input').setValue(true)
+    await wrapper.get('[data-test="secret-confirm-close"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-test="delete-api-key-41"]').trigger('click')
+    await flushPromises()
+    expect(deleteCalls).toBe(1)
+    expect(wrapper.find('[data-test="api-key-row-41"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('仅在提供 userId 时序列化精确的 owner filter', async () => {

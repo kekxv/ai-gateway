@@ -29,13 +29,18 @@ import 'element-plus/theme-chalk/el-tag.css'
 
 import {
   createApiKey,
+  createOwnApiKey,
   deleteApiKey,
+  deleteOwnApiKey,
   listApiKeys,
+  listOwnApiKeys,
   rotateApiKey,
+  rotateOwnApiKey,
   updateApiKey,
+  updateOwnApiKey,
 } from '@/api/apiKeys'
 import { ApiError } from '@/api/client'
-import { listModels } from '@/api/models'
+import { listAvailableModels, listModels } from '@/api/models'
 import { listProviders } from '@/api/providers'
 import type {
   ApiKeyCreate,
@@ -44,18 +49,23 @@ import type {
   ApiKeyUpdate,
   ModelResponse,
   ProviderResponse,
+  SelfApiKeyCreate,
+  SelfApiKeyScope,
+  SelfApiKeyUpdate,
   UserResponse,
 } from '@/api/types'
 import { listUsers } from '@/api/users'
 import ApiKeyFormDrawer from '@/components/api-keys/ApiKeyFormDrawer.vue'
 import SecretResultDialog from '@/components/api-keys/SecretResultDialog.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
+import { useAuthStore } from '@/stores/auth'
 import { formatDateTime } from '@/utils/format'
 
 type NoticeType = 'success' | 'warning' | 'error'
 type KeyOperation = 'edit' | 'rotate' | 'delete'
 
 const apiKeys = ref<ApiKeyResponse[]>([])
+const auth = useAuthStore()
 const users = ref<UserResponse[]>([])
 const providers = ref<ProviderResponse[]>([])
 const models = ref<ModelResponse[]>([])
@@ -309,9 +319,11 @@ function stopTestChat(): void {
   testChatController?.abort()
 }
 
-const ownerEmails = computed(
-  () => new Map(users.value.map((user) => [user.id, user.email] as const)),
-)
+const ownerEmails = computed(() => {
+  const entries = users.value.map((user) => [user.id, user.email] as const)
+  if (auth.user !== null) entries.push([auth.user.id, auth.user.email] as const)
+  return new Map(entries)
+})
 const filteredApiKeys = computed(() => {
   const query = searchText.value.trim().toLocaleLowerCase('zh-CN')
   if (query === '') return apiKeys.value
@@ -342,6 +354,19 @@ async function load(): Promise<void> {
   const startingRevision = stateRevision
   loading.value = apiKeys.value.length === 0
   try {
+    if (!auth.isAdmin) {
+      const [loadedKeys, loadedModels] = await Promise.all([
+        listOwnApiKeys(controller.signal),
+        listAvailableModels(controller.signal),
+      ])
+      if (!isCurrentLoad(controller, generation, startingRevision)) return
+      apiKeys.value = loadedKeys.filter((apiKey) => !deletedIds.has(apiKey.id))
+      users.value = []
+      providers.value = []
+      models.value = loadedModels
+      loadError.value = ''
+      return
+    }
     const [loadedKeys, loadedUsers, loadedProviders, loadedModels] = await Promise.all([
       listApiKeys(undefined, controller.signal),
       listUsers(controller.signal),
@@ -359,6 +384,33 @@ async function load(): Promise<void> {
     loadError.value = errorText(error, '接口密钥列表加载失败')
   } finally {
     if (isCurrentLoadRequest(controller, generation)) loading.value = false
+  }
+}
+
+function selfScope(scope: ApiKeyScope): SelfApiKeyScope {
+  if (scope === 'all' || scope === 'models') return scope
+  throw new Error('普通用户不能创建供应商作用域的密钥')
+}
+
+function toSelfCreate(payload: ApiKeyCreate): SelfApiKeyCreate {
+  return {
+    name: payload.name,
+    ...(payload.scope === undefined ? {} : { scope: selfScope(payload.scope) }),
+    ...(payload.is_active === undefined ? {} : { is_active: payload.is_active }),
+    ...(payload.expires_at === undefined ? {} : { expires_at: payload.expires_at }),
+    ...(payload.model_ids === undefined ? {} : { model_ids: payload.model_ids }),
+  }
+}
+
+function toSelfUpdate(payload: ApiKeyUpdate): SelfApiKeyUpdate {
+  return {
+    ...(payload.name === undefined ? {} : { name: payload.name }),
+    ...(payload.scope === undefined
+      ? {}
+      : { scope: payload.scope === null ? null : selfScope(payload.scope) }),
+    ...(payload.is_active === undefined ? {} : { is_active: payload.is_active }),
+    ...(payload.expires_at === undefined ? {} : { expires_at: payload.expires_at }),
+    ...(payload.model_ids === undefined ? {} : { model_ids: payload.model_ids }),
   }
 }
 
@@ -510,7 +562,10 @@ async function saveApiKey(payload: ApiKeyCreate | ApiKeyUpdate): Promise<void> {
   let keepSecretLifecycleForDialog = false
   try {
     if (isCreate) {
-      const created = await createApiKey(payload as ApiKeyCreate, controller.signal)
+      const createPayload = payload as ApiKeyCreate
+      const created = auth.isAdmin
+        ? await createApiKey(createPayload, controller.signal)
+        : await createOwnApiKey(toSelfCreate(createPayload), controller.signal)
       if (!isCurrentSave(controller, token, session, apiKeyId)) return
       const { key, ...metadata } = created
       replaceApiKey(metadata)
@@ -523,7 +578,10 @@ async function saveApiKey(payload: ApiKeyCreate | ApiKeyUpdate): Promise<void> {
       keepSecretLifecycleForDialog = true
       notice.value = { type: 'success', text: '接口密钥已创建，请立即安全保存' }
     } else {
-      const updated = await updateApiKey(apiKeyId, payload, controller.signal)
+      const updatePayload = payload
+      const updated = auth.isAdmin
+        ? await updateApiKey(apiKeyId, updatePayload, controller.signal)
+        : await updateOwnApiKey(apiKeyId, toSelfUpdate(updatePayload), controller.signal)
       if (!isCurrentSave(controller, token, session, apiKeyId) || updated.id !== apiKeyId) return
       replaceApiKey(updated)
       formSession += 1
@@ -587,7 +645,9 @@ async function rotate(apiKey: ApiKeyResponse): Promise<void> {
 
   let keepSecretLifecycleForDialog = false
   try {
-    const rotated = await rotateApiKey(apiKey.id, controller.signal)
+    const rotated = auth.isAdmin
+      ? await rotateApiKey(apiKey.id, controller.signal)
+      : await rotateOwnApiKey(apiKey.id, controller.signal)
     if (!isCurrentOperation(controller, apiKey.id, 'rotate')) return
     const { key, ...metadata } = rotated
     replaceRotatedApiKey(apiKey.id, metadata)
@@ -637,7 +697,8 @@ async function remove(apiKey: ApiKeyResponse): Promise<void> {
   }
 
   try {
-    await deleteApiKey(apiKey.id, controller.signal)
+    if (auth.isAdmin) await deleteApiKey(apiKey.id, controller.signal)
+    else await deleteOwnApiKey(apiKey.id, controller.signal)
     if (!isCurrentOperation(controller, apiKey.id, 'delete')) return
     stateRevision += 1
     deletedIds.add(apiKey.id)
@@ -854,7 +915,7 @@ onBeforeUnmount(() => {
         <table class="key-table">
           <thead>
             <tr>
-              <th>名称</th><th>所有者</th><th>密钥</th><th>作用域</th><th>状态</th>
+              <th>名称</th><th v-if="auth.isAdmin" data-test="api-key-owner-column">所有者</th><th>密钥</th><th>作用域</th><th>状态</th>
               <th>过期时间</th><th>最后使用</th><th>创建时间</th><th>操作</th>
             </tr>
           </thead>
@@ -865,7 +926,7 @@ onBeforeUnmount(() => {
               :data-test="`api-key-row-${String(apiKey.id)}`"
             >
               <td><strong>{{ apiKey.name }}</strong></td>
-              <td>{{ ownerEmail(apiKey.user_id) }}</td>
+              <td v-if="auth.isAdmin">{{ ownerEmail(apiKey.user_id) }}</td>
               <td class="prefix-cell">{{ apiKey.key_prefix.slice(0, 8) }}****</td>
               <td><ElTag effect="plain">{{ scopeLabels[apiKey.scope] }}</ElTag></td>
               <td>
@@ -913,6 +974,8 @@ onBeforeUnmount(() => {
       :providers="providers"
       :models="models"
       :submitting="formSubmitting"
+      :fixed-owner="auth.isAdmin || auth.user === null ? undefined : { id: auth.user.id, email: auth.user.email }"
+      :allow-provider-scopes="auth.isAdmin"
       @submit="saveApiKey"
       @update:model-value="setFormOpen"
     />

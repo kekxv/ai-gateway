@@ -26,14 +26,18 @@ import type {
   UserResponse,
 } from '@/api/types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: boolean
   apiKey: ApiKeyResponse | null
   users: UserResponse[]
   providers: ProviderResponse[]
   models: ModelResponse[]
   submitting: boolean
-}>()
+  fixedOwner?: { id: number; email: string } | undefined
+  allowProviderScopes?: boolean
+}>(), {
+  allowProviderScopes: true,
+})
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
@@ -55,6 +59,7 @@ const modelError = ref('')
 const expiryError = ref('')
 
 const editing = computed(() => props.apiKey !== null)
+const providerScopesAllowed = computed(() => props.allowProviderScopes)
 const title = computed(() => (editing.value ? '编辑接口密钥' : '新建接口密钥'))
 const needsProviders = computed(
   () => scope.value === 'providers' || scope.value === 'providers_and_models',
@@ -72,7 +77,7 @@ function localDateTime(iso: string | null): string {
 }
 
 function clearDraft(): void {
-  ownerId.value = null
+  ownerId.value = props.fixedOwner?.id ?? null
   name.value = ''
   scope.value = 'all'
   isActive.value = true
@@ -93,9 +98,12 @@ function clearErrors(): void {
 
 function resetForm(): void {
   const apiKey = props.apiKey
-  ownerId.value = apiKey?.user_id ?? null
+  ownerId.value = props.fixedOwner?.id ?? apiKey?.user_id ?? null
   name.value = apiKey?.name ?? ''
-  scope.value = apiKey?.scope ?? 'all'
+  scope.value =
+    !providerScopesAllowed.value && apiKey?.scope !== 'all' && apiKey?.scope !== 'models'
+      ? 'all'
+      : (apiKey?.scope ?? 'all')
   isActive.value = apiKey?.is_active ?? true
   expiry.value = localDateTime(apiKey?.expires_at ?? null)
   expiryDirty.value = false
@@ -263,7 +271,13 @@ function submitForm(): void {
     </template>
 
     <ElForm :disabled="submitting" label-position="top" @submit.prevent="submitForm">
-      <ElFormItem label="所有者" for="api-key-owner" :error="ownerError" required>
+      <ElFormItem
+        v-if="fixedOwner === undefined"
+        label="所有者"
+        for="api-key-owner"
+        :error="ownerError"
+        required
+      >
         <select
           id="api-key-owner"
           v-model="ownerId"
@@ -275,6 +289,9 @@ function submitForm(): void {
           <option v-for="user in users" :key="user.id" :value="user.id">{{ user.email }}</option>
         </select>
       </ElFormItem>
+      <ElFormItem v-else label="所有者">
+        <p data-test="api-key-owner-summary" class="fixed-owner">{{ fixedOwner.email }}</p>
+      </ElFormItem>
 
       <ElFormItem label="名称" :error="nameError">
         <ElInput v-model="name" data-test="api-key-name" maxlength="255" autocomplete="off" />
@@ -283,9 +300,9 @@ function submitForm(): void {
       <ElFormItem label="作用域">
         <select v-model="scope" data-test="api-key-scope" class="field-select" :disabled="submitting">
           <option value="all">全部供应商与模型</option>
-          <option value="providers">指定供应商</option>
+          <option v-if="providerScopesAllowed" value="providers">指定供应商</option>
           <option value="models">指定模型</option>
-          <option value="providers_and_models">指定供应商和模型</option>
+          <option v-if="providerScopesAllowed" value="providers_and_models">指定供应商和模型</option>
         </select>
       </ElFormItem>
 

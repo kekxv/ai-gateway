@@ -327,6 +327,24 @@ export interface ApiKeyUpdate {
   model_ids?: number[] | null
 }
 
+export type SelfApiKeyScope = Extract<ApiKeyScope, 'all' | 'models'>
+
+export interface SelfApiKeyCreate {
+  name: string
+  scope?: SelfApiKeyScope
+  is_active?: boolean
+  expires_at?: string | null
+  model_ids?: number[]
+}
+
+export interface SelfApiKeyUpdate {
+  name?: string | null
+  scope?: SelfApiKeyScope | null
+  is_active?: boolean | null
+  expires_at?: string | null
+  model_ids?: number[] | null
+}
+
 export interface ApiKeyResponse {
   id: number
   user_id: number
