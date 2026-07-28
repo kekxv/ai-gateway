@@ -18,7 +18,8 @@ Lean AI Gateway 是一个专注于多 AI 提供商的网关，支持 OpenAI、Cl
 - 支持规范模型、模型别名、精确的每百万 Token 价格和提供商专用 `upstream_model`。模型目录会返回别名，
   但转发到上游前始终会改写为提供商的原始模型名。
 - API Key 独立管理，可授权全部资源、指定提供商、指定模型，或同时限定提供商与模型集合。
-- JWT access/refresh 认证、管理员权限控制，以及 TOTP 首次绑定和安全换绑。
+- 支持公开注册并确保首位用户唯一成为管理员，同时提供 JWT access/refresh 认证、角色权限控制、
+  修改密码，以及 TOTP 首次绑定、安全换绑和关闭。
 - 基于 `Decimal` 的精确余额、预留、结算、调账和不可变账本。
 - 脱敏请求日志、后端游标分页，以及 GZIP 压缩的请求/响应详情。
 - 支持供应商和模型级别的价格倍率配置，灵活调整计费价格。
@@ -81,16 +82,15 @@ Completions 必须选择 OpenAI 路由，并分别转发到 `/v1/embeddings` 和
 ## 一条命令启动 Docker 示例
 
 如需快速进行一次性本地体验，[`example/`](example/) 目录会构建网关、启动 MySQL、执行数据库迁移、
-创建本地管理员并提供管理控制台：
+提供不包含内置账户凭据的管理控制台：
 
 ```bash
 cd example
 docker compose up
 ```
 
-打开 <http://127.0.0.1:8000/console/>，使用 `admin@example.com` / `change-me-now`，并输入演示
-TOTP 密钥 `JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP` 当前生成的验证码。这些固定凭据和密钥仅限
-本地体验；覆盖配置和清理方法见[示例说明](example/README.md)。
+打开 <http://127.0.0.1:8000/console/register> 注册第一个账户；该账户会成为管理员，之后注册的
+账户为普通用户。初始化和清理方法见[示例说明](example/README.md)。
 
 ## 本地启动
 
@@ -117,9 +117,11 @@ MySQL 仅发布在 `127.0.0.1:3306`；不会暴露到外部主机接口。根目
 docker compose up -d mysql
 uv sync --frozen
 uv run alembic upgrade head
-uv run python scripts/create_admin.py --email admin@example.com
 uv run uvicorn ai_gateway.main:app --host 127.0.0.1 --port 8000 --reload
 ```
+
+打开 <http://127.0.0.1:8000/console/register> 创建第一个管理员。自动化部署仍可选择使用
+`scripts/create_admin.py` 进行非交互式初始化。
 
 检查就绪状态：
 
@@ -127,11 +129,12 @@ uv run uvicorn ai_gateway.main:app --host 127.0.0.1 --port 8000 --reload
 curl --fail http://127.0.0.1:8000/health
 ```
 
-`/health` 仅在 MySQL 可达时返回 `200 {"status":"ok"}`。如果数据库未迁移到 `0004` 版本，启动也会拒绝。
+`/health` 仅在 MySQL 可达时返回 `200 {"status":"ok"}`。如果数据库未迁移到 `0010` 版本，启动也会拒绝。
 
 ### 管理控制台开发
 
-在迁移数据库并创建管理员后，分别在两个终端运行后端和 Vite 开发服务器：
+迁移数据库后，分别在两个终端运行后端和 Vite 开发服务器；若尚无用户，请在
+`/console/register` 创建第一个管理员：
 
 ```bash
 # 终端 1：后端
@@ -153,14 +156,14 @@ uv run uvicorn ai_gateway.main:app --host 127.0.0.1 --port 8000
 
 公共模型网关仍在 `8000` 端口；编译后的控制台使用同源，不需要单独的生产 Node 进程。`5173` 端口仅用于 Vite 开发服务器。
 
-控制台仅允许管理员访问，提供以下功能：
+所有已登录用户都可访问账户安全设置。管理员还可使用以下功能：
 
 - 用量、成本、健康状态和资源统计仪表盘；
 - 提供商协议、凭据、模型同步、模型、别名和加权路由管理；
 - 用户、余额、不可变账本和带作用域的 API Key 管理；
 - 一次性 API Key 展示，以及明确的复制/下载确认流程；
 - 请求日志筛选、后端游标翻页和脱敏 JSON 详情查看；
-- TOTP 首次绑定和经过当前验证码校验的安全换绑。
+- 修改密码，以及 TOTP 首次绑定、经过校验的安全换绑和关闭。
 
 JWT access 和 refresh token 仅保存在 `sessionStorage`，不会写入 `localStorage`。提供商凭据、
 TOTP 验证码、密码和完整 API Key 不会持久化，也不会在一次性流程结束后再次显示。
@@ -188,8 +191,12 @@ uv run python scripts/export_legacy_sqlite_catalog.py /path/to/ai-gateway.db \
 ## Docker 部署
 
 对于容器部署，在 `.env` 中设置 `GATEWAY_ENVIRONMENT=production`，使用非示例的 JWT、Fernet
-和 MySQL 密钥，数据库主机名保持 `compose.yaml` 的覆盖值（`mysql`）。首次启动前可设置以下
-变量来创建第一个管理员；TOTP 密钥可选，但必须为 Base32 且解码后至少 160 bit：
+和 MySQL 密钥，数据库主机名保持 `compose.yaml` 的覆盖值（`mysql`）。三个管理员引导变量均可
+不设置：服务启动后在 `/console/register` 注册第一个账户即可。首个成功提交的注册用户成为管理员，
+之后注册的用户为普通用户。
+
+自动化部署也可在首次启动前设置以下变量，以非交互方式创建管理员；TOTP 密钥可选，但必须为
+Base32 且解码后至少 160 bit：
 
 ```bash
 uv run python -c 'import pyotp; print(pyotp.random_base32())'
@@ -203,8 +210,8 @@ docker compose up -d --build
 docker compose ps
 ```
 
-一次性的 `setup` 服务会等待 MySQL、执行全部迁移，然后创建管理员。三个引导变量全部为空时，
-它会跳过管理员创建；只要配置了任意一项，就必须同时提供邮箱和密码，TOTP 仍为可选。引导值仅在
+一次性的 `setup` 服务会等待 MySQL、执行全部迁移，并可选择创建管理员。三个引导变量全部为空时，
+它会跳过管理员创建，改由注册页完成初始化；只要配置了任意一项，就必须同时提供邮箱和密码，TOTP 仍为可选。引导值仅在
 该邮箱首次创建时生效：后续部署或并发初始化都不会覆盖已有管理员的密码或 TOTP 配置。首次启动成功后，
 请从部署环境删除全部三个引导变量（尤其是密码和 TOTP 密钥）；后续 Compose 重启仍会正常执行迁移并
 启动网关。具体应先从 `.env` 或密钥来源删除三个值，再执行 `docker compose rm -f setup` 删除仍携带
@@ -256,7 +263,7 @@ Node.js 或 npm。镜像默认使用生产模式，因此启动时必须提供�
 
 ## 获取网关 API Key
 
-以管理员身份登录，然后使用管理 API 创建用户、提供商、模型、别名、路由、API Key 和余额调整。`/docs` 的交互式 API 文档列出了所有字段。只有 API Key 创建或轮换响应会包含原始密钥；请立即保存。
+注册或登录管理员账户，然后使用管理 API 创建用户、提供商、模型、别名、路由、API Key 和余额调整。`/docs` 的交互式 API 文档列出了所有字段。只有 API Key 创建或轮换响应会包含原始密钥；请立即保存。
 
 ```bash
 export GATEWAY_URL=http://127.0.0.1:8000
@@ -404,9 +411,10 @@ docker build -t lean-ai-gateway:test .
 docker compose config --quiet
 ```
 
-浏览器 E2E 使用的管理员必须已存在于所选数据库中。E2E 测试套件仅使用 MySQL 和本地回环假提供商；
-它不需要真实的提供商凭据或公共网络访问。测试会创建带唯一名称的资源，按依赖关系逆序删除可安全删除的
-资源，并停用因不可变账本历史而不能删除的用户。
+浏览器 E2E 必须使用已迁移且没有用户的全新应用数据库。首个用例会用 `E2E_ADMIN_EMAIL` 和
+`E2E_ADMIN_PASSWORD` 注册，并验证该账户能进入管理员页面。E2E 测试套件仅使用 MySQL 和本地回环
+假提供商；它不需要真实的提供商凭据或公共网络访问。测试会创建带唯一名称的资源，按依赖关系逆序删除
+可安全删除的资源，并停用因不可变账本历史而不能删除的用户。
 
 ## 更多文档
 

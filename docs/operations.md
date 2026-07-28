@@ -22,11 +22,17 @@
 - The Compose MySQL port is bound only to `127.0.0.1:3306`. Use private networking rather than
   widening that host binding for remote access.
 
-## First administrator bootstrap
+## First administrator initialization
 
-The root Compose deployment's one-shot `setup` service always applies migrations and can create
-the first administrator non-interactively. Supply email and password together; a Base32 TOTP
-secret that decodes to at least 20 bytes (160 bits) is optional:
+The root Compose deployment's one-shot `setup` service always applies migrations. All
+`GATEWAY_BOOTSTRAP_ADMIN_*` variables may be absent. After the gateway starts, open
+`/console/register`; the first committed registration becomes the administrator, while every
+later registration becomes a regular user. Concurrent first registrations are serialized by the
+database, so exactly one receives the administrator role.
+
+For an automated environment, setup can instead create the administrator non-interactively.
+Supply email and password together; a Base32 TOTP secret that decodes to at least 20 bytes
+(160 bits) is optional:
 
 ```bash
 uv run python -c 'import pyotp; print(pyotp.random_base32())'
@@ -37,7 +43,8 @@ GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET=<generated-base32-secret>
 ```
 
 Put the values in the deployment's secret-backed environment and run `docker compose up -d`.
-When all three variables are empty, setup only migrates. A partial configuration fails closed:
+When all three variables are empty, setup only migrates and interactive first registration stays
+available. A partial configuration fails closed:
 whenever any bootstrap value is supplied, both email and password must be non-empty. TOTP is
 enabled only when its variable contains a valid Base32 secret; the value is encrypted with
 `GATEWAY_ENCRYPTION_KEY` before storage and is never printed.
@@ -98,6 +105,8 @@ npm --prefix frontend run dev
 
 Configure a reverse proxy to preserve the origin and forward `/console/`, `/auth/`, and `/admin/`
 to the gateway. The `/auth/` prefix includes `GET /auth/me`; there is no separate `/me/` endpoint.
+It also includes public `POST /auth/register`, so apply request-rate controls without requiring
+authentication on that path.
 Continue forwarding `/v1/` and `/v1beta/` for public client traffic, including WebSocket upgrade
 headers where required. Do not route `/console/*` through a static-server fallback that can
 intercept the API or model-gateway prefixes.

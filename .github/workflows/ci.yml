@@ -103,15 +103,11 @@ jobs:
       - name: Install Chromium
         run: npm exec --prefix frontend -- playwright install --with-deps chromium
 
-      - name: Run administrator browser acceptance tests
+      - name: Run first-registration browser acceptance tests
         run: |
-          export GATEWAY_BOOTSTRAP_PASSWORD="$(openssl rand -hex 24)"
-          trap 'unset GATEWAY_BOOTSTRAP_PASSWORD E2E_ADMIN_EMAIL E2E_ADMIN_PASSWORD' EXIT
-          uv run python scripts/create_admin.py \
-            --email console-e2e@example.com \
-            --password-env GATEWAY_BOOTSTRAP_PASSWORD
+          trap 'unset E2E_ADMIN_EMAIL E2E_ADMIN_PASSWORD' EXIT
           export E2E_ADMIN_EMAIL='console-e2e@example.com'
-          export E2E_ADMIN_PASSWORD="$GATEWAY_BOOTSTRAP_PASSWORD"
+          export E2E_ADMIN_PASSWORD="$(openssl rand -hex 24)"
           npm --prefix frontend run e2e
 
       - name: Validate Compose

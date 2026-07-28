@@ -25,8 +25,9 @@ scale containers horizontally.
   upstream as provider model names.
 - Independently managed API keys scoped to all resources, selected providers, selected models,
   or both provider and model sets.
-- JWT access/refresh authentication, administrator authorization, and TOTP enrollment or
-  replacement.
+- Public registration with an exactly-once first administrator, JWT access/refresh
+  authentication, role-based authorization, password changes, and TOTP enrollment,
+  replacement, or disable.
 - Exact `Decimal` balance accounting, reservations, settlement, adjustments, and an immutable
   ledger.
 - Redacted request logs with cursor pagination and GZIP-compressed request/response details.
@@ -92,17 +93,16 @@ Gemini. See [protocol compatibility](docs/protocol-compatibility.md) for portabl
 ## One-command Docker example
 
 For a disposable local evaluation, the [`example/`](example/) directory builds the gateway,
-starts MySQL, applies migrations, creates a local administrator, and serves the console:
+starts MySQL, applies migrations, and serves the console without built-in account credentials:
 
 ```bash
 cd example
 docker compose up
 ```
 
-Open <http://127.0.0.1:8000/console/> and sign in with `admin@example.com` / `change-me-now` plus
-the current code for demo TOTP secret `JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP`. These fixed
-credentials and secrets are strictly for local evaluation; see the
-[example README](example/README.md) for overrides and cleanup.
+Open <http://127.0.0.1:8000/console/register> and register the first account, which becomes the
+administrator. Later registrations are regular users. See the [example README](example/README.md)
+for the initialization flow and cleanup.
 
 ## Local startup
 
@@ -140,9 +140,11 @@ Start MySQL, install the frozen dependency set, and migrate before starting the 
 docker compose up -d mysql
 uv sync --frozen
 uv run alembic upgrade head
-uv run python scripts/create_admin.py --email admin@example.com
 uv run uvicorn ai_gateway.main:app --host 127.0.0.1 --port 8000 --reload
 ```
+
+Open <http://127.0.0.1:8000/console/register> to create the first administrator. For automated
+deployments, `scripts/create_admin.py` remains available as the optional non-interactive path.
 
 Check readiness:
 
@@ -151,12 +153,12 @@ curl --fail http://127.0.0.1:8000/health
 ```
 
 `/health` returns `200 {"status":"ok"}` only when MySQL is reachable. Startup also refuses a
-database that is not at migration head `0004`.
+database that is not at migration head `0010`.
 
 ### Admin console development
 
-Run the backend and Vite development server in separate terminals after migrating the database
-and creating an administrator:
+Run the backend and Vite development server in separate terminals after migrating the database.
+If the database has no users, create the first administrator at `/console/register`:
 
 ```bash
 # terminal 1: backend
@@ -181,14 +183,14 @@ The public model gateway remains on port `8000`; the compiled console uses the s
 does not require a separate production Node process. Port `5173` is only the Vite development
 server.
 
-The console is administrator-only and provides:
+All authenticated users can access account security settings. Administrator accounts also have:
 
 - dashboard usage, cost, health, and resource summaries;
 - provider protocols, credentials, model synchronization, models, aliases, and weighted routes;
 - users, balances, immutable ledger entries, and scoped API keys;
 - one-time API-key display with explicit copy/download acknowledgement;
 - request-log filters, backend cursor navigation, and redacted JSON detail inspection;
-- initial TOTP enrollment and verified TOTP replacement.
+- password changes plus TOTP enrollment, verified replacement, and verified disable.
 
 JWT access and refresh tokens are stored in `sessionStorage`, not `localStorage`. Provider
 credentials, TOTP codes, passwords, and full API keys are never persisted or redisplayed after
@@ -220,8 +222,13 @@ secret handling, and rollback limitations.
 
 For container deployment, set `GATEWAY_ENVIRONMENT=production` in `.env`, use non-example JWT,
 Fernet, and MySQL secrets, and leave the database hostname to the `compose.yaml` override
-(`mysql`). To create the first administrator, set the following values before the first start.
-The TOTP secret is optional and must be Base32 with at least 160 bits of decoded entropy:
+(`mysql`). All administrator bootstrap variables may remain absent: after startup, register the
+first account at `/console/register`. The first committed registration becomes administrator and
+later registrations become regular users.
+
+For automated deployments, optionally set the following values before the first start to create
+the administrator non-interactively. The TOTP secret is optional and must be Base32 with at least
+160 bits of decoded entropy:
 
 ```bash
 uv run python -c 'import pyotp; print(pyotp.random_base32())'
@@ -235,8 +242,9 @@ docker compose up -d --build
 docker compose ps
 ```
 
-The one-shot `setup` service waits for MySQL, applies all migrations, and then creates the
-administrator. If all three bootstrap variables are empty it skips administrator creation. If
+The one-shot `setup` service waits for MySQL, applies all migrations, and can then create the
+administrator. If all three bootstrap variables are empty it skips administrator creation and
+the registration page remains the initialization path. If
 any is configured, email and password are required while TOTP remains optional. Bootstrap values
 only affect a newly created email: an existing administrator's password and TOTP configuration
 are never overwritten, including on later deployments or concurrent setup runs. After a
@@ -296,7 +304,7 @@ starting the new application version.
 
 ## Obtain a gateway API key
 
-Login as the administrator, then use the admin APIs to create a user, provider, model, alias,
+Register or log in as the administrator, then use the admin APIs to create a user, provider, model, alias,
 route, API key, and balance adjustment. The interactive API schema at `/docs` lists every field.
 Only the API-key create or rotate response contains the raw key; store it immediately.
 
@@ -452,10 +460,12 @@ docker build -t lean-ai-gateway:test .
 docker compose config --quiet
 ```
 
-The browser E2E account must already exist in the selected database. The E2E suite uses only
-MySQL and loopback fake providers; it never requires real provider credentials or public network
-access. It creates uniquely named resources, removes disposable resources in reverse dependency
-order, and disables users whose immutable ledger history prevents deletion.
+Run the browser E2E suite against a freshly migrated application database with no users. Its first
+test registers `E2E_ADMIN_EMAIL` with `E2E_ADMIN_PASSWORD` and verifies that the account reaches
+administrator pages. The suite uses only MySQL and loopback fake providers; it never requires real
+provider credentials or public network access. It creates uniquely named resources, removes
+disposable resources in reverse dependency order, and disables users whose immutable ledger
+history prevents deletion.
 
 ## Further documentation
 

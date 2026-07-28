@@ -45,6 +45,16 @@ async function login(page: Page): Promise<void> {
   await expect(page.getByRole('heading', { level: 1, name: '控制台概览' })).toBeVisible()
 }
 
+async function registerFirstAdministrator(page: Page): Promise<void> {
+  const credentials = requireCredentials()
+  await page.goto('register')
+  await page.getByTestId('register-email').fill(credentials.email)
+  await page.getByTestId('register-password').fill(credentials.password)
+  await page.getByTestId('register-password-confirm').fill(credentials.password)
+  await page.getByTestId('register-submit').click()
+  await expect(page.getByRole('heading', { level: 1, name: '控制台概览' })).toBeVisible()
+}
+
 async function numericId(locator: Locator, prefix: string): Promise<number> {
   const attribute = await locator.getAttribute('data-test')
   if (attribute === null || !attribute.startsWith(prefix)) {
@@ -310,12 +320,16 @@ async function expectNoSeriousAxeViolations(page: Page, pageName: string): Promi
   expect(violations, `${pageName} has critical or serious accessibility violations`).toEqual([])
 }
 
-test('login and administrator pages have no critical or serious Axe violations', async ({ page }) => {
+test('registration, login, and administrator pages have no critical or serious Axe violations', async ({ page }) => {
   await page.goto('login')
-  await expect(page.getByRole('heading', { level: 1, name: '管理控制台登录' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: '账户登录' })).toBeVisible()
   await expectNoSeriousAxeViolations(page, 'login')
 
-  await login(page)
+  await page.goto('register')
+  await expect(page.getByRole('heading', { level: 1, name: '创建账户' })).toBeVisible()
+  await expectNoSeriousAxeViolations(page, 'registration')
+
+  await registerFirstAdministrator(page)
   const pages = [
     ['', '控制台概览', '请求与费用趋势'],
     ['providers', '供应商管理', 'create-provider'],

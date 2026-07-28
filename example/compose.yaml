@@ -47,30 +47,13 @@ services:
 
   setup:
     <<: *gateway-service
-    environment:
-      <<: *gateway-environment
-      GATEWAY_BOOTSTRAP_ADMIN_EMAIL: ${GATEWAY_BOOTSTRAP_ADMIN_EMAIL-}
-      GATEWAY_BOOTSTRAP_ADMIN_PASSWORD: ${GATEWAY_BOOTSTRAP_ADMIN_PASSWORD-}
-      GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET: ${GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET-}
-      GATEWAY_BOOTSTRAP_ADMIN_OVERRIDE: >-
-        ${GATEWAY_BOOTSTRAP_ADMIN_EMAIL+x}${GATEWAY_BOOTSTRAP_ADMIN_PASSWORD+x}${GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET+x}
     depends_on:
       mysql:
         condition: service_healthy
     command:
       - /bin/sh
       - -ec
-      - |
-        alembic upgrade head
-        if [ -z "$$GATEWAY_BOOTSTRAP_ADMIN_OVERRIDE" ]; then
-          export GATEWAY_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
-          export GATEWAY_BOOTSTRAP_ADMIN_PASSWORD=change-me-now
-          export GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP
-        fi
-        python scripts/create_admin.py \
-          --email-env GATEWAY_BOOTSTRAP_ADMIN_EMAIL \
-          --password-env GATEWAY_BOOTSTRAP_ADMIN_PASSWORD \
-          --totp-secret-env GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET
+      - alembic upgrade head
     restart: "no"
 
   gateway:
