@@ -1,7 +1,7 @@
 from typing import Annotated
 
 import pyotp
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,16 +10,20 @@ from ai_gateway.auth.schemas import (
     AccessToken,
     CurrentUserResponse,
     LoginRequest,
+    PasswordChangeRequest,
     RefreshRequest,
     RegisterRequest,
     TokenPair,
     TotpConfirmRequest,
     TotpConfirmResponse,
+    TotpDisableRequest,
     TotpSetupRequest,
     TotpSetupResponse,
 )
 from ai_gateway.auth.service import (
     authenticate_user,
+    change_password,
+    disable_totp,
     raise_auth_error,
     refresh_access_token,
     register_user,
@@ -98,6 +102,38 @@ async def get_me(user: CurrentUser) -> CurrentUserResponse:
         created_at=user.created_at,
         updated_at=user.updated_at,
     )
+
+
+@router.post("/password", status_code=status.HTTP_204_NO_CONTENT)
+async def update_password(
+    payload: PasswordChangeRequest,
+    user: CurrentUser,
+    session: Session,
+) -> Response:
+    await change_password(
+        session=session,
+        user_id=user.id,
+        current_password=payload.current_password.get_secret_value(),
+        new_password=payload.new_password.get_secret_value(),
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/totp/disable", response_model=TotpConfirmResponse)
+async def remove_totp(
+    payload: TotpDisableRequest,
+    user: CurrentUser,
+    session: Session,
+    settings: AppSettings,
+) -> TotpConfirmResponse:
+    await disable_totp(
+        session=session,
+        user_id=user.id,
+        current_password=payload.current_password.get_secret_value(),
+        code=payload.code.get_secret_value(),
+        settings=settings,
+    )
+    return TotpConfirmResponse(totp_enabled=False)
 
 
 @router.post("/totp/setup", response_model=TotpSetupResponse)

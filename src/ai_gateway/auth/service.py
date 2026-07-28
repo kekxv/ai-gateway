@@ -56,6 +56,78 @@ async def register_user(
     return user
 
 
+async def change_password(
+    *,
+    session: AsyncSession,
+    user_id: int,
+    current_password: str,
+    new_password: str,
+) -> None:
+    user = await _locked_user(session=session, user_id=user_id)
+    if not verify_password(current_password, user.password_hash):
+        raise_auth_error(
+            status.HTTP_401_UNAUTHORIZED,
+            "invalid_credentials",
+            "Invalid current password",
+            authenticate=True,
+        )
+    user.password_hash = hash_password(new_password)
+    await session.commit()
+
+
+async def disable_totp(
+    *,
+    session: AsyncSession,
+    user_id: int,
+    current_password: str,
+    code: str,
+    settings: Settings,
+) -> None:
+    user = await _locked_user(session=session, user_id=user_id)
+    if not user.totp_enabled or user.totp_secret_encrypted is None:
+        raise_auth_error(
+            status.HTTP_409_CONFLICT,
+            "totp_not_enabled",
+            "TOTP is not enabled",
+        )
+    if not verify_password(current_password, user.password_hash):
+        raise_auth_error(
+            status.HTTP_401_UNAUTHORIZED,
+            "invalid_credentials",
+            "Invalid current password",
+            authenticate=True,
+        )
+    secret = decrypt_secret(user.totp_secret_encrypted, settings=settings)
+    if not pyotp.TOTP(secret).verify(code, valid_window=1):
+        raise_auth_error(
+            status.HTTP_401_UNAUTHORIZED,
+            "invalid_totp",
+            "Invalid TOTP code",
+            authenticate=True,
+        )
+    user.totp_enabled = False
+    user.totp_secret_encrypted = None
+    user.pending_totp_secret_encrypted = None
+    await session.commit()
+
+
+async def _locked_user(*, session: AsyncSession, user_id: int) -> User:
+    user = await session.scalar(
+        select(User)
+        .where(User.id == user_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if user is None:
+        raise_auth_error(
+            status.HTTP_401_UNAUTHORIZED,
+            "invalid_token",
+            "Invalid or expired token",
+            authenticate=True,
+        )
+    return user
+
+
 def raise_auth_error(
     status_code: int,
     code: str,

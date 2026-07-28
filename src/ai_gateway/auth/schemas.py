@@ -10,6 +10,20 @@ class RegisterRequest(BaseModel):
     password: SecretStr = Field(min_length=8, max_length=1024)
 
 
+class PasswordChangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: SecretStr
+    new_password: SecretStr = Field(min_length=8, max_length=1024)
+
+
+class TotpDisableRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: SecretStr
+    code: SecretStr = Field(min_length=6, max_length=6)
+
+
 class LoginRequest(BaseModel):
     email: str
     password: SecretStr
