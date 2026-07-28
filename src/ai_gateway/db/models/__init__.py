@@ -1,7 +1,13 @@
 from ai_gateway.db.models.audit import ConfigAuditLog, RequestLog, RequestLogDetail
 from ai_gateway.db.models.billing import Account, LedgerEntry
 from ai_gateway.db.models.catalog import Model, ModelAlias, ModelRoute, Provider, ProviderProtocol
-from ai_gateway.db.models.identity import ApiKey, ApiKeyModel, ApiKeyProvider, User
+from ai_gateway.db.models.identity import (
+    ApiKey,
+    ApiKeyModel,
+    ApiKeyProvider,
+    RegistrationLock,
+    User,
+)
 
 __all__ = [
     "Account",
@@ -15,6 +21,7 @@ __all__ = [
     "ModelRoute",
     "Provider",
     "ProviderProtocol",
+    "RegistrationLock",
     "RequestLog",
     "RequestLogDetail",
     "User",

@@ -53,6 +53,12 @@ class User(Base):
     )
 
 
+class RegistrationLock(Base):
+    __tablename__ = "registration_locks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+
 class ApiKey(Base):
     __tablename__ = "api_keys"
 

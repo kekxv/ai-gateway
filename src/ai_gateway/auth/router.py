@@ -11,13 +11,19 @@ from ai_gateway.auth.schemas import (
     CurrentUserResponse,
     LoginRequest,
     RefreshRequest,
+    RegisterRequest,
     TokenPair,
     TotpConfirmRequest,
     TotpConfirmResponse,
     TotpSetupRequest,
     TotpSetupResponse,
 )
-from ai_gateway.auth.service import authenticate_user, raise_auth_error, refresh_access_token
+from ai_gateway.auth.service import (
+    authenticate_user,
+    raise_auth_error,
+    refresh_access_token,
+    register_user,
+)
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.security import (
     decrypt_secret,
@@ -33,6 +39,23 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 Session = Annotated[AsyncSession, Depends(get_session)]
 AppSettings = Annotated[Settings, Depends(get_settings)]
 CurrentUser = Annotated[User, Depends(current_user)]
+
+
+@router.post("/register", response_model=TokenPair, status_code=status.HTTP_201_CREATED)
+async def register(
+    payload: RegisterRequest,
+    session: Session,
+    settings: AppSettings,
+) -> TokenPair:
+    user = await register_user(
+        session=session,
+        email=payload.email,
+        password=payload.password.get_secret_value(),
+    )
+    return TokenPair(
+        access_token=issue_access_token(user_id=user.id, settings=settings),
+        refresh_token=issue_refresh_token(user_id=user.id, settings=settings),
+    )
 
 
 @router.post("/login", response_model=TokenPair)

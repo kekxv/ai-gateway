@@ -4,6 +4,8 @@ import pyotp
 from fastapi import HTTPException, status
 from jwt import InvalidTokenError
 from sqlalchemy import select
+from sqlalchemy.dialects.mysql import insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.core.config import Settings
@@ -11,15 +13,47 @@ from ai_gateway.core.security import (
     InvalidTokenTypeError,
     decode_token,
     decrypt_secret,
+    hash_password,
     issue_access_token,
     verify_password,
 )
-from ai_gateway.db.models import User
+from ai_gateway.db.models import Account, RegistrationLock, User
 
 _DUMMY_PASSWORD_HASH = (
     "$argon2id$v=19$m=65536,t=3,p=4$Mzg0czBoazgzYm9Ba0lsTg$"
     "GqvI/2Blf7Y7Kq4hTZQONhxCM7Ez3cm66GaR5eWvqJY"
 )
+
+
+async def register_user(
+    *,
+    session: AsyncSession,
+    email: str,
+    password: str,
+) -> User:
+    normalized_email = email.strip().lower()
+    await session.execute(
+        insert(RegistrationLock).values(id=1).on_duplicate_key_update(id=RegistrationLock.id)
+    )
+    await session.scalar(select(RegistrationLock).where(RegistrationLock.id == 1).with_for_update())
+    existing_user_id = await session.scalar(select(User.id).limit(1))
+    user = User(
+        email=normalized_email,
+        password_hash=hash_password(password),
+        role="admin" if existing_user_id is None else "user",
+        account=Account(),
+    )
+    session.add(user)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise_auth_error(
+            status.HTTP_409_CONFLICT,
+            "email_exists",
+            "A user with this email already exists",
+        )
+    return user
 
 
 def raise_auth_error(

@@ -4,6 +4,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
+from importlib import import_module
 from uuid import uuid4
 
 import httpx
@@ -13,6 +14,7 @@ from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import joinedload
 
 from ai_gateway.admin.api_keys import rotate_api_key
 from ai_gateway.admin.model_sync import sync_provider_models
@@ -40,6 +42,53 @@ class _HttpClientFactory:
 
     async def client_for(self, _: str | httpx.URL) -> httpx.AsyncClient:
         return self.client
+
+
+async def test_concurrent_first_registrations_create_exactly_one_admin(
+    test_engine: AsyncEngine,
+) -> None:
+    auth_service = import_module("ai_gateway.auth.service")
+    register_user = getattr(auth_service, "register_user", None)
+    assert callable(register_user), "auth.service.register_user must be implemented"
+
+    sessions = async_sessionmaker(test_engine, expire_on_commit=False)
+    suffix = uuid4().hex
+    emails = [
+        f"first-registration-a-{suffix}@example.com",
+        f"first-registration-b-{suffix}@example.com",
+    ]
+
+    async def register_once(email: str) -> User:
+        async with sessions() as session:
+            return await register_user(
+                session=session,
+                email=email,
+                password="concurrent-registration-password",
+            )
+
+    user_ids: list[int] = []
+    try:
+        first, second = await asyncio.gather(*(register_once(email) for email in emails))
+        user_ids = [first.id, second.id]
+
+        async with sessions() as check:
+            users = list(
+                await check.scalars(
+                    select(User).where(User.id.in_(user_ids)).options(joinedload(User.account))
+                )
+            )
+
+        assert len(users) == 2
+        assert {user.email for user in users} == set(emails)
+        assert sorted(user.role for user in users) == ["admin", "user"]
+        assert all(user.account is not None for user in users)
+    finally:
+        if user_ids:
+            async with sessions() as cleanup:
+                users = await cleanup.scalars(select(User).where(User.id.in_(user_ids)))
+                for user in users:
+                    await cleanup.delete(user)
+                await cleanup.commit()
 
 
 def _settings() -> Settings:

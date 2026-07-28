@@ -52,7 +52,7 @@ from ai_gateway.gateway.openai import router as openai_gateway_router
 from ai_gateway.gateway.websocket import router as websocket_gateway_router
 from ai_gateway.transport.http import HttpClientFactory
 
-REQUIRED_MIGRATION_HEAD = "0009"
+REQUIRED_MIGRATION_HEAD = "0010"
 _EXAMPLE_JWT_SECRET = "replace-with-a-long-random-secret"
 _EXAMPLE_ENCRYPTION_KEY = "replace-with-a-fernet-key"
 

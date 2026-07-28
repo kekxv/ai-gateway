@@ -35,6 +35,7 @@ from ai_gateway.db.models import (
 
 def test_schema_contains_exact_tables_and_columns() -> None:
     expected = {
+        "registration_locks": {"id"},
         "users": {
             "id",
             "email",
@@ -372,3 +373,9 @@ assert all(
         ConfigAuditLog,
     )
 )
+
+
+def test_registration_lock_model_is_publicly_exported() -> None:
+    models = __import__("ai_gateway.db.models", fromlist=["RegistrationLock"])
+
+    assert getattr(models, "RegistrationLock", None) is not None
