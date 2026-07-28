@@ -12,7 +12,7 @@ import orjson
 import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import joinedload
 
@@ -22,6 +22,7 @@ from ai_gateway.billing.service import BillingService
 from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import ApiKeyScope, Protocol, RouteRuntimeState, RouteSource
 from ai_gateway.core.security import encrypt_secret, hash_password
+from ai_gateway.db.base import Base
 from ai_gateway.db.models import (
     Account,
     ApiKey,
@@ -32,6 +33,8 @@ from ai_gateway.db.models import (
     ProviderProtocol,
     User,
 )
+from ai_gateway.db.test_safety import clean_test_database
+from ai_gateway.main import REQUIRED_MIGRATION_HEAD
 from ai_gateway.protocols.types import CanonicalUsage
 from ai_gateway.routing.service import Router
 
@@ -47,6 +50,17 @@ class _HttpClientFactory:
 async def test_concurrent_first_registrations_create_exactly_one_admin(
     test_engine: AsyncEngine,
 ) -> None:
+    await clean_test_database(test_engine)
+    async with test_engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+        await connection.execute(
+            text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
+        )
+        await connection.execute(
+            text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
+            {"revision": REQUIRED_MIGRATION_HEAD},
+        )
+
     auth_service = import_module("ai_gateway.auth.service")
     register_user = getattr(auth_service, "register_user", None)
     assert callable(register_user), "auth.service.register_user must be implemented"
