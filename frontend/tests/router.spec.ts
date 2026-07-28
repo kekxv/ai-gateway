@@ -119,7 +119,22 @@ describe('导航守卫', () => {
     expect(router.currentRoute.value.name).toBe('security')
   })
 
-  it.each(['/', '/providers', '/models', '/users', '/api-keys', '/request-logs'])(
+  it.each(['/models', '/api-keys'])('允许普通用户访问自助路由 %s', async (path) => {
+    const auth = useAuthStore()
+    vi.spyOn(auth, 'restore').mockImplementation(() => {
+      auth.user = regularUser
+      auth.ready = true
+      return Promise.resolve()
+    })
+    const router = createAppRouter(createMemoryHistory())
+
+    await router.push(path)
+    await router.isReady()
+
+    expect(router.currentRoute.value.name).toBe(path === '/models' ? 'models' : 'api-keys')
+  })
+
+  it.each(['/', '/providers', '/users', '/request-logs'])(
     '阻止普通用户访问管理员路由 %s',
     async (path) => {
       const auth = useAuthStore()

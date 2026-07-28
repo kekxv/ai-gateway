@@ -110,16 +110,17 @@ beforeEach(() => {
 })
 
 describe('管理控制台外壳', () => {
-  it('普通用户只看到安全设置导航、账户邮箱和退出入口', async () => {
+  it('普通用户看到自助模型、接口密钥、安全设置导航和账户入口', async () => {
     const { wrapper } = await mountShell(1200, undefined, regularUser)
     const navigationText = wrapper.get('nav[aria-label="控制台导航"]').text()
 
+    expect(navigationText).toContain('可用模型')
+    expect(navigationText).toContain('接口密钥')
     expect(navigationText).toContain('安全设置')
     expect(navigationText).not.toContain('控制台概览')
     expect(navigationText).not.toContain('供应商管理')
     expect(navigationText).not.toContain('模型管理')
     expect(navigationText).not.toContain('用户管理')
-    expect(navigationText).not.toContain('接口密钥')
     expect(navigationText).not.toContain('请求日志')
     expect(wrapper.get('.admin-email').text()).toBe(regularUser.email)
     expect(wrapper.get('.admin-header').text()).toContain('退出登录')

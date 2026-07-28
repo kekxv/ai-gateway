@@ -43,7 +43,7 @@ export const routes: RouteRecordRaw[] = [
         path: 'models',
         name: 'models',
         component: () => import('@/views/ModelsView.vue'),
-        meta: { title: '模型管理', requiresAdmin: true },
+        meta: { title: '模型管理', userTitle: '可用模型' },
       },
       {
         path: 'users',
@@ -55,7 +55,7 @@ export const routes: RouteRecordRaw[] = [
         path: 'api-keys',
         name: 'api-keys',
         component: () => import('@/views/ApiKeysView.vue'),
-        meta: { title: '接口密钥', requiresAdmin: true },
+        meta: { title: '接口密钥' },
       },
       {
         path: 'request-logs',

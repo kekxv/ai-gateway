@@ -22,6 +22,11 @@ export async function listModels(signal?: AbortSignal): Promise<ModelResponse[]>
   return data
 }
 
+export async function listAvailableModels(signal?: AbortSignal): Promise<ModelResponse[]> {
+  const { data } = await apiClient.get<ModelResponse[]>('/user/models', signalConfig(signal))
+  return data
+}
+
 export async function createModel(
   payload: ModelCreate,
   signal?: AbortSignal,

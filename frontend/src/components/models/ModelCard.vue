@@ -21,6 +21,7 @@ const props = defineProps<{
   nonDeletable?: boolean
   nonDeletableRouteIds?: ReadonlySet<number>
   routesLoading?: boolean
+  readonly?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -131,7 +132,7 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
           :status="model.enabled ? 'enabled' : 'disabled'"
         />
       </div>
-      <div class="card-actions">
+      <div v-if="readonly !== true" class="card-actions">
         <ElButton
           :data-test="`edit-model-${String(model.id)}`"
           size="small"
@@ -209,7 +210,7 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
         </div>
       </div>
 
-      <div class="routes-section">
+      <div v-if="readonly !== true" class="routes-section">
         <div class="routes-header">
           <button
             class="routes-toggle"

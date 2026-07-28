@@ -28,6 +28,7 @@ import {
   createModelRoute,
   deleteModel,
   deleteModelRoute,
+  listAvailableModels,
   listModelRoutes,
   listModels,
   updateModel,
@@ -47,6 +48,7 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import ModelFormDrawer from '@/components/models/ModelFormDrawer.vue'
 import RouteFormDrawer from '@/components/models/RouteFormDrawer.vue'
 import ModelCard from '@/components/models/ModelCard.vue'
+import { useAuthStore } from '@/stores/auth'
 
 type NoticeType = 'success' | 'warning' | 'error'
 type ModelOperation = 'edit' | 'delete' | 'disable'
@@ -68,6 +70,7 @@ interface RouteOperationState {
 }
 
 const models = ref<ModelResponse[]>([])
+const auth = useAuthStore()
 const providers = ref<ProviderResponse[]>([])
 const allRoutes = ref<ModelRouteResponse[]>([])
 const searchText = ref('')
@@ -218,6 +221,16 @@ async function load(): Promise<void> {
   loading.value = models.value.length === 0
   routesLoading.value = true
   try {
+    if (!auth.isAdmin) {
+      const loadedModels = await listAvailableModels(controller.signal)
+      if (!mounted || controller.signal.aborted || generation !== loadGeneration) return
+      models.value = loadedModels
+      providers.value = []
+      allRoutes.value = []
+      catalogReady.value = true
+      loadError.value = ''
+      return
+    }
     const [loadedModels, loadedProviders, loadedRoutes] = await Promise.all([
       listModels(controller.signal),
       listProviders(controller.signal),
@@ -687,8 +700,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="route-page">
-    <PageHeader title="模型管理" description="管理统一模型、调用别名与加权上游路由。">
-      <template #actions>
+    <PageHeader
+      :title="auth.isAdmin ? '模型管理' : '可用模型'"
+      :description="auth.isAdmin ? '管理统一模型、调用别名与加权上游路由。' : '浏览当前可调用的模型、别名与计费价格。'"
+    >
+      <template v-if="auth.isAdmin" #actions>
         <ElButton
           data-test="create-model"
           type="primary"
@@ -701,7 +717,7 @@ onBeforeUnmount(() => {
       </template>
     </PageHeader>
 
-    <div v-if="modelNotice" data-test="model-notice" class="notice-row">
+    <div v-if="auth.isAdmin && modelNotice" data-test="model-notice" class="notice-row">
       <ElAlert
         :type="modelNotice.type"
         :title="modelNotice.text"
@@ -722,7 +738,7 @@ onBeforeUnmount(() => {
       </ElButton>
     </div>
 
-    <div v-if="routeNotice" data-test="route-notice" class="notice-row">
+    <div v-if="auth.isAdmin && routeNotice" data-test="route-notice" class="notice-row">
       <ElAlert
         :type="routeNotice.type"
         :title="routeNotice.text"
@@ -751,6 +767,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="toolbar-filters">
           <select
+            v-if="auth.isAdmin"
             v-model="providerFilter"
             data-test="provider-filter"
             class="provider-filter-select"
@@ -800,6 +817,7 @@ onBeforeUnmount(() => {
           :routes-loading="routesLoading"
           :non-deletable="nonDeletableModelIds.has(model.id)"
           :non-deletable-route-ids="nonDeletableRouteIds"
+          :readonly="!auth.isAdmin"
           @edit="openEditModel"
           @delete="removeModel"
           @disable="disableModel"
@@ -817,6 +835,7 @@ onBeforeUnmount(() => {
     </section>
 
     <ModelFormDrawer
+      v-if="auth.isAdmin"
       :model-value="modelDrawerOpen"
       :model="editingModel"
       :submitting="modelSubmitting"
@@ -824,6 +843,7 @@ onBeforeUnmount(() => {
       @submit="saveModel"
     />
     <RouteFormDrawer
+      v-if="auth.isAdmin"
       :model-value="routeDrawerOpen"
       :model="models.find((m) => m.id === routeDrawerModelId) ?? null"
       :route="editingRoute"

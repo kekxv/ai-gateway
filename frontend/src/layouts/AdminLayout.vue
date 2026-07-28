@@ -42,6 +42,7 @@ import { useAuthStore } from '@/stores/auth'
 interface NavigationItem {
   route: string
   label: string
+  userLabel?: string
   icon: typeof DataAnalysis
   requiresAdmin?: boolean
 }
@@ -49,9 +50,9 @@ interface NavigationItem {
 const navigation: NavigationItem[] = [
   { route: '/', label: '控制台概览', icon: DataAnalysis, requiresAdmin: true },
   { route: '/providers', label: '供应商管理', icon: Connection, requiresAdmin: true },
-  { route: '/models', label: '模型管理', icon: Operation, requiresAdmin: true },
+  { route: '/models', label: '模型管理', userLabel: '可用模型', icon: Operation },
   { route: '/users', label: '用户管理', icon: User, requiresAdmin: true },
-  { route: '/api-keys', label: '接口密钥', icon: Key, requiresAdmin: true },
+  { route: '/api-keys', label: '接口密钥', icon: Key },
   { route: '/request-logs', label: '请求日志', icon: Document, requiresAdmin: true },
   { route: '/security', label: '安全设置', icon: Lock },
 ]
@@ -106,7 +107,9 @@ function focusPendingPageHeading(): void {
   if (pendingPageHeadingPath === undefined || route.path !== pendingPageHeadingPath) return
   const heading = document.querySelector<HTMLElement>('.page-header h1')
   if (heading === null) return
-  const expectedTitle = route.meta.title
+  const expectedTitle = !auth.isAdmin && typeof route.meta.userTitle === 'string'
+    ? route.meta.userTitle
+    : route.meta.title
   if (typeof expectedTitle === 'string' && heading.textContent.trim() !== expectedTitle) return
   heading.focus()
   pendingPageHeadingPath = undefined
@@ -157,7 +160,7 @@ onBeforeUnmount(() => {
             :data-navigation-route="item.route"
           >
             <ElIcon><component :is="item.icon" /></ElIcon>
-            <template #title>{{ item.label }}</template>
+            <template #title>{{ !auth.isAdmin && item.userLabel ? item.userLabel : item.label }}</template>
           </ElMenuItem>
         </ElMenu>
       </nav>
@@ -178,7 +181,7 @@ onBeforeUnmount(() => {
       <ElMenu class="admin-menu admin-menu--drawer" :default-active="route.path" @select="navigate">
         <ElMenuItem v-for="item in visibleNavigation" :key="item.route" :index="item.route">
           <ElIcon><component :is="item.icon" /></ElIcon>
-          <template #title>{{ item.label }}</template>
+          <template #title>{{ !auth.isAdmin && item.userLabel ? item.userLabel : item.label }}</template>
         </ElMenuItem>
       </ElMenu>
     </ElDrawer>

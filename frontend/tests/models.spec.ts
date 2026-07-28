@@ -2,12 +2,19 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { ElMessageBox, type MessageBoxData } from 'element-plus'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ModelResponse, ModelRouteResponse, ProviderResponse } from '@/api/types'
+import type {
+  CurrentUser,
+  ModelResponse,
+  ModelRouteResponse,
+  ProviderResponse,
+} from '@/api/types'
 import ModelFormDrawer from '@/components/models/ModelFormDrawer.vue'
 import RouteFormDrawer from '@/components/models/RouteFormDrawer.vue'
 import { routes } from '@/router'
+import { useAuthStore } from '@/stores/auth'
 import ModelsView from '@/views/ModelsView.vue'
 
 interface Deferred<T> {
@@ -97,10 +104,32 @@ const routeFixture: ModelRouteResponse = {
   last_error_at: null,
 }
 
+const adminUser: CurrentUser = {
+  id: 1,
+  email: 'admin@example.com',
+  role: 'admin',
+  is_active: true,
+  totp_enabled: false,
+  created_at: '2026-07-22T00:00:00Z',
+  updated_at: '2026-07-22T00:00:00Z',
+}
+
+const regularUser: CurrentUser = {
+  ...adminUser,
+  id: 2,
+  email: 'member@example.com',
+  role: 'user',
+}
+
 const server = setupServer()
 
 beforeAll(() => {
   server.listen({ onUnhandledRequest: 'error' })
+})
+
+beforeEach(() => {
+  setActivePinia(createPinia())
+  useAuthStore().user = adminUser
 })
 
 afterEach(() => {
@@ -142,6 +171,54 @@ describe('模型与别名管理', () => {
     const loadModels = modelRoute.component as () => Promise<{ default: unknown }>
     const loadedModule = await loadModels()
     expect(loadedModule.default).toBe(ModelsView)
+  })
+
+  it('普通用户只从自助目录浏览可用模型且看不到管理和路由信息', async () => {
+    useAuthStore().user = regularUser
+    let adminModelsRequests = 0
+    let providerRequests = 0
+    let routeRequests = 0
+    server.use(
+      http.get('/user/models', () =>
+        HttpResponse.json([
+          {
+            ...modelFixture,
+            aliases: modelFixture.aliases.filter((alias) => alias.enabled),
+          },
+        ]),
+      ),
+      http.get('/admin/models', () => {
+        adminModelsRequests += 1
+        return HttpResponse.json([])
+      }),
+      http.get('/admin/providers', () => {
+        providerRequests += 1
+        return HttpResponse.json([])
+      }),
+      http.get('/admin/model-routes', () => {
+        routeRequests += 1
+        return HttpResponse.json([])
+      }),
+    )
+
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    expect(wrapper.get('.page-header h1').text()).toBe('可用模型')
+    expect(wrapper.get('[data-test="model-card-1"]').text()).toContain('GPT 4.1')
+    expect(wrapper.text()).toContain('fast-chat')
+    expect(wrapper.text()).not.toContain('legacy-chat')
+    expect(wrapper.find('[data-test="create-model"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test^="edit-model-"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test^="delete-model-"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test^="create-route-"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('模型路由')
+    expect(wrapper.findComponent(ModelFormDrawer).exists()).toBe(false)
+    expect(wrapper.findComponent(RouteFormDrawer).exists()).toBe(false)
+    expect(adminModelsRequests).toBe(0)
+    expect(providerRequests).toBe(0)
+    expect(routeRequests).toBe(0)
+    wrapper.unmount()
   })
 
   it('提交启用状态别名对象并原样保留精确价格字符串', async () => {
