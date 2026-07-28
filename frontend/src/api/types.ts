@@ -22,6 +22,10 @@ export interface RegisterRequest {
   password: string
 }
 
+export interface RegistrationSetting {
+  enabled: boolean
+}
+
 export interface PasswordChangeRequest {
   current_password: string
   new_password: string

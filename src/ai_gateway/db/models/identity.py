@@ -57,6 +57,12 @@ class RegistrationLock(Base):
     __tablename__ = "registration_locks"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
 
 class ApiKey(Base):

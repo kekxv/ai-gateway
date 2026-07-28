@@ -3,7 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import QrcodeVue from 'qrcode.vue'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { CurrentUser } from '@/api/types'
 import { routes } from '@/router'
@@ -39,10 +39,23 @@ const enabledAdmin: CurrentUser = {
   updated_at: '2026-07-22T01:00:00Z',
 }
 
+const regularUser: CurrentUser = {
+  ...disabledAdmin,
+  id: 2,
+  email: 'member@example.com',
+  role: 'user',
+}
+
 const server = setupServer()
 
 beforeAll(() => {
   server.listen({ onUnhandledRequest: 'error' })
+})
+
+beforeEach(() => {
+  server.use(
+    http.get('/admin/settings/registration', () => HttpResponse.json({ enabled: true })),
+  )
 })
 
 afterEach(() => {
@@ -75,6 +88,78 @@ function apiError(code: string, status = 400) {
 }
 
 describe('TOTP 安全设置', () => {
+  it('管理员可以在安全页关闭和重新开启公开注册', async () => {
+    const updates: unknown[] = []
+    server.use(
+      http.patch('/admin/settings/registration', async ({ request }) => {
+        const body = await request.json()
+        updates.push(body)
+        return HttpResponse.json(body)
+      }),
+    )
+    const { wrapper } = mountSecurity()
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="registration-setting"]').text()).toContain('已开启')
+    await wrapper.get('[data-test="registration-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="registration-setting"]').text()).toContain('已关闭')
+
+    await wrapper.get('[data-test="registration-toggle"]').trigger('click')
+    await flushPromises()
+
+    expect(updates).toEqual([{ enabled: false }, { enabled: true }])
+    expect(wrapper.get('[data-test="registration-setting"]').text()).toContain('已开启')
+    wrapper.unmount()
+  })
+
+  it('普通用户看不到公开注册设置且不会请求管理员接口', async () => {
+    let calls = 0
+    server.use(
+      http.get('/admin/settings/registration', () => {
+        calls += 1
+        return HttpResponse.json({ enabled: true })
+      }),
+    )
+
+    const { wrapper } = mountSecurity(regularUser)
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="registration-setting"]').exists()).toBe(false)
+    expect(calls).toBe(0)
+    wrapper.unmount()
+  })
+
+  it('注册设置更新期间阻止重复操作并显示安全错误', async () => {
+    const requestStarted = deferred()
+    const releaseRequest = deferred()
+    let calls = 0
+    server.use(
+      http.patch('/admin/settings/registration', async () => {
+        calls += 1
+        requestStarted.resolve()
+        await releaseRequest.promise
+        return apiError('registration_update_failed', 500)
+      }),
+    )
+    const { wrapper } = mountSecurity()
+    await flushPromises()
+
+    await wrapper.get('[data-test="registration-toggle"]').trigger('click')
+    await requestStarted.promise
+    await wrapper.get('[data-test="registration-toggle"]').trigger('click')
+
+    expect(calls).toBe(1)
+    expect(wrapper.get('[data-test="registration-toggle"]').attributes('disabled')).toBeDefined()
+    releaseRequest.resolve()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('服务暂时不可用')
+    expect(wrapper.text()).not.toContain('The server message')
+    expect(wrapper.get('[data-test="registration-setting"]').text()).toContain('已开启')
+    wrapper.unmount()
+  })
+
   it('本地校验改密必填项与确认密码，且不发送确认密码', async () => {
     const requests: unknown[] = []
     server.use(

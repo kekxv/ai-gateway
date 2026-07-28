@@ -355,6 +355,39 @@ test('registration, login, and administrator pages have no critical or serious A
   }
 })
 
+test('administrator can close and reopen public registration', async ({ page }) => {
+  await login(page)
+  try {
+    await page.goto('security')
+    const setting = page.getByTestId('registration-setting')
+    await expect(setting).toContainText('已开启')
+    await page.getByTestId('registration-toggle').click()
+    await expect(setting).toContainText('已关闭')
+    await expect(page.getByText('公开注册已关闭')).toBeVisible()
+
+    await page.evaluate(() => {
+      window.sessionStorage.clear()
+    })
+    await page.goto('register')
+    await expect(page.getByRole('heading', { level: 1, name: '创建账户' })).toBeVisible()
+    await expect(page.getByText('管理员已关闭公开注册')).toBeVisible()
+    await expect(page.getByTestId('register-submit')).toHaveCount(0)
+    await expect(page.getByRole('link', { name: '返回登录' })).toBeVisible()
+  } finally {
+    const hasSession = await page.evaluate(
+      () => window.sessionStorage.getItem('gateway.access_token') !== null,
+    )
+    if (!hasSession) await login(page)
+    await page.goto('security')
+    const setting = page.getByTestId('registration-setting')
+    await expect(setting).toBeVisible()
+    if ((await setting.textContent())?.includes('已关闭') === true) {
+      await page.getByTestId('registration-toggle').click()
+      await expect(setting).toContainText('已开启')
+    }
+  }
+})
+
 test('keyboard focus moves from skip link through navigation to the page action', async ({ page }) => {
   await login(page)
   await page.goto('')

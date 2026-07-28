@@ -28,7 +28,10 @@ The root Compose deployment's one-shot `setup` service always applies migrations
 `GATEWAY_BOOTSTRAP_ADMIN_*` variables may be absent. After the gateway starts, open
 `/console/register`; the first committed registration becomes the administrator, while every
 later registration becomes a regular user. Concurrent first registrations are serialized by the
-database, so exactly one receives the administrator role.
+database, so exactly one receives the administrator role. Public registration is enabled by
+default. After initialization, an administrator can close or reopen it from **Security settings →
+Public registration**. The setting is stored in MySQL and shared by all gateway instances; when
+closed, both the public form and `POST /auth/register` reject new registrations.
 
 For an automated environment, setup can instead create the administrator non-interactively.
 Supply email and password together; a Base32 TOTP secret that decodes to at least 20 bytes

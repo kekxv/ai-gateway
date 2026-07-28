@@ -4,6 +4,7 @@ import type {
   LoginRequest,
   PasswordChangeRequest,
   RegisterRequest,
+  RegistrationSetting,
   TokenPair,
   TotpConfirmRequest,
   TotpConfirmResponse,
@@ -33,6 +34,20 @@ export async function register(
     const { data } = await rawClient.post<TokenPair>(
       '/auth/register',
       credentials,
+      signalConfig(signal),
+    )
+    return data
+  } catch (error: unknown) {
+    throw normalizeApiError(error)
+  }
+}
+
+export async function getRegistrationStatus(
+  signal?: AbortSignal,
+): Promise<RegistrationSetting> {
+  try {
+    const { data } = await rawClient.get<RegistrationSetting>(
+      '/auth/registration',
       signalConfig(signal),
     )
     return data

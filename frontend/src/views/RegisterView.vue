@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { ElAlert, ElButton, ElCard, ElForm, ElFormItem, ElInput } from 'element-plus'
 import 'element-plus/theme-chalk/el-alert.css'
@@ -9,6 +9,8 @@ import 'element-plus/theme-chalk/el-form.css'
 import 'element-plus/theme-chalk/el-form-item.css'
 import 'element-plus/theme-chalk/el-input.css'
 
+import { getRegistrationStatus } from '@/api/auth'
+import { ApiError } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -19,6 +21,10 @@ const password = ref('')
 const passwordConfirmation = ref('')
 const submitting = ref(false)
 const errorMessage = ref('')
+const registrationEnabled = ref(false)
+const statusLoading = ref(true)
+let mounted = true
+const statusController = new AbortController()
 
 function clearSecrets(): void {
   password.value = ''
@@ -26,7 +32,7 @@ function clearSecrets(): void {
 }
 
 async function submit(): Promise<void> {
-  if (submitting.value) return
+  if (submitting.value || statusLoading.value || !registrationEnabled.value) return
   errorMessage.value = ''
   if (password.value !== passwordConfirmation.value) {
     errorMessage.value = '两次输入的密码不一致'
@@ -43,6 +49,9 @@ async function submit(): Promise<void> {
     clearSecrets()
     await router.replace({ name: auth.isAdmin ? 'dashboard' : 'security' })
   } catch (error: unknown) {
+    if (error instanceof ApiError && error.code === 'registration_disabled') {
+      registrationEnabled.value = false
+    }
     errorMessage.value = error instanceof Error ? error.message : '注册失败，请稍后重试'
     clearSecrets()
   } finally {
@@ -50,7 +59,27 @@ async function submit(): Promise<void> {
   }
 }
 
-onBeforeUnmount(clearSecrets)
+async function loadRegistrationStatus(): Promise<void> {
+  try {
+    const status = await getRegistrationStatus(statusController.signal)
+    if (!mounted || statusController.signal.aborted) return
+    registrationEnabled.value = status.enabled
+  } catch {
+    if (!mounted || statusController.signal.aborted) return
+    registrationEnabled.value = false
+    errorMessage.value = '暂时无法确认是否开放注册，请稍后重试'
+  } finally {
+    if (mounted && !statusController.signal.aborted) statusLoading.value = false
+  }
+}
+
+onMounted(() => void loadRegistrationStatus())
+
+onBeforeUnmount(() => {
+  mounted = false
+  statusController.abort()
+  clearSecrets()
+})
 </script>
 
 <template>
@@ -64,7 +93,7 @@ onBeforeUnmount(clearSecrets)
         </div>
       </div>
 
-      <p class="registration-policy">
+      <p v-if="registrationEnabled" class="registration-policy">
         第一个注册的账户将自动成为管理员，之后注册的账户为普通用户。
       </p>
 
@@ -77,7 +106,20 @@ onBeforeUnmount(clearSecrets)
         show-icon
       />
 
-      <ElForm label-position="top" @submit.prevent="submit">
+      <p v-if="statusLoading" class="registration-policy" aria-live="polite">
+        正在检查注册状态……
+      </p>
+
+      <ElAlert
+        v-else-if="!registrationEnabled && !errorMessage"
+        class="register-alert"
+        title="管理员已关闭公开注册，请使用已有账户登录。"
+        type="info"
+        :closable="false"
+        show-icon
+      />
+
+      <ElForm v-if="registrationEnabled && !statusLoading" label-position="top" @submit.prevent="submit">
         <ElFormItem label="邮箱">
           <ElInput
             v-model="email"

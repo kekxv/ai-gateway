@@ -10,6 +10,10 @@ class RegisterRequest(BaseModel):
     password: SecretStr = Field(min_length=8, max_length=1024)
 
 
+class RegistrationStatusResponse(BaseModel):
+    enabled: bool
+
+
 class PasswordChangeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -101,8 +101,10 @@ docker compose up
 ```
 
 Open <http://127.0.0.1:8000/console/register> and register the first account, which becomes the
-administrator. Later registrations are regular users. See the [example README](example/README.md)
-for the initialization flow and cleanup.
+administrator. Later registrations are regular users. Public registration is enabled by default;
+an administrator can close or reopen it from **Security settings → Public registration**. Closing
+it hides the registration form and makes the registration API reject new accounts. See the
+[example README](example/README.md) for the initialization flow and cleanup.
 
 ## Local startup
 

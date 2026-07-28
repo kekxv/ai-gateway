@@ -14,7 +14,8 @@ After the `gateway` service becomes healthy:
 1. Open <http://127.0.0.1:8000/console/register>.
 2. Register the first account. The first committed registration becomes the administrator.
 3. Later registrations become regular users and can manage only their own password and TOTP
-   settings.
+   settings. Public registration is enabled by default; administrators can close or reopen it
+   under **Security settings → Public registration**.
 4. Return to <http://127.0.0.1:8000/console/login> for later sign-ins.
 
 Other endpoints:

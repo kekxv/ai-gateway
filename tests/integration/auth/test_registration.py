@@ -94,6 +94,57 @@ async def test_registered_credentials_can_log_in(
     assert login.json()["access_token"]
 
 
+async def test_registration_status_is_public_and_enabled_by_default(
+    registration_client: AsyncClient,
+) -> None:
+    response = await registration_client.get("/auth/registration")
+
+    assert response.status_code == 200
+    assert response.json() == {"enabled": True}
+
+
+async def test_administrator_can_disable_and_reenable_registration(
+    registration_client: AsyncClient,
+) -> None:
+    administrator = await registration_client.post(
+        "/auth/register",
+        json={"email": "admin@example.com", "password": "administrator-password"},
+    )
+    headers = {"Authorization": f"Bearer {administrator.json()['access_token']}"}
+
+    disabled = await registration_client.patch(
+        "/admin/settings/registration",
+        headers=headers,
+        json={"enabled": False},
+    )
+    public_status = await registration_client.get("/auth/registration")
+    rejected = await registration_client.post(
+        "/auth/register",
+        json={"email": "blocked@example.com", "password": "registration-password"},
+    )
+
+    assert disabled.status_code == 200
+    assert disabled.json() == {"enabled": False}
+    assert public_status.json() == {"enabled": False}
+    assert rejected.status_code == 403
+    assert rejected.json()["detail"]["code"] == "registration_disabled"
+    assert "registration-password" not in rejected.text
+
+    enabled = await registration_client.patch(
+        "/admin/settings/registration",
+        headers=headers,
+        json={"enabled": True},
+    )
+    accepted = await registration_client.post(
+        "/auth/register",
+        json={"email": "accepted@example.com", "password": "registration-password"},
+    )
+
+    assert enabled.status_code == 200
+    assert enabled.json() == {"enabled": True}
+    assert accepted.status_code == 201
+
+
 async def test_duplicate_registration_uses_safe_conflict(
     registration_client: AsyncClient,
 ) -> None:

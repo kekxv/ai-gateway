@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElAlert, ElButton, ElCard, ElForm, ElFormItem, ElInput, ElTag } from 'element-plus'
 import 'element-plus/theme-chalk/el-alert.css'
 import 'element-plus/theme-chalk/el-button.css'
@@ -12,6 +12,7 @@ import QrcodeVue from 'qrcode.vue'
 
 import { changePassword, confirmTotp, disableTotp, setupTotp } from '@/api/auth'
 import { ApiError } from '@/api/client'
+import { getRegistrationSetting, updateRegistrationSetting } from '@/api/settings'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -35,6 +36,9 @@ const disablePassword = ref('')
 const disableCode = ref('')
 const disableError = ref('')
 const disableSubmitting = ref(false)
+const registrationEnabled = ref<boolean | null>(null)
+const registrationLoading = ref(false)
+const registrationSubmitting = ref(false)
 
 const totpEnabled = computed(() => auth.user?.totp_enabled === true)
 const replacementRequiresCode = computed(
@@ -47,6 +51,7 @@ let setupController: AbortController | undefined
 let confirmController: AbortController | undefined
 let passwordController: AbortController | undefined
 let disableController: AbortController | undefined
+let registrationController: AbortController | undefined
 
 function sixDigits(value: string): string {
   return value.replace(/\D/g, '').slice(0, 6)
@@ -119,6 +124,73 @@ function isCurrentOperation(revision: number, controller: AbortController): bool
     operationRevision === revision &&
     !controller.signal.aborted
   )
+}
+
+function isCurrentRegistrationOperation(controller: AbortController): boolean {
+  return (
+    mounted &&
+    auth.isAdmin &&
+    registrationController === controller &&
+    !controller.signal.aborted
+  )
+}
+
+function clearRegistrationOperation(): void {
+  registrationController?.abort()
+  registrationController = undefined
+  registrationLoading.value = false
+  registrationSubmitting.value = false
+  registrationEnabled.value = null
+}
+
+async function loadRegistrationSetting(): Promise<void> {
+  if (!auth.isAdmin || registrationLoading.value) return
+  const controller = new AbortController()
+  registrationController?.abort()
+  registrationController = controller
+  registrationLoading.value = true
+  try {
+    const setting = await getRegistrationSetting(controller.signal)
+    if (!isCurrentRegistrationOperation(controller)) return
+    registrationEnabled.value = setting.enabled
+  } catch (error: unknown) {
+    if (!isCurrentRegistrationOperation(controller)) return
+    statusError.value = safeError(error, '公开注册设置加载失败，请稍后重试')
+  } finally {
+    if (registrationController === controller) {
+      registrationController = undefined
+      if (mounted) registrationLoading.value = false
+    }
+  }
+}
+
+async function toggleRegistration(): Promise<void> {
+  if (
+    !auth.isAdmin ||
+    registrationEnabled.value === null ||
+    registrationSubmitting.value
+  ) return
+  const controller = new AbortController()
+  registrationController?.abort()
+  registrationController = controller
+  registrationSubmitting.value = true
+  statusError.value = ''
+  successMessage.value = ''
+  const nextEnabled = !registrationEnabled.value
+  try {
+    const setting = await updateRegistrationSetting(nextEnabled, controller.signal)
+    if (!isCurrentRegistrationOperation(controller)) return
+    registrationEnabled.value = setting.enabled
+    successMessage.value = setting.enabled ? '公开注册已开启' : '公开注册已关闭'
+  } catch (error: unknown) {
+    if (!isCurrentRegistrationOperation(controller)) return
+    statusError.value = safeError(error, '公开注册设置更新失败，请稍后重试')
+  } finally {
+    if (registrationController === controller) {
+      registrationController = undefined
+      if (mounted) registrationSubmitting.value = false
+    }
+  }
 }
 
 function setupFieldError(error: unknown): string {
@@ -362,6 +434,7 @@ watch(
   () => auth.user,
   (user) => {
     if (user === null) {
+      clearRegistrationOperation()
       currentCodeRequiredByServer.value = false
       invalidateOperations()
       successMessage.value = ''
@@ -370,8 +443,11 @@ watch(
   { flush: 'sync' },
 )
 
+onMounted(() => void loadRegistrationSetting())
+
 onBeforeUnmount(() => {
   mounted = false
+  clearRegistrationOperation()
   currentCodeRequiredByServer.value = false
   invalidateOperations()
   successMessage.value = ''
@@ -398,6 +474,41 @@ onBeforeUnmount(() => {
       :closable="false"
       show-icon
     />
+
+    <ElCard v-if="auth.isAdmin" data-test="registration-setting" class="security-card" shadow="never">
+      <template #header>
+        <div class="security-card__header">
+          <div>
+            <h2>公开注册</h2>
+            <p>控制新用户是否可以从注册页面自行创建账户。</p>
+          </div>
+          <ElTag
+            v-if="registrationEnabled !== null"
+            :type="registrationEnabled ? 'success' : 'info'"
+          >
+            {{ registrationEnabled ? '已开启' : '已关闭' }}
+          </ElTag>
+        </div>
+      </template>
+
+      <p v-if="registrationLoading" class="setting-description" aria-live="polite">
+        正在读取注册设置……
+      </p>
+      <div v-else-if="registrationEnabled !== null" class="setting-action">
+        <p class="setting-description">
+          关闭后，注册页面会隐藏表单，注册接口也会拒绝新账户。
+        </p>
+        <ElButton
+          data-test="registration-toggle"
+          type="primary"
+          :loading="registrationSubmitting"
+          :disabled="registrationSubmitting"
+          @click="toggleRegistration"
+        >
+          {{ registrationEnabled ? '关闭公开注册' : '开启公开注册' }}
+        </ElButton>
+      </div>
+    </ElCard>
 
     <ElCard class="security-card" shadow="never">
       <template #header>
@@ -625,6 +736,26 @@ onBeforeUnmount(() => {
 
 .security-card {
   border-color: var(--gateway-border);
+}
+
+.setting-action {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.setting-description {
+  margin: 0;
+  color: var(--gateway-muted);
+  line-height: 1.6;
+}
+
+@media (max-width: 40rem) {
+  .setting-action {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 .security-card + .security-card {

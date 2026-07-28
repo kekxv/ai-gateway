@@ -19,6 +19,7 @@ from ai_gateway.admin.model_sync import router as model_sync_router
 from ai_gateway.admin.models import models_router, routes_router
 from ai_gateway.admin.providers import router as providers_router
 from ai_gateway.admin.request_logs import router as request_logs_router
+from ai_gateway.admin.settings import router as settings_router
 from ai_gateway.admin.users import router as users_router
 from ai_gateway.audit.cleanup import AuditLogCleanupScheduler
 from ai_gateway.audit.codec import DEFAULT_AUDIT_BODY_LIMIT_BYTES
@@ -52,7 +53,7 @@ from ai_gateway.gateway.openai import router as openai_gateway_router
 from ai_gateway.gateway.websocket import router as websocket_gateway_router
 from ai_gateway.transport.http import HttpClientFactory
 
-REQUIRED_MIGRATION_HEAD = "0010"
+REQUIRED_MIGRATION_HEAD = "0011"
 _EXAMPLE_JWT_SECRET = "replace-with-a-long-random-secret"
 _EXAMPLE_ENCRYPTION_KEY = "replace-with-a-fernet-key"
 
@@ -256,6 +257,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(billing_router)
     app.include_router(dashboard_router)
     app.include_router(configuration_router)
+    app.include_router(settings_router)
     app.include_router(openai_gateway_router)
     app.include_router(claude_gateway_router)
     app.include_router(gemini_gateway_router)

@@ -134,6 +134,7 @@ const apiErrorMessages: Readonly<Record<string, string>> = {
   provider_not_found: '供应商不存在',
   provider_protocol_in_use: '供应商协议正在使用中',
   provider_protocol_mismatch: '供应商协议不匹配',
+  registration_disabled: '管理员已关闭公开注册',
   request_log_not_found: '请求日志不存在',
   self_delete_forbidden: '不能删除当前登录账户',
   self_disable_forbidden: '不能停用当前登录账户',

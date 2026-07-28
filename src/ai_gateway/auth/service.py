@@ -35,7 +35,18 @@ async def register_user(
     await session.execute(
         insert(RegistrationLock).values(id=1).on_duplicate_key_update(id=RegistrationLock.id)
     )
-    await session.scalar(select(RegistrationLock).where(RegistrationLock.id == 1).with_for_update())
+    registration = await session.scalar(
+        select(RegistrationLock).where(RegistrationLock.id == 1).with_for_update()
+    )
+    if registration is None:
+        raise RuntimeError("registration lock was not created")
+    if not registration.enabled:
+        await session.rollback()
+        raise_auth_error(
+            status.HTTP_403_FORBIDDEN,
+            "registration_disabled",
+            "Public registration is disabled",
+        )
     existing_user_id = await session.scalar(select(User.id).limit(1))
     user = User(
         email=normalized_email,
@@ -54,6 +65,11 @@ async def register_user(
             "A user with this email already exists",
         )
     return user
+
+
+async def registration_enabled(*, session: AsyncSession) -> bool:
+    enabled = await session.scalar(select(RegistrationLock.enabled).where(RegistrationLock.id == 1))
+    return True if enabled is None else enabled
 
 
 async def change_password(

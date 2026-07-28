@@ -13,6 +13,7 @@ from ai_gateway.auth.schemas import (
     PasswordChangeRequest,
     RefreshRequest,
     RegisterRequest,
+    RegistrationStatusResponse,
     TokenPair,
     TotpConfirmRequest,
     TotpConfirmResponse,
@@ -27,6 +28,7 @@ from ai_gateway.auth.service import (
     raise_auth_error,
     refresh_access_token,
     register_user,
+    registration_enabled,
 )
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.security import (
@@ -60,6 +62,11 @@ async def register(
         access_token=issue_access_token(user_id=user.id, settings=settings),
         refresh_token=issue_refresh_token(user_id=user.id, settings=settings),
     )
+
+
+@router.get("/registration", response_model=RegistrationStatusResponse)
+async def get_registration_status(session: Session) -> RegistrationStatusResponse:
+    return RegistrationStatusResponse(enabled=await registration_enabled(session=session))
 
 
 @router.post("/login", response_model=TokenPair)

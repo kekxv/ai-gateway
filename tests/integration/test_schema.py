@@ -35,7 +35,7 @@ from ai_gateway.db.models import (
 
 def test_schema_contains_exact_tables_and_columns() -> None:
     expected = {
-        "registration_locks": {"id"},
+        "registration_locks": {"id", "enabled", "updated_at"},
         "users": {
             "id",
             "email",

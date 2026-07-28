@@ -43,6 +43,7 @@ afterAll(() => {
 beforeEach(() => {
   sessionStorage.clear()
   setActivePinia(createPinia())
+  server.use(http.get('/auth/registration', () => HttpResponse.json({ enabled: true })))
 })
 
 async function mountRegistration() {
@@ -61,6 +62,7 @@ async function mountRegistration() {
     attachTo: document.body,
     global: { plugins: [router] },
   })
+  await flushPromises()
   return { router, wrapper }
 }
 
@@ -212,6 +214,56 @@ describe('注册页面', () => {
 
     expect(wrapper.text()).toContain('第一个注册的账户将自动成为管理员')
     expect(wrapper.get('a[href="/login"]').text()).toContain('登录')
+    wrapper.unmount()
+  })
+
+  it('管理员关闭公开注册时隐藏表单并保留登录入口', async () => {
+    server.use(http.get('/auth/registration', () => HttpResponse.json({ enabled: false })))
+
+    const { wrapper } = await mountRegistration()
+
+    expect(wrapper.find('form').exists()).toBe(false)
+    expect(wrapper.text()).toContain('管理员已关闭公开注册')
+    expect(wrapper.get('a[href="/login"]').text()).toContain('登录')
+    wrapper.unmount()
+  })
+
+  it('无法确认注册状态时不显示表单且不泄露服务端消息', async () => {
+    server.use(
+      http.get('/auth/registration', () =>
+        HttpResponse.json(
+          { detail: { code: 'unexpected_setting_error', message: 'unsafe server detail' } },
+          { status: 500 },
+        ),
+      ),
+    )
+
+    const { wrapper } = await mountRegistration()
+
+    expect(wrapper.find('form').exists()).toBe(false)
+    expect(wrapper.get('[role="alert"]').text()).toContain('暂时无法确认是否开放注册')
+    expect(wrapper.text()).not.toContain('unsafe server detail')
+    wrapper.unmount()
+  })
+
+  it('提交期间若管理员关闭注册则切换到关闭状态', async () => {
+    server.use(
+      http.post('/auth/register', () =>
+        HttpResponse.json(
+          { detail: { code: 'registration_disabled', message: 'unsafe server detail' } },
+          { status: 403 },
+        ),
+      ),
+    )
+    const { wrapper } = await mountRegistration()
+    await fillRegistration(wrapper)
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.find('form').exists()).toBe(false)
+    expect(wrapper.get('[role="alert"]').text()).toContain('管理员已关闭公开注册')
+    expect(wrapper.text()).not.toContain('unsafe server detail')
     wrapper.unmount()
   })
 })
