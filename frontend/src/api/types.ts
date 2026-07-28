@@ -22,6 +22,16 @@ export interface RegisterRequest {
   password: string
 }
 
+export interface PasswordChangeRequest {
+  current_password: string
+  new_password: string
+}
+
+export interface TotpDisableRequest {
+  current_password: string
+  code: string
+}
+
 export interface RefreshRequest {
   refresh_token: string
 }

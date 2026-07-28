@@ -1,20 +1,26 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { ElAlert, ElButton, ElCard, ElFormItem, ElInput, ElTag } from 'element-plus'
+import { ElAlert, ElButton, ElCard, ElForm, ElFormItem, ElInput, ElTag } from 'element-plus'
 import 'element-plus/theme-chalk/el-alert.css'
 import 'element-plus/theme-chalk/el-button.css'
 import 'element-plus/theme-chalk/el-card.css'
+import 'element-plus/theme-chalk/el-form.css'
 import 'element-plus/theme-chalk/el-form-item.css'
 import 'element-plus/theme-chalk/el-input.css'
 import 'element-plus/theme-chalk/el-tag.css'
 import QrcodeVue from 'qrcode.vue'
 
-import { confirmTotp, setupTotp } from '@/api/auth'
+import { changePassword, confirmTotp, disableTotp, setupTotp } from '@/api/auth'
 import { ApiError } from '@/api/client'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
+const currentPassword = ref('')
+const newPassword = ref('')
+const newPasswordConfirmation = ref('')
+const passwordError = ref('')
+const passwordSubmitting = ref(false)
 const currentCode = ref('')
 const confirmCode = ref('')
 const setupUri = ref('')
@@ -25,6 +31,10 @@ const statusError = ref('')
 const successMessage = ref('')
 const setupSubmitting = ref(false)
 const confirmSubmitting = ref(false)
+const disablePassword = ref('')
+const disableCode = ref('')
+const disableError = ref('')
+const disableSubmitting = ref(false)
 
 const totpEnabled = computed(() => auth.user?.totp_enabled === true)
 const replacementRequiresCode = computed(
@@ -35,6 +45,8 @@ let mounted = true
 let operationRevision = 0
 let setupController: AbortController | undefined
 let confirmController: AbortController | undefined
+let passwordController: AbortController | undefined
+let disableController: AbortController | undefined
 
 function sixDigits(value: string): string {
   return value.replace(/\D/g, '').slice(0, 6)
@@ -50,26 +62,52 @@ function normalizeConfirmCode(value: string): void {
   confirmCodeError.value = ''
 }
 
+function normalizeDisableCode(value: string): void {
+  disableCode.value = sixDigits(value)
+  disableError.value = ''
+}
+
+function erasePasswordSecrets(): void {
+  currentPassword.value = ''
+  newPassword.value = ''
+  newPasswordConfirmation.value = ''
+}
+
+function eraseDisableSecrets(): void {
+  disablePassword.value = ''
+  disableCode.value = ''
+}
+
 function eraseSecrets(): void {
   setupUri.value = ''
   currentCode.value = ''
   confirmCode.value = ''
+  erasePasswordSecrets()
+  eraseDisableSecrets()
 }
 
 function resetErrors(): void {
   currentCodeError.value = ''
   confirmCodeError.value = ''
   statusError.value = ''
+  passwordError.value = ''
+  disableError.value = ''
 }
 
 function invalidateOperations(): void {
   operationRevision += 1
   setupController?.abort()
   confirmController?.abort()
+  passwordController?.abort()
+  disableController?.abort()
   setupController = undefined
   confirmController = undefined
+  passwordController = undefined
+  disableController = undefined
   setupSubmitting.value = false
   confirmSubmitting.value = false
+  passwordSubmitting.value = false
+  disableSubmitting.value = false
   eraseSecrets()
   resetErrors()
 }
@@ -103,6 +141,111 @@ function confirmFieldError(error: unknown): string {
 
 function safeError(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
+}
+
+async function submitPasswordChange(): Promise<void> {
+  if (passwordSubmitting.value) return
+  passwordError.value = ''
+  statusError.value = ''
+  successMessage.value = ''
+  if (currentPassword.value === '') {
+    passwordError.value = '请输入当前密码'
+    erasePasswordSecrets()
+    return
+  }
+  if (newPassword.value.length < 8) {
+    passwordError.value = '新密码至少需要八个字符'
+    erasePasswordSecrets()
+    return
+  }
+  if (newPassword.value !== newPasswordConfirmation.value) {
+    passwordError.value = '两次输入的新密码不一致'
+    erasePasswordSecrets()
+    return
+  }
+
+  const revision = ++operationRevision
+  const controller = new AbortController()
+  passwordController?.abort()
+  passwordController = controller
+  passwordSubmitting.value = true
+  try {
+    await changePassword(
+      {
+        current_password: currentPassword.value,
+        new_password: newPassword.value,
+      },
+      controller.signal,
+    )
+    if (!isCurrentOperation(revision, controller)) return
+    erasePasswordSecrets()
+    successMessage.value = '密码已修改'
+  } catch (error: unknown) {
+    if (!isCurrentOperation(revision, controller)) return
+    erasePasswordSecrets()
+    if (error instanceof ApiError && error.code === 'invalid_credentials') {
+      passwordError.value = '当前密码不正确'
+    } else {
+      statusError.value = safeError(error, '密码修改失败，请稍后重试')
+    }
+  } finally {
+    if (passwordController === controller) {
+      passwordController = undefined
+      if (mounted && operationRevision === revision) passwordSubmitting.value = false
+    }
+  }
+}
+
+async function turnOffTotp(): Promise<void> {
+  if (disableSubmitting.value) return
+  disableError.value = ''
+  statusError.value = ''
+  successMessage.value = ''
+  if (disablePassword.value === '') {
+    disableError.value = '请输入当前密码'
+    eraseDisableSecrets()
+    return
+  }
+  if (disableCode.value.length !== 6) {
+    disableError.value = '请输入当前六位验证码'
+    eraseDisableSecrets()
+    return
+  }
+
+  const revision = ++operationRevision
+  const controller = new AbortController()
+  disableController?.abort()
+  disableController = controller
+  disableSubmitting.value = true
+  try {
+    await disableTotp(
+      {
+        current_password: disablePassword.value,
+        code: disableCode.value,
+      },
+      controller.signal,
+    )
+    if (!isCurrentOperation(revision, controller)) return
+    eraseDisableSecrets()
+    await auth.refreshCurrentUser(controller.signal)
+    if (!isCurrentOperation(revision, controller)) return
+    successMessage.value = '双重验证已关闭'
+  } catch (error: unknown) {
+    if (!isCurrentOperation(revision, controller)) return
+    eraseDisableSecrets()
+    if (error instanceof ApiError && error.code === 'invalid_credentials') {
+      disableError.value = '当前密码不正确'
+    } else if (error instanceof ApiError && error.code === 'invalid_totp') {
+      disableError.value = '当前验证码无效，请重新输入'
+    } else {
+      statusError.value = safeError(error, '关闭双重验证失败，请稍后重试')
+    }
+  } finally {
+    if (disableController === controller) {
+      disableController = undefined
+      if (mounted && operationRevision === revision) disableSubmitting.value = false
+    }
+  }
 }
 
 async function startSetup(): Promise<void> {
@@ -260,6 +403,70 @@ onBeforeUnmount(() => {
       <template #header>
         <div class="security-card__header">
           <div>
+            <h2>修改密码</h2>
+            <p>验证当前密码后设置新的登录密码。</p>
+          </div>
+        </div>
+      </template>
+
+      <ElForm class="credential-form" label-position="top" @submit.prevent="submitPasswordChange">
+        <ElFormItem label="当前密码">
+          <ElInput
+            v-model="currentPassword"
+            data-test="current-password"
+            name="current_password"
+            type="password"
+            autocomplete="current-password"
+            show-password
+            :disabled="passwordSubmitting"
+            required
+          />
+        </ElFormItem>
+        <ElFormItem label="新密码">
+          <ElInput
+            v-model="newPassword"
+            data-test="new-password"
+            name="new_password"
+            type="password"
+            autocomplete="new-password"
+            minlength="8"
+            show-password
+            :disabled="passwordSubmitting"
+            required
+          />
+        </ElFormItem>
+        <ElFormItem label="确认新密码">
+          <ElInput
+            v-model="newPasswordConfirmation"
+            data-test="new-password-confirm"
+            name="new_password_confirmation"
+            type="password"
+            autocomplete="new-password"
+            minlength="8"
+            show-password
+            :disabled="passwordSubmitting"
+            required
+          />
+          <p v-if="passwordError" data-test="password-error" class="field-error">
+            {{ passwordError }}
+          </p>
+        </ElFormItem>
+        <ElButton
+          data-test="change-password"
+          native-type="submit"
+          type="primary"
+          :loading="passwordSubmitting"
+          :disabled="passwordSubmitting"
+        >
+          修改密码
+        </ElButton>
+      </ElForm>
+    </ElCard>
+
+    <ElCard class="security-card" shadow="never">
+      <template #header>
+        <div class="security-card__header">
+          <div>
             <h2>双重验证</h2>
             <p>登录时需要输入身份验证器生成的六位验证码。</p>
           </div>
@@ -362,6 +569,51 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-else class="refreshing" aria-live="polite">正在刷新双重验证状态…</div>
+
+      <div v-if="totpEnabled && setupUri === '' && !confirmSubmitting" class="disable-panel">
+        <h3>关闭双重验证</h3>
+        <p>关闭前需要再次验证当前密码和身份验证器中的六位验证码。</p>
+        <ElForm class="credential-form" label-position="top" @submit.prevent="turnOffTotp">
+          <ElFormItem label="当前密码">
+            <ElInput
+              v-model="disablePassword"
+              data-test="disable-password"
+              name="disable_current_password"
+              type="password"
+              autocomplete="current-password"
+              show-password
+              :disabled="disableSubmitting"
+              required
+            />
+          </ElFormItem>
+          <ElFormItem label="当前验证码">
+            <ElInput
+              :model-value="disableCode"
+              data-test="disable-code"
+              name="disable_totp_code"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              maxlength="6"
+              placeholder="请输入当前六位验证码"
+              :disabled="disableSubmitting"
+              required
+              @update:model-value="normalizeDisableCode"
+            />
+            <p v-if="disableError" data-test="disable-error" class="field-error">
+              {{ disableError }}
+            </p>
+          </ElFormItem>
+          <ElButton
+            data-test="disable-totp"
+            native-type="submit"
+            type="danger"
+            :loading="disableSubmitting"
+            :disabled="disableSubmitting || disableCode.length !== 6"
+          >
+            关闭双重验证
+          </ElButton>
+        </ElForm>
+      </div>
     </ElCard>
   </div>
 </template>
@@ -373,6 +625,10 @@ onBeforeUnmount(() => {
 
 .security-card {
   border-color: var(--gateway-border);
+}
+
+.security-card + .security-card {
+  margin-top: 1rem;
 }
 
 .security-card__header {
@@ -402,6 +658,32 @@ h2 {
 
 .setup-start {
   max-width: 28rem;
+}
+
+.credential-form {
+  max-width: 28rem;
+}
+
+.disable-panel {
+  max-width: 28rem;
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--gateway-border);
+}
+
+.disable-panel h3,
+.disable-panel p {
+  margin: 0;
+}
+
+.disable-panel h3 {
+  font-size: 1rem;
+}
+
+.disable-panel > p {
+  margin: 0.35rem 0 1rem;
+  color: var(--gateway-muted);
+  line-height: 1.6;
 }
 
 .enrollment {

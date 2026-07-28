@@ -139,6 +139,7 @@ const apiErrorMessages: Readonly<Record<string, string>> = {
   self_disable_forbidden: '不能停用当前登录账户',
   session_changed: '登录状态已变更，请重试',
   totp_not_configured: '未配置双重验证',
+  totp_not_enabled: '双重验证尚未启用',
   totp_required: '请输入双重验证验证码',
   user_disabled: '用户已停用',
   user_has_history: '用户已有请求或账本历史，请改为停用用户以保留审计记录',
@@ -147,8 +148,10 @@ const apiErrorMessages: Readonly<Record<string, string>> = {
 
 const validationFieldLabels: Readonly<Record<string, string>> = {
   code: '验证码',
+  current_password: '当前密码',
   current_totp_code: '当前验证码',
   email: '邮箱',
+  new_password: '新密码',
   password: '密码',
   refresh_token: '刷新令牌',
   totp_code: '验证码',

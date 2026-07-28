@@ -2,10 +2,12 @@ import { apiClient, normalizeApiError, rawClient } from './client'
 import type {
   CurrentUser,
   LoginRequest,
+  PasswordChangeRequest,
   RegisterRequest,
   TokenPair,
   TotpConfirmRequest,
   TotpConfirmResponse,
+  TotpDisableRequest,
   TotpSetupRequest,
   TotpSetupResponse,
 } from './types'
@@ -66,6 +68,25 @@ export async function confirmTotp(
 ): Promise<TotpConfirmResponse> {
   const { data } = await apiClient.post<TotpConfirmResponse>(
     '/auth/totp/confirm',
+    payload,
+    signalConfig(signal),
+  )
+  return data
+}
+
+export async function changePassword(
+  payload: PasswordChangeRequest,
+  signal?: AbortSignal,
+): Promise<void> {
+  await apiClient.post('/auth/password', payload, signalConfig(signal))
+}
+
+export async function disableTotp(
+  payload: TotpDisableRequest,
+  signal?: AbortSignal,
+): Promise<TotpConfirmResponse> {
+  const { data } = await apiClient.post<TotpConfirmResponse>(
+    '/auth/totp/disable',
     payload,
     signalConfig(signal),
   )

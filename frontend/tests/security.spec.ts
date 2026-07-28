@@ -75,6 +75,181 @@ function apiError(code: string, status = 400) {
 }
 
 describe('TOTP 安全设置', () => {
+  it('本地校验改密必填项与确认密码，且不发送确认密码', async () => {
+    const requests: unknown[] = []
+    server.use(
+      http.post('/auth/password', async ({ request }) => {
+        requests.push(await request.json())
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+    const { wrapper } = mountSecurity()
+
+    await wrapper.findAll('form')[0]?.trigger('submit')
+    expect(wrapper.get('[data-test="password-error"]').text()).toContain('请输入当前密码')
+
+    await wrapper.get('[data-test="current-password"]').setValue('current-password')
+    await wrapper.get('[data-test="new-password"]').setValue('replacement-password')
+    await wrapper.get('[data-test="new-password-confirm"]').setValue('different-password')
+    await wrapper.get('[data-test="change-password"]').trigger('click')
+
+    expect(wrapper.get('[data-test="password-error"]').text()).toContain(
+      '两次输入的新密码不一致',
+    )
+    expect(requests).toEqual([])
+    expect((wrapper.vm as unknown as { currentPassword: string }).currentPassword).toBe('')
+    expect((wrapper.vm as unknown as { newPassword: string }).newPassword).toBe('')
+    expect(
+      (wrapper.vm as unknown as { newPasswordConfirmation: string }).newPasswordConfirmation,
+    ).toBe('')
+    wrapper.unmount()
+  })
+
+  it('成功修改密码时只发送当前和新密码，并清空字段', async () => {
+    const requests: unknown[] = []
+    server.use(
+      http.post('/auth/password', async ({ request }) => {
+        requests.push(await request.json())
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+    const { wrapper } = mountSecurity()
+    await wrapper.get('[data-test="current-password"]').setValue('current-password')
+    await wrapper.get('[data-test="new-password"]').setValue('replacement-password')
+    await wrapper.get('[data-test="new-password-confirm"]').setValue('replacement-password')
+
+    await wrapper.get('[data-test="change-password"]').trigger('click')
+    await flushPromises()
+
+    expect(requests).toEqual([
+      { current_password: 'current-password', new_password: 'replacement-password' },
+    ])
+    expect(wrapper.text()).toContain('密码已修改')
+    expect(wrapper.text()).not.toContain('current-password')
+    expect(wrapper.text()).not.toContain('replacement-password')
+    expect((wrapper.vm as unknown as { currentPassword: string }).currentPassword).toBe('')
+    expect((wrapper.vm as unknown as { newPassword: string }).newPassword).toBe('')
+    wrapper.unmount()
+  })
+
+  it('改密请求期间阻止重复提交，失败后清空所有密码并显示安全错误', async () => {
+    const requestStarted = deferred()
+    const releaseRequest = deferred()
+    let calls = 0
+    server.use(
+      http.post('/auth/password', async () => {
+        calls += 1
+        requestStarted.resolve()
+        await releaseRequest.promise
+        return apiError('invalid_credentials', 401)
+      }),
+    )
+    const { wrapper } = mountSecurity()
+    await wrapper.get('[data-test="current-password"]').setValue('wrong-current-password')
+    await wrapper.get('[data-test="new-password"]').setValue('replacement-password')
+    await wrapper.get('[data-test="new-password-confirm"]').setValue('replacement-password')
+
+    await wrapper.get('[data-test="change-password"]').trigger('click')
+    await requestStarted.promise
+    await wrapper.get('[data-test="change-password"]').trigger('click')
+    expect(calls).toBe(1)
+    expect(wrapper.get('[data-test="change-password"]').attributes('disabled')).toBeDefined()
+    releaseRequest.resolve()
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="password-error"]').text()).toContain('当前密码不正确')
+    expect(wrapper.text()).not.toContain('The server message')
+    expect((wrapper.vm as unknown as { currentPassword: string }).currentPassword).toBe('')
+    expect((wrapper.vm as unknown as { newPassword: string }).newPassword).toBe('')
+    expect(
+      (wrapper.vm as unknown as { newPasswordConfirmation: string }).newPasswordConfirmation,
+    ).toBe('')
+    wrapper.unmount()
+  })
+
+  it('关闭 TOTP 时发送当前密码与六位码，刷新状态并清空凭据', async () => {
+    const requests: unknown[] = []
+    let disabled = false
+    server.use(
+      http.post('/auth/totp/disable', async ({ request }) => {
+        requests.push(await request.json())
+        disabled = true
+        return HttpResponse.json({ totp_enabled: false })
+      }),
+      http.get('/auth/me', () => HttpResponse.json(disabled ? disabledAdmin : enabledAdmin)),
+    )
+    const { auth, wrapper } = mountSecurity(enabledAdmin)
+    await wrapper.get('[data-test="disable-password"]').setValue('current-password')
+    await wrapper.get('[data-test="disable-code"]').setValue('12a34 56')
+
+    await wrapper.get('[data-test="disable-totp"]').trigger('click')
+    await flushPromises()
+
+    expect(requests).toEqual([{ current_password: 'current-password', code: '123456' }])
+    expect(auth.user).toEqual(disabledAdmin)
+    expect(wrapper.text()).toContain('双重验证已关闭')
+    expect(wrapper.text()).toContain('未启用')
+    expect((wrapper.vm as unknown as { disablePassword: string }).disablePassword).toBe('')
+    expect((wrapper.vm as unknown as { disableCode: string }).disableCode).toBe('')
+    wrapper.unmount()
+  })
+
+  it('退出或卸载会中止安全请求并清空改密与关闭 TOTP 凭据', async () => {
+    const requestStarted = deferred()
+    const releaseRequest = deferred()
+    server.use(
+      http.post('/auth/totp/disable', async () => {
+        requestStarted.resolve()
+        await releaseRequest.promise
+        return HttpResponse.json({ totp_enabled: false })
+      }),
+    )
+    const first = mountSecurity(enabledAdmin)
+    await first.wrapper.get('[data-test="current-password"]').setValue('password-secret')
+    await first.wrapper.get('[data-test="new-password"]').setValue('new-password-secret')
+    await first.wrapper
+      .get('[data-test="new-password-confirm"]')
+      .setValue('new-password-secret')
+    await first.wrapper.get('[data-test="disable-password"]').setValue('password-secret')
+    await first.wrapper.get('[data-test="disable-code"]').setValue('123456')
+    await first.wrapper.get('[data-test="disable-totp"]').trigger('click')
+    await requestStarted.promise
+
+    first.auth.logout()
+    releaseRequest.resolve()
+    await flushPromises()
+
+    expect((first.wrapper.vm as unknown as { currentPassword: string }).currentPassword).toBe('')
+    expect((first.wrapper.vm as unknown as { newPassword: string }).newPassword).toBe('')
+    expect((first.wrapper.vm as unknown as { disablePassword: string }).disablePassword).toBe('')
+    expect((first.wrapper.vm as unknown as { disableCode: string }).disableCode).toBe('')
+    expect(first.wrapper.text()).not.toContain('双重验证已关闭')
+    first.wrapper.unmount()
+
+    const second = mountSecurity(enabledAdmin)
+    await second.wrapper.get('[data-test="current-password"]').setValue('password-secret')
+    await second.wrapper.get('[data-test="new-password"]').setValue('new-password-secret')
+    await second.wrapper
+      .get('[data-test="new-password-confirm"]')
+      .setValue('new-password-secret')
+    await second.wrapper.get('[data-test="disable-password"]').setValue('password-secret')
+    await second.wrapper.get('[data-test="disable-code"]').setValue('654321')
+    const vm = second.wrapper.vm as unknown as {
+      currentPassword: string
+      newPassword: string
+      newPasswordConfirmation: string
+      disablePassword: string
+      disableCode: string
+    }
+    second.wrapper.unmount()
+
+    expect(vm.currentPassword).toBe('')
+    expect(vm.newPassword).toBe('')
+    expect(vm.newPasswordConfirmation).toBe('')
+    expect(vm.disablePassword).toBe('')
+    expect(vm.disableCode).toBe('')
+  })
+
   it('通过独立懒加载路由提供安全设置页面', async () => {
     const shellRoute = routes.find((route) => route.path === '/')
     const securityRoute = shellRoute?.children?.find((route) => route.name === 'security')
