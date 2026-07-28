@@ -63,6 +63,7 @@ export interface CurrentUser {
 
 export interface TotpSetupRequest {
   current_totp_code?: string | null
+  custom_secret?: string | null
 }
 
 export interface TotpSetupResponse {

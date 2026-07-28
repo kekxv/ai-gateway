@@ -5,6 +5,7 @@ import pytest
 from cryptography.fernet import Fernet
 from jwt import InvalidTokenError
 
+from ai_gateway.core import security
 from ai_gateway.core.config import Settings
 from ai_gateway.core.security import (
     decode_token,
@@ -15,6 +16,31 @@ from ai_gateway.core.security import (
     issue_refresh_token,
     verify_password,
 )
+
+
+def test_totp_secret_normalizes_formatted_base32_and_preserves_entropy() -> None:
+    normalized = security.validate_totp_secret("jbsw y3dp-ehpk3pxp jbsw y3dp-ehpk3pxp")
+
+    assert normalized == "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+
+
+@pytest.mark.parametrize(
+    ("secret", "message"),
+    [
+        ("---   ", "must not be empty"),
+        ("NOT-BASE32-0189", "valid Base32"),
+        ("JBSWY3DPEHPK3PXP", "at least 20 bytes"),
+        ("A" * 129, "at most 128"),
+    ],
+)
+def test_totp_secret_rejects_unsafe_values_without_echoing_them(
+    secret: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message) as error:
+        security.validate_totp_secret(secret)
+
+    assert secret not in str(error.value)
 
 
 @pytest.fixture

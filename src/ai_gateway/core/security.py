@@ -1,3 +1,6 @@
+import base64
+import binascii
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import uuid4
@@ -13,10 +16,31 @@ TokenType = Literal["access", "refresh"]
 
 _PASSWORD_HASHER = PasswordHasher(type=Type.ID)
 _JWT_ALGORITHM = "HS256"
+_TOTP_SECRET_PATTERN = re.compile(r"[A-Z2-7]+")
+_TOTP_SECRET_IGNORED_CHARACTERS = " \t\n\r\v\f-"
 
 
 class InvalidTokenTypeError(jwt.InvalidTokenError):
     pass
+
+
+def validate_totp_secret(secret: str) -> str:
+    normalized = secret.translate(str.maketrans("", "", _TOTP_SECRET_IGNORED_CHARACTERS)).upper()
+    if not normalized:
+        raise ValueError("TOTP secret must not be empty")
+    if len(normalized) > 128:
+        raise ValueError("TOTP secret must contain at most 128 Base32 characters")
+    if _TOTP_SECRET_PATTERN.fullmatch(normalized) is None:
+        raise ValueError("TOTP secret must be a valid Base32 value")
+
+    padded = normalized + "=" * (-len(normalized) % 8)
+    try:
+        decoded = base64.b32decode(padded)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("TOTP secret must be a valid Base32 value") from exc
+    if len(decoded) < 20:
+        raise ValueError("TOTP secret must decode to at least 20 bytes")
+    return normalized
 
 
 def hash_password(password: str) -> str:

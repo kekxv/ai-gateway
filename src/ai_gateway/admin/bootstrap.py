@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import binascii
 from dataclasses import dataclass
 from typing import cast
 
-import pyotp
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from ai_gateway.core.config import get_settings
-from ai_gateway.core.security import encrypt_secret, hash_password
+from ai_gateway.core.security import encrypt_secret, hash_password, validate_totp_secret
 from ai_gateway.db.models import Account, User
 from ai_gateway.db.session import get_engine_for_url, get_session_factory_for_engine
 
@@ -35,19 +33,6 @@ def _existing_user_result(user: User) -> AdminBootstrapResult:
             f"email {user.email!r} belongs to a regular user; refusing to promote it"
         )
     return AdminBootstrapResult(user=user, created=False)
-
-
-def _validated_totp_secret(secret: str) -> str:
-    normalized = secret.strip()
-    if not normalized:
-        raise ValueError("TOTP secret must not be empty")
-    try:
-        decoded = pyotp.TOTP(normalized).byte_secret()
-    except (binascii.Error, TypeError, ValueError) as exc:
-        raise ValueError("TOTP secret must be a valid Base32 value") from exc
-    if len(decoded) < 20:
-        raise ValueError("TOTP secret must decode to at least 20 bytes")
-    return normalized
 
 
 async def create_admin(
@@ -79,7 +64,7 @@ async def create_admin(
 
             encrypted_totp_secret: bytes | None = None
             if totp_secret is not None:
-                validated_totp_secret = _validated_totp_secret(totp_secret)
+                validated_totp_secret = validate_totp_secret(totp_secret)
                 settings = settings or get_settings()
                 encrypted_totp_secret = encrypt_secret(
                     validated_totp_secret,

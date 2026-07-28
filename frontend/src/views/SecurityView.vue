@@ -1,9 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElAlert, ElButton, ElCard, ElForm, ElFormItem, ElInput, ElTag } from 'element-plus'
+import {
+  ElAlert,
+  ElButton,
+  ElCard,
+  ElCheckbox,
+  ElForm,
+  ElFormItem,
+  ElInput,
+  ElTag,
+} from 'element-plus'
 import 'element-plus/theme-chalk/el-alert.css'
 import 'element-plus/theme-chalk/el-button.css'
 import 'element-plus/theme-chalk/el-card.css'
+import 'element-plus/theme-chalk/el-checkbox.css'
 import 'element-plus/theme-chalk/el-form.css'
 import 'element-plus/theme-chalk/el-form-item.css'
 import 'element-plus/theme-chalk/el-input.css'
@@ -12,6 +22,7 @@ import QrcodeVue from 'qrcode.vue'
 
 import { changePassword, confirmTotp, disableTotp, setupTotp } from '@/api/auth'
 import { ApiError } from '@/api/client'
+import type { TotpSetupRequest } from '@/api/types'
 import { getRegistrationSetting, updateRegistrationSetting } from '@/api/settings'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -28,6 +39,10 @@ const setupUri = ref('')
 const currentCodeRequiredByServer = ref(false)
 const currentCodeError = ref('')
 const confirmCodeError = ref('')
+const useCustomTotpSecret = ref(false)
+const customTotpSecret = ref('')
+const customTotpAcknowledged = ref(false)
+const customTotpError = ref('')
 const statusError = ref('')
 const successMessage = ref('')
 const setupSubmitting = ref(false)
@@ -43,6 +58,12 @@ const registrationSubmitting = ref(false)
 const totpEnabled = computed(() => auth.user?.totp_enabled === true)
 const replacementRequiresCode = computed(
   () => (totpEnabled.value || currentCodeRequiredByServer.value) && setupUri.value === '',
+)
+const customSetupBlocked = computed(
+  () =>
+    useCustomTotpSecret.value &&
+    (customTotpValidationMessage(customTotpSecret.value) !== '' ||
+      !customTotpAcknowledged.value),
 )
 
 let mounted = true
@@ -72,6 +93,26 @@ function normalizeDisableCode(value: string): void {
   disableError.value = ''
 }
 
+function customTotpValidationMessage(value: string): string {
+  if (value.length < 32) return '自定义密钥至少需要 32 个 Base32 字符（160 bit）'
+  if (value.length > 128) return '自定义密钥最多允许 128 个 Base32 字符'
+  if (!/^[A-Z2-7]+$/.test(value)) return '自定义密钥只能包含 Base32 字符 A-Z 和 2-7'
+  return ''
+}
+
+function normalizeCustomTotpSecret(value: string): void {
+  customTotpSecret.value = value.replace(/[ \t\n\r\v\f-]/g, '').toUpperCase()
+  customTotpError.value =
+    customTotpSecret.value === '' ? '' : customTotpValidationMessage(customTotpSecret.value)
+}
+
+function eraseCustomTotpSecret(): void {
+  useCustomTotpSecret.value = false
+  customTotpSecret.value = ''
+  customTotpAcknowledged.value = false
+  customTotpError.value = ''
+}
+
 function erasePasswordSecrets(): void {
   currentPassword.value = ''
   newPassword.value = ''
@@ -87,6 +128,7 @@ function eraseSecrets(): void {
   setupUri.value = ''
   currentCode.value = ''
   confirmCode.value = ''
+  eraseCustomTotpSecret()
   erasePasswordSecrets()
   eraseDisableSecrets()
 }
@@ -94,6 +136,7 @@ function eraseSecrets(): void {
 function resetErrors(): void {
   currentCodeError.value = ''
   confirmCodeError.value = ''
+  customTotpError.value = ''
   statusError.value = ''
   passwordError.value = ''
   disableError.value = ''
@@ -326,6 +369,17 @@ async function startSetup(): Promise<void> {
     currentCodeError.value = '请输入当前六位验证码'
     return
   }
+  if (useCustomTotpSecret.value) {
+    const validationMessage = customTotpValidationMessage(customTotpSecret.value)
+    if (validationMessage !== '') {
+      customTotpError.value = validationMessage
+      return
+    }
+    if (!customTotpAcknowledged.value) {
+      customTotpError.value = '请先确认已了解并接受自定义密钥的安全风险'
+      return
+    }
+  }
 
   resetErrors()
   successMessage.value = ''
@@ -334,9 +388,10 @@ async function startSetup(): Promise<void> {
   setupController?.abort()
   setupController = controller
   setupSubmitting.value = true
-  const payload = replacementRequiresCode.value
-    ? { current_totp_code: currentCode.value }
-    : {}
+  const payload: TotpSetupRequest = {}
+  if (replacementRequiresCode.value) payload.current_totp_code = currentCode.value
+  if (useCustomTotpSecret.value) payload.custom_secret = customTotpSecret.value
+  customTotpSecret.value = ''
 
   try {
     const result = await setupTotp(payload, controller.signal)
@@ -349,9 +404,13 @@ async function startSetup(): Promise<void> {
     if (error instanceof ApiError && error.code === 'current_totp_required') {
       currentCodeRequiredByServer.value = true
     }
-    const fieldError = setupFieldError(error)
-    if (fieldError !== '') currentCodeError.value = fieldError
-    else statusError.value = safeError(error, '双重验证设置请求失败，请稍后重试')
+    if (error instanceof ApiError && error.code === 'invalid_totp_secret') {
+      customTotpError.value = '请输入有效的 Base32 密钥，且至少包含 160 bit 随机熵'
+    } else {
+      const fieldError = setupFieldError(error)
+      if (fieldError !== '') currentCodeError.value = fieldError
+      else statusError.value = safeError(error, '双重验证设置请求失败，请稍后重试')
+    }
   } finally {
     if (setupController === controller) {
       setupController = undefined
@@ -442,6 +501,14 @@ watch(
   },
   { flush: 'sync' },
 )
+
+watch(useCustomTotpSecret, (enabled) => {
+  if (!enabled) {
+    customTotpSecret.value = ''
+    customTotpAcknowledged.value = false
+    customTotpError.value = ''
+  }
+})
 
 onMounted(() => void loadRegistrationSetting())
 
@@ -588,6 +655,55 @@ onBeforeUnmount(() => {
       </template>
 
       <div v-if="setupUri === '' && !confirmSubmitting" class="setup-start">
+        <ElCheckbox
+          v-model="useCustomTotpSecret"
+          data-test="use-custom-totp-secret"
+          :disabled="setupSubmitting"
+        >
+          使用自定义 TOTP 密钥（高级）
+        </ElCheckbox>
+
+        <div v-if="useCustomTotpSecret" class="custom-totp-panel">
+          <ElAlert
+            data-test="custom-totp-warning"
+            title="自定义密钥存在安全风险"
+            type="warning"
+            :closable="false"
+            show-icon
+          >
+            <p>
+              仅使用密码管理器或安全工具生成的随机 Base32 密钥，至少 160 bit（32 个 Base32
+              字符）。弱密钥或复用密钥可能导致账户被接管；丢失密钥可能导致无法登录。请先安全备份。
+            </p>
+          </ElAlert>
+
+          <ElFormItem label="自定义 Base32 密钥">
+            <ElInput
+              :model-value="customTotpSecret"
+              data-test="custom-totp-secret"
+              name="custom_totp_secret"
+              type="password"
+              autocomplete="off"
+              :spellcheck="false"
+              maxlength="256"
+              placeholder="至少 32 个字符，仅限 A-Z 和 2-7"
+              :disabled="setupSubmitting"
+              @update:model-value="normalizeCustomTotpSecret"
+            />
+            <p v-if="customTotpError" data-test="custom-totp-error" class="field-error">
+              {{ customTotpError }}
+            </p>
+          </ElFormItem>
+
+          <ElCheckbox
+            v-model="customTotpAcknowledged"
+            data-test="custom-totp-acknowledged"
+            :disabled="setupSubmitting"
+          >
+            我确认密钥由安全工具随机生成，并已安全备份且未在其他账户复用
+          </ElCheckbox>
+        </div>
+
         <ElFormItem v-if="replacementRequiresCode" label="当前验证码">
           <ElInput
             :model-value="currentCode"
@@ -611,7 +727,10 @@ onBeforeUnmount(() => {
             type="primary"
             :loading="setupSubmitting"
             :disabled="
-              setupSubmitting || confirmSubmitting || (replacementRequiresCode && currentCode.length !== 6)
+              setupSubmitting ||
+              confirmSubmitting ||
+              customSetupBlocked ||
+              (replacementRequiresCode && currentCode.length !== 6)
             "
             @click="startSetup"
           >
@@ -789,6 +908,23 @@ h2 {
 
 .setup-start {
   max-width: 28rem;
+}
+
+.custom-totp-panel {
+  display: grid;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.custom-totp-panel :deep(.el-alert__description) {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.custom-totp-panel :deep(.el-checkbox) {
+  height: auto;
+  align-items: flex-start;
+  white-space: normal;
 }
 
 .credential-form {

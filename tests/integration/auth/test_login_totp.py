@@ -319,6 +319,96 @@ async def test_initial_totp_setup_uses_pending_secret_until_confirmed(
     assert decrypt_secret(user.totp_secret_encrypted, settings=auth_settings) == secret
 
 
+async def test_totp_setup_accepts_normalized_custom_secret_until_confirmed(
+    client: AsyncClient,
+    session: AsyncSession,
+    auth_settings: Settings,
+) -> None:
+    user = await create_user(session)
+    access_token = issue_access_token(user_id=user.id, settings=auth_settings)
+    headers = {"Authorization": f"Bearer {access_token}"}
+    custom_secret = "jbsw y3dp-ehpk3pxp jbsw y3dp-ehpk3pxp"
+    normalized_secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+
+    setup = await client.post(
+        "/auth/totp/setup",
+        headers=headers,
+        json={"custom_secret": custom_secret},
+    )
+
+    assert setup.status_code == 200
+    uri_secret = parse_qs(urlparse(setup.json()["otpauth_uri"]).query)["secret"][0]
+    assert uri_secret == normalized_secret
+    assert user.totp_secret_encrypted is None
+    assert user.pending_totp_secret_encrypted is not None
+    assert normalized_secret.encode() not in user.pending_totp_secret_encrypted
+    assert (
+        decrypt_secret(user.pending_totp_secret_encrypted, settings=auth_settings)
+        == normalized_secret
+    )
+
+    confirm = await client.post(
+        "/auth/totp/confirm",
+        headers=headers,
+        json={"code": pyotp.TOTP(normalized_secret).now()},
+    )
+
+    assert confirm.status_code == 200
+    assert user.totp_enabled
+    assert user.pending_totp_secret_encrypted is None
+    assert decrypt_secret(user.totp_secret_encrypted, settings=auth_settings) == normalized_secret
+
+
+@pytest.mark.parametrize(
+    "custom_secret",
+    ["NOT-BASE32-0189", "JBSWY3DPEHPK3PXP", "A" * 129],
+)
+async def test_totp_setup_rejects_invalid_custom_secret_without_exposing_or_persisting_it(
+    client: AsyncClient,
+    session: AsyncSession,
+    auth_settings: Settings,
+    custom_secret: str,
+) -> None:
+    user = await create_user(session)
+    access_token = issue_access_token(user_id=user.id, settings=auth_settings)
+
+    response = await client.post(
+        "/auth/totp/setup",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"custom_secret": custom_secret},
+    )
+
+    assert response.status_code == 422
+    assert error_code(response.json()) == "invalid_totp_secret"
+    assert custom_secret not in response.text
+    assert user.pending_totp_secret_encrypted is None
+    assert user.totp_secret_encrypted is None
+    assert not user.totp_enabled
+
+
+async def test_totp_reenrollment_with_custom_secret_still_requires_current_code(
+    client: AsyncClient,
+    session: AsyncSession,
+    auth_settings: Settings,
+) -> None:
+    old_secret = pyotp.random_base32()
+    custom_secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+    user = await create_user(session, totp_secret=old_secret, settings=auth_settings)
+    active_ciphertext = user.totp_secret_encrypted
+    access_token = issue_access_token(user_id=user.id, settings=auth_settings)
+
+    response = await client.post(
+        "/auth/totp/setup",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"custom_secret": custom_secret},
+    )
+
+    assert response.status_code == 401
+    assert error_code(response.json()) == "current_totp_required"
+    assert user.pending_totp_secret_encrypted is None
+    assert user.totp_secret_encrypted == active_ciphertext
+
+
 async def test_totp_reenrollment_requires_current_code(
     client: AsyncClient,
     session: AsyncSession,

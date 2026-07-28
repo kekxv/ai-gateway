@@ -36,6 +36,7 @@ from ai_gateway.core.security import (
     encrypt_secret,
     issue_access_token,
     issue_refresh_token,
+    validate_totp_secret,
 )
 from ai_gateway.db.models import User
 from ai_gateway.db.session import get_session
@@ -189,7 +190,17 @@ async def setup_totp(
                 "Invalid TOTP code",
                 authenticate=True,
             )
-    secret = pyotp.random_base32()
+    if payload is not None and payload.custom_secret is not None:
+        try:
+            secret = validate_totp_secret(payload.custom_secret.get_secret_value())
+        except ValueError:
+            raise_auth_error(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "invalid_totp_secret",
+                "Custom TOTP secret must be valid Base32 with at least 160 bits",
+            )
+    else:
+        secret = pyotp.random_base32()
     locked_user.pending_totp_secret_encrypted = encrypt_secret(secret, settings=settings)
     await session.commit()
     uri = pyotp.TOTP(secret).provisioning_uri(

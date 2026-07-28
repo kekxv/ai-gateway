@@ -64,7 +64,10 @@ class TotpSetupResponse(BaseModel):
 
 
 class TotpSetupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     current_totp_code: SecretStr | None = None
+    custom_secret: SecretStr | None = None
 
 
 class TotpConfirmRequest(BaseModel):

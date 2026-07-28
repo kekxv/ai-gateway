@@ -198,6 +198,15 @@ model set; they cannot select providers or another owner. Administrator accounts
 - request-log filters, backend cursor navigation, and redacted JSON detail inspection;
 - password changes plus TOTP enrollment, verified replacement, and verified disable.
 
+TOTP setup generates a random secret by default. The Security settings page also offers an
+advanced custom-secret option for migrations and managed authenticators. A custom value must be
+RFC 4648 Base32, decode to at least 160 bits, and is normalized by removing spaces/hyphens and
+uppercasing it. Use only a randomly generated, securely backed-up secret that is not reused:
+weak or reused values can lead to account takeover, while losing the value can lock the user out.
+The console shows this warning and requires explicit acknowledgement before submission. The new
+secret remains encrypted and pending until a code generated from it is confirmed; an existing
+active TOTP secret continues to work until that confirmation succeeds.
+
 JWT access and refresh tokens are stored in `sessionStorage`, not `localStorage`. Provider
 credentials, TOTP codes, passwords, and full API keys are never persisted or redisplayed after
 their one-time workflow ends.

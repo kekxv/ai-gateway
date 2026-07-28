@@ -391,6 +391,166 @@ describe('TOTP 安全设置', () => {
     wrapper.unmount()
   })
 
+  it('自定义 TOTP 密钥显示高风险警告，要求安全确认并规范化后提交', async () => {
+    const setupBodies: unknown[] = []
+    const requestStarted = deferred()
+    const releaseRequest = deferred()
+    server.use(
+      http.post('/auth/totp/setup', async ({ request }) => {
+        setupBodies.push(await request.json())
+        requestStarted.resolve()
+        await releaseRequest.promise
+        return HttpResponse.json({ otpauth_uri: 'otpauth://totp/custom?secret=custom-secret' })
+      }),
+    )
+    const { wrapper } = mountSecurity()
+
+    expect(wrapper.find('[data-test="custom-totp-warning"]').exists()).toBe(false)
+    await wrapper.get('[data-test="use-custom-totp-secret"] input').setValue(true)
+
+    const warning = wrapper.get('[data-test="custom-totp-warning"]').text()
+    expect(warning).toContain('随机 Base32 密钥')
+    expect(warning).toContain('至少 160 bit')
+    expect(warning).toContain('账户被接管')
+    expect(warning).toContain('无法登录')
+    expect(warning).toContain('安全备份')
+    expect(wrapper.get('[data-test="custom-totp-secret"]').attributes('type')).toBe('password')
+
+    await wrapper.get('[data-test="custom-totp-secret"]').setValue('JBSWY3DPEHPK3PXP')
+    expect(wrapper.get('[data-test="custom-totp-error"]').text()).toContain('至少需要 32 个')
+    expect(wrapper.get('[data-test="start-totp"]').attributes('disabled')).toBeDefined()
+
+    await wrapper
+      .get('[data-test="custom-totp-secret"]')
+      .setValue('jbsw y3dp-ehpk3pxp jbsw y3dp-ehpk3pxp')
+    expect(
+      (wrapper.get('[data-test="custom-totp-secret"]').element as HTMLInputElement).value,
+    ).toBe('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP')
+    await wrapper.get('[data-test="custom-totp-acknowledged"] input').setValue(true)
+    expect(wrapper.get('[data-test="start-totp"]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[data-test="start-totp"]').trigger('click')
+    await requestStarted.promise
+
+    expect(setupBodies).toEqual([
+      { custom_secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP' },
+    ])
+    expect((wrapper.vm as unknown as { customTotpSecret: string }).customTotpSecret).toBe('')
+    releaseRequest.resolve()
+    await flushPromises()
+    expect(wrapper.findComponent(QrcodeVue).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('自定义密钥重新绑定时仍同时发送当前验证码', async () => {
+    const setupBodies: unknown[] = []
+    server.use(
+      http.post('/auth/totp/setup', async ({ request }) => {
+        setupBodies.push(await request.json())
+        return HttpResponse.json({ otpauth_uri: 'otpauth://totp/custom?secret=custom-secret' })
+      }),
+    )
+    const { wrapper } = mountSecurity(enabledAdmin)
+
+    await wrapper.get('[data-test="current-code"]').setValue('654321')
+    await wrapper.get('[data-test="use-custom-totp-secret"] input').setValue(true)
+    await wrapper
+      .get('[data-test="custom-totp-secret"]')
+      .setValue('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP')
+    await wrapper.get('[data-test="custom-totp-acknowledged"] input').setValue(true)
+    await wrapper.get('[data-test="start-totp"]').trigger('click')
+    await flushPromises()
+
+    expect(setupBodies).toEqual([
+      {
+        current_totp_code: '654321',
+        custom_secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+      },
+    ])
+    wrapper.unmount()
+  })
+
+  it('将 invalid_totp_secret 映射到密钥字段且不显示服务端消息', async () => {
+    server.use(http.post('/auth/totp/setup', () => apiError('invalid_totp_secret', 422)))
+    const { wrapper } = mountSecurity()
+
+    await wrapper.get('[data-test="use-custom-totp-secret"] input').setValue(true)
+    await wrapper
+      .get('[data-test="custom-totp-secret"]')
+      .setValue('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP')
+    await wrapper.get('[data-test="custom-totp-acknowledged"] input').setValue(true)
+    await wrapper.get('[data-test="start-totp"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="custom-totp-error"]').text()).toContain(
+      '有效的 Base32 密钥',
+    )
+    expect(wrapper.text()).not.toContain('The server message')
+    expect((wrapper.vm as unknown as { customTotpSecret: string }).customTotpSecret).toBe('')
+    wrapper.unmount()
+  })
+
+  it('取消、退出和卸载都会清除自定义密钥与风险确认状态', async () => {
+    const requestStarted = deferred()
+    const releaseRequest = deferred()
+    server.use(
+      http.post('/auth/totp/setup', async () => {
+        requestStarted.resolve()
+        await releaseRequest.promise
+        return HttpResponse.json({ otpauth_uri: 'otpauth://totp/late?secret=late-secret' })
+      }),
+    )
+    const first = mountSecurity()
+    await first.wrapper.get('[data-test="use-custom-totp-secret"] input').setValue(true)
+    await first.wrapper
+      .get('[data-test="custom-totp-secret"]')
+      .setValue('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP')
+    await first.wrapper.get('[data-test="custom-totp-acknowledged"] input').setValue(true)
+    await first.wrapper.get('[data-test="start-totp"]').trigger('click')
+    await requestStarted.promise
+    await first.wrapper.get('[data-test="cancel-setup"]').trigger('click')
+    releaseRequest.resolve()
+    await flushPromises()
+
+    expect((first.wrapper.vm as unknown as { useCustomTotpSecret: boolean }).useCustomTotpSecret).toBe(
+      false,
+    )
+    expect((first.wrapper.vm as unknown as { customTotpSecret: string }).customTotpSecret).toBe('')
+    expect(
+      (first.wrapper.vm as unknown as { customTotpAcknowledged: boolean })
+        .customTotpAcknowledged,
+    ).toBe(false)
+    expect(first.wrapper.findComponent(QrcodeVue).exists()).toBe(false)
+
+    await first.wrapper.get('[data-test="use-custom-totp-secret"] input').setValue(true)
+    await first.wrapper
+      .get('[data-test="custom-totp-secret"]')
+      .setValue('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP')
+    await first.wrapper.get('[data-test="custom-totp-acknowledged"] input').setValue(true)
+    first.auth.logout()
+    expect((first.wrapper.vm as unknown as { useCustomTotpSecret: boolean }).useCustomTotpSecret).toBe(
+      false,
+    )
+    expect((first.wrapper.vm as unknown as { customTotpSecret: string }).customTotpSecret).toBe('')
+    first.wrapper.unmount()
+
+    const second = mountSecurity()
+    await second.wrapper.get('[data-test="use-custom-totp-secret"] input').setValue(true)
+    await second.wrapper
+      .get('[data-test="custom-totp-secret"]')
+      .setValue('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP')
+    await second.wrapper.get('[data-test="custom-totp-acknowledged"] input').setValue(true)
+    const vm = second.wrapper.vm as unknown as {
+      useCustomTotpSecret: boolean
+      customTotpSecret: string
+      customTotpAcknowledged: boolean
+    }
+    second.wrapper.unmount()
+    expect(vm.useCustomTotpSecret).toBe(false)
+    expect(vm.customTotpSecret).toBe('')
+    expect(vm.customTotpAcknowledged).toBe(false)
+  })
+
   it('重新绑定要求当前六位验证码，发送正确字段并在请求期间防止重复提交', async () => {
     const setupBodies: unknown[] = []
     const requestStarted = deferred()
