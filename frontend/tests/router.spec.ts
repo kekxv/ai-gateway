@@ -17,6 +17,13 @@ const adminUser = {
   updated_at: '2026-07-22T00:00:00',
 }
 
+const regularUser = {
+  ...adminUser,
+  id: 2,
+  email: 'member@example.com',
+  role: 'user' as const,
+}
+
 describe('导航守卫', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -87,6 +94,48 @@ describe('导航守卫', () => {
 
     expect(router.currentRoute.value.name).toBe('dashboard')
   })
+
+  it('允许未登录用户访问注册页', async () => {
+    const router = createAppRouter(createMemoryHistory())
+
+    await router.push('/register')
+    await router.isReady()
+
+    expect(router.currentRoute.value.name).toBe('register')
+  })
+
+  it.each(['/login', '/register'])('将普通用户从公开账户页 %s 转到安全设置', async (path) => {
+    const auth = useAuthStore()
+    vi.spyOn(auth, 'restore').mockImplementation(() => {
+      auth.user = regularUser
+      auth.ready = true
+      return Promise.resolve()
+    })
+    const router = createAppRouter(createMemoryHistory())
+
+    await router.push(path)
+    await router.isReady()
+
+    expect(router.currentRoute.value.name).toBe('security')
+  })
+
+  it.each(['/', '/providers', '/models', '/users', '/api-keys', '/request-logs'])(
+    '阻止普通用户访问管理员路由 %s',
+    async (path) => {
+      const auth = useAuthStore()
+      vi.spyOn(auth, 'restore').mockImplementation(() => {
+        auth.user = regularUser
+        auth.ready = true
+        return Promise.resolve()
+      })
+      const router = createAppRouter(createMemoryHistory())
+
+      await router.push(path)
+      await router.isReady()
+
+      expect(router.currentRoute.value.name).toBe('security')
+    },
+  )
 
   it('保留安全的站内登录后目标地址', () => {
     expect(resolveLoginRedirect('/providers?enabled=true#details')).toBe(

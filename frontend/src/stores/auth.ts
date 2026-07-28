@@ -1,7 +1,11 @@
 import { computed, onScopeDispose, ref } from 'vue'
 import { defineStore } from 'pinia'
 
-import { getCurrentUser, login as loginRequest } from '@/api/auth'
+import {
+  getCurrentUser,
+  login as loginRequest,
+  register as registerRequest,
+} from '@/api/auth'
 import {
   ACCESS_TOKEN_KEY,
   ApiError,
@@ -10,7 +14,7 @@ import {
   replaceSessionTokens,
   REFRESH_TOKEN_KEY,
 } from '@/api/client'
-import type { CurrentUser, LoginRequest } from '@/api/types'
+import type { CurrentUser, LoginRequest, RegisterRequest, TokenPair } from '@/api/types'
 
 interface AuthOperation {
   revision: number
@@ -87,30 +91,22 @@ export const useAuthStore = defineStore('auth', () => {
     activeAuthOperation = undefined
   }
 
-  function requireAdmin(currentUser: CurrentUser): void {
-    if (currentUser.role !== 'admin') {
-      clearSession()
-      throw new ApiError(403, 'admin_required', '仅管理员可以访问管理控制台')
-    }
-  }
-
   function currentUserId(): number | null {
     return user.value?.id ?? null
   }
 
-  async function login(credentials: LoginRequest): Promise<void> {
+  async function authenticate(
+    request: (signal: AbortSignal) => Promise<TokenPair>,
+  ): Promise<void> {
     clearSession()
     const operation = beginAuthOperation()
     try {
-      const tokens = await loginRequest(credentials, operation.controller.signal)
+      const tokens = await request(operation.controller.signal)
       requireCurrentAuthOperation(operation)
       replaceSessionTokens(tokens.access_token, tokens.refresh_token)
 
       const currentUser = await getCurrentUser(operation.controller.signal)
       requireCurrentAuthOperation(operation)
-      if (currentUser.role !== 'admin') {
-        throw new ApiError(403, 'admin_required', '仅管理员可以访问管理控制台')
-      }
       user.value = currentUser
     } catch (error: unknown) {
       requireCurrentAuthOperation(operation)
@@ -119,6 +115,14 @@ export const useAuthStore = defineStore('auth', () => {
     } finally {
       if (isCurrentAuthOperation(operation)) finishAuthOperation(operation)
     }
+  }
+
+  async function login(credentials: LoginRequest): Promise<void> {
+    await authenticate((signal) => loginRequest(credentials, signal))
+  }
+
+  async function register(credentials: RegisterRequest): Promise<void> {
+    await authenticate((signal) => registerRequest(credentials, signal))
   }
 
   async function restore(): Promise<void> {
@@ -135,9 +139,6 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const currentUser = await getCurrentUser(operation.controller.signal)
       requireCurrentAuthOperation(operation)
-      if (currentUser.role !== 'admin') {
-        throw new ApiError(403, 'admin_required', '仅管理员可以访问管理控制台')
-      }
       user.value = currentUser
     } catch (error: unknown) {
       if (isOwnAuthenticationFailure(operation, error)) return
@@ -162,7 +163,6 @@ export const useAuthStore = defineStore('auth', () => {
     ) {
       throw new ApiError(401, 'session_changed', '登录状态已变更，请重试')
     }
-    requireAdmin(currentUser)
     user.value = currentUser
   }
 
@@ -171,5 +171,15 @@ export const useAuthStore = defineStore('auth', () => {
     ready.value = true
   }
 
-  return { user, ready, authenticated, isAdmin, login, restore, refreshCurrentUser, logout }
+  return {
+    user,
+    ready,
+    authenticated,
+    isAdmin,
+    login,
+    register,
+    restore,
+    refreshCurrentUser,
+    logout,
+  }
 })

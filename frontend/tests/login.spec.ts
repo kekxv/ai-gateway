@@ -21,6 +21,14 @@ const adminUser: CurrentUser = {
   updated_at: '2026-07-22T00:00:00',
 }
 
+const regularUser: CurrentUser = {
+  ...adminUser,
+  id: 2,
+  email: 'member@example.com',
+  role: 'user',
+  totp_enabled: false,
+}
+
 const server = setupServer()
 
 beforeAll(() => {
@@ -54,6 +62,38 @@ async function mountLogin(redirect?: string) {
 }
 
 describe('登录页面', () => {
+  it('使用通用账户文案并提供注册链接', async () => {
+    const { wrapper } = await mountLogin()
+
+    expect(wrapper.get('h1').text()).toBe('账户登录')
+    expect(wrapper.text()).toContain('邮箱')
+    expect(wrapper.text()).not.toContain('管理员邮箱')
+    expect(wrapper.get('a[href="/register"]').text()).toContain('注册')
+  })
+
+  it('普通用户登录后进入安全设置', async () => {
+    server.use(
+      http.post('/auth/login', () =>
+        HttpResponse.json({
+          access_token: 'access',
+          refresh_token: 'refresh',
+          token_type: 'bearer',
+        }),
+      ),
+      http.get('/auth/me', () => HttpResponse.json(regularUser)),
+    )
+    const { router, wrapper } = await mountLogin()
+    await wrapper.get('[data-test="email"]').setValue(regularUser.email)
+    await wrapper.get('[data-test="password"]').setValue('member-password')
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    await vi.waitFor(() => {
+      expect(router.currentRoute.value.name).toBe('security')
+    })
+  })
+
   it('仅在服务端要求双重验证后显示验证码输入框', async () => {
     const requests: unknown[] = []
     const totpFocusDisabledStates: boolean[] = []

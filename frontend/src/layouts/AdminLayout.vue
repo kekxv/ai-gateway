@@ -43,15 +43,16 @@ interface NavigationItem {
   route: string
   label: string
   icon: typeof DataAnalysis
+  requiresAdmin?: boolean
 }
 
 const navigation: NavigationItem[] = [
-  { route: '/', label: '控制台概览', icon: DataAnalysis },
-  { route: '/providers', label: '供应商管理', icon: Connection },
-  { route: '/models', label: '模型管理', icon: Operation },
-  { route: '/users', label: '用户管理', icon: User },
-  { route: '/api-keys', label: '接口密钥', icon: Key },
-  { route: '/request-logs', label: '请求日志', icon: Document },
+  { route: '/', label: '控制台概览', icon: DataAnalysis, requiresAdmin: true },
+  { route: '/providers', label: '供应商管理', icon: Connection, requiresAdmin: true },
+  { route: '/models', label: '模型管理', icon: Operation, requiresAdmin: true },
+  { route: '/users', label: '用户管理', icon: User, requiresAdmin: true },
+  { route: '/api-keys', label: '接口密钥', icon: Key, requiresAdmin: true },
+  { route: '/request-logs', label: '请求日志', icon: Document, requiresAdmin: true },
   { route: '/security', label: '安全设置', icon: Lock },
 ]
 
@@ -62,6 +63,9 @@ const viewportWidth = ref(typeof window === 'undefined' ? 1200 : window.innerWid
 const drawerOpen = ref(false)
 const isMobile = computed(() => viewportWidth.value < 768)
 const isCollapsed = computed(() => viewportWidth.value < 1200)
+const visibleNavigation = computed(() =>
+  navigation.filter((item) => item.requiresAdmin !== true || auth.isAdmin),
+)
 let pendingPageHeadingPath: string | undefined
 
 function updateViewport(): void {
@@ -147,7 +151,7 @@ onBeforeUnmount(() => {
           @select="navigate"
         >
           <ElMenuItem
-            v-for="item in navigation"
+            v-for="item in visibleNavigation"
             :key="item.route"
             :index="item.route"
             :data-navigation-route="item.route"
@@ -172,7 +176,7 @@ onBeforeUnmount(() => {
         </ElButton>
       </template>
       <ElMenu class="admin-menu admin-menu--drawer" :default-active="route.path" @select="navigate">
-        <ElMenuItem v-for="item in navigation" :key="item.route" :index="item.route">
+        <ElMenuItem v-for="item in visibleNavigation" :key="item.route" :index="item.route">
           <ElIcon><component :is="item.icon" /></ElIcon>
           <template #title>{{ item.label }}</template>
         </ElMenuItem>

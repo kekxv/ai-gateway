@@ -4,6 +4,7 @@ import { createMemoryHistory, type Router } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from '@/App.vue'
+import type { CurrentUser } from '@/api/types'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import { createAppRouter } from '@/router'
 import { useAuthStore } from '@/stores/auth'
@@ -43,6 +44,13 @@ const adminUser = {
   updated_at: '2026-07-22T00:00:00',
 }
 
+const regularUser = {
+  ...adminUser,
+  id: 2,
+  email: 'member@example.com',
+  role: 'user' as const,
+}
+
 const mountedWrappers: VueWrapper[] = []
 
 function setViewport(width: number): void {
@@ -50,7 +58,11 @@ function setViewport(width: number): void {
   window.dispatchEvent(new Event('resize'))
 }
 
-async function mountShell(width = 1200, warnings?: string[]): Promise<{
+async function mountShell(
+  width = 1200,
+  warnings?: string[],
+  currentUser: CurrentUser = adminUser,
+): Promise<{
   auth: ReturnType<typeof useAuthStore>
   router: Router
   wrapper: VueWrapper
@@ -60,7 +72,7 @@ async function mountShell(width = 1200, warnings?: string[]): Promise<{
   setActivePinia(pinia)
   const auth = useAuthStore()
   vi.spyOn(auth, 'restore').mockImplementation(() => {
-    auth.user = adminUser
+    auth.user = currentUser
     auth.ready = true
     return Promise.resolve()
   })
@@ -98,6 +110,21 @@ beforeEach(() => {
 })
 
 describe('管理控制台外壳', () => {
+  it('普通用户只看到安全设置导航、账户邮箱和退出入口', async () => {
+    const { wrapper } = await mountShell(1200, undefined, regularUser)
+    const navigationText = wrapper.get('nav[aria-label="控制台导航"]').text()
+
+    expect(navigationText).toContain('安全设置')
+    expect(navigationText).not.toContain('控制台概览')
+    expect(navigationText).not.toContain('供应商管理')
+    expect(navigationText).not.toContain('模型管理')
+    expect(navigationText).not.toContain('用户管理')
+    expect(navigationText).not.toContain('接口密钥')
+    expect(navigationText).not.toContain('请求日志')
+    expect(wrapper.get('.admin-email').text()).toBe(regularUser.email)
+    expect(wrapper.get('.admin-header').text()).toContain('退出登录')
+  })
+
   it('通过真实过渡渲染缓存页面时不产生 Fragment 根节点警告', async () => {
     const warnings: string[] = []
     const { router, wrapper } = await mountShell(1200, warnings)

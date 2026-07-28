@@ -72,6 +72,19 @@ describe('authentication store', () => {
     expect(store.ready).toBe(true)
   })
 
+  it('restores a valid regular-user session', async () => {
+    sessionStorage.setItem('gateway.access_token', 'access')
+    sessionStorage.setItem('gateway.refresh_token', 'refresh')
+    server.use(http.get('/auth/me', () => HttpResponse.json(regularUser)))
+
+    const store = useAuthStore()
+    await store.restore()
+
+    expect(store.user).toEqual(regularUser)
+    expect(store.isAdmin).toBe(false)
+    expect(store.authenticated).toBe(true)
+  })
+
   it('clears storage when refresh fails', async () => {
     sessionStorage.setItem('gateway.access_token', 'expired')
     sessionStorage.setItem('gateway.refresh_token', 'refresh')
@@ -267,7 +280,7 @@ describe('authentication store', () => {
     expect(useAuthStore().user).toBeNull()
   })
 
-  it('rejects a non-admin login and clears its tokens', async () => {
+  it('accepts a regular-user login and reports the role', async () => {
     server.use(
       http.post('/auth/login', () =>
         HttpResponse.json({
@@ -281,13 +294,70 @@ describe('authentication store', () => {
 
     const store = useAuthStore()
 
-    await expect(store.login({ email: regularUser.email, password: 'secret' })).rejects.toEqual(
-      expect.objectContaining({
-        status: 403,
-        code: 'admin_required',
-        message: '仅管理员可以访问管理控制台',
+    await store.login({ email: regularUser.email, password: 'secret' })
+
+    expect(sessionStorage.getItem('gateway.access_token')).toBe('access')
+    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('refresh')
+    expect(store.user).toEqual(regularUser)
+    expect(store.isAdmin).toBe(false)
+  })
+
+  it('registers, stores the returned tokens, and loads the new user', async () => {
+    const requests: unknown[] = []
+    server.use(
+      http.post('/auth/register', async ({ request }) => {
+        requests.push(await request.json())
+        return HttpResponse.json(
+          {
+            access_token: 'registered-access',
+            refresh_token: 'registered-refresh',
+            token_type: 'bearer',
+          },
+          { status: 201 },
+        )
       }),
+      http.get('/auth/me', () => HttpResponse.json(regularUser)),
     )
+
+    const store = useAuthStore()
+    await store.register({ email: regularUser.email, password: 'registration-password' })
+
+    expect(requests).toEqual([
+      { email: regularUser.email, password: 'registration-password' },
+    ])
+    expect(sessionStorage.getItem('gateway.access_token')).toBe('registered-access')
+    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('registered-refresh')
+    expect(store.user).toEqual(regularUser)
+  })
+
+  it('does not let a registration response restore the session after logout', async () => {
+    const registrationStarted = createDeferred()
+    const releaseRegistration = createDeferred()
+    server.use(
+      http.post('/auth/register', async () => {
+        registrationStarted.resolve()
+        await releaseRegistration.promise
+        return HttpResponse.json(
+          {
+            access_token: 'stale-access',
+            refresh_token: 'stale-refresh',
+            token_type: 'bearer',
+          },
+          { status: 201 },
+        )
+      }),
+      http.get('/auth/me', () => HttpResponse.json(regularUser)),
+    )
+    const store = useAuthStore()
+
+    const outcome = store
+      .register({ email: regularUser.email, password: 'registration-password' })
+      .catch((error: unknown) => error)
+    await registrationStarted.promise
+    store.logout()
+    releaseRegistration.resolve()
+
+    expect(await outcome).toEqual(expect.objectContaining({ code: 'session_changed' }))
     expect(sessionStorage.length).toBe(0)
     expect(store.user).toBeNull()
   })

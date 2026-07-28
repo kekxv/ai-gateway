@@ -2,6 +2,7 @@ import { apiClient, normalizeApiError, rawClient } from './client'
 import type {
   CurrentUser,
   LoginRequest,
+  RegisterRequest,
   TokenPair,
   TotpConfirmRequest,
   TotpConfirmResponse,
@@ -13,6 +14,22 @@ export async function login(credentials: LoginRequest, signal?: AbortSignal): Pr
   try {
     const { data } = await rawClient.post<TokenPair>(
       '/auth/login',
+      credentials,
+      signalConfig(signal),
+    )
+    return data
+  } catch (error: unknown) {
+    throw normalizeApiError(error)
+  }
+}
+
+export async function register(
+  credentials: RegisterRequest,
+  signal?: AbortSignal,
+): Promise<TokenPair> {
+  try {
+    const { data } = await rawClient.post<TokenPair>(
+      '/auth/register',
       credentials,
       signalConfig(signal),
     )

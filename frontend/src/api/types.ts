@@ -17,6 +17,11 @@ export interface LoginRequest {
   totp_code?: string | null
 }
 
+export interface RegisterRequest {
+  email: string
+  password: string
+}
+
 export interface RefreshRequest {
   refresh_token: string
 }

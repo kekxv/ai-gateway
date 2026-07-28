@@ -237,7 +237,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="route-page">
-    <PageHeader title="安全设置" description="使用身份验证器为管理员账户增加一层登录保护。" />
+    <PageHeader title="安全设置" description="使用身份验证器为账户增加一层登录保护。" />
 
     <ElAlert
       v-if="successMessage"
