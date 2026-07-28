@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from ai_gateway.admin.api_keys import router as api_keys_router
+from ai_gateway.admin.api_keys import self_router as self_api_keys_router
 from ai_gateway.admin.billing import router as billing_router
 from ai_gateway.admin.configuration import router as configuration_router
 from ai_gateway.admin.dashboard import router as dashboard_router
@@ -249,6 +250,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(users_router)
     app.include_router(api_keys_router)
+    app.include_router(self_api_keys_router)
     app.include_router(providers_router)
     app.include_router(model_sync_router)
     app.include_router(models_router)

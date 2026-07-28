@@ -3,7 +3,7 @@ from __future__ import annotations
 import secrets
 from datetime import UTC, datetime
 from hashlib import sha256
-from typing import Annotated, NoReturn
+from typing import Annotated, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -11,16 +11,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ai_gateway.auth.dependencies import admin_user
+from ai_gateway.auth.dependencies import admin_user, current_user
 from ai_gateway.auth.service import raise_auth_error
 from ai_gateway.core.enums import ApiKeyScope
 from ai_gateway.db.models import ApiKey, ApiKeyModel, ApiKeyProvider, Model, Provider, User
 from ai_gateway.db.session import get_session
 
 router = APIRouter(prefix="/admin/api-keys", tags=["admin-api-keys"])
+self_router = APIRouter(prefix="/user/api-keys", tags=["user-api-keys"])
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 AdminUser = Annotated[User, Depends(admin_user)]
+CurrentUser = Annotated[User, Depends(current_user)]
+SelfApiKeyScope = Literal[ApiKeyScope.ALL, ApiKeyScope.MODELS]
 
 
 class ApiKeyCreate(BaseModel):
@@ -62,6 +65,26 @@ class ApiKeyResponse(BaseModel):
 
 class ApiKeyCreatedResponse(ApiKeyResponse):
     key: str
+
+
+class SelfApiKeyCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=255)
+    scope: SelfApiKeyScope = ApiKeyScope.ALL
+    is_active: bool = True
+    expires_at: datetime | None = None
+    model_ids: list[int] = Field(default_factory=list)
+
+
+class SelfApiKeyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    scope: SelfApiKeyScope | None = None
+    is_active: bool | None = None
+    expires_at: datetime | None = None
+    model_ids: list[int] | None = None
 
 
 @router.post("", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED)
@@ -172,15 +195,126 @@ async def rotate_api_key(
     session: Session,
     _: AdminUser,
 ) -> ApiKeyCreatedResponse:
-    old_key = await session.scalar(
-        select(ApiKey)
-        .where(ApiKey.id == api_key_id)
-        .with_for_update()
-        .options(selectinload(ApiKey.provider_links), selectinload(ApiKey.model_links))
-        .execution_options(populate_existing=True)
+    old_key = await _get_api_key(session, api_key_id, for_update=True)
+    return await _rotate_locked_api_key(session, old_key)
+
+
+@self_router.post("", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED)
+async def create_own_api_key(
+    payload: SelfApiKeyCreate,
+    session: Session,
+    user: CurrentUser,
+) -> ApiKeyCreatedResponse:
+    model_ids = set(payload.model_ids) if payload.scope is ApiKeyScope.MODELS else set()
+    await _validate_self_model_ids(session, model_ids)
+    api_key, raw_key = _new_api_key(
+        user_id=user.id,
+        name=payload.name,
+        scope=payload.scope,
+        is_active=payload.is_active,
+        expires_at=_database_datetime(payload.expires_at),
+        provider_ids=set(),
+        model_ids=model_ids,
     )
-    if old_key is None:
-        _raise_api_key_not_found()
+    session.add(api_key)
+    await session.flush()
+    await session.refresh(api_key, attribute_names=["created_at"])
+    response = _created_response(api_key, raw_key)
+    await session.commit()
+    return response
+
+
+@self_router.get("", response_model=list[ApiKeyResponse])
+async def list_own_api_keys(session: Session, user: CurrentUser) -> list[ApiKeyResponse]:
+    api_keys = (
+        await session.scalars(
+            select(ApiKey)
+            .where(ApiKey.user_id == user.id)
+            .options(selectinload(ApiKey.provider_links), selectinload(ApiKey.model_links))
+            .order_by(ApiKey.id)
+        )
+    ).all()
+    return [_api_key_response(api_key) for api_key in api_keys]
+
+
+@self_router.get("/{api_key_id}", response_model=ApiKeyResponse)
+async def get_own_api_key(
+    api_key_id: int,
+    session: Session,
+    user: CurrentUser,
+) -> ApiKeyResponse:
+    return _api_key_response(await _get_api_key(session, api_key_id, user_id=user.id))
+
+
+@self_router.patch("/{api_key_id}", response_model=ApiKeyResponse)
+async def update_own_api_key(
+    api_key_id: int,
+    payload: SelfApiKeyUpdate,
+    session: Session,
+    user: CurrentUser,
+) -> ApiKeyResponse:
+    api_key = await _get_api_key(session, api_key_id, user_id=user.id)
+    target_scope = payload.scope if payload.scope is not None else api_key.scope
+    if payload.name is not None:
+        api_key.name = payload.name
+    if payload.scope is not None:
+        api_key.scope = payload.scope
+        api_key.provider_links = []
+    if payload.is_active is not None:
+        api_key.is_active = payload.is_active
+    if "expires_at" in payload.model_fields_set:
+        api_key.expires_at = _database_datetime(payload.expires_at)
+
+    if target_scope is ApiKeyScope.MODELS:
+        model_ids = (
+            set(payload.model_ids)
+            if payload.model_ids is not None
+            else {link.model_id for link in api_key.model_links}
+        )
+        await _validate_self_model_ids(session, model_ids)
+        if payload.model_ids is not None or payload.scope is not None:
+            api_key.model_links = [ApiKeyModel(model_id=model_id) for model_id in sorted(model_ids)]
+    elif target_scope is ApiKeyScope.ALL:
+        api_key.model_links = []
+    elif payload.model_ids is not None:
+        _raise_invalid_self_scope()
+
+    await session.flush()
+    response = _api_key_response(api_key)
+    await session.commit()
+    return response
+
+
+@self_router.delete("/{api_key_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_own_api_key(
+    api_key_id: int,
+    session: Session,
+    user: CurrentUser,
+) -> Response:
+    api_key = await _get_api_key(session, api_key_id, user_id=user.id)
+    await session.delete(api_key)
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@self_router.post(
+    "/{api_key_id}/rotate",
+    response_model=ApiKeyCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def rotate_own_api_key(
+    api_key_id: int,
+    session: Session,
+    user: CurrentUser,
+) -> ApiKeyCreatedResponse:
+    old_key = await _get_api_key(session, api_key_id, user_id=user.id, for_update=True)
+    return await _rotate_locked_api_key(session, old_key)
+
+
+async def _rotate_locked_api_key(
+    session: AsyncSession,
+    old_key: ApiKey,
+) -> ApiKeyCreatedResponse:
     if not old_key.is_active:
         raise_auth_error(
             status.HTTP_409_CONFLICT,
@@ -207,12 +341,20 @@ async def rotate_api_key(
     return response
 
 
-async def _get_api_key(session: AsyncSession, api_key_id: int) -> ApiKey:
-    api_key = await session.scalar(
-        select(ApiKey)
-        .where(ApiKey.id == api_key_id)
-        .options(selectinload(ApiKey.provider_links), selectinload(ApiKey.model_links))
-    )
+async def _get_api_key(
+    session: AsyncSession,
+    api_key_id: int,
+    *,
+    user_id: int | None = None,
+    for_update: bool = False,
+) -> ApiKey:
+    query = select(ApiKey).where(ApiKey.id == api_key_id)
+    if user_id is not None:
+        query = query.where(ApiKey.user_id == user_id)
+    query = query.options(selectinload(ApiKey.provider_links), selectinload(ApiKey.model_links))
+    if for_update:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    api_key = await session.scalar(query)
     if api_key is None:
         _raise_api_key_not_found()
     return api_key
@@ -239,6 +381,28 @@ async def _validate_relation_ids(
             "invalid_scope_reference",
             "One or more provider or model IDs do not exist",
         )
+
+
+async def _validate_self_model_ids(session: AsyncSession, model_ids: set[int]) -> None:
+    existing_model_ids = set(
+        await session.scalars(
+            select(Model.id).where(Model.id.in_(model_ids), Model.enabled.is_(True))
+        )
+    )
+    if existing_model_ids != model_ids:
+        raise_auth_error(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "invalid_scope_reference",
+            "One or more model IDs are unavailable",
+        )
+
+
+def _raise_invalid_self_scope() -> NoReturn:
+    raise_auth_error(
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
+        "invalid_scope_reference",
+        "This API key scope cannot be managed by a regular user",
+    )
 
 
 def _new_api_key(
