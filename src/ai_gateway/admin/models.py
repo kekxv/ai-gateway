@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ai_gateway.admin.audit import log_multiplier_change
-from ai_gateway.auth.dependencies import admin_user
+from ai_gateway.auth.dependencies import admin_user, current_user
 from ai_gateway.auth.service import raise_auth_error
 from ai_gateway.catalog.schemas import (
     ModelAliasInput,
@@ -38,9 +38,11 @@ from ai_gateway.db.session import get_session
 
 models_router = APIRouter(prefix="/admin/models", tags=["admin-models"])
 routes_router = APIRouter(prefix="/admin/model-routes", tags=["admin-model-routes"])
+user_models_router = APIRouter(prefix="/user/models", tags=["user-models"])
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 AdminUser = Annotated[User, Depends(admin_user)]
+CurrentUser = Annotated[User, Depends(current_user)]
 
 
 @models_router.post("", response_model=ModelResponse, status_code=status.HTTP_201_CREATED)
@@ -82,6 +84,19 @@ async def list_models(session: Session, _: AdminUser) -> list[ModelResponse]:
         await session.scalars(select(Model).options(selectinload(Model.aliases)).order_by(Model.id))
     ).all()
     return [_model_response(model) for model in models]
+
+
+@user_models_router.get("", response_model=list[ModelResponse])
+async def list_available_models(session: Session, _: CurrentUser) -> list[ModelResponse]:
+    models = (
+        await session.scalars(
+            select(Model)
+            .where(Model.enabled.is_(True))
+            .options(selectinload(Model.aliases))
+            .order_by(Model.id)
+        )
+    ).all()
+    return [_model_response(model, enabled_aliases_only=True) for model in models]
 
 
 @models_router.get("/{model_id}", response_model=ModelResponse)
@@ -374,8 +389,11 @@ def _replace_aliases(model: Model, aliases: list[ModelAliasInput]) -> None:
     model.aliases = replacements
 
 
-def _model_response(model: Model) -> ModelResponse:
-    aliases = sorted(model.aliases, key=lambda item: item.id)
+def _model_response(model: Model, *, enabled_aliases_only: bool = False) -> ModelResponse:
+    aliases = sorted(
+        (alias for alias in model.aliases if alias.enabled or not enabled_aliases_only),
+        key=lambda item: item.id,
+    )
     return ModelResponse(
         id=model.id,
         canonical_name=model.canonical_name,
