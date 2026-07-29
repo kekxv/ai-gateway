@@ -13,8 +13,7 @@ import {
 } from 'echarts/components'
 import { type ComposeOption, use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { ElAlert, ElButton, ElCard, ElResult, ElSkeleton, ElSkeletonItem } from 'element-plus'
-import 'element-plus/theme-chalk/el-alert.css'
+import { ElButton, ElCard, ElResult, ElSkeleton, ElSkeletonItem } from 'element-plus'
 import 'element-plus/theme-chalk/el-button.css'
 import 'element-plus/theme-chalk/el-card.css'
 import 'element-plus/theme-chalk/el-result.css'
@@ -22,9 +21,10 @@ import 'element-plus/theme-chalk/el-skeleton.css'
 import 'element-plus/theme-chalk/el-skeleton-item.css'
 import VChart from 'vue-echarts'
 
-import { getDashboardSummary } from '@/api/dashboard'
-import type { DashboardSummary } from '@/api/types'
+import { getDashboardSummary, getUserDashboardSummary } from '@/api/dashboard'
+import type { DashboardSummary, UserDashboardSummary } from '@/api/types'
 import PageHeader from '@/components/common/PageHeader.vue'
+import { useAuthStore } from '@/stores/auth'
 import { formatDuration, formatInteger, formatMoney, formatPercent } from '@/utils/format'
 
 use([
@@ -46,7 +46,10 @@ type DashboardChartOption = ComposeOption<
   | TooltipComponentOption
 >
 
-const summary = ref<DashboardSummary | null>(null)
+const auth = useAuthStore()
+
+const adminSummary = ref<DashboardSummary | null>(null)
+const userSummary = ref<UserDashboardSummary | null>(null)
 const initialLoading = ref(true)
 const retrying = ref(false)
 const errorMessage = ref('')
@@ -55,7 +58,7 @@ let requestSequence = 0
 let requestController: AbortController | undefined
 
 const resourceCards = computed(() => {
-  const data = summary.value
+  const data = adminSummary.value
   if (data === null) return []
   return [
     { label: '用户总数', value: formatInteger(data.users_total), note: '已创建账户' },
@@ -82,8 +85,22 @@ const resourceCards = computed(() => {
   ]
 })
 
+const userBalanceCards = computed(() => {
+  const data = userSummary.value
+  if (data === null) return []
+  return [
+    { label: '账户余额', value: formatMoney(data.balance), note: '当前可用余额' },
+    { label: '累计消费', value: formatMoney(data.total_spent), note: '历史总消费' },
+    {
+      label: '活跃接口密钥',
+      value: formatInteger(data.active_api_keys),
+      note: '当前可用密钥',
+    },
+  ]
+})
+
 const usageCards = computed(() => {
-  const data = summary.value
+  const data = auth.isAdmin ? adminSummary.value : userSummary.value
   if (data === null) return []
   return [
     { label: '24 小时请求', value: formatInteger(data.requests_24h) },
@@ -102,15 +119,20 @@ function isZeroDecimal(value: string): boolean {
   return /^[+-]?0+(?:\.0*)?(?:[eE][+-]?\d+)?$/.test(value.trim())
 }
 
+const dailyUsageData = computed(() => {
+  if (auth.isAdmin) return adminSummary.value?.daily_usage ?? []
+  return userSummary.value?.daily_usage ?? []
+})
+
 const chartEmpty = computed(() => {
-  const points = summary.value?.daily_usage ?? []
+  const points = dailyUsageData.value
   return points.every(
     (point) => point.requests === 0 && point.failures === 0 && isZeroDecimal(point.cost),
   )
 })
 
 const chartOption = computed<DashboardChartOption>(() => {
-  const points = summary.value?.daily_usage ?? []
+  const points = dailyUsageData.value
   return {
     aria: {
       enabled: true,
@@ -188,7 +210,7 @@ function formatChartTooltip(params: unknown): string {
       'dataIndex' in candidate &&
       typeof candidate.dataIndex === 'number',
   )
-  const point = item === undefined ? undefined : summary.value?.daily_usage[item.dataIndex]
+  const point = item === undefined ? undefined : dailyUsageData.value[item.dataIndex]
   if (point === undefined) return ''
 
   return [
@@ -211,9 +233,15 @@ async function loadSummary(): Promise<void> {
   else retrying.value = true
 
   try {
-    const data = await getDashboardSummary(controller.signal)
-    if (sequence !== requestSequence) return
-    summary.value = data
+    if (auth.isAdmin) {
+      const data = await getDashboardSummary(controller.signal)
+      if (sequence !== requestSequence) return
+      adminSummary.value = data
+    } else {
+      const data = await getUserDashboardSummary(controller.signal)
+      if (sequence !== requestSequence) return
+      userSummary.value = data
+    }
     errorMessage.value = ''
   } catch (error: unknown) {
     if (controller.signal.aborted || sequence !== requestSequence) return
@@ -225,6 +253,8 @@ async function loadSummary(): Promise<void> {
     }
   }
 }
+
+const hasData = computed(() => (auth.isAdmin ? adminSummary.value !== null : userSummary.value !== null))
 
 onMounted(() => {
   void loadSummary()
@@ -238,7 +268,10 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="route-page">
-    <PageHeader title="控制台概览" description="查看网关资源状态与近期请求趋势。" />
+    <PageHeader
+      title="控制台概览"
+      :description="auth.isAdmin ? '查看网关资源状态与近期请求趋势。' : '查看你的账户余额与近期使用情况。'"
+    />
 
     <section v-if="initialLoading" data-test="dashboard-skeleton" aria-label="正在加载概览">
       <div class="resource-grid" aria-hidden="true">
@@ -255,7 +288,7 @@ onBeforeUnmount(() => {
     </section>
 
     <ElResult
-      v-else-if="summary === null && errorMessage"
+      v-else-if="!hasData && errorMessage"
       data-test="dashboard-error"
       icon="error"
       title="概览数据加载失败"
@@ -273,26 +306,45 @@ onBeforeUnmount(() => {
       </template>
     </ElResult>
 
-    <template v-else-if="summary !== null">
-      <ElAlert
-        v-if="summary.routes.unavailable > 0"
-        class="route-alert"
-        type="warning"
-        :title="`${formatInteger(summary.routes.unavailable)} 条路由处于熔断状态`"
-        description="请检查上游提供商健康状态与最近请求日志。"
-        :closable="false"
-        show-icon
-      />
+    <template v-else-if="hasData">
+      <!-- Admin: resource cards -->
+      <template v-if="auth.isAdmin && adminSummary">
+        <ElAlert
+          v-if="adminSummary.routes.unavailable > 0"
+          class="route-alert"
+          type="warning"
+          :title="`${formatInteger(adminSummary.routes.unavailable)} 条路由处于熔断状态`"
+          description="请检查上游提供商健康状态与最近请求日志。"
+          :closable="false"
+          show-icon
+        />
 
-      <section aria-labelledby="resource-heading">
+        <section aria-labelledby="resource-heading">
+          <div class="section-heading">
+            <div>
+              <p class="section-heading__eyebrow">资源状态</p>
+              <h2 id="resource-heading">网关资源</h2>
+            </div>
+          </div>
+          <div class="resource-grid">
+            <ElCard v-for="card in resourceCards" :key="card.label" shadow="never">
+              <p class="resource-card__summary">{{ card.label }} {{ card.value }}</p>
+              <p class="resource-card__note">{{ card.note }}</p>
+            </ElCard>
+          </div>
+        </section>
+      </template>
+
+      <!-- Regular user: balance cards -->
+      <section v-if="!auth.isAdmin" aria-labelledby="balance-heading">
         <div class="section-heading">
           <div>
-            <p class="section-heading__eyebrow">资源状态</p>
-            <h2 id="resource-heading">网关资源</h2>
+            <p class="section-heading__eyebrow">账户</p>
+            <h2 id="balance-heading">余额与密钥</h2>
           </div>
         </div>
-        <div class="resource-grid">
-          <ElCard v-for="card in resourceCards" :key="card.label" shadow="never">
+        <div class="resource-grid resource-grid--three">
+          <ElCard v-for="card in userBalanceCards" :key="card.label" shadow="never">
             <p class="resource-card__summary">{{ card.label }} {{ card.value }}</p>
             <p class="resource-card__note">{{ card.note }}</p>
           </ElCard>
@@ -346,7 +398,7 @@ onBeforeUnmount(() => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="point in summary.daily_usage" :key="point.date">
+            <tr v-for="point in dailyUsageData" :key="point.date">
               <td>{{ point.date }}</td>
               <td>{{ formatInteger(point.requests) }}</td>
               <td>{{ formatInteger(point.failures) }}</td>
@@ -389,6 +441,10 @@ h2 {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0.9rem;
+}
+
+.resource-grid--three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .resource-grid :deep(.el-card) {
@@ -508,6 +564,7 @@ h2 {
 
 @media (max-width: 760px) {
   .resource-grid,
+  .resource-grid--three,
   .usage-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -519,6 +576,7 @@ h2 {
 
 @media (max-width: 480px) {
   .resource-grid,
+  .resource-grid--three,
   .usage-grid {
     grid-template-columns: 1fr;
   }

@@ -19,10 +19,15 @@ import 'element-plus/theme-chalk/el-skeleton.css'
 import 'element-plus/theme-chalk/el-skeleton-item.css'
 import 'element-plus/theme-chalk/el-tag.css'
 
-import { listRequestLogs, type RequestLogQuery } from '@/api/requestLogs'
-import type { Protocol, RequestLogSummary, RequestStatus } from '@/api/types'
+import {
+  listRequestLogs,
+  listUserRequestLogs,
+  type RequestLogQuery,
+} from '@/api/requestLogs'
+import type { Protocol, RequestLogSummary, RequestStatus, UserRequestLogSummary } from '@/api/types'
 import PageHeader from '@/components/common/PageHeader.vue'
 import RequestLogDetailDrawer from '@/components/request-logs/RequestLogDetailDrawer.vue'
+import { useAuthStore } from '@/stores/auth'
 import { formatDateTime, formatDuration, formatMoney } from '@/utils/format'
 
 interface FilterDraft {
@@ -37,6 +42,8 @@ interface FilterDraft {
   createdTo: string
 }
 
+const auth = useAuthStore()
+
 const filters = reactive<FilterDraft>({
   requestId: '',
   userId: '',
@@ -48,7 +55,7 @@ const filters = reactive<FilterDraft>({
   createdFrom: '',
   createdTo: '',
 })
-const logs = ref<RequestLogSummary[]>([])
+const logs = ref<Array<RequestLogSummary | UserRequestLogSummary>>([])
 const loading = ref(true)
 const loadError = ref('')
 const pageSize = ref(50)
@@ -81,11 +88,13 @@ function currentQuery(cursor: string | null): RequestLogQuery {
     createdTo: filters.createdTo,
     pageSize: pageSize.value,
   }
-  const userId = optionalInteger(filters.userId)
+  if (auth.isAdmin) {
+    const userId = optionalInteger(filters.userId)
+    if (userId !== undefined) query.userId = userId
+  }
   const apiKeyId = optionalInteger(filters.apiKeyId)
   const modelId = optionalInteger(filters.modelId)
   const providerId = optionalInteger(filters.providerId)
-  if (userId !== undefined) query.userId = userId
   if (apiKeyId !== undefined) query.apiKeyId = apiKeyId
   if (modelId !== undefined) query.modelId = modelId
   if (providerId !== undefined) query.providerId = providerId
@@ -116,7 +125,9 @@ async function load(): Promise<void> {
   loading.value = true
   loadError.value = ''
   try {
-    const response = await listRequestLogs(currentQuery(currentCursor.value), controller.signal)
+    const response = auth.isAdmin
+      ? await listRequestLogs(currentQuery(currentCursor.value), controller.signal)
+      : await listUserRequestLogs(currentQuery(currentCursor.value), controller.signal)
     if (!isCurrentLoad(controller, generation)) return
     logs.value = response.items
     nextCursor.value = response.next_cursor
@@ -195,7 +206,10 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="route-page">
-    <PageHeader title="请求日志" description="按审计字段搜索网关请求，并检查服务端已脱敏的请求与响应详情。">
+    <PageHeader
+      title="请求日志"
+      :description="auth.isAdmin ? '按审计字段搜索网关请求，并检查服务端已脱敏的请求与响应详情。' : '查看你的网关请求记录与元数据。'"
+    >
       <template #actions>
         <ElButton :loading="loading" aria-label="刷新请求日志" @click="load">
           <ElIcon><Refresh /></ElIcon>
@@ -219,12 +233,12 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="filter-grid">
+      <div class="filter-grid" :class="{ 'filter-grid--compact': !auth.isAdmin }">
         <label>
           <span>请求 ID</span>
           <input v-model="filters.requestId" data-test="log-request-id" type="search" placeholder="输入完整请求 ID" @change="applyFilters">
         </label>
-        <label>
+        <label v-if="auth.isAdmin">
           <span>用户 ID</span>
           <input v-model="filters.userId" data-test="log-user-id" type="number" min="1" placeholder="例如 2" @change="applyFilters">
         </label>
@@ -313,7 +327,8 @@ onBeforeUnmount(() => {
           <thead>
             <tr>
               <th>请求 ID</th>
-              <th>用户 / 密钥</th>
+              <th v-if="auth.isAdmin">用户 / 密钥</th>
+              <th v-else>密钥</th>
               <th>模型 / 供应商 / 路由</th>
               <th>入站 → 出站协议</th>
               <th>传输 / 流式</th>
@@ -329,7 +344,8 @@ onBeforeUnmount(() => {
           <tbody>
             <tr v-for="log in logs" :key="log.id" :data-test="`request-log-${log.id}`">
               <td class="id-cell"><strong>{{ log.id }}</strong></td>
-              <td>{{ entityLabel('用户', log.user_id) }} / {{ entityLabel('密钥', log.api_key_id) }}</td>
+              <td v-if="auth.isAdmin">{{ entityLabel('用户', (log as RequestLogSummary).user_id) }} / {{ entityLabel('密钥', log.api_key_id) }}</td>
+              <td v-else>{{ entityLabel('密钥', log.api_key_id) }}</td>
               <td>{{ entityLabel('模型', log.model_id) }} / {{ entityLabel('供应商', log.provider_id) }} / {{ entityLabel('路由', log.model_route_id) }}</td>
               <td>{{ log.inbound_protocol }} → {{ log.outbound_protocol ?? '无出站协议' }}</td>
               <td>{{ log.transport }} / {{ log.stream ? '是' : '否' }}</td>
@@ -370,6 +386,7 @@ onBeforeUnmount(() => {
     <RequestLogDetailDrawer
       :model-value="detailOpen"
       :request-id="selectedRequestId"
+      :hide-sensitive="!auth.isAdmin"
       @update:model-value="setDetailOpen"
     />
   </div>
@@ -430,6 +447,10 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(5, minmax(9rem, 1fr));
   gap: 0.85rem;
   margin-top: 1rem;
+}
+
+.filter-grid--compact {
+  grid-template-columns: repeat(4, minmax(9rem, 1fr));
 }
 
 .filter-grid label {

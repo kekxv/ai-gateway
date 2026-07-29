@@ -48,12 +48,12 @@ interface NavigationItem {
 }
 
 const navigation: NavigationItem[] = [
-  { route: '/', label: '控制台概览', icon: DataAnalysis, requiresAdmin: true },
+  { route: '/', label: '控制台概览', icon: DataAnalysis },
   { route: '/providers', label: '供应商管理', icon: Connection, requiresAdmin: true },
   { route: '/models', label: '模型管理', userLabel: '可用模型', icon: Operation },
   { route: '/users', label: '用户管理', icon: User, requiresAdmin: true },
   { route: '/api-keys', label: '接口密钥', icon: Key },
-  { route: '/request-logs', label: '请求日志', icon: Document, requiresAdmin: true },
+  { route: '/request-logs', label: '请求日志', icon: Document },
   { route: '/security', label: '安全设置', icon: Lock },
 ]
 

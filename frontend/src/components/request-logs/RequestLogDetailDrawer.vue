@@ -9,21 +9,24 @@ import 'element-plus/theme-chalk/el-skeleton.css'
 import 'element-plus/theme-chalk/el-skeleton-item.css'
 import 'element-plus/theme-chalk/el-tag.css'
 
-import { getRequestLog } from '@/api/requestLogs'
-import type { RequestLogDetail, RequestStatus } from '@/api/types'
+import { getRequestLog, getUserRequestLog } from '@/api/requestLogs'
+import type { RequestLogDetail, RequestStatus, UserRequestLogDetail } from '@/api/types'
 import JsonViewer from '@/components/common/JsonViewer.vue'
 import { formatDateTime, formatDuration, formatMoney } from '@/utils/format'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: boolean
   requestId: string | null
-}>()
+  hideSensitive?: boolean
+}>(), {
+  hideSensitive: false,
+})
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
 }>()
 
-const detail = ref<RequestLogDetail | null>(null)
+const detail = ref<RequestLogDetail | UserRequestLogDetail | null>(null)
 const loading = ref(false)
 const error = ref('')
 let requestController: AbortController | undefined
@@ -61,7 +64,9 @@ async function load(requestId: string): Promise<void> {
   error.value = ''
   loading.value = true
   try {
-    const loaded = await getRequestLog(requestId, controller.signal)
+    const loaded = props.hideSensitive
+      ? await getUserRequestLog(requestId, controller.signal)
+      : await getRequestLog(requestId, controller.signal)
     if (!isCurrentRequest(controller, generation, requestId) || loaded.id !== requestId) return
     detail.value = loaded
   } catch (value: unknown) {
@@ -99,6 +104,10 @@ onBeforeUnmount(() => {
   mounted = false
   clearDetail()
 })
+
+function isRequestLogDetail(value: RequestLogDetail | UserRequestLogDetail): value is RequestLogDetail {
+  return 'request_detail' in value
+}
 </script>
 
 <template>
@@ -111,7 +120,8 @@ onBeforeUnmount(() => {
     <template #header>
       <div>
         <h2 class="drawer-heading">请求详情</h2>
-        <p class="drawer-description">{{ requestId }} · 敏感字段已由服务端脱敏</p>
+        <p v-if="hideSensitive" class="drawer-description">{{ requestId }}</p>
+        <p v-else class="drawer-description">{{ requestId }} · 敏感字段已由服务端脱敏</p>
       </div>
     </template>
 
@@ -135,7 +145,12 @@ onBeforeUnmount(() => {
         </div>
         <dl class="metadata-grid">
           <div><dt>请求 ID</dt><dd>{{ detail.id }}</dd></div>
-          <div><dt>用户 / 密钥</dt><dd>用户 #{{ detail.user_id }} / {{ detail.api_key_id === null ? '无密钥' : `密钥 #${String(detail.api_key_id)}` }}</dd></div>
+          <template v-if="!hideSensitive">
+            <div><dt>用户 / 密钥</dt><dd>用户 #{{ (detail as RequestLogDetail).user_id }} / {{ detail.api_key_id === null ? '无密钥' : `密钥 #${String(detail.api_key_id)}` }}</dd></div>
+          </template>
+          <template v-else>
+            <div><dt>密钥</dt><dd>{{ detail.api_key_id === null ? '无密钥' : `密钥 #${String(detail.api_key_id)}` }}</dd></div>
+          </template>
           <div><dt>模型 / 供应商 / 路由</dt><dd>{{ detail.model_id === null ? '无模型' : `模型 #${String(detail.model_id)}` }} / {{ detail.provider_id === null ? '无供应商' : `供应商 #${String(detail.provider_id)}` }} / {{ detail.model_route_id === null ? '无路由' : `路由 #${String(detail.model_route_id)}` }}</dd></div>
           <div><dt>协议</dt><dd>{{ detail.inbound_protocol }} → {{ detail.outbound_protocol ?? '无出站协议' }}</dd></div>
           <div><dt>传输 / 流式</dt><dd>{{ detail.transport }} / {{ detail.stream ? '是' : '否' }}</dd></div>
@@ -150,8 +165,10 @@ onBeforeUnmount(() => {
         </dl>
       </section>
 
-      <JsonViewer data-test="request-json-section" title="请求 JSON" :value="detail.request_detail" />
-      <JsonViewer data-test="response-json-section" title="响应 JSON" :value="detail.response_detail" />
+      <template v-if="!hideSensitive && isRequestLogDetail(detail)">
+        <JsonViewer data-test="request-json-section" title="请求 JSON" :value="detail.request_detail" />
+        <JsonViewer data-test="response-json-section" title="响应 JSON" :value="detail.response_detail" />
+      </template>
     </div>
 
     <template #footer>

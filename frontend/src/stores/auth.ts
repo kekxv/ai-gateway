@@ -26,6 +26,7 @@ export const useAuthStore = defineStore('auth', () => {
   const ready = ref(false)
   const authenticated = computed(() => user.value !== null)
   const isAdmin = computed(() => user.value?.role === 'admin')
+  const isUser = computed(() => user.value?.role === 'user')
   let sessionRevision = 0
   let activeAuthOperation: AuthOperation | undefined
   let operationInvalidatedBySessionFailure: AuthOperation | undefined
@@ -176,6 +177,7 @@ export const useAuthStore = defineStore('auth', () => {
     ready,
     authenticated,
     isAdmin,
+    isUser,
     login,
     register,
     restore,

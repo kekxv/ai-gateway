@@ -13,7 +13,7 @@ export default defineConfig({
   },
   server: {
     proxy: Object.fromEntries(
-      ['/auth', '/admin', '/me', '/health', '/v1', '/v1beta'].map((path) => [
+      ['/auth', '/user', '/admin', '/me', '/health', '/v1', '/v1beta'].map((path) => [
         path,
         {
           target: process.env.GATEWAY_DEV_URL ?? 'http://127.0.0.1:8000',

@@ -125,6 +125,19 @@ export interface DashboardSummary {
   daily_usage: DailyUsagePoint[]
 }
 
+export interface UserDashboardSummary {
+  balance: string
+  total_spent: string
+  active_api_keys: number
+  requests_24h: number
+  failed_requests_24h: number
+  prompt_tokens_24h: number
+  completion_tokens_24h: number
+  cost_24h: string
+  average_latency_ms_24h: number | null
+  daily_usage: DailyUsagePoint[]
+}
+
 export interface UserCreate {
   email: string
   password: string
@@ -426,4 +439,12 @@ export interface RequestLogListResponse {
 export interface RequestLogDetail extends RequestLogSummary {
   request_detail: Record<string, unknown> | null
   response_detail: Record<string, unknown> | null
+}
+
+export type UserRequestLogSummary = Omit<RequestLogSummary, 'user_id'>
+export type UserRequestLogDetail = Omit<RequestLogDetail, 'user_id' | 'request_detail' | 'response_detail'>
+
+export interface UserRequestLogListResponse {
+  items: UserRequestLogSummary[]
+  next_cursor: string | null
 }

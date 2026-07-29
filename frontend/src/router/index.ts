@@ -31,7 +31,7 @@ export const routes: RouteRecordRaw[] = [
         path: '',
         name: 'dashboard',
         component: () => import('@/views/DashboardView.vue'),
-        meta: { title: '控制台概览', requiresAdmin: true },
+        meta: { title: '控制台概览', userTitle: '控制台概览' },
       },
       {
         path: 'providers',
@@ -61,7 +61,7 @@ export const routes: RouteRecordRaw[] = [
         path: 'request-logs',
         name: 'request-logs',
         component: () => import('@/views/RequestLogsView.vue'),
-        meta: { title: '请求日志', requiresAdmin: true },
+        meta: { title: '请求日志', userTitle: '请求日志' },
       },
       {
         path: 'security',
@@ -92,7 +92,7 @@ export function createAppRouter(
     }
 
     if ((to.name === 'login' || to.name === 'register') && auth.authenticated) {
-      return { name: auth.isAdmin ? 'dashboard' : 'security' }
+      return { name: 'dashboard' }
     }
     if (to.meta.public === true) return true
     if (!auth.authenticated) {
