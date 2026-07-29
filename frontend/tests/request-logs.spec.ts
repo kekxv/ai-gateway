@@ -1,12 +1,14 @@
+import { createPinia } from 'pinia'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { listRequestLogs } from '@/api/requestLogs'
-import type { RequestLogDetail, RequestLogSummary } from '@/api/types'
+import type { CurrentUser, RequestLogDetail, RequestLogSummary } from '@/api/types'
 import JsonViewer from '@/components/common/JsonViewer.vue'
 import { routes } from '@/router'
+import { useAuthStore } from '@/stores/auth'
 import RequestLogsView from '@/views/RequestLogsView.vue'
 
 interface Deferred<T> {
@@ -70,6 +72,16 @@ const detail: RequestLogDetail = {
   },
 }
 
+const adminUser: CurrentUser = {
+  id: 1,
+  email: 'admin@example.com',
+  role: 'admin',
+  is_active: true,
+  totp_enabled: false,
+  created_at: '2026-07-22T00:00:00',
+  updated_at: '2026-07-22T00:00:00',
+}
+
 const server = setupServer()
 
 beforeAll(() => {
@@ -95,12 +107,23 @@ function useLogs(items: RequestLogSummary[] = [firstLog], nextCursor: string | n
   )
 }
 
+function mountRequestLogs() {
+  const pinia = createPinia()
+  const auth = useAuthStore(pinia)
+  auth.user = adminUser
+  auth.ready = true
+  return mount(RequestLogsView, {
+    attachTo: document.body,
+    global: { plugins: [pinia] },
+  })
+}
+
 async function mountLogs(
   items: RequestLogSummary[] = [firstLog],
   nextCursor: string | null = null,
 ): Promise<VueWrapper> {
   useLogs(items, nextCursor)
-  const wrapper = mount(RequestLogsView, { attachTo: document.body })
+  const wrapper = mountRequestLogs()
   await flushPromises()
   return wrapper
 }
@@ -168,7 +191,7 @@ describe('请求日志搜索与详情检查', () => {
           : HttpResponse.json({ items: [firstLog], next_cursor: 'page-two' })
       }),
     )
-    const wrapper = mount(RequestLogsView, { attachTo: document.body })
+    const wrapper = mountRequestLogs()
     await flushPromises()
 
     expect(wrapper.text()).toContain(firstLog.id)
@@ -194,7 +217,7 @@ describe('请求日志搜索与详情检查', () => {
         return HttpResponse.json({ items: [firstLog], next_cursor: 'page-two' })
       }),
     )
-    const wrapper = mount(RequestLogsView, { attachTo: document.body })
+    const wrapper = mountRequestLogs()
     await flushPromises()
     await wrapper.get('[data-test="logs-next"]').trigger('click')
     await flushPromises()
@@ -246,7 +269,7 @@ describe('请求日志搜索与详情检查', () => {
         return HttpResponse.json(detail)
       }),
     )
-    const wrapper = mount(RequestLogsView, { attachTo: document.body })
+    const wrapper = mountRequestLogs()
     await flushPromises()
     expect(detailCalls).toBe(0)
 
@@ -300,7 +323,7 @@ describe('请求日志搜索与详情检查', () => {
         return HttpResponse.json({ items: [secondLog], next_cursor: null })
       }),
     )
-    const wrapper = mount(RequestLogsView, { attachTo: document.body })
+    const wrapper = mountRequestLogs()
     await flushPromises()
 
     await wrapper.get('[data-test="log-user-id"]').setValue('2')
@@ -325,7 +348,7 @@ describe('请求日志搜索与详情检查', () => {
       ),
       http.get('/admin/request-logs/:requestId', () => detailGate.promise),
     )
-    const wrapper = mount(RequestLogsView, { attachTo: document.body })
+    const wrapper = mountRequestLogs()
     await flushPromises()
     await wrapper.get(`[data-test="inspect-log-${firstLog.id}"]`).trigger('click')
     await flushPromises()

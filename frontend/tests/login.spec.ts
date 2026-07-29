@@ -71,7 +71,7 @@ describe('登录页面', () => {
     expect(wrapper.get('a[href="/register"]').text()).toContain('注册')
   })
 
-  it('普通用户登录后进入安全设置', async () => {
+  it('普通用户登录后进入控制台首页', async () => {
     server.use(
       http.post('/auth/login', () =>
         HttpResponse.json({
@@ -90,7 +90,7 @@ describe('登录页面', () => {
     await flushPromises()
 
     await vi.waitFor(() => {
-      expect(router.currentRoute.value.name).toBe('security')
+      expect(router.currentRoute.value.name).toBe('dashboard')
     })
   })
 

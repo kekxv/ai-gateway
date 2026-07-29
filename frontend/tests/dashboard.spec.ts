@@ -1,12 +1,14 @@
 import { defineComponent } from 'vue'
+import { createPinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import * as dashboardApi from '@/api/dashboard'
-import type { DashboardSummary } from '@/api/types'
+import type { CurrentUser, DashboardSummary } from '@/api/types'
 import { routes } from '@/router'
+import { useAuthStore } from '@/stores/auth'
 import { formatDuration, formatInteger, formatMoney, formatPercent } from '@/utils/format'
 import DashboardView from '@/views/DashboardView.vue'
 
@@ -44,6 +46,16 @@ const summaryFixture: DashboardSummary = {
   ],
 }
 
+const adminUser: CurrentUser = {
+  id: 1,
+  email: 'admin@example.com',
+  role: 'admin',
+  is_active: true,
+  totp_enabled: false,
+  created_at: '2026-07-22T00:00:00',
+  updated_at: '2026-07-22T00:00:00',
+}
+
 const zeroSummary: DashboardSummary = {
   ...summaryFixture,
   requests_24h: 0,
@@ -76,6 +88,16 @@ afterAll(() => {
   server.close()
 })
 
+function mountDashboard() {
+  const pinia = createPinia()
+  const auth = useAuthStore(pinia)
+  auth.user = adminUser
+  auth.ready = true
+  return mount(DashboardView, {
+    global: { plugins: [pinia] },
+  })
+}
+
 describe('控制台概览', () => {
   it('通过独立懒加载路由提供概览页面', async () => {
     const shellRoute = routes.find((route) => route.path === '/')
@@ -106,7 +128,7 @@ describe('控制台概览', () => {
       http.get('/admin/dashboard/summary', () => HttpResponse.json(exactSummary)),
     )
 
-    const wrapper = mount(DashboardView)
+    const wrapper = mountDashboard()
     await flushPromises()
 
     expect(wrapper.text()).toContain('用户总数 12,345')
@@ -118,6 +140,7 @@ describe('控制台概览', () => {
     expect(wrapper.text()).toContain('失败率 2.0%')
     expect(wrapper.text()).toContain('24 小时费用 ¥0.12500000')
     expect(wrapper.text()).toContain('1 条路由处于熔断状态')
+    expect(wrapper.get('.el-alert').text()).toContain('1 条路由处于熔断状态')
 
     const chart = wrapper.getComponent({ name: 'VChartStub' })
     expect(chart.props('autoresize')).toBe(true)
@@ -180,7 +203,7 @@ describe('控制台概览', () => {
       }),
     )
 
-    const wrapper = mount(DashboardView)
+    const wrapper = mountDashboard()
     await vi.waitFor(() => {
       expect(wrapper.find('[data-test="dashboard-skeleton"]').exists()).toBe(true)
       expect(releaseRequest).toBeTypeOf('function')
@@ -214,7 +237,7 @@ describe('控制台概览', () => {
       }),
     )
 
-    const wrapper = mount(DashboardView)
+    const wrapper = mountDashboard()
     await flushPromises()
 
     expect(wrapper.get('[data-test="dashboard-error"]').text()).toContain(
@@ -254,7 +277,7 @@ describe('控制台概览', () => {
       return Promise.resolve(latestSummary)
     })
 
-    const wrapper = mount(DashboardView)
+    const wrapper = mountDashboard()
     await flushPromises()
     const loadSummary = (
       wrapper.vm as unknown as {
@@ -287,7 +310,7 @@ describe('控制台概览', () => {
       return new Promise<DashboardSummary>(() => {})
     })
 
-    const wrapper = mount(DashboardView)
+    const wrapper = mountDashboard()
     await vi.waitFor(() => {
       expect(activeSignal).toBeDefined()
     })

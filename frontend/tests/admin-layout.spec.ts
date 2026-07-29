@@ -24,6 +24,18 @@ vi.mock('@/api/dashboard', () => ({
     average_latency_ms_24h: null,
     daily_usage: [],
   }),
+  getUserDashboardSummary: () => Promise.resolve({
+    balance: '0',
+    total_spent: '0',
+    active_api_keys: 0,
+    requests_24h: 0,
+    failed_requests_24h: 0,
+    prompt_tokens_24h: 0,
+    completion_tokens_24h: 0,
+    cost_24h: '0',
+    average_latency_ms_24h: null,
+    daily_usage: [],
+  }),
 }))
 
 vi.mock('@/api/providers', () => ({
@@ -32,6 +44,11 @@ vi.mock('@/api/providers', () => ({
   updateProvider: vi.fn(),
   deleteProvider: vi.fn(),
   syncProviderModels: vi.fn(),
+}))
+
+vi.mock('@/api/settings', () => ({
+  getRegistrationSetting: () => Promise.resolve({ enabled: true }),
+  updateRegistrationSetting: vi.fn(),
 }))
 
 const adminUser = {
@@ -110,18 +127,18 @@ beforeEach(() => {
 })
 
 describe('管理控制台外壳', () => {
-  it('普通用户看到自助模型、接口密钥、安全设置导航和账户入口', async () => {
+  it('普通用户看到概览、自助模型、请求日志、接口密钥、安全设置导航和账户入口', async () => {
     const { wrapper } = await mountShell(1200, undefined, regularUser)
     const navigationText = wrapper.get('nav[aria-label="控制台导航"]').text()
 
     expect(navigationText).toContain('可用模型')
     expect(navigationText).toContain('接口密钥')
     expect(navigationText).toContain('安全设置')
-    expect(navigationText).not.toContain('控制台概览')
+    expect(navigationText).toContain('控制台概览')
     expect(navigationText).not.toContain('供应商管理')
     expect(navigationText).not.toContain('模型管理')
     expect(navigationText).not.toContain('用户管理')
-    expect(navigationText).not.toContain('请求日志')
+    expect(navigationText).toContain('请求日志')
     expect(wrapper.get('.admin-email').text()).toBe(regularUser.email)
     expect(wrapper.get('.admin-header').text()).toContain('退出登录')
   })

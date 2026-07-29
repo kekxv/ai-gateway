@@ -104,7 +104,7 @@ describe('导航守卫', () => {
     expect(router.currentRoute.value.name).toBe('register')
   })
 
-  it.each(['/login', '/register'])('将普通用户从公开账户页 %s 转到安全设置', async (path) => {
+  it.each(['/login', '/register'])('将普通用户从公开账户页 %s 转到控制台首页', async (path) => {
     const auth = useAuthStore()
     vi.spyOn(auth, 'restore').mockImplementation(() => {
       auth.user = regularUser
@@ -116,10 +116,15 @@ describe('导航守卫', () => {
     await router.push(path)
     await router.isReady()
 
-    expect(router.currentRoute.value.name).toBe('security')
+    expect(router.currentRoute.value.name).toBe('dashboard')
   })
 
-  it.each(['/models', '/api-keys'])('允许普通用户访问自助路由 %s', async (path) => {
+  it.each([
+    ['/', 'dashboard'],
+    ['/models', 'models'],
+    ['/api-keys', 'api-keys'],
+    ['/request-logs', 'request-logs'],
+  ] as const)('允许普通用户访问自助路由 %s', async (path, routeName) => {
     const auth = useAuthStore()
     vi.spyOn(auth, 'restore').mockImplementation(() => {
       auth.user = regularUser
@@ -131,10 +136,10 @@ describe('导航守卫', () => {
     await router.push(path)
     await router.isReady()
 
-    expect(router.currentRoute.value.name).toBe(path === '/models' ? 'models' : 'api-keys')
+    expect(router.currentRoute.value.name).toBe(routeName)
   })
 
-  it.each(['/', '/providers', '/users', '/request-logs'])(
+  it.each(['/providers', '/users'])(
     '阻止普通用户访问管理员路由 %s',
     async (path) => {
       const auth = useAuthStore()
