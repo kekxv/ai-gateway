@@ -226,6 +226,83 @@ async def test_request_lifecycle_writes_started_completion_and_redacted_details(
     assert gunzip_json(started_detail.response_detail_gzip) == {
         "body": {"access_token": "[REDACTED]", "result": "ok"},
         "headers": {"Content-Type": "application/json"},
+        "usage": {
+            "input_tokens": 1250,
+            "output_tokens": 375,
+            "cache_read_tokens": 1000,
+            "cache_write_tokens": 250,
+            "source": "provider",
+        },
+    }
+
+
+async def test_claude_sse_response_detail_is_structured_redacted_and_includes_usage(
+    session: AsyncSession,
+    audit_session_factory: async_sessionmaker[AsyncSession],
+    audit_records: tuple[User, User, ApiKey, Model, Provider, ModelRoute],
+) -> None:
+    _, member, api_key, model, provider, route = audit_records
+    service = AuditService(audit_session_factory)
+    request_id = await service.start_request(
+        RequestContext(
+            user_id=member.id,
+            api_key_id=api_key.id,
+            model_id=model.id,
+            inbound_protocol=Protocol.CLAUDE,
+            transport="http",
+            stream=True,
+        ),
+        b"{}",
+    )
+    sse_body = (
+        b"event: message_start\n"
+        b'data: {"type":"message_start","message":{"type":"message",'
+        b'"usage":{"input_tokens":32769,"cache_read_input_tokens":12000,'
+        b'"cache_creation_input_tokens":8000}},"api_key":"stream-secret"}\n\n'
+        b"event: content_block_delta\n"
+        b'data: {"type":"content_block_delta","index":0,'
+        b'"delta":{"type":"text_delta","text":"hello"}}\n\n'
+        b"event: message_delta\n"
+        b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+        b'"usage":{"output_tokens":517}}\n\n'
+        b"event: message_stop\n"
+        b'data: {"type":"message_stop"}\n\n'
+    )
+
+    await service.complete_request(
+        request_id,
+        RequestResult(
+            provider_id=provider.id,
+            model_route_id=route.id,
+            outbound_protocol=Protocol.CLAUDE,
+            http_status=200,
+            prompt_tokens=32769,
+            completion_tokens=517,
+            cache_read_tokens=12000,
+            cache_write_tokens=8000,
+            usage_source=UsageSource.PROVIDER,
+            headers={"Content-Type": "text/event-stream;charset=UTF-8"},
+            body=sse_body,
+        ),
+    )
+    stored_detail = await session.get(RequestLogDetail, str(request_id))
+
+    assert stored_detail is not None
+    assert stored_detail.response_detail_gzip is not None
+    detail = gunzip_json(stored_detail.response_detail_gzip)
+    assert detail["body"]["format"] == "sse"
+    assert detail["body"]["byte_length"] == len(sse_body)
+    assert detail["body"]["event_count"] == 4
+    assert detail["body"]["events"][0]["event"] == "message_start"
+    assert detail["body"]["events"][0]["data"]["type"] == "message_start"
+    assert detail["body"]["events"][0]["data"]["api_key"] == "[REDACTED]"
+    assert detail["body"]["events"][1]["data"]["delta"]["text"] == "hello"
+    assert detail["usage"] == {
+        "input_tokens": 32769,
+        "output_tokens": 517,
+        "cache_read_tokens": 12000,
+        "cache_write_tokens": 8000,
+        "source": "provider",
     }
 
 
@@ -613,6 +690,12 @@ async def test_admin_list_filters_cursor_and_detail_are_safe(
         assert all("response_detail" not in item for item in first_body["items"])
         assert all("cache_read_tokens" in item for item in first_body["items"])
         assert all("cache_write_tokens" in item for item in first_body["items"])
+        for item in first_body["items"]:
+            assert item["user_email"] == "audit-member@example.com"
+            assert item["api_key_prefix"] == "sk-gw-audit-"
+            assert item["model_name"] == "audit-model"
+            assert item["provider_name"] == "audit-provider"
+            assert item["route_upstream_model"] == "provider-audit-model"
 
         second = await client.get(
             "/admin/request-logs",
@@ -648,8 +731,59 @@ async def test_admin_list_filters_cursor_and_detail_are_safe(
         monkeypatch.undo()
         detail = await client.get(f"/admin/request-logs/{ids[0]}")
         assert detail.status_code == 200, detail.text
+        assert detail.json()["user_email"] == "audit-member@example.com"
+        assert detail.json()["api_key_prefix"] == "sk-gw-audit-"
+        assert detail.json()["model_name"] == "audit-model"
+        assert detail.json()["provider_name"] == "audit-provider"
+        assert detail.json()["route_upstream_model"] == "provider-audit-model"
         assert detail.json()["request_detail"]["body"]["credential"] == "[REDACTED]"
         assert detail.json()["response_detail"]["body"]["secret"] == "[REDACTED]"
+
+
+async def test_user_list_and_detail_include_readable_catalog_identities(
+    session: AsyncSession,
+    audit_session_factory: async_sessionmaker[AsyncSession],
+    audit_records: tuple[User, User, ApiKey, Model, Provider, ModelRoute],
+    audit_settings: Settings,
+) -> None:
+    _, member, api_key, model, provider, route = audit_records
+    service = AuditService(audit_session_factory)
+    request_id = await service.start_request(
+        RequestContext(
+            user_id=member.id,
+            api_key_id=api_key.id,
+            model_id=model.id,
+            inbound_protocol=Protocol.CLAUDE,
+            transport="http",
+            stream=True,
+        ),
+        b"{}",
+    )
+    await service.complete_request(
+        request_id,
+        RequestResult(
+            provider_id=provider.id,
+            model_route_id=route.id,
+            outbound_protocol=Protocol.CLAUDE,
+            http_status=200,
+        ),
+    )
+
+    async for client in _client_for(session, audit_settings, member):
+        listing = await client.get(
+            "/user/request-logs",
+            params={"request_id": str(request_id)},
+        )
+        detail = await client.get(f"/user/request-logs/{request_id}")
+
+    assert listing.status_code == 200, listing.text
+    assert detail.status_code == 200, detail.text
+    for item in (listing.json()["items"][0], detail.json()):
+        assert "user_email" not in item
+        assert item["api_key_prefix"] == "sk-gw-audit-"
+        assert item["model_name"] == "audit-model"
+        assert item["provider_name"] == "audit-provider"
+        assert item["route_upstream_model"] == "provider-audit-model"
 
 
 async def test_request_log_endpoints_require_admin(

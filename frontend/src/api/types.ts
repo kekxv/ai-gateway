@@ -405,10 +405,15 @@ export interface LedgerEntryResponse {
 export interface RequestLogSummary {
   id: string
   user_id: number
+  user_email: string
   api_key_id: number | null
+  api_key_prefix: string | null
   model_id: number | null
+  model_name: string | null
   provider_id: number | null
+  provider_name: string | null
   model_route_id: number | null
+  route_upstream_model: string | null
   inbound_protocol: Protocol
   outbound_protocol: Protocol | null
   transport: string
@@ -438,8 +443,11 @@ export interface RequestLogDetail extends RequestLogSummary {
   response_detail: Record<string, unknown> | null
 }
 
-export type UserRequestLogSummary = Omit<RequestLogSummary, 'user_id'>
-export type UserRequestLogDetail = Omit<RequestLogDetail, 'user_id' | 'request_detail' | 'response_detail'>
+export type UserRequestLogSummary = Omit<RequestLogSummary, 'user_id' | 'user_email'>
+export type UserRequestLogDetail = Omit<
+  RequestLogDetail,
+  'user_id' | 'user_email' | 'request_detail' | 'response_detail'
+>
 
 export interface UserRequestLogListResponse {
   items: UserRequestLogSummary[]

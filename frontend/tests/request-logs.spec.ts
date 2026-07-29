@@ -27,10 +27,15 @@ function deferred<T>(): Deferred<T> {
 const firstLog: RequestLogSummary = {
   id: '11111111-1111-4111-8111-111111111111',
   user_id: 2,
+  user_email: 'audit-member@example.com',
   api_key_id: 31,
+  api_key_prefix: 'sk-gw-audit-',
   model_id: 21,
+  model_name: 'audit-model',
   provider_id: 11,
+  provider_name: 'audit-provider',
   model_route_id: 201,
+  route_upstream_model: 'provider-audit-model',
   inbound_protocol: 'claude',
   outbound_protocol: 'openai',
   transport: 'http',
@@ -194,18 +199,18 @@ describe('请求日志搜索与详情检查', () => {
     const wrapper = mountRequestLogs()
     await flushPromises()
 
-    expect(wrapper.text()).toContain(firstLog.id)
+    expect(wrapper.find(`[data-test="request-log-${firstLog.id}"]`).exists()).toBe(true)
     expect(wrapper.get('[data-test="logs-next"]').attributes('disabled')).toBeUndefined()
     await wrapper.get('[data-test="logs-next"]').trigger('click')
     await flushPromises()
     expect(requests.at(-1)?.searchParams.get('cursor')).toBe('page-two')
-    expect(wrapper.text()).toContain(secondLog.id)
+    expect(wrapper.find(`[data-test="request-log-${secondLog.id}"]`).exists()).toBe(true)
     expect(wrapper.get('[data-test="logs-next"]').attributes('disabled')).toBeDefined()
 
     await wrapper.get('[data-test="logs-previous"]').trigger('click')
     await flushPromises()
     expect(requests.at(-1)?.searchParams.has('cursor')).toBe(false)
-    expect(wrapper.text()).toContain(firstLog.id)
+    expect(wrapper.find(`[data-test="request-log-${firstLog.id}"]`).exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -237,19 +242,26 @@ describe('请求日志搜索与详情检查', () => {
     wrapper.unmount()
   })
 
-  it('展示全部审计列并格式化显示 Decimal cost', async () => {
+  it('隐藏请求 UUID 并展示可读实体、用量和精确费用', async () => {
     const wrapper = await mountLogs()
 
     for (const heading of [
-      '请求 ID', '用户 / 密钥', '模型 / 供应商 / 路由', '入站 → 出站协议',
+      '用户 / 密钥', '模型 / 供应商 / 上游模型', '入站 → 出站协议',
       '传输 / 流式', '状态 / HTTP', '令牌', '精确费用', '延迟 / 首个令牌',
       '错误代码', '创建时间',
     ]) {
       expect(wrapper.text()).toContain(heading)
     }
+    expect(wrapper.get('.log-table thead').text()).not.toContain('请求 ID')
     const row = wrapper.get(`[data-test="request-log-${firstLog.id}"]`)
-    expect(row.text()).toContain('用户 #2 / 密钥 #31')
-    expect(row.text()).toContain('模型 #21 / 供应商 #11 / 路由 #201')
+    expect(row.text()).not.toContain(firstLog.id)
+    expect(row.text()).not.toContain('用户 #2')
+    expect(row.text()).not.toContain('模型 #21')
+    expect(row.text()).toContain('audit-member@example.com')
+    expect(row.text()).toContain('sk-gw-audit-…')
+    expect(row.text()).toContain('audit-model')
+    expect(row.text()).toContain('audit-provider')
+    expect(row.text()).toContain('provider-audit-model')
     expect(row.text()).toContain('claude → openai')
     expect(row.text()).toContain('http / 是')
     expect(row.text()).toContain(`¥${firstLog.cost}`)
@@ -329,13 +341,13 @@ describe('请求日志搜索与详情检查', () => {
     await wrapper.get('[data-test="log-user-id"]').setValue('2')
     await wrapper.get('[data-test="log-user-id"]').setValue('')
     await flushPromises()
-    expect(wrapper.text()).toContain(secondLog.id)
+    expect(wrapper.find(`[data-test="request-log-${secondLog.id}"]`).exists()).toBe(true)
     expect(abortSpy).toHaveBeenCalled()
 
     stale.resolve(HttpResponse.json({ items: [firstLog], next_cursor: null }))
     await flushPromises()
-    expect(wrapper.text()).toContain(secondLog.id)
-    expect(wrapper.text()).not.toContain(firstLog.id)
+    expect(wrapper.find(`[data-test="request-log-${secondLog.id}"]`).exists()).toBe(true)
+    expect(wrapper.find(`[data-test="request-log-${firstLog.id}"]`).exists()).toBe(false)
     wrapper.unmount()
   })
 

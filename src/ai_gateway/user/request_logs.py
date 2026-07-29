@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ai_gateway.auth.dependencies import current_user
 from ai_gateway.auth.service import raise_auth_error
 from ai_gateway.core.enums import Protocol, RequestStatus, UsageSource
-from ai_gateway.db.models import RequestLog, User
+from ai_gateway.db.models import ApiKey, Model, ModelRoute, Provider, RequestLog, User
 from ai_gateway.db.session import get_session
 
 router = APIRouter(prefix="/user/request-logs", tags=["user-request-logs"])
@@ -28,9 +28,13 @@ PageSize = Annotated[int, Query(ge=1, le=200)]
 class RequestLogSummary(BaseModel):
     id: UUID
     api_key_id: int | None
+    api_key_prefix: str | None
     model_id: int | None
+    model_name: str | None
     provider_id: int | None
+    provider_name: str | None
     model_route_id: int | None
+    route_upstream_model: str | None
     inbound_protocol: Protocol
     outbound_protocol: Protocol | None
     transport: str
@@ -84,6 +88,24 @@ _SUMMARY_COLUMNS = (
     RequestLog.completed_at,
 )
 
+_IDENTITY_COLUMNS = (
+    ApiKey.key_prefix.label("api_key_prefix"),
+    Model.canonical_name.label("model_name"),
+    Provider.name.label("provider_name"),
+    ModelRoute.upstream_model.label("route_upstream_model"),
+)
+
+
+def _summary_query() -> Select[Any]:
+    return (
+        select(*_SUMMARY_COLUMNS, *_IDENTITY_COLUMNS)
+        .select_from(RequestLog)
+        .outerjoin(ApiKey, ApiKey.id == RequestLog.api_key_id)
+        .outerjoin(Model, Model.id == RequestLog.model_id)
+        .outerjoin(Provider, Provider.id == RequestLog.provider_id)
+        .outerjoin(ModelRoute, ModelRoute.id == RequestLog.model_route_id)
+    )
+
 
 @router.get("", response_model=RequestLogListResponse)
 async def list_user_request_logs(
@@ -100,7 +122,7 @@ async def list_user_request_logs(
     cursor: str | None = None,
     page_size: PageSize = 50,
 ) -> RequestLogListResponse:
-    query = select(*_SUMMARY_COLUMNS).where(RequestLog.user_id == user.id)
+    query = _summary_query().where(RequestLog.user_id == user.id)
     query = _apply_filters(
         query,
         request_id=request_id,
@@ -149,16 +171,25 @@ async def get_user_request_log(
     session: Session,
     user: CurrentUser,
 ) -> RequestLogDetail:
-    request_log = await session.get(RequestLog, str(request_id))
-    if request_log is None or request_log.user_id != user.id:
+    row = (
+        (
+            await session.execute(
+                _summary_query().where(
+                    RequestLog.id == str(request_id),
+                    RequestLog.user_id == user.id,
+                )
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
         raise_auth_error(
             status.HTTP_404_NOT_FOUND,
             "request_log_not_found",
             "Request log not found",
         )
-    return RequestLogDetail(
-        **{column.key: getattr(request_log, column.key) for column in _SUMMARY_COLUMNS}
-    )
+    return RequestLogDetail(**dict(row))
 
 
 def _apply_filters(

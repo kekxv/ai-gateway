@@ -18,7 +18,7 @@ from ai_gateway.auth.dependencies import admin_user
 from ai_gateway.auth.service import raise_auth_error
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import Protocol, RequestStatus, UsageSource
-from ai_gateway.db.models import RequestLog, User
+from ai_gateway.db.models import ApiKey, Model, ModelRoute, Provider, RequestLog, User
 from ai_gateway.db.models import RequestLogDetail as RequestLogDetailRecord
 from ai_gateway.db.session import get_session
 
@@ -32,10 +32,15 @@ PageSize = Annotated[int, Query(ge=1, le=200)]
 class RequestLogSummary(BaseModel):
     id: UUID
     user_id: int
+    user_email: str
     api_key_id: int | None
+    api_key_prefix: str | None
     model_id: int | None
+    model_name: str | None
     provider_id: int | None
+    provider_name: str | None
     model_route_id: int | None
+    route_upstream_model: str | None
     inbound_protocol: Protocol
     outbound_protocol: Protocol | None
     transport: str
@@ -91,6 +96,26 @@ _SUMMARY_COLUMNS = (
     RequestLog.completed_at,
 )
 
+_IDENTITY_COLUMNS = (
+    User.email.label("user_email"),
+    ApiKey.key_prefix.label("api_key_prefix"),
+    Model.canonical_name.label("model_name"),
+    Provider.name.label("provider_name"),
+    ModelRoute.upstream_model.label("route_upstream_model"),
+)
+
+
+def _summary_query() -> Select[Any]:
+    return (
+        select(*_SUMMARY_COLUMNS, *_IDENTITY_COLUMNS)
+        .select_from(RequestLog)
+        .join(User, User.id == RequestLog.user_id)
+        .outerjoin(ApiKey, ApiKey.id == RequestLog.api_key_id)
+        .outerjoin(Model, Model.id == RequestLog.model_id)
+        .outerjoin(Provider, Provider.id == RequestLog.provider_id)
+        .outerjoin(ModelRoute, ModelRoute.id == RequestLog.model_route_id)
+    )
+
 
 @router.get("", response_model=RequestLogListResponse)
 async def list_request_logs(
@@ -108,7 +133,7 @@ async def list_request_logs(
     cursor: str | None = None,
     page_size: PageSize = 50,
 ) -> RequestLogListResponse:
-    query = select(*_SUMMARY_COLUMNS)
+    query = _summary_query()
     query = _apply_filters(
         query,
         request_id=request_id,
@@ -158,8 +183,12 @@ async def get_request_log(
     session: Session,
     _: AdminUser,
 ) -> RequestLogDetail:
-    request_log = await session.get(RequestLog, str(request_id))
-    if request_log is None:
+    row = (
+        (await session.execute(_summary_query().where(RequestLog.id == str(request_id))))
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
         raise_auth_error(
             status.HTTP_404_NOT_FOUND,
             "request_log_not_found",
@@ -167,7 +196,7 @@ async def get_request_log(
         )
     detail_record = await session.get(RequestLogDetailRecord, str(request_id))
     return RequestLogDetail(
-        **_summary_values(request_log),
+        **dict(row),
         request_detail=(
             gunzip_json(detail_record.request_detail_gzip)
             if detail_record and detail_record.request_detail_gzip is not None
@@ -218,10 +247,6 @@ def _apply_filters(
     if created_to is not None:
         query = query.where(RequestLog.created_at <= _database_datetime(created_to))
     return query
-
-
-def _summary_values(request_log: RequestLog) -> dict[str, Any]:
-    return {column.key: getattr(request_log, column.key) for column in _SUMMARY_COLUMNS}
 
 
 def _database_datetime(value: datetime) -> datetime:

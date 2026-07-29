@@ -108,6 +108,10 @@ onBeforeUnmount(() => {
 function isRequestLogDetail(value: RequestLogDetail | UserRequestLogDetail): value is RequestLogDetail {
   return 'request_detail' in value
 }
+
+function apiKeyLabel(prefix: string | null): string {
+  return prefix === null ? '无密钥' : `${prefix}…`
+}
 </script>
 
 <template>
@@ -146,12 +150,12 @@ function isRequestLogDetail(value: RequestLogDetail | UserRequestLogDetail): val
         <dl class="metadata-grid">
           <div><dt>请求 ID</dt><dd>{{ detail.id }}</dd></div>
           <template v-if="!hideSensitive">
-            <div><dt>用户 / 密钥</dt><dd>用户 #{{ (detail as RequestLogDetail).user_id }} / {{ detail.api_key_id === null ? '无密钥' : `密钥 #${String(detail.api_key_id)}` }}</dd></div>
+            <div><dt>用户 / 密钥</dt><dd>{{ (detail as RequestLogDetail).user_email }} / {{ apiKeyLabel(detail.api_key_prefix) }}</dd></div>
           </template>
           <template v-else>
-            <div><dt>密钥</dt><dd>{{ detail.api_key_id === null ? '无密钥' : `密钥 #${String(detail.api_key_id)}` }}</dd></div>
+            <div><dt>密钥</dt><dd>{{ apiKeyLabel(detail.api_key_prefix) }}</dd></div>
           </template>
-          <div><dt>模型 / 供应商 / 路由</dt><dd>{{ detail.model_id === null ? '无模型' : `模型 #${String(detail.model_id)}` }} / {{ detail.provider_id === null ? '无供应商' : `供应商 #${String(detail.provider_id)}` }} / {{ detail.model_route_id === null ? '无路由' : `路由 #${String(detail.model_route_id)}` }}</dd></div>
+          <div><dt>模型 / 供应商 / 上游模型</dt><dd>{{ detail.model_name ?? '已删除模型' }} / {{ detail.provider_name ?? '已删除供应商' }} / {{ detail.route_upstream_model ?? '已删除路由' }}</dd></div>
           <div><dt>协议</dt><dd>{{ detail.inbound_protocol }} → {{ detail.outbound_protocol ?? '无出站协议' }}</dd></div>
           <div><dt>传输 / 流式</dt><dd>{{ detail.transport }} / {{ detail.stream ? '是' : '否' }}</dd></div>
           <div><dt>HTTP 状态</dt><dd>{{ detail.http_status ?? '—' }}</dd></div>

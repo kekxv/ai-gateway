@@ -23,6 +23,7 @@ from ai_gateway.core.config import get_settings
 from ai_gateway.core.enums import Protocol, RequestStatus, UsageSource
 from ai_gateway.db.models import RequestLog, RequestLogDetail
 from ai_gateway.db.session import get_session_factory
+from ai_gateway.transport.sse import SSEDecoder
 
 logger = logging.getLogger(__name__)
 
@@ -215,10 +216,18 @@ class AuditService:
         metadata: Mapping[str, Any],
     ) -> None:
         try:
+            response_metadata = dict(metadata)
+            response_metadata["usage"] = {
+                "input_tokens": prompt_tokens,
+                "output_tokens": completion_tokens,
+                "cache_read_tokens": cache_read_tokens,
+                "cache_write_tokens": cache_write_tokens,
+                "source": usage_source.value if usage_source is not None else None,
+            }
             response_detail_gzip = None
-            if headers or body is not None or metadata:
+            if headers or body is not None or response_metadata:
                 response_detail_gzip = gzip_json(
-                    _detail(headers=headers, body=body, metadata=metadata),
+                    _detail(headers=headers, body=body, metadata=response_metadata),
                     limit_bytes=self._body_limit_bytes,
                 )
             async with self._session_factory() as session:
@@ -264,22 +273,67 @@ def _detail(
     if headers:
         detail["headers"] = redact_headers(headers)
     if body is not None:
-        detail["body"] = _redacted_body(body)
+        detail["body"] = _redacted_body(body, content_type=_content_type(headers))
     return detail
 
 
-def _redacted_body(body: Any) -> Any:
+def _redacted_body(body: Any, *, content_type: str | None = None) -> Any:
     if isinstance(body, bytes):
-        decoded = _decode_json_bytes(body)
+        decoded = _decode_sse_bytes(body) if _is_sse(content_type) else _decode_json_bytes(body)
     elif isinstance(body, str):
         raw = body.encode("utf-8")
-        try:
-            decoded = orjson.loads(body)
-        except orjson.JSONDecodeError:
-            decoded = _unparseable_metadata(raw)
+        if _is_sse(content_type):
+            decoded = _decode_sse_bytes(raw)
+        else:
+            try:
+                decoded = orjson.loads(body)
+            except orjson.JSONDecodeError:
+                decoded = _unparseable_metadata(raw)
     else:
         decoded = body
     return redact_json(_normalize_json(decoded))
+
+
+def _content_type(headers: Mapping[str, str]) -> str | None:
+    return next(
+        (str(value) for key, value in headers.items() if str(key).lower() == "content-type"),
+        None,
+    )
+
+
+def _is_sse(content_type: str | None) -> bool:
+    return content_type is not None and content_type.split(";", 1)[0].strip().lower() == (
+        "text/event-stream"
+    )
+
+
+def _decode_sse_bytes(body: bytes) -> dict[str, Any]:
+    decoder = SSEDecoder()
+    events = [*decoder.feed(body), *decoder.finish()]
+    decoded_events: list[dict[str, Any]] = []
+    for event in events:
+        decoded_event: dict[str, Any] = {}
+        if event.event is not None:
+            decoded_event["event"] = event.event
+        if event.event_id is not None:
+            decoded_event["id"] = event.event_id
+        if event.comment is not None:
+            decoded_event["comment"] = event.comment.decode("utf-8", errors="replace")
+        if event.data:
+            if event.data == b"[DONE]":
+                decoded_event["data"] = "[DONE]"
+            else:
+                try:
+                    decoded_event["data"] = orjson.loads(event.data)
+                except (UnicodeDecodeError, orjson.JSONDecodeError):
+                    decoded_event["data"] = _unparseable_metadata(event.data)
+        decoded_events.append(decoded_event)
+    return {
+        "format": "sse",
+        "events": decoded_events,
+        "event_count": len(decoded_events),
+        "byte_length": len(body),
+    }
 
 
 def _decode_json_bytes(body: bytes) -> Any:

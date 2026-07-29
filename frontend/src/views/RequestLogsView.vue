@@ -188,8 +188,8 @@ function setDetailOpen(open: boolean): void {
   if (!open) selectedRequestId.value = null
 }
 
-function entityLabel(kind: string, id: number | null): string {
-  return id === null ? `无${kind}` : `${kind} #${String(id)}`
+function apiKeyLabel(prefix: string | null): string {
+  return prefix === null ? '无密钥' : `${prefix}…`
 }
 
 onMounted(() => {
@@ -326,10 +326,9 @@ onBeforeUnmount(() => {
         <table class="log-table">
           <thead>
             <tr>
-              <th>请求 ID</th>
               <th v-if="auth.isAdmin">用户 / 密钥</th>
               <th v-else>密钥</th>
-              <th>模型 / 供应商 / 路由</th>
+              <th>模型 / 供应商 / 上游模型</th>
               <th>入站 → 出站协议</th>
               <th>传输 / 流式</th>
               <th>状态 / HTTP</th>
@@ -343,10 +342,20 @@ onBeforeUnmount(() => {
           </thead>
           <tbody>
             <tr v-for="log in logs" :key="log.id" :data-test="`request-log-${log.id}`">
-              <td class="id-cell"><strong>{{ log.id }}</strong></td>
-              <td v-if="auth.isAdmin">{{ entityLabel('用户', (log as RequestLogSummary).user_id) }} / {{ entityLabel('密钥', log.api_key_id) }}</td>
-              <td v-else>{{ entityLabel('密钥', log.api_key_id) }}</td>
-              <td>{{ entityLabel('模型', log.model_id) }} / {{ entityLabel('供应商', log.provider_id) }} / {{ entityLabel('路由', log.model_route_id) }}</td>
+              <td v-if="auth.isAdmin">
+                <div class="entity-cell">
+                  <strong>{{ (log as RequestLogSummary).user_email }}</strong>
+                  <small>{{ apiKeyLabel(log.api_key_prefix) }}</small>
+                </div>
+              </td>
+              <td v-else>{{ apiKeyLabel(log.api_key_prefix) }}</td>
+              <td>
+                <div class="entity-cell">
+                  <strong>{{ log.model_name ?? '已删除模型' }}</strong>
+                  <span>{{ log.provider_name ?? '已删除供应商' }}</span>
+                  <small>上游：{{ log.route_upstream_model ?? '已删除路由' }}</small>
+                </div>
+              </td>
               <td>{{ log.inbound_protocol }} → {{ log.outbound_protocol ?? '无出站协议' }}</td>
               <td>{{ log.transport }} / {{ log.stream ? '是' : '否' }}</td>
               <td>
@@ -498,7 +507,7 @@ onBeforeUnmount(() => {
 
 .log-table {
   width: 100%;
-  min-width: 138rem;
+  min-width: 116rem;
   border-collapse: collapse;
 }
 
@@ -522,10 +531,18 @@ onBeforeUnmount(() => {
   border-bottom: 0;
 }
 
-.id-cell,
 .exact-value {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
+}
+
+.entity-cell {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.entity-cell small {
+  color: var(--gateway-muted);
 }
 
 .table-skeleton {
