@@ -436,6 +436,18 @@ async def test_same_protocol_preserves_vendor_json_and_response_bytes(
     )
     path, body = _request(protocol, alias)
     body["vendor_unknown"] = {"nested": [1, "two"]}
+    if protocol is Protocol.CLAUDE:
+        body["messages"].append(
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "native system message"},
+                    {"type": "future_beta_block", "payload": {"mode": "native"}},
+                ],
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
+        path = f"{path}?beta=true"
     async with AsyncClient(
         transport=ASGITransport(app=_app(service)),
         base_url="http://test",
@@ -458,6 +470,16 @@ async def test_same_protocol_preserves_vendor_json_and_response_bytes(
         assert request_model_path(seen[0]) == upstream_model
     else:
         assert upstream_payload["model"] == upstream_model
+    if protocol is Protocol.CLAUDE:
+        assert upstream_payload["messages"][1] == {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "native system message"},
+                {"type": "future_beta_block", "payload": {"mode": "native"}},
+            ],
+            "cache_control": {"type": "ephemeral"},
+        }
+        assert seen[0].url.params["beta"] == "true"
     assert "x-remove" not in seen[0].headers
 
 

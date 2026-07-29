@@ -889,6 +889,11 @@ class GatewayService:
                     stream=prepared.canonical.stream,
                     openai_operation=_outbound_openai_operation(prepared, route),
                 )
+                if route.protocol is prepared.inbound_protocol and request.query_params:
+                    passthrough_params = httpx.QueryParams(
+                        tuple(request.query_params.multi_items())
+                    )
+                    url = str(httpx.URL(url).copy_merge_params(passthrough_params))
                 upstream_request = build_upstream_request(
                     route,
                     request.headers,
@@ -1241,7 +1246,65 @@ def _decode_gateway_request(
         return _native_openai_billing_request(payload, openai_operation)
     if inbound_protocol is Protocol.OPENAI and openai_operation == "responses":
         return _native_responses_billing_request(payload)
-    return get_adapter(inbound_protocol).decode_request(payload)
+    try:
+        return get_adapter(inbound_protocol).decode_request(payload)
+    except (GatewayError, ValueError):
+        return _native_passthrough_billing_request(payload)
+
+
+def _native_passthrough_billing_request(payload: Mapping[str, Any]) -> CanonicalRequest:
+    model = payload.get("model")
+    if not isinstance(model, str):
+        raise InvalidRequestError("A non-empty model is required")
+    prompt_texts = tuple(
+        text
+        for field in ("system", "instructions", "input", "messages", "contents")
+        for text in _native_prompt_texts(payload.get(field))
+    )
+    max_output_tokens = _native_max_output_tokens(payload)
+    return CanonicalRequest(
+        model=model,
+        messages=(
+            (CanonicalMessage(role="user", content=tuple(TextPart(text) for text in prompt_texts)),)
+            if prompt_texts
+            else ()
+        ),
+        system=(),
+        tools=(),
+        tool_choice=None,
+        temperature=None,
+        top_p=None,
+        max_output_tokens=max_output_tokens,
+        stop_sequences=(),
+        stream=payload.get("stream") is True,
+        metadata={},
+    )
+
+
+def _native_prompt_texts(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, list):
+        return tuple(text for item in value for text in _native_prompt_texts(item))
+    if not isinstance(value, Mapping):
+        return ()
+    return tuple(
+        text
+        for field in ("text", "content", "parts")
+        for text in _native_prompt_texts(value.get(field))
+    )
+
+
+def _native_max_output_tokens(payload: Mapping[str, Any]) -> int | None:
+    for value in (payload.get("max_tokens"), payload.get("max_output_tokens")):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    generation_config = payload.get("generationConfig")
+    if isinstance(generation_config, Mapping):
+        value = generation_config.get("maxOutputTokens")
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
 
 
 def _native_openai_billing_request(
@@ -1354,6 +1417,8 @@ def _upstream_body(
         )
         return rewritten
     canonical = prepared.canonical
+    if route.protocol is not prepared.inbound_protocol:
+        canonical = get_adapter(prepared.inbound_protocol).decode_request(prepared.payload)
     if prepared.openai_operation == "responses":
         from ai_gateway.protocols.openai import OpenAIAdapter
 
