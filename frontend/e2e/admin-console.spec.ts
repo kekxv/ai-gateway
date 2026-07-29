@@ -415,7 +415,17 @@ test('regular user can browse models and manage only their own API key', async (
     await expect(navigation.getByRole('menuitem', { name: '安全设置' })).toBeVisible()
     await expect(navigation.getByRole('menuitem', { name: '供应商管理' })).toHaveCount(0)
     await expect(navigation.getByRole('menuitem', { name: '用户管理' })).toHaveCount(0)
-    await expect(navigation.getByRole('menuitem', { name: '请求日志' })).toHaveCount(0)
+    await expect(navigation.getByRole('menuitem', { name: '请求日志' })).toBeVisible()
+
+    const requestLogsRequestPromise = page.waitForRequest((request) => {
+      const url = new URL(request.url())
+      return url.pathname === '/user/request-logs' && request.method() === 'GET'
+    })
+    await page.goto('request-logs')
+    await requestLogsRequestPromise
+    await expect(page.getByRole('heading', { level: 1, name: '请求日志' })).toBeVisible()
+    await expect(page.getByText('查看你的网关请求记录与元数据。')).toBeVisible()
+    await expect(page.getByTestId('log-user-id')).toHaveCount(0)
 
     await page.goto('models')
     await expect(page.getByRole('heading', { level: 1, name: '可用模型' })).toBeVisible()
