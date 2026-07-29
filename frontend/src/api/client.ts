@@ -177,7 +177,8 @@ function validationMessage(errors: ApiValidationError[]): string {
   return labels.size === 0 ? '请求参数无效' : `${[...labels].join('、')}参数无效`
 }
 
-function safeApiMessage(code: string, status: number): string {
+function safeApiMessage(code: string, status: number, serverMessage?: string): string {
+  if (code === 'model_discovery_failed' && serverMessage?.trim()) return serverMessage
   const knownMessage = apiErrorMessages[code]
   if (knownMessage !== undefined) return knownMessage
   if (status === 400) return '请求内容无效'
@@ -206,7 +207,7 @@ export function normalizeApiError(error: unknown): ApiError {
     return new ApiError(
       status,
       body.detail.code,
-      safeApiMessage(body.detail.code, status),
+      safeApiMessage(body.detail.code, status, body.detail.message),
       body.detail.request_id,
     )
   }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -14,7 +15,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from ai_gateway.admin.model_sync import sync_provider_models
+from ai_gateway.admin.model_sync import discover_provider_models, sync_provider_models
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import Protocol, RouteSource
 from ai_gateway.core.security import encrypt_secret, hash_password, issue_access_token
@@ -190,15 +191,83 @@ async def test_sync_is_idempotent_preserves_aliases_and_never_mutates_manual_rou
 
 
 @pytest.mark.asyncio
-async def test_failed_multi_protocol_discovery_does_not_apply_partial_catalog_changes(
+async def test_sync_prefers_openai_discovery_when_multiple_protocols_are_enabled(
     session: AsyncSession,
     sync_settings: Settings,
 ) -> None:
     provider = _provider(
         sync_settings,
-        name="sync-atomic-failure",
+        name="sync-openai-preferred",
         protocols=(Protocol.OPENAI, Protocol.CLAUDE),
     )
+    session.add(provider)
+    await session.flush()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://openai.example/v1/models"
+        return _json_response(
+            request,
+            {"data": [{"id": "openai-discovered"}], "has_more": False},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        factory = FakeHttpClientFactory(client)
+        result = await sync_provider_models(
+            provider.id,
+            session=session,
+            http_client_factory=factory,
+            settings=sync_settings,
+        )
+
+    routes = list(
+        await session.scalars(select(ModelRoute).where(ModelRoute.provider_id == provider.id))
+    )
+    assert result.discovered_models == 1
+    assert factory.urls == ["https://openai.example/v1/models"]
+    assert len(routes) == 1
+    assert routes[0].provider_protocol_id == provider.protocols[0].id
+    assert routes[0].upstream_model == "openai-discovered"
+
+
+@pytest.mark.asyncio
+async def test_discovery_endpoint_logic_prefers_openai_when_multiple_protocols_are_enabled(
+    session: AsyncSession,
+    sync_settings: Settings,
+) -> None:
+    provider = _provider(
+        sync_settings,
+        name="discover-openai-preferred",
+        protocols=(Protocol.OPENAI, Protocol.CLAUDE),
+    )
+    session.add(provider)
+    await session.flush()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://openai.example/v1/models"
+        return _json_response(
+            request,
+            {"data": [{"id": "openai-discovered"}], "has_more": False},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        factory = FakeHttpClientFactory(client)
+        result = await discover_provider_models(
+            provider.id,
+            session=session,
+            http_client_factory=factory,
+            settings=sync_settings,
+        )
+
+    assert result == {"openai": ["openai-discovered"]}
+    assert factory.urls == ["https://openai.example/v1/models"]
+
+
+@pytest.mark.asyncio
+async def test_failed_discovery_does_not_apply_catalog_changes(
+    session: AsyncSession,
+    sync_settings: Settings,
+) -> None:
+    provider = _provider(sync_settings, name="sync-atomic-failure")
     stale_model = Model(canonical_name="stale-discovered", display_name="Stale")
     provider.routes.append(
         ModelRoute(
@@ -213,11 +282,6 @@ async def test_failed_multi_protocol_discovery_does_not_apply_partial_catalog_ch
     await session.flush()
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "openai.example":
-            return _json_response(
-                request,
-                {"data": [{"id": "must-not-be-created"}], "has_more": False},
-            )
         return httpx.Response(503, json={"error": "temporary"}, request=request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -229,10 +293,6 @@ async def test_failed_multi_protocol_discovery_does_not_apply_partial_catalog_ch
                 settings=sync_settings,
             )
 
-    assert (
-        await session.scalar(select(Model.id).where(Model.canonical_name == "must-not-be-created"))
-        is None
-    )
     assert provider.routes[0].enabled is True
     assert provider.last_model_sync_at is None
 
@@ -377,6 +437,121 @@ async def test_sync_endpoint_uses_app_owned_http_factory(
     assert response.json()["provider_id"] == provider.id
     assert response.json()["discovered_models"] == 1
     assert factory.urls == ["https://openai.example/v1/models"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "endpoint"),
+    [("GET", "discover-models"), ("POST", "sync-models")],
+)
+async def test_model_sync_endpoints_log_upstream_failure_at_warning_level(
+    session: AsyncSession,
+    sync_settings: Settings,
+    caplog: pytest.LogCaptureFixture,
+    method: str,
+    endpoint: str,
+) -> None:
+    provider = _provider(sync_settings, name="discovery-warning")
+    admin = User(
+        email="discovery-warning-admin@example.com",
+        password_hash=hash_password("discovery-warning-admin-password"),
+        role="admin",
+        account=Account(),
+    )
+    session.add_all([provider, admin])
+    await session.flush()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": "temporary"}, request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as upstream_client:
+        app = create_app(sync_settings)
+        app.state.http_client_factory = FakeHttpClientFactory(upstream_client)
+
+        async def override_session() -> AsyncIterator[AsyncSession]:
+            yield session
+
+        app.dependency_overrides[get_session] = override_session
+        app.dependency_overrides[get_settings] = lambda: sync_settings
+        token = issue_access_token(user_id=admin.id, settings=sync_settings)
+        caplog.set_level(logging.WARNING, logger="uvicorn")
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"authorization": f"Bearer {token}"},
+        ) as client:
+            response = await client.request(
+                method,
+                f"/admin/providers/{provider.id}/{endpoint}",
+            )
+
+    records = [record for record in caplog.records if record.name == "uvicorn"]
+    assert response.status_code == 502
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert f"provider_id={provider.id}" in records[0].getMessage()
+    assert "HTTPStatusError" in records[0].getMessage()
+    assert "503 Service Unavailable" in records[0].getMessage()
+    assert "https://openai.example/v1/models" in records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_discovery_endpoint_returns_sanitized_upstream_error_detail(
+    session: AsyncSession,
+    sync_settings: Settings,
+) -> None:
+    provider = _provider(sync_settings, name="discovery-error-detail")
+    admin = User(
+        email="discovery-error-detail-admin@example.com",
+        password_hash=hash_password("discovery-error-detail-admin-password"),
+        role="admin",
+        account=Account(),
+    )
+    session.add_all([provider, admin])
+    await session.flush()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={
+                "error": {
+                    "message": "Incorrect API key",
+                    "type": "authentication_error",
+                    "api_key": "sk-upstream-secret-value",
+                }
+            },
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as upstream_client:
+        app = create_app(sync_settings)
+        app.state.http_client_factory = FakeHttpClientFactory(upstream_client)
+
+        async def override_session() -> AsyncIterator[AsyncSession]:
+            yield session
+
+        app.dependency_overrides[get_session] = override_session
+        app.dependency_overrides[get_settings] = lambda: sync_settings
+        token = issue_access_token(user_id=admin.id, settings=sync_settings)
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"authorization": f"Bearer {token}"},
+        ) as client:
+            response = await client.get(f"/admin/providers/{provider.id}/discover-models")
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": {
+            "code": "model_discovery_failed",
+            "message": (
+                "Upstream provider returned 401 Unauthorized: "
+                '{"error":{"message":"Incorrect API key","type":"authentication_error",'
+                '"api_key":"[REDACTED]"}}'
+            ),
+        }
+    }
+    assert "sk-upstream-secret-value" not in response.text
 
 
 @pytest.mark.asyncio

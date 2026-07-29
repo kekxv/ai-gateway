@@ -547,6 +547,37 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('在模型同步对话框显示经过后端处理的上游错误', async () => {
+    server.use(
+      http.get('/admin/providers/1/discover-models', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              code: 'model_discovery_failed',
+              message: 'Upstream provider returned 401 Unauthorized: Incorrect API key',
+            },
+          },
+          { status: 502 },
+        ),
+      ),
+    )
+    const wrapper = mount(ModelSyncDialog, {
+      props: {
+        modelValue: true,
+        providerId: 1,
+        providerName: '错误线路',
+        submitting: false,
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(
+      'Upstream provider returned 401 Unauthorized: Incorrect API key',
+    )
+    wrapper.unmount()
+  })
+
   it('供应商已有历史记录时保留列表项并引导改为停用', async () => {
     let deleteRequests = 0
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
