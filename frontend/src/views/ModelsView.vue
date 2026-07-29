@@ -91,7 +91,6 @@ const routeSubmitting = ref(false)
 const modelOperations = ref(new Map<number, ModelOperation>())
 const routeOperations = ref(new Map<number, RouteOperationState>())
 const nonDeletableModelIds = ref(new Set<number>())
-const nonDeletableRouteIds = ref(new Set<number>())
 const deletedModelIds = new Set<number>()
 const deletedRouteIds = new Set<number>()
 const operationControllers = new Set<AbortController>()
@@ -585,7 +584,6 @@ async function removeRoute(route: ModelRouteResponse): Promise<void> {
     !catalogReady.value ||
     loading.value ||
     controlsLocked.value ||
-    nonDeletableRouteIds.value.has(route.id) ||
     !beginRouteOperation(route.id, modelId, 'delete')
   ) return
   const controller = operationController()
@@ -620,20 +618,10 @@ async function removeRoute(route: ModelRouteResponse): Promise<void> {
     }
   } catch (error: unknown) {
     if (!isCurrentRouteOperation(controller, route.id, modelId, 'delete')) return
-    if (error instanceof ApiError && error.code === 'model_route_has_history') {
-      nonDeletableRouteIds.value = new Set(nonDeletableRouteIds.value).add(route.id)
-      routeNotice.value = {
-        type: 'warning',
-        text: '模型路由已有请求历史，不能直接删除；可以改为停用。',
-        conflictId: route.id,
-        modelId,
-      }
-    } else {
-      routeNotice.value = {
-        type: 'error',
-        text: errorText(error, '模型路由删除失败'),
-        modelId,
-      }
+    routeNotice.value = {
+      type: 'error',
+      text: errorText(error, '模型路由删除失败'),
+      modelId,
     }
   } finally {
     operationControllers.delete(controller)
@@ -746,17 +734,6 @@ onBeforeUnmount(() => {
         closable
         @close="routeNotice = null"
       />
-      <ElButton
-        v-if="routeNotice.conflictId !== undefined"
-        :data-test="`disable-route-conflict-${String(routeNotice.conflictId)}`"
-        type="warning"
-        plain
-        :loading="routeOperations.get(routeNotice.conflictId)?.operation === 'disable'"
-        :disabled="controlsLocked"
-        @click="disableRoute(routeNotice.conflictId, routeNotice.modelId)"
-      >
-        改为停用
-      </ElButton>
     </div>
 
     <section class="model-panel page-card" aria-labelledby="model-list-heading">
@@ -816,7 +793,6 @@ onBeforeUnmount(() => {
           :loading="controlsLocked"
           :routes-loading="routesLoading"
           :non-deletable="nonDeletableModelIds.has(model.id)"
-          :non-deletable-route-ids="nonDeletableRouteIds"
           :readonly="!auth.isAdmin"
           @edit="openEditModel"
           @delete="removeModel"

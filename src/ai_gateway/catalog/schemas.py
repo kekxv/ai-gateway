@@ -182,7 +182,6 @@ class ModelRouteCreate(BaseModel):
 
     model_id: int = Field(ge=1)
     provider_id: int = Field(ge=1)
-    provider_protocol_id: int = Field(ge=1)
     upstream_model: CatalogName
     weight: int = Field(default=100, ge=1, le=10000)
     enabled: bool = True
@@ -193,7 +192,6 @@ class ModelRouteUpdate(BaseModel):
 
     model_id: int | None = Field(default=None, ge=1)
     provider_id: int | None = Field(default=None, ge=1)
-    provider_protocol_id: int | None = Field(default=None, ge=1)
     upstream_model: CatalogName | None = None
     weight: int | None = Field(default=None, ge=1, le=10000)
     enabled: bool | None = None
@@ -203,7 +201,6 @@ class ModelRouteResponse(BaseModel):
     id: int
     model_id: int
     provider_id: int
-    provider_protocol_id: int
     upstream_model: str
     weight: int
     enabled: bool

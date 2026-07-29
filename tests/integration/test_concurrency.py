@@ -219,14 +219,15 @@ async def test_concurrent_half_open_claims_allow_one_probe(test_engine: AsyncEng
         name=f"claim-provider-{suffix}",
         credential_encrypted=b"encrypted",
     )
+    provider.protocols.append(
+        ProviderProtocol(
+            protocol=Protocol.OPENAI,
+            base_url="https://claim.invalid/v1",
+        )
+    )
     route = ModelRoute(
         model=Model(canonical_name=f"claim-model-{suffix}", display_name="Claim model"),
         provider=provider,
-        provider_protocol=ProviderProtocol(
-            provider=provider,
-            protocol=Protocol.OPENAI,
-            base_url="https://claim.invalid/v1",
-        ),
         upstream_model="claim-upstream",
         runtime_state=RouteRuntimeState.OPEN,
         consecutive_failures=3,

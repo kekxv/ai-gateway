@@ -121,7 +121,7 @@ async def _list_selectable_models(
         select(Model)
         .join(ModelRoute, ModelRoute.model_id == Model.id)
         .join(Provider, Provider.id == ModelRoute.provider_id)
-        .join(ProviderProtocol, ProviderProtocol.id == ModelRoute.provider_protocol_id)
+        .join(ProviderProtocol, ProviderProtocol.provider_id == ModelRoute.provider_id)
         .where(
             Model.enabled.is_(True),
             ModelRoute.enabled.is_(True),

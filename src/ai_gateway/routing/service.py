@@ -73,12 +73,14 @@ class Router:
         principal: ApiKeyPrincipal,
         required_protocol: Protocol | str | None = None,
         *,
+        preferred_protocol: Protocol | str | None = None,
         requested_model: str | None = None,
         excluded_route_ids: frozenset[int] | set[int] = frozenset(),
         require_websocket: bool = False,
     ) -> RouteCandidate:
         model_id, requested_name = _model_identity(model, requested_model)
         protocol = Protocol(required_protocol) if required_protocol is not None else None
+        preferred = Protocol(preferred_protocol) if preferred_protocol is not None else protocol
         now = self._clock()
         with self._session.no_autoflush:
             rows = (
@@ -99,23 +101,37 @@ class Router:
             )
 
         first_row = rows[0]
-        candidates = [_candidate_from_row(row) for row in rows if row["route_id"] is not None]
+        candidates = _candidates_from_rows(rows, preferred)
         removed_by_scope = bool(first_row["removed_by_scope"])
         removed_by_transport = bool(first_row["removed_by_transport"])
         removed_by_health = bool(first_row["removed_by_health"])
 
-        while candidates:
-            candidate = choose_weighted_route(candidates, self._rng)
-            candidates.remove(candidate)
-            if candidate.runtime_state is RouteRuntimeState.CLOSED:
-                return candidate
-            if await self._claim_half_open(candidate.route_id, now):
-                return replace(
-                    candidate,
-                    runtime_state=RouteRuntimeState.HALF_OPEN,
-                    disabled_until=None,
-                )
-            removed_by_health = True
+        preferred_candidates = (
+            [candidate for candidate in candidates if candidate.protocol is preferred]
+            if preferred is not None
+            else []
+        )
+        fallback_candidates = (
+            [candidate for candidate in candidates if candidate.protocol is not preferred]
+            if preferred_candidates
+            else candidates
+        )
+        pools = (
+            [preferred_candidates, fallback_candidates] if preferred_candidates else [candidates]
+        )
+        for pool in pools:
+            while pool:
+                candidate = choose_weighted_route(pool, self._rng)
+                pool.remove(candidate)
+                if candidate.runtime_state is RouteRuntimeState.CLOSED:
+                    return candidate
+                if await self._claim_half_open(candidate.route_id, now):
+                    return replace(
+                        candidate,
+                        runtime_state=RouteRuntimeState.HALF_OPEN,
+                        disabled_until=None,
+                    )
+                removed_by_health = True
 
         raise NoRouteAvailable(
             requested_name,
@@ -178,6 +194,7 @@ async def select_route(
     principal: ApiKeyPrincipal,
     required_protocol: Protocol | str | None = None,
     *,
+    preferred_protocol: Protocol | str | None = None,
     rng: random.Random | None = None,
     clock: Clock = _utcnow,
     requested_model: str | None = None,
@@ -194,6 +211,7 @@ async def select_route(
         model,
         principal,
         required_protocol,
+        preferred_protocol=preferred_protocol,
         requested_model=requested_model,
         excluded_route_ids=excluded_route_ids,
         require_websocket=require_websocket,
@@ -285,7 +303,7 @@ def _route_exists(
         .select_from(route)
         .join(model, model.id == route.model_id)
         .join(provider, provider.id == route.provider_id)
-        .join(protocol, protocol.id == route.provider_protocol_id)
+        .join(protocol, protocol.provider_id == route.provider_id)
         .where(*conditions)
     )
 
@@ -304,7 +322,7 @@ def _candidate_query(
             ModelRoute.id.label("route_id"),
             ModelRoute.model_id,
             ModelRoute.provider_id,
-            ModelRoute.provider_protocol_id,
+            ProviderProtocol.id.label("provider_protocol_id"),
             ProviderProtocol.protocol,
             ProviderProtocol.base_url,
             ProviderProtocol.websocket_url,
@@ -319,7 +337,7 @@ def _candidate_query(
         .select_from(ModelRoute)
         .join(Model, Model.id == ModelRoute.model_id)
         .join(Provider, Provider.id == ModelRoute.provider_id)
-        .join(ProviderProtocol, ProviderProtocol.id == ModelRoute.provider_protocol_id)
+        .join(ProviderProtocol, ProviderProtocol.provider_id == ModelRoute.provider_id)
         .where(
             _base_conditions(ModelRoute, Model, Provider, ProviderProtocol, model_id),
             _scope_condition(ModelRoute, principal),
@@ -383,3 +401,26 @@ def _candidate_from_row(row: Any) -> RouteCandidate:
         provider_credential_encrypted=cast(bytes, row["provider_credential_encrypted"]),
         extra_headers_encrypted=cast(bytes | None, row["extra_headers_encrypted"]),
     )
+
+
+def _candidates_from_rows(
+    rows: Sequence[Any],
+    preferred_protocol: Protocol | None,
+) -> list[RouteCandidate]:
+    rows_by_route: dict[int, list[Any]] = {}
+    for row in rows:
+        route_id = row["route_id"]
+        if route_id is not None:
+            rows_by_route.setdefault(cast(int, route_id), []).append(row)
+    candidates: list[RouteCandidate] = []
+    for route_rows in rows_by_route.values():
+        selected = min(
+            route_rows,
+            key=lambda row: (
+                preferred_protocol is not None
+                and Protocol(row["protocol"]) is not preferred_protocol,
+                cast(int, row["provider_protocol_id"]),
+            ),
+        )
+        candidates.append(_candidate_from_row(selected))
+    return candidates

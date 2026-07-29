@@ -92,7 +92,6 @@ const routeFixture: ModelRouteResponse = {
   id: 201,
   model_id: 1,
   provider_id: 11,
-  provider_protocol_id: 111,
   upstream_model: 'gpt-4.1-2026-04-14',
   weight: 100,
   enabled: true,

@@ -25,7 +25,8 @@ async def _create_provider(
             "enabled": True,
             "auto_load_models": True,
             "protocols": protocols
-            or [
+            if protocols is not None
+            else [
                 {
                     "protocol": "openai",
                     "base_url": "https://api.example.com/v1",
@@ -369,7 +370,6 @@ async def test_route_weight_must_be_in_supported_range(
         json={
             "model_id": 1,
             "provider_id": 1,
-            "provider_protocol_id": 1,
             "upstream_model": "provider-native-model",
             "weight": weight,
         },
@@ -378,26 +378,51 @@ async def test_route_weight_must_be_in_supported_range(
     assert response.status_code == 422
 
 
-async def test_route_protocol_must_belong_to_provider(
+async def test_route_associates_provider_and_rejects_provider_without_protocols(
     admin_client: AsyncClient,
 ) -> None:
     first = await _create_provider(admin_client, name="first-provider")
-    second = await _create_provider(admin_client, name="second-provider")
+    second = await _create_provider(
+        admin_client,
+        name="second-provider",
+        protocols=[],
+    )
     model = await _create_model(admin_client)
 
-    response = await admin_client.post(
+    created = await admin_client.post(
         "/admin/model-routes",
         json={
             "model_id": model["id"],
             "provider_id": first["id"],
-            "provider_protocol_id": second["protocols"][0]["id"],
+            "upstream_model": "provider-native-model",
+            "weight": 100,
+        },
+    )
+    duplicate = await admin_client.post(
+        "/admin/model-routes",
+        json={
+            "model_id": model["id"],
+            "provider_id": first["id"],
+            "upstream_model": "provider-native-model-duplicate",
+            "weight": 100,
+        },
+    )
+    invalid = await admin_client.post(
+        "/admin/model-routes",
+        json={
+            "model_id": model["id"],
+            "provider_id": second["id"],
             "upstream_model": "provider-native-model",
             "weight": 100,
         },
     )
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "provider_protocol_mismatch"
+    assert created.status_code == 201, created.text
+    assert "provider_protocol_id" not in created.json()
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"]["code"] == "model_route_conflict"
+    assert invalid.status_code == 422
+    assert invalid.json()["detail"]["code"] == "invalid_route_reference"
 
 
 async def test_provider_native_upstream_model_may_equal_an_alias(
@@ -409,7 +434,6 @@ async def test_provider_native_upstream_model_may_equal_an_alias(
     route_payload = {
         "model_id": model["id"],
         "provider_id": provider["id"],
-        "provider_protocol_id": provider["protocols"][0]["id"],
         "weight": 100,
         "enabled": True,
     }
@@ -440,7 +464,6 @@ async def test_alias_may_be_added_after_matching_upstream_route_exists(
         json={
             "model_id": model["id"],
             "provider_id": provider["id"],
-            "provider_protocol_id": provider["protocols"][0]["id"],
             "upstream_model": "shared-native-name",
         },
     )
@@ -469,7 +492,6 @@ async def test_model_alias_and_route_relations_can_be_updated(
         json={
             "model_id": model["id"],
             "provider_id": provider["id"],
-            "provider_protocol_id": provider["protocols"][0]["id"],
             "upstream_model": "native-original",
             "weight": 100,
         },
@@ -504,7 +526,6 @@ async def test_models_and_routes_have_list_and_detail_crud_views(
         json={
             "model_id": model["id"],
             "provider_id": provider["id"],
-            "provider_protocol_id": provider["protocols"][0]["id"],
             "upstream_model": "native-list-detail",
         },
     )
@@ -546,7 +567,7 @@ async def test_model_cache_prices_round_trip_and_update(admin_client: AsyncClien
     assert updated.json()["cache_write_price_per_million"] == "0.20000000"
 
 
-async def test_provider_and_model_deletion_with_request_history_returns_conflict(
+async def test_route_deletion_detaches_history_while_provider_and_model_still_conflict(
     admin_client: AsyncClient,
     admin_user_record: User,
     session: AsyncSession,
@@ -558,24 +579,22 @@ async def test_provider_and_model_deletion_with_request_history_returns_conflict
         json={
             "model_id": model["id"],
             "provider_id": provider["id"],
-            "provider_protocol_id": provider["protocols"][0]["id"],
             "upstream_model": "native-original",
             "weight": 100,
         },
     )
     assert route.status_code == 201, route.text
-    session.add(
-        RequestLog(
-            id=str(uuid4()),
-            user_id=admin_user_record.id,
-            model_id=int(model["id"]),
-            provider_id=int(provider["id"]),
-            model_route_id=route.json()["id"],
-            inbound_protocol=Protocol.OPENAI,
-            outbound_protocol=Protocol.OPENAI,
-            transport="http",
-        )
+    request_log = RequestLog(
+        id=str(uuid4()),
+        user_id=admin_user_record.id,
+        model_id=int(model["id"]),
+        provider_id=int(provider["id"]),
+        model_route_id=route.json()["id"],
+        inbound_protocol=Protocol.OPENAI,
+        outbound_protocol=Protocol.OPENAI,
+        transport="http",
     )
+    session.add(request_log)
     await session.flush()
 
     provider_delete = await admin_client.delete(f"/admin/providers/{provider['id']}")
@@ -584,7 +603,10 @@ async def test_provider_and_model_deletion_with_request_history_returns_conflict
 
     assert provider_delete.status_code == 409
     assert model_delete.status_code == 409
-    assert route_delete.status_code == 409
+    assert route_delete.status_code == 204
+    await session.refresh(request_log)
+    assert request_log.model_route_id is None
+    assert await session.get(ModelRoute, route.json()["id"]) is None
 
 
 async def test_catalog_records_without_history_can_be_deleted(
@@ -598,7 +620,6 @@ async def test_catalog_records_without_history_can_be_deleted(
         json={
             "model_id": model["id"],
             "provider_id": provider["id"],
-            "provider_protocol_id": provider["protocols"][0]["id"],
             "upstream_model": "native-original",
         },
     )
@@ -625,7 +646,6 @@ async def test_catalog_records_without_history_can_be_deleted(
             {
                 "model_id": 1,
                 "provider_id": 1,
-                "provider_protocol_id": 1,
                 "upstream_model": "blocked",
             },
         ),

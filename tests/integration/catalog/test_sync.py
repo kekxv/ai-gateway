@@ -93,7 +93,6 @@ async def test_sync_is_idempotent_preserves_aliases_and_never_mutates_manual_rou
     sync_settings: Settings,
 ) -> None:
     provider = _provider(sync_settings, name="sync-idempotent")
-    protocol = provider.protocols[0]
     alias_model = Model(
         canonical_name="alias-target",
         display_name="Alias Target",
@@ -106,21 +105,18 @@ async def test_sync_is_idempotent_preserves_aliases_and_never_mutates_manual_rou
         [
             ModelRoute(
                 model=found_model,
-                provider_protocol=protocol,
                 upstream_model="stale-upstream-name",
                 enabled=False,
                 source=RouteSource.DISCOVERED,
             ),
             ModelRoute(
                 model=missing_model,
-                provider_protocol=protocol,
                 upstream_model="native-missing",
                 enabled=True,
                 source=RouteSource.DISCOVERED,
             ),
             ModelRoute(
                 model=manual_model,
-                provider_protocol=protocol,
                 upstream_model="manual-upstream",
                 enabled=True,
                 source=RouteSource.MANUAL,
@@ -225,7 +221,6 @@ async def test_sync_prefers_openai_discovery_when_multiple_protocols_are_enabled
     assert result.discovered_models == 1
     assert factory.urls == ["https://openai.example/v1/models"]
     assert len(routes) == 1
-    assert routes[0].provider_protocol_id == provider.protocols[0].id
     assert routes[0].upstream_model == "openai-discovered"
 
 
@@ -272,7 +267,6 @@ async def test_failed_discovery_does_not_apply_catalog_changes(
     provider.routes.append(
         ModelRoute(
             model=stale_model,
-            provider_protocol=provider.protocols[0],
             upstream_model="stale-discovered",
             source=RouteSource.DISCOVERED,
             enabled=True,

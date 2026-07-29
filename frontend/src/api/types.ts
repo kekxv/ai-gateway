@@ -292,7 +292,6 @@ export interface ModelResponse {
 export interface ModelRouteCreate {
   model_id: number
   provider_id: number
-  provider_protocol_id: number
   upstream_model: string
   weight?: number
   enabled?: boolean
@@ -301,7 +300,6 @@ export interface ModelRouteCreate {
 export interface ModelRouteUpdate {
   model_id?: number | null
   provider_id?: number | null
-  provider_protocol_id?: number | null
   upstream_model?: string | null
   weight?: number | null
   enabled?: boolean | null
@@ -311,7 +309,6 @@ export interface ModelRouteResponse {
   id: number
   model_id: number
   provider_id: number
-  provider_protocol_id: number
   upstream_model: string
   weight: number
   enabled: boolean

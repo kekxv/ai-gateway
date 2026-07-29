@@ -52,7 +52,7 @@ ADMIN_PASSWORD = "e2e-admin-password"
 USER_PASSWORD = "e2e-user-password"
 INITIAL_CREDIT = Decimal("10.00000000")
 EXPECTED_RESERVATION_TOTAL = Decimal("0.09200000")
-EXPECTED_USAGE_COST = Decimal("0.07000000")
+EXPECTED_USAGE_COST = Decimal("0.06400000")
 
 
 @dataclass(slots=True)
@@ -268,6 +268,48 @@ def fake_provider_app(state: FakeProviderState) -> FastAPI:
             }
         )
 
+    @app.post("/v1beta/models/{model}:streamGenerateContent")
+    async def stream_generate_content(model: str, request: Request) -> Response:
+        payload = await request.json()
+        state.gemini_requests.append(
+            {
+                "path": request.url.path,
+                "api_key": request.headers.get("x-goog-api-key"),
+                "payload": payload,
+            }
+        )
+
+        async def frames() -> AsyncIterator[bytes]:
+            chunks = (
+                {
+                    "modelVersion": model,
+                    "responseId": "response-e2e-stream",
+                    "candidates": [
+                        {
+                            "index": 0,
+                            "content": {
+                                "role": "model",
+                                "parts": [{"text": "streamed reply"}],
+                            },
+                            "finishReason": "STOP",
+                        }
+                    ],
+                },
+                {
+                    "modelVersion": model,
+                    "responseId": "response-e2e-stream",
+                    "candidates": [],
+                    "usageMetadata": {
+                        "promptTokenCount": 4,
+                        "candidatesTokenCount": 3,
+                    },
+                },
+            )
+            for chunk in chunks:
+                yield b"data: " + orjson.dumps(chunk) + b"\n\n"
+
+        return StreamingResponse(frames(), media_type="text/event-stream")
+
     @app.websocket("/realtime")
     async def realtime(websocket: WebSocket) -> None:
         state.websocket_authorization = websocket.headers.get("authorization")
@@ -356,7 +398,6 @@ async def provision_gateway(
     assert provider_secret not in provider.text
     provider_body = provider.json()
     provider_id = int(provider_body["id"])
-    protocol_ids = {str(item["protocol"]): int(item["id"]) for item in provider_body["protocols"]}
 
     async def create_model_route(protocol: str) -> tuple[int, int, str, str]:
         qualifier = "" if protocol == "openai" else f"-{protocol}"
@@ -381,7 +422,6 @@ async def provision_gateway(
             json={
                 "model_id": model_id,
                 "provider_id": provider_id,
-                "provider_protocol_id": protocol_ids[protocol],
                 "upstream_model": upstream_model,
                 "weight": 100,
             },
@@ -588,7 +628,6 @@ async def exercise_admin_and_auth_regression(
         json={
             "model_id": state.model_id,
             "provider_id": state.provider_id,
-            "provider_protocol_id": route.json()["provider_protocol_id"],
             "upstream_model": state.upstream_model,
             "weight": 100,
             "enabled": True,
@@ -601,7 +640,6 @@ async def exercise_admin_and_auth_regression(
         json={
             "model_id": state.model_id,
             "provider_id": state.provider_id,
-            "provider_protocol_id": route.json()["provider_protocol_id"],
             "upstream_model": state.upstream_model,
         },
     )
@@ -652,7 +690,6 @@ async def exercise_admin_and_auth_regression(
     )
     assert auxiliary_provider.status_code == 201, auxiliary_provider.text
     auxiliary_provider_id = int(auxiliary_provider.json()["id"])
-    auxiliary_protocol_id = int(auxiliary_provider.json()["protocols"][0]["id"])
     auxiliary_model = await client.post(
         "/admin/models",
         headers=state.admin_headers,
@@ -669,7 +706,6 @@ async def exercise_admin_and_auth_regression(
         json={
             "model_id": auxiliary_model_id,
             "provider_id": auxiliary_provider_id,
-            "provider_protocol_id": auxiliary_protocol_id,
             "upstream_model": "aux-upstream",
         },
     )
@@ -736,8 +772,8 @@ async def exercise_http_protocols(
         },
     )
     assert non_stream.status_code == 200, non_stream.text
-    assert non_stream.json()["content"] == "non-stream reply"
-    assert non_stream.json()["usage"] == {"input_tokens": 10, "output_tokens": 5}
+    assert non_stream.json()["content"] == [{"type": "text", "text": "native Claude reply"}]
+    assert non_stream.json()["usage"] == {"input_tokens": 6, "output_tokens": 4}
 
     stream = await client.post(
         f"/v1beta/models/{state.alias}:streamGenerateContent",
@@ -899,8 +935,8 @@ async def assert_durable_results(
         Decimal("0.00700000"),
         Decimal("0.01000000"),
         Decimal("0.01400000"),
+        Decimal("0.01400000"),
         Decimal("0.01900000"),
-        Decimal("0.02000000"),
     ]
     assert {item.transport for item in request_logs} == {"http", "websocket"}
     assert {item.inbound_protocol.value for item in request_logs} == {
@@ -990,25 +1026,23 @@ async def assert_durable_results(
     provider_delete = await client.delete(
         f"/admin/providers/{state.provider_id}", headers=state.admin_headers
     )
-    assert (
-        route_delete.status_code == model_delete.status_code == provider_delete.status_code == 409
-    )
+    assert route_delete.status_code == 204
+    assert model_delete.status_code == provider_delete.status_code == 409
 
-    assert len(fake.openai_requests) == 2
-    assert all(
-        request["authorization"] == f"Bearer {fake.provider_secret}"
-        for request in fake.openai_requests
-    )
-    assert all(
-        request["payload"]["model"] == state.upstream_model for request in fake.openai_requests
-    )
-    assert {request["path"] for request in fake.openai_requests} == {"/v1/chat/completions"}
-    assert {bool(request["payload"]["stream"]) for request in fake.openai_requests} == {
-        False,
-        True,
-    }
+    assert fake.openai_requests == []
 
     assert fake.claude_requests == [
+        {
+            "path": "/v1/messages",
+            "api_key": fake.provider_secret,
+            "anthropic_version": "2023-06-01",
+            "payload": {
+                "model": state.upstream_model,
+                "messages": [{"role": "user", "content": "hello over Claude"}],
+                "max_tokens": 8,
+                "secret": state.body_secret,
+            },
+        },
         {
             "path": "/v1/messages",
             "api_key": fake.provider_secret,
@@ -1019,9 +1053,18 @@ async def assert_durable_results(
                 "max_tokens": 8,
                 "secret": state.body_secret,
             },
-        }
+        },
     ]
     assert fake.gemini_requests == [
+        {
+            "path": f"/v1beta/models/{state.upstream_model}:streamGenerateContent",
+            "api_key": fake.provider_secret,
+            "payload": {
+                "contents": [{"role": "user", "parts": [{"text": "hello over Gemini"}]}],
+                "generationConfig": {"maxOutputTokens": 8},
+                "secret": state.body_secret,
+            },
+        },
         {
             "path": f"/v1beta/models/{state.gemini_upstream_model}:generateContent",
             "api_key": fake.provider_secret,
@@ -1030,7 +1073,7 @@ async def assert_durable_results(
                 "generationConfig": {"maxOutputTokens": 8},
                 "secret": state.body_secret,
             },
-        }
+        },
     ]
     assert fake.websocket_authorization == f"Bearer {fake.provider_secret}"
     assert fake.websocket_model == state.upstream_model

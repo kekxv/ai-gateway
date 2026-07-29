@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated, NoReturn, cast
 
 from fastapi import APIRouter, Depends, Response, status
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -198,12 +198,10 @@ async def create_model_route(
         session,
         model_id=payload.model_id,
         provider_id=payload.provider_id,
-        provider_protocol_id=payload.provider_protocol_id,
     )
     route = ModelRoute(
         model_id=payload.model_id,
         provider_id=payload.provider_id,
-        provider_protocol_id=payload.provider_protocol_id,
         upstream_model=payload.upstream_model,
         weight=payload.weight,
         enabled=payload.enabled,
@@ -252,21 +250,14 @@ async def update_model_route(
     route = await _get_route(session, route_id)
     model_id = payload.model_id if payload.model_id is not None else route.model_id
     provider_id = payload.provider_id if payload.provider_id is not None else route.provider_id
-    provider_protocol_id = (
-        payload.provider_protocol_id
-        if payload.provider_protocol_id is not None
-        else route.provider_protocol_id
-    )
     upstream_model = payload.upstream_model or route.upstream_model
     await _validate_route_relations(
         session,
         model_id=model_id,
         provider_id=provider_id,
-        provider_protocol_id=provider_protocol_id,
     )
     route.model_id = model_id
     route.provider_id = provider_id
-    route.provider_protocol_id = provider_protocol_id
     route.upstream_model = upstream_model
     if payload.weight is not None:
         route.weight = payload.weight
@@ -285,15 +276,9 @@ async def update_model_route(
 @routes_router.delete("/{route_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_model_route(route_id: int, session: Session, _: AdminUser) -> Response:
     await _get_route(session, route_id)
-    history_id = await session.scalar(
-        select(RequestLog.id).where(RequestLog.model_route_id == route_id).limit(1)
+    await session.execute(
+        update(RequestLog).where(RequestLog.model_route_id == route_id).values(model_route_id=None)
     )
-    if history_id is not None:
-        raise_auth_error(
-            status.HTTP_409_CONFLICT,
-            "model_route_has_history",
-            "Routes with request history must be disabled instead of deleted",
-        )
     await session.execute(delete(ModelRoute).where(ModelRoute.id == route_id))
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -358,22 +343,17 @@ async def _validate_route_relations(
     *,
     model_id: int,
     provider_id: int,
-    provider_protocol_id: int,
 ) -> None:
     model = await session.get(Model, model_id)
     provider = await session.get(Provider, provider_id)
-    protocol = await session.get(ProviderProtocol, provider_protocol_id)
-    if model is None or provider is None or protocol is None:
+    protocol_id = await session.scalar(
+        select(ProviderProtocol.id).where(ProviderProtocol.provider_id == provider_id).limit(1)
+    )
+    if model is None or provider is None or protocol_id is None:
         raise_auth_error(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "invalid_route_reference",
-            "Model, provider, and provider protocol must exist",
-        )
-    if protocol.provider_id != provider_id:
-        raise_auth_error(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "provider_protocol_mismatch",
-            "Provider protocol must belong to the selected provider",
+            "Model and provider with at least one protocol must exist",
         )
 
 
@@ -419,7 +399,6 @@ def _route_response(route: ModelRoute) -> ModelRouteResponse:
         id=route.id,
         model_id=route.model_id,
         provider_id=route.provider_id,
-        provider_protocol_id=route.provider_protocol_id,
         upstream_model=route.upstream_model,
         weight=route.weight,
         enabled=route.enabled,
@@ -444,5 +423,5 @@ def _raise_route_conflict() -> NoReturn:
     raise_auth_error(
         status.HTTP_409_CONFLICT,
         "model_route_conflict",
-        "A route already exists for this model, provider, and provider protocol",
+        "A route already exists for this model and provider",
     )

@@ -72,7 +72,6 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
         ModelRoute(
             model_id=model_a.id,
             provider_id=provider_a.id,
-            provider_protocol_id=provider_a.protocols[0].id,
             upstream_model="upstream-model-a",
             weight=321,
             enabled=False,
@@ -145,8 +144,6 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
                 "routes": [
                     {
                         "provider": "provider-a",
-                        "protocol": "openai",
-                        "base_url": "https://provider-a.example/v1",
                         "upstream_model": "upstream-model-a",
                         "weight": 321,
                         "enabled": False,
@@ -290,8 +287,6 @@ def _import_bundle(
                 "routes": [
                     {
                         "provider": "import-provider",
-                        "protocol": "openai",
-                        "base_url": "https://import-provider.example/v1",
                         "upstream_model": route_upstream_model,
                         "weight": route_weight,
                         "enabled": model_enabled,
@@ -486,7 +481,6 @@ async def test_admin_import_claims_discovered_route_and_preserves_health_through
     route = ModelRoute(
         model=model,
         provider=provider,
-        provider_protocol=provider.protocols[0],
         upstream_model="discovered-upstream-model",
         weight=25,
         enabled=True,
@@ -607,8 +601,6 @@ async def test_admin_import_rejects_invalid_bundle_and_dangling_route_references
                     "routes": [
                         {
                             "provider": "missing-provider",
-                            "protocol": "openai",
-                            "base_url": "https://missing.example/v1",
                             "upstream_model": "missing-upstream-model",
                             "weight": 1,
                             "enabled": True,

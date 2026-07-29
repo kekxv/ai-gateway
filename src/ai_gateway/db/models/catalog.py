@@ -88,7 +88,6 @@ class ProviderProtocol(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
 
     provider: Mapped[Provider] = relationship(back_populates="protocols")
-    routes: Mapped[list[ModelRoute]] = relationship(back_populates="provider_protocol")
 
 
 class Model(Base):
@@ -164,8 +163,7 @@ class ModelRoute(Base):
         UniqueConstraint(
             "model_id",
             "provider_id",
-            "provider_protocol_id",
-            name="uq_model_routes_model_provider_protocol",
+            name="uq_model_routes_model_provider",
         ),
         Index(
             "ix_model_routes_model_enabled_runtime_state",
@@ -178,7 +176,6 @@ class ModelRoute(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     model_id: Mapped[int] = mapped_column(ForeignKey("models.id"))
     provider_id: Mapped[int] = mapped_column(ForeignKey("providers.id"))
-    provider_protocol_id: Mapped[int] = mapped_column(ForeignKey("provider_protocols.id"))
     upstream_model: Mapped[str] = mapped_column(String(255))
     weight: Mapped[int] = mapped_column(Integer, default=100, server_default=text("100"))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
@@ -203,4 +200,3 @@ class ModelRoute(Base):
 
     model: Mapped[Model] = relationship(back_populates="routes")
     provider: Mapped[Provider] = relationship(back_populates="routes")
-    provider_protocol: Mapped[ProviderProtocol] = relationship(back_populates="routes")

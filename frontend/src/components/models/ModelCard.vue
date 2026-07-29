@@ -19,7 +19,6 @@ const props = defineProps<{
   providers: ProviderResponse[]
   loading?: boolean
   nonDeletable?: boolean
-  nonDeletableRouteIds?: ReadonlySet<number>
   routesLoading?: boolean
   readonly?: boolean
 }>()
@@ -67,11 +66,14 @@ function providerName(providerId: number): string {
   )
 }
 
-function protocolName(providerId: number, protocolId: number): string {
-  const protocol = props.providers
+function providerProtocolNames(providerId: number): string {
+  const protocols = props.providers
     .find((provider) => provider.id === providerId)
-    ?.protocols.find((item) => item.id === protocolId)
-  return protocol === undefined ? `#${String(protocolId)}` : protocolLabels[protocol.protocol]
+    ?.protocols.filter((protocol) => protocol.enabled)
+    .map((protocol) => protocolLabels[protocol.protocol])
+  return protocols === undefined || protocols.length === 0
+    ? '无启用协议'
+    : protocols.join(' / ')
 }
 
 function formatDate(value: string | null): string {
@@ -260,7 +262,7 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
             <div class="route-header">
               <div class="route-provider">
                 <ElTag size="small" effect="plain">
-                  {{ protocolName(route.provider_id, route.provider_protocol_id) }}
+                  {{ providerProtocolNames(route.provider_id) }}
                 </ElTag>
                 <span class="provider-name">{{ providerName(route.provider_id) }}</span>
               </div>
@@ -281,8 +283,7 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
                   size="small"
                   text
                   type="danger"
-                  :disabled="loading === true || nonDeletableRouteIds?.has(route.id) === true"
-                  :title="nonDeletableRouteIds?.has(route.id) ? '该路由已有请求历史，请改为停用' : undefined"
+                  :disabled="loading === true"
                   @click="emit('deleteRoute', route)"
                 >
                   <ElIcon><Delete /></ElIcon>

@@ -104,7 +104,6 @@ def test_schema_contains_exact_tables_and_columns() -> None:
             "id",
             "model_id",
             "provider_id",
-            "provider_protocol_id",
             "upstream_model",
             "weight",
             "enabled",
@@ -268,7 +267,7 @@ def test_required_unique_constraints_and_indexes_are_declared() -> None:
     assert ("provider_id", "protocol", "base_url") in unique_column_sets("provider_protocols")
     assert ("canonical_name",) in unique_column_sets("models")
     assert ("alias",) in unique_column_sets("model_aliases")
-    assert ("model_id", "provider_id", "provider_protocol_id") in unique_column_sets("model_routes")
+    assert ("model_id", "provider_id") in unique_column_sets("model_routes")
     assert ("idempotency_key",) in unique_column_sets("ledger_entries")
 
     route_indexes = {
@@ -304,7 +303,7 @@ def test_required_unique_constraints_and_indexes_are_declared() -> None:
     }
 
 
-async def test_model_route_is_unique_per_model_provider_protocol(session) -> None:
+async def test_model_route_is_unique_per_model_provider(session) -> None:
     model = Model(
         canonical_name="gateway-model",
         display_name="Gateway Model",
@@ -325,14 +324,12 @@ async def test_model_route_is_unique_per_model_provider_protocol(session) -> Non
             ModelRoute(
                 model_id=model.id,
                 provider_id=provider.id,
-                provider_protocol_id=protocol.id,
                 upstream_model="gpt-4.1-mini",
                 weight=100,
             ),
             ModelRoute(
                 model_id=model.id,
                 provider_id=provider.id,
-                provider_protocol_id=protocol.id,
                 upstream_model="gpt-4.1-mini-duplicate",
                 weight=100,
             ),

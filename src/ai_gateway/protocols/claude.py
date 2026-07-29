@@ -84,9 +84,25 @@ class ClaudeAdapter(ProtocolAdapter):
         if not isinstance(messages_value, list):
             raise UnsupportedFeatureError("messages", "must be a list")
         messages: list[CanonicalMessage] = []
+        system = list(_decode_content(payload.get("system"), "system"))
+        if not all(isinstance(part, TextPart) for part in system):
+            raise UnsupportedFeatureError("system", "must contain only text")
         for index, raw_message in enumerate(messages_value):
             message = require_object(raw_message, f"messages[{index}]")
             role = message.get("role")
+            if role == "system":
+                system_parts = _decode_content(
+                    message.get("content"),
+                    f"messages[{index}].content",
+                    role=role,
+                )
+                if not all(isinstance(part, TextPart) for part in system_parts):
+                    raise UnsupportedFeatureError(
+                        f"messages[{index}].content",
+                        "system content must contain only text",
+                    )
+                system.extend(system_parts)
+                continue
             if role not in {"user", "assistant"}:
                 raise UnsupportedFeatureError(
                     f"messages[{index}].role", f"unsupported role {role!r}"
@@ -108,13 +124,10 @@ class ClaudeAdapter(ProtocolAdapter):
             )
         metadata = vendor_metadata(self.protocol, payload, _REQUEST_FIELDS)
         _capture_tool_choice_extensions(metadata, payload.get("tool_choice"))
-        system = _decode_content(payload.get("system"), "system")
-        if not all(isinstance(part, TextPart) for part in system):
-            raise UnsupportedFeatureError("system", "must contain only text")
         return CanonicalRequest(
             model=model,
             messages=messages,
-            system=system,
+            system=tuple(system),
             tools=_decode_tools(payload.get("tools")),
             tool_choice=_decode_tool_choice(payload.get("tool_choice")),
             temperature=optional_float(payload.get("temperature"), "temperature"),

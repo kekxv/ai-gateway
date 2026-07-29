@@ -98,10 +98,11 @@ class FakeRouter:
         __: ApiKeyPrincipal,
         required_protocol: Protocol | str | None = None,
         *,
+        preferred_protocol: Protocol | str | None = None,
         requested_model: str | None = None,
         excluded_route_ids: frozenset[int] | set[int] = frozenset(),
     ) -> RouteCandidate:
-        del required_protocol, requested_model
+        del required_protocol, preferred_protocol, requested_model
         for route in self.routes:
             if route.route_id not in excluded_route_ids:
                 return route

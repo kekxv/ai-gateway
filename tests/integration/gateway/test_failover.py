@@ -165,14 +165,12 @@ async def test_mysql_backed_failover_uses_each_route_once_and_audits_attempt_ord
         first_route = ModelRoute(
             model_id=model.id,
             provider_id=first_provider.id,
-            provider_protocol_id=first_protocol.id,
             upstream_model="first-native",
             weight=10000,
         )
         second_route = ModelRoute(
             model_id=model.id,
             provider_id=second_provider.id,
-            provider_protocol_id=second_protocol.id,
             upstream_model="second-native",
             weight=1,
         )
@@ -424,7 +422,6 @@ async def test_cancellation_after_reservation_is_shielded_and_terminal(
         model_route = ModelRoute(
             model_id=model.id,
             provider_id=provider.id,
-            provider_protocol_id=provider_protocol.id,
             upstream_model="cancel-native",
             weight=100,
         )

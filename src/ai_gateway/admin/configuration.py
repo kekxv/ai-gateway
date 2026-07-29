@@ -72,8 +72,8 @@ class CatalogRoute(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: CatalogName
-    protocol: Protocol
-    base_url: BaseUrl
+    protocol: Protocol | None = Field(default=None, exclude=True)
+    base_url: BaseUrl | None = Field(default=None, exclude=True)
     upstream_model: CatalogName
     weight: int = Field(ge=1, le=10000)
     enabled: bool = True
@@ -131,7 +131,6 @@ async def export_catalog_bundle(
             .options(
                 selectinload(Model.aliases),
                 selectinload(Model.routes).selectinload(ModelRoute.provider),
-                selectinload(Model.routes).selectinload(ModelRoute.provider_protocol),
             )
             .order_by(Model.canonical_name)
         )
@@ -218,12 +217,8 @@ async def _validate_import_bundle(session: AsyncSession, bundle: CatalogBundle) 
             aliases[alias.alias] = model.canonical_name
 
     route_provider_names = {route.provider for model in bundle.models for route in model.routes}
-    existing_protocols = set(
-        (
-            provider.name,
-            protocol.protocol,
-            protocol.base_url,
-        )
+    providers_with_protocols = set(
+        provider.name
         for provider in (
             await session.scalars(
                 select(Provider)
@@ -231,18 +226,20 @@ async def _validate_import_bundle(session: AsyncSession, bundle: CatalogBundle) 
                 .where(Provider.name.in_(route_provider_names))
             )
         ).all()
-        for protocol in provider.protocols
+        if provider.protocols
+    )
+    providers_with_protocols.update(
+        provider.name for provider in bundle.providers if provider.protocols
     )
     for model in bundle.models:
-        route_keys: set[tuple[str, Protocol, str]] = set()
+        route_keys: set[str] = set()
         for route in model.routes:
-            key = (route.provider, route.protocol, route.base_url)
-            if key in route_keys:
+            if route.provider in route_keys:
                 _raise_catalog_import_conflict()
-            route_keys.add(key)
-            if key not in protocol_keys and key not in existing_protocols:
+            route_keys.add(route.provider)
+            if route.provider not in providers_with_protocols:
                 _raise_catalog_import_validation(
-                    "Each imported route must reference an existing or imported provider protocol"
+                    "Each imported route must reference a provider with a protocol"
                 )
 
     if not aliases and not model_names:
@@ -288,7 +285,6 @@ async def _merge_catalog_bundle(
     }
     providers_created = 0
     providers_updated = 0
-    protocols: dict[tuple[str, Protocol, str], ProviderProtocol] = {}
     for provider_payload in bundle.providers:
         provider = providers.get(provider_payload.name)
         if provider is None:
@@ -331,25 +327,23 @@ async def _merge_catalog_bundle(
             protocol.websocket_url = protocol_payload.websocket_url
             protocol.supports_responses = protocol_payload.supports_responses
             protocol.enabled = protocol_payload.enabled
-            protocols[(provider.name, protocol.protocol, protocol.base_url)] = protocol
     await session.flush()
 
-    referenced_protocol_keys = {
-        (route.provider, route.protocol, route.base_url)
-        for model in bundle.models
-        for route in model.routes
+    referenced_provider_names = {
+        route.provider for model in bundle.models for route in model.routes
     }
-    missing_protocol_keys = referenced_protocol_keys - set(protocols)
-    if missing_protocol_keys:
-        for provider in (
-            await session.scalars(
-                select(Provider)
-                .options(selectinload(Provider.protocols))
-                .where(Provider.name.in_({key[0] for key in missing_protocol_keys}))
-            )
-        ).all():
-            for protocol in provider.protocols:
-                protocols[(provider.name, protocol.protocol, protocol.base_url)] = protocol
+    missing_provider_names = referenced_provider_names - set(providers)
+    if missing_provider_names:
+        providers.update(
+            {
+                provider.name: provider
+                for provider in (
+                    await session.scalars(
+                        select(Provider).where(Provider.name.in_(missing_provider_names))
+                    )
+                ).all()
+            }
+        )
 
     models = {
         model.canonical_name: model
@@ -399,25 +393,17 @@ async def _merge_catalog_bundle(
     for model_payload in bundle.models:
         model = models[model_payload.canonical_name]
         for route_payload in model_payload.routes:
-            protocol = protocols[
-                (
-                    route_payload.provider,
-                    route_payload.protocol,
-                    route_payload.base_url,
-                )
-            ]
+            provider = providers[route_payload.provider]
             route = await session.scalar(
                 select(ModelRoute).where(
                     ModelRoute.model_id == model.id,
-                    ModelRoute.provider_id == protocol.provider_id,
-                    ModelRoute.provider_protocol_id == protocol.id,
+                    ModelRoute.provider_id == provider.id,
                 )
             )
             if route is None:
                 route = ModelRoute(
                     model_id=model.id,
-                    provider_id=protocol.provider_id,
-                    provider_protocol_id=protocol.id,
+                    provider_id=provider.id,
                     upstream_model=route_payload.upstream_model,
                     weight=route_payload.weight,
                     enabled=route_payload.enabled,
@@ -546,19 +532,13 @@ def _catalog_model(model: Model) -> CatalogModel:
         routes=[
             CatalogRoute(
                 provider=route.provider.name,
-                protocol=route.provider_protocol.protocol,
-                base_url=route.provider_protocol.base_url,
                 upstream_model=route.upstream_model,
                 weight=route.weight,
                 enabled=route.enabled,
             )
             for route in sorted(
                 model.routes,
-                key=lambda item: (
-                    item.provider.name,
-                    item.provider_protocol.protocol.value,
-                    item.provider_protocol.base_url,
-                ),
+                key=lambda item: item.provider.name,
             )
         ],
     )

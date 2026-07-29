@@ -226,21 +226,15 @@ async def _replace_protocols(
         protocol.enabled = payload.enabled
         selected.append(protocol)
 
-    selected_ids = {protocol.id for protocol in selected if protocol.id is not None}
-    removed_ids = {
-        protocol.id
-        for protocol in provider.protocols
-        if protocol.id is not None and protocol.id not in selected_ids
-    }
-    if removed_ids:
+    if not selected:
         route_id = await session.scalar(
-            select(ModelRoute.id).where(ModelRoute.provider_protocol_id.in_(removed_ids)).limit(1)
+            select(ModelRoute.id).where(ModelRoute.provider_id == provider.id).limit(1)
         )
         if route_id is not None:
             raise_auth_error(
                 status.HTTP_409_CONFLICT,
                 "provider_protocol_in_use",
-                "Delete or reassign model routes before removing a provider protocol",
+                "Delete or reassign model routes before removing every provider protocol",
             )
     provider.protocols = selected
 

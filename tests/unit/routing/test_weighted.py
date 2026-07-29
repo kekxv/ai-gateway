@@ -86,14 +86,13 @@ async def _add_route(
     route = ModelRoute(
         model=model,
         provider=provider,
-        provider_protocol=provider_protocol,
         upstream_model=f"upstream-{suffix}",
         weight=100,
         enabled=route_enabled,
         runtime_state=runtime_state,
         disabled_until=disabled_until,
     )
-    session.add(route)
+    session.add_all([provider_protocol, route])
     await session.flush()
     return (
         ResolvedModel(
@@ -103,6 +102,83 @@ async def _add_route(
         ),
         route,
     )
+
+
+async def test_provider_route_projects_matching_inbound_protocol(
+    session: AsyncSession,
+) -> None:
+    model, route = await _add_route(
+        session,
+        suffix="multi-protocol-provider",
+        protocol=Protocol.OPENAI,
+    )
+    claude_protocol = ProviderProtocol(
+        provider_id=route.provider_id,
+        protocol=Protocol.CLAUDE,
+        base_url="https://claude.provider.invalid/v1",
+    )
+    session.add(claude_protocol)
+    await session.flush()
+
+    selected = await Router(session).select_route(
+        model,
+        principal(),
+        preferred_protocol=Protocol.CLAUDE,
+    )
+
+    assert selected.route_id == route.id
+    assert selected.provider_protocol_id == claude_protocol.id
+    assert selected.protocol is Protocol.CLAUDE
+
+
+async def test_native_protocol_routes_precede_conversion_then_fall_back_when_excluded(
+    session: AsyncSession,
+) -> None:
+    model = Model(canonical_name="native-first", display_name="Native First")
+    native_provider = Provider(name="native-provider", credential_encrypted=b"native")
+    native_protocol = ProviderProtocol(
+        provider=native_provider,
+        protocol=Protocol.CLAUDE,
+        base_url="https://native.invalid/v1",
+    )
+    native_route = ModelRoute(
+        model=model,
+        provider=native_provider,
+        upstream_model="native-model",
+        weight=100,
+    )
+    conversion_provider = Provider(name="conversion-provider", credential_encrypted=b"convert")
+    conversion_protocol = ProviderProtocol(
+        provider=conversion_provider,
+        protocol=Protocol.OPENAI,
+        base_url="https://conversion.invalid/v1",
+    )
+    conversion_route = ModelRoute(
+        model=model,
+        provider=conversion_provider,
+        upstream_model="conversion-model",
+        weight=100,
+    )
+    session.add_all([native_protocol, native_route, conversion_protocol, conversion_route])
+    await session.flush()
+    router = Router(session, rng=random.Random(0))
+
+    selected = await router.select_route(
+        model.id,
+        principal(),
+        preferred_protocol=Protocol.CLAUDE,
+    )
+    fallback = await router.select_route(
+        model.id,
+        principal(),
+        preferred_protocol=Protocol.CLAUDE,
+        excluded_route_ids={native_route.id},
+    )
+
+    assert selected.route_id == native_route.id
+    assert selected.protocol is Protocol.CLAUDE
+    assert fallback.route_id == conversion_route.id
+    assert fallback.protocol is Protocol.OPENAI
 
 
 async def test_select_route_uses_one_unlocked_query_for_eligible_route(

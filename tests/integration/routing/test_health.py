@@ -66,12 +66,11 @@ async def committed_route(
         route = ModelRoute(
             model=model,
             provider=provider,
-            provider_protocol=provider_protocol,
             upstream_model="health-upstream",
             weight=100,
             enabled=True,
         )
-        setup_session.add(route)
+        setup_session.add_all([provider_protocol, route])
         await setup_session.commit()
         resolved = ResolvedModel(
             model_id=model.id,

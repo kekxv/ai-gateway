@@ -152,6 +152,33 @@ def test_all_nine_request_conversion_pairs_preserve_semantics(source, target, lo
         assert "cachedContent" not in converted
 
 
+@pytest.mark.parametrize("target", (Protocol.OPENAI, Protocol.GEMINI))
+def test_claude_system_message_converts_to_target_system_instruction(target: Protocol) -> None:
+    canonical = get_adapter(Protocol.CLAUDE).decode_request(
+        {
+            "model": "claude-model",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "Follow system policy."}],
+                },
+                {"role": "user", "content": "Hello"},
+            ],
+            "max_tokens": 128,
+        }
+    )
+
+    converted = get_adapter(target).encode_request(canonical)
+
+    if target is Protocol.OPENAI:
+        assert converted["messages"][0] == {
+            "role": "system",
+            "content": "Follow system policy.",
+        }
+    else:
+        assert converted["systemInstruction"] == {"parts": [{"text": "Follow system policy."}]}
+
+
 @pytest.mark.parametrize("source", PROTOCOLS)
 @pytest.mark.parametrize("target", PROTOCOLS)
 def test_all_nine_response_conversion_pairs_preserve_semantics(

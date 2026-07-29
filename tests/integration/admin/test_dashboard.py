@@ -129,7 +129,6 @@ async def seeded_dashboard_data(
             ModelRoute(
                 model_id=models[0].id,
                 provider_id=providers[0].id,
-                provider_protocol_id=protocols[0].id,
                 upstream_model="dashboard-upstream-a",
                 enabled=True,
                 runtime_state=RouteRuntimeState.CLOSED,
@@ -137,7 +136,6 @@ async def seeded_dashboard_data(
             ModelRoute(
                 model_id=models[0].id,
                 provider_id=providers[1].id,
-                provider_protocol_id=protocols[1].id,
                 upstream_model="dashboard-upstream-b",
                 enabled=True,
                 runtime_state=RouteRuntimeState.OPEN,
@@ -145,7 +143,6 @@ async def seeded_dashboard_data(
             ModelRoute(
                 model_id=models[1].id,
                 provider_id=providers[0].id,
-                provider_protocol_id=protocols[0].id,
                 upstream_model="dashboard-upstream-c",
                 enabled=False,
                 runtime_state=RouteRuntimeState.HALF_OPEN,

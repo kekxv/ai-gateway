@@ -301,45 +301,31 @@ async def _apply_discovered_models(
     if created_models:
         await session.flush()
 
-    protocol_ids = set(discovered_by_protocol)
-    existing_routes = (
-        list(
-            await session.scalars(
-                select(ModelRoute).where(
-                    ModelRoute.provider_id == provider_id,
-                    ModelRoute.provider_protocol_id.in_(protocol_ids),
-                )
-            )
-        )
-        if protocol_ids
-        else []
+    existing_routes = list(
+        await session.scalars(select(ModelRoute).where(ModelRoute.provider_id == provider_id))
     )
-    routes_by_key = {
-        (route.provider_protocol_id, route.model_id): route for route in existing_routes
-    }
-    seen_route_keys: set[tuple[int, int]] = set()
+    routes_by_model_id = {route.model_id: route for route in existing_routes}
+    seen_model_ids: set[int] = set()
     created_routes = 0
     updated_routes = 0
 
-    for protocol_id, discovered_names in discovered_by_protocol.items():
+    for discovered_names in discovered_by_protocol.values():
         for upstream_name in discovered_names:
             model = models_by_name[upstream_name]
-            key = (protocol_id, model.id)
-            if key in seen_route_keys:
+            if model.id in seen_model_ids:
                 continue
-            seen_route_keys.add(key)
-            route = routes_by_key.get(key)
+            seen_model_ids.add(model.id)
+            route = routes_by_model_id.get(model.id)
             if route is None:
                 route = ModelRoute(
                     model_id=model.id,
                     provider_id=provider_id,
-                    provider_protocol_id=protocol_id,
                     upstream_model=upstream_name,
                     enabled=True,
                     source=RouteSource.DISCOVERED,
                 )
                 session.add(route)
-                routes_by_key[key] = route
+                routes_by_model_id[model.id] = route
                 created_routes += 1
             elif route.source is RouteSource.DISCOVERED:
                 if route.upstream_model != upstream_name or not route.enabled:
@@ -352,10 +338,9 @@ async def _apply_discovered_models(
     # If selected_models is provided, don't disable existing routes for non-selected models
     if selected_models is None:
         for route in existing_routes:
-            key = (route.provider_protocol_id, route.model_id)
             if (
                 route.source is RouteSource.DISCOVERED
-                and key not in seen_route_keys
+                and route.model_id not in seen_model_ids
                 and route.enabled
             ):
                 route.enabled = False

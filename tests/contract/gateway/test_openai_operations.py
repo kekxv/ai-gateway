@@ -98,10 +98,11 @@ class RouteRecorder:
         __: ApiKeyPrincipal,
         required_protocol: Protocol | str | None = None,
         *,
+        preferred_protocol: Protocol | str | None = None,
         requested_model: str | None = None,
         excluded_route_ids: frozenset[int] | set[int] = frozenset(),
     ) -> RouteCandidate:
-        del requested_model
+        del preferred_protocol, requested_model
         self.required_protocols.append(required_protocol)
         if self.route.route_id in excluded_route_ids:
             raise NoRouteAvailable("alias")

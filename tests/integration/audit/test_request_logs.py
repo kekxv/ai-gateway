@@ -101,7 +101,6 @@ async def audit_records(
     route = ModelRoute(
         model_id=model.id,
         provider_id=provider.id,
-        provider_protocol_id=provider_protocol.id,
         upstream_model="provider-audit-model",
     )
     session.add(route)

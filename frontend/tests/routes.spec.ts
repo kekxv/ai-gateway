@@ -107,7 +107,6 @@ const routeFixture: ModelRouteResponse = {
   id: 201,
   model_id: 1,
   provider_id: 11,
-  provider_protocol_id: 111,
   upstream_model: 'gpt-4.1-2026-04-14',
   weight: 750,
   enabled: true,
@@ -123,7 +122,6 @@ const closedRoute: ModelRouteResponse = {
   ...routeFixture,
   id: 202,
   provider_id: 12,
-  provider_protocol_id: 121,
   upstream_model: 'gemini-2.5-pro',
   source: 'manual',
   runtime_state: 'closed',
@@ -229,7 +227,7 @@ describe('加权模型路由管理', () => {
     wrapper.unmount()
   })
 
-  it('提供商选择只显示其协议编号并提交选定模型上下文', async () => {
+  it('路由只关联供应商并提交选定模型上下文', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(RouteFormDrawer, {
       props: {
@@ -245,18 +243,10 @@ describe('加权模型路由管理', () => {
     await flushPromises()
 
     const providerSelect = wrapper.get('[data-test="route-provider"]')
-    const protocolSelect = wrapper.get('[data-test="route-protocol"]')
     expect(providerSelect.attributes('aria-label')).toBe('供应商')
-    expect(protocolSelect.attributes('aria-label')).toBe('供应商协议')
-    expect(protocolSelect.findAll('option').map((option) => option.attributes('value'))).toEqual([
-      '111',
-      '112',
-    ])
+    expect(wrapper.find('[data-test="route-protocol"]').exists()).toBe(false)
 
     await providerSelect.setValue('12')
-    expect(protocolSelect.findAll('option').map((option) => option.attributes('value'))).toEqual([
-      '121',
-    ])
     await wrapper.get('[data-test="route-upstream-model"]').setValue('gemini-2.5-pro')
     await wrapper.get('[data-test="route-weight"] input').setValue('500')
     await wrapper.get('[data-test="route-submit"]').trigger('click')
@@ -264,7 +254,6 @@ describe('加权模型路由管理', () => {
     expect(onSubmit).toHaveBeenCalledWith({
       model_id: 1,
       provider_id: 12,
-      provider_protocol_id: 121,
       upstream_model: 'gemini-2.5-pro',
       weight: 500,
       enabled: true,
@@ -272,7 +261,7 @@ describe('加权模型路由管理', () => {
     wrapper.unmount()
   })
 
-  it('编辑时同步更新提供商与它的协议关系', async () => {
+  it('编辑时只更新提供商关系', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(RouteFormDrawer, {
       props: {
@@ -292,7 +281,6 @@ describe('加权模型路由管理', () => {
 
     expect(onSubmit).toHaveBeenCalledWith({
       provider_id: 12,
-      provider_protocol_id: 121,
     })
     wrapper.unmount()
   })
@@ -313,13 +301,12 @@ describe('加权模型路由管理', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-test="route-provider"]').attributes('aria-label')).toBe('供应商')
-    expect(wrapper.get('[data-test="route-protocol"]').attributes('aria-label')).toBe('供应商协议')
+    expect(wrapper.find('[data-test="route-protocol"]').exists()).toBe(false)
     await wrapper.get('[data-test="route-upstream-model"]').setValue('native-name')
     await wrapper.get('[data-test="route-submit"]').trigger('click')
     await waitForFormErrors()
 
     expect(wrapper.text()).toContain('请选择供应商')
-    expect(wrapper.text()).toContain('请选择当前供应商的协议')
     expect(onSubmit).not.toHaveBeenCalled()
     wrapper.unmount()
   })
@@ -388,6 +375,7 @@ describe('加权模型路由管理', () => {
     expect(firstCard.text()).toContain('upstream_timeout')
     expect(firstCard.text()).toContain('连续失败: 3')
     expect(firstCard.text()).toContain('健康')
+    expect(firstCard.text()).toContain('OpenAI / Claude')
 
     await wrapper.get('[data-test="model-card-2"] .routes-toggle').trigger('click')
     const secondCard = wrapper.get('[data-test="model-card-2"]')
@@ -466,29 +454,14 @@ describe('加权模型路由管理', () => {
     wrapper.unmount()
   })
 
-  it('非初始模型卡的路由有历史记录时显示通知并提供真实的停用操作', async () => {
-    const patchBodies: unknown[] = []
+  it('删除路由后立即移除对应路由卡片', async () => {
     useCatalog()
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
       value: '',
       action: 'confirm',
     } as MessageBoxData)
     server.use(
-      http.delete('/admin/model-routes/203', () =>
-        HttpResponse.json(
-          {
-            detail: {
-              code: 'model_route_has_history',
-              message: 'Routes with request history must be disabled instead of deleted',
-            },
-          },
-          { status: 409 },
-        ),
-      ),
-      http.patch('/admin/model-routes/203', async ({ request }) => {
-        patchBodies.push(await request.json())
-        return HttpResponse.json({ ...openRoute, enabled: false })
-      }),
+      http.delete('/admin/model-routes/203', () => new HttpResponse(null, { status: 204 })),
     )
     const wrapper = mount(ModelsView, { attachTo: document.body })
     await flushPromises()
@@ -496,13 +469,8 @@ describe('加权模型路由管理', () => {
     await wrapper.get('[data-test="model-card-2"] .routes-toggle').trigger('click')
     await wrapper.get('[data-test="delete-route-203"]').trigger('click')
     await flushPromises()
-    expect(wrapper.text()).toContain('claude-opus-4-1')
-    expect(wrapper.get('[data-test="route-notice"]').text()).toContain('请求历史')
-
-    await wrapper.get('[data-test="disable-route-conflict-203"]').trigger('click')
-    await flushPromises()
-    expect(patchBodies).toEqual([{ enabled: false }])
-    expect(wrapper.get('[data-test="route-status-203"]').text()).toContain('已停用')
+    expect(wrapper.find('[data-test="edit-route-203"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="route-notice"]').text()).toContain('已删除')
     wrapper.unmount()
   })
 

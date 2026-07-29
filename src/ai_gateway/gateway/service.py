@@ -89,6 +89,7 @@ class RouteSelector(TypingProtocol):
         principal: ApiKeyPrincipal,
         required_protocol: Protocol | str | None = None,
         *,
+        preferred_protocol: Protocol | str | None = None,
         requested_model: str | None = None,
         excluded_route_ids: frozenset[int] | set[int] = frozenset(),
     ) -> RouteCandidate: ...
@@ -856,6 +857,7 @@ class GatewayService:
                     model_id,
                     principal,
                     required_protocol=prepared.required_protocol,
+                    preferred_protocol=prepared.inbound_protocol,
                     requested_model=prepared.requested_model,
                     excluded_route_ids=attempted_route_ids,
                 )

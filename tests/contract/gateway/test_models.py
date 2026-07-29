@@ -75,11 +75,10 @@ def _route(
     *,
     enabled: bool = True,
 ) -> ModelRoute:
-    provider_protocol = next(item for item in provider.protocols if item.protocol is protocol)
+    assert any(item.protocol is protocol for item in provider.protocols)
     return ModelRoute(
         model=model,
         provider=provider,
-        provider_protocol=provider_protocol,
         upstream_model=model.canonical_name,
         enabled=enabled,
     )
@@ -321,12 +320,7 @@ async def test_all_api_key_scope_modes_filter_names_through_same_channel_route(
     other_provider = _provider(f"other-{scope.value}", Protocol.OPENAI, Protocol.GEMINI)
     other_model = _model(f"other-model-{scope.value}")
     other_model.aliases.append(ModelAlias(alias=f"other-alias-{scope.value}"))
-    session.add_all(
-        [
-            _route(other_model, other_provider, Protocol.OPENAI),
-            _route(other_model, other_provider, Protocol.GEMINI),
-        ]
-    )
+    session.add(_route(other_model, other_provider, Protocol.OPENAI))
     await session.flush()
 
     if scope is ApiKeyScope.ALL:

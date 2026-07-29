@@ -23,7 +23,6 @@ import type {
   ModelRouteCreate,
   ModelRouteResponse,
   ModelRouteUpdate,
-  Protocol,
   ProviderResponse,
 } from '@/api/types'
 
@@ -41,39 +40,28 @@ const emit = defineEmits<{
 }>()
 
 const providerId = ref<number | null>(null)
-const protocolId = ref<number | null>(null)
 const upstreamModel = ref('')
 const weight = ref<number | null>(100)
 const enabled = ref(true)
 const providerError = ref('')
-const protocolError = ref('')
 const upstreamModelError = ref('')
 const weightError = ref('')
 const formContent = ref<HTMLElement | null>(null)
-
-const protocolLabels: Readonly<Record<Protocol, string>> = {
-  openai: 'OpenAI',
-  claude: 'Claude',
-  gemini: 'Gemini',
-}
 
 const editing = computed(() => props.route !== null)
 const drawerTitle = computed(() => (editing.value ? '编辑模型路由' : '新建模型路由'))
 const selectedProvider = computed(
   () => props.providers.find((provider) => provider.id === providerId.value) ?? null,
 )
-const availableProtocols = computed(() => selectedProvider.value?.protocols ?? [])
 
 function resetErrors(): void {
   providerError.value = ''
-  protocolError.value = ''
   upstreamModelError.value = ''
   weightError.value = ''
 }
 
 function clearDraft(): void {
   providerId.value = null
-  protocolId.value = null
   upstreamModel.value = ''
   weight.value = 100
   enabled.value = true
@@ -83,10 +71,6 @@ function clearDraft(): void {
 function resetForm(): void {
   const route = props.route
   providerId.value = route?.provider_id ?? props.providers[0]?.id ?? null
-  protocolId.value =
-    route?.provider_protocol_id ??
-    props.providers.find((provider) => provider.id === providerId.value)?.protocols[0]?.id ??
-    null
   upstreamModel.value = route?.upstream_model ?? ''
   weight.value = route?.weight ?? 100
   enabled.value = route?.enabled ?? true
@@ -102,13 +86,6 @@ watch(
   },
   { immediate: true, flush: 'sync' },
 )
-
-watch(providerId, () => {
-  const protocols = availableProtocols.value
-  if (!protocols.some((protocol) => protocol.id === protocolId.value)) {
-    protocolId.value = protocols[0]?.id ?? null
-  }
-})
 
 onBeforeUnmount(() => {
   if (!props.submitting) clearDraft()
@@ -146,14 +123,8 @@ function submitForm(): void {
   if (props.submitting) return
   resetErrors()
   const model = props.model
-  const selectedProtocol = availableProtocols.value.find(
-    (protocol) => protocol.id === protocolId.value,
-  )
   if (providerId.value === null || selectedProvider.value === null) {
     providerError.value = '请选择供应商'
-  }
-  if (protocolId.value === null || selectedProtocol === undefined) {
-    protocolError.value = '请选择当前供应商的协议'
   }
   if (upstreamModel.value.trim() === '') {
     upstreamModelError.value = '请输入提供商原始模型名'
@@ -164,7 +135,6 @@ function submitForm(): void {
 
   let invalidSelector: string | null = null
   if (providerError.value !== '') invalidSelector = '[data-validation="route-provider"] select'
-  else if (protocolError.value !== '') invalidSelector = '[data-validation="route-protocol"] select'
   else if (upstreamModelError.value !== '') {
     invalidSelector = '[data-validation="route-upstream-model"] input'
   } else if (weightError.value !== '') invalidSelector = '[data-validation="route-weight"] input'
@@ -175,7 +145,6 @@ function submitForm(): void {
   if (
     model === null ||
     providerId.value === null ||
-    protocolId.value === null ||
     weight.value === null
   ) {
     return
@@ -186,7 +155,6 @@ function submitForm(): void {
     emit('submit', {
       model_id: model.id,
       provider_id: providerId.value,
-      provider_protocol_id: protocolId.value,
       upstream_model: upstream,
       weight: weight.value,
       enabled: enabled.value,
@@ -198,9 +166,6 @@ function submitForm(): void {
   if (route === null) return
   const payload: ModelRouteUpdate = {}
   if (providerId.value !== route.provider_id) payload.provider_id = providerId.value
-  if (protocolId.value !== route.provider_protocol_id) {
-    payload.provider_protocol_id = protocolId.value
-  }
   if (upstream !== route.upstream_model) payload.upstream_model = upstream
   if (weight.value !== route.weight) payload.weight = weight.value
   if (enabled.value !== route.enabled) payload.enabled = enabled.value
@@ -223,47 +188,30 @@ function submitForm(): void {
       <div>
         <h2 class="drawer-heading">{{ drawerTitle }}</h2>
         <p class="drawer-description">
-          为“{{ model?.display_name ?? '未选择模型' }}”配置上游协议与权重。
+          为“{{ model?.display_name ?? '未选择模型' }}”配置上游供应商与权重。
         </p>
       </div>
     </template>
 
     <ElForm :disabled="submitting" label-position="top" @submit.prevent="submitForm">
       <div ref="formContent">
-        <div class="form-grid">
-          <ElFormItem
-            data-validation="route-provider"
-            label="供应商"
-            :error="providerError"
+        <ElFormItem
+          data-validation="route-provider"
+          label="供应商"
+          :error="providerError"
+        >
+          <select
+            v-model.number="providerId"
+            data-test="route-provider"
+            aria-label="供应商"
+            :disabled="submitting"
           >
-            <select
-              v-model.number="providerId"
-              data-test="route-provider"
-              aria-label="供应商"
-              :disabled="submitting"
-            >
-              <option v-for="provider in providers" :key="provider.id" :value="provider.id">
-                {{ provider.name }}
-              </option>
-            </select>
-          </ElFormItem>
-          <ElFormItem
-            data-validation="route-protocol"
-            label="供应商协议"
-            :error="protocolError"
-          >
-            <select
-              v-model.number="protocolId"
-              data-test="route-protocol"
-              aria-label="供应商协议"
-              :disabled="submitting"
-            >
-              <option v-for="protocol in availableProtocols" :key="protocol.id" :value="protocol.id">
-                {{ protocolLabels[protocol.protocol] }} · #{{ protocol.id }}
-              </option>
-            </select>
-          </ElFormItem>
-        </div>
+            <option v-for="provider in providers" :key="provider.id" :value="provider.id">
+              {{ provider.name }}
+            </option>
+          </select>
+          <p class="field-help">转发时优先使用与客户端一致的供应商协议。</p>
+        </ElFormItem>
 
         <ElFormItem
           data-validation="route-upstream-model"
