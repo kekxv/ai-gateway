@@ -33,6 +33,8 @@ def auth_settings() -> Settings:
         environment="test",
         jwt_secret="integration-test-jwt-secret-at-least-32-bytes",
         encryption_key=Fernet.generate_key().decode(),
+        auth_rate_limit_max_requests=5,
+        auth_rate_limit_window_seconds=300,
     )
 
 
