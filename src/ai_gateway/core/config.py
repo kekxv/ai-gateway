@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     billing_reservation_ttl_seconds: int = Field(default=300, ge=60)
     audit_log_retention_days: int = Field(default=30, ge=0)
     audit_log_cleanup_interval_seconds: int = Field(default=3600, ge=60)
+    auth_rate_limit_max_requests: int = Field(default=5, ge=1)
+    auth_rate_limit_window_seconds: int = Field(default=300, ge=1)
 
 
 @lru_cache

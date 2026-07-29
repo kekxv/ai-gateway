@@ -47,9 +47,6 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 AppSettings = Annotated[Settings, Depends(get_settings)]
 CurrentUser = Annotated[User, Depends(current_user)]
 
-_AUTH_RATE_LIMIT_MAX_REQUESTS = 5
-_AUTH_RATE_LIMIT_WINDOW_SECONDS = 300
-
 
 @router.post("/register", response_model=TokenPair, status_code=status.HTTP_201_CREATED)
 async def register(
@@ -61,8 +58,8 @@ async def register(
     await check_rate_limit(
         request,
         session,
-        max_requests=_AUTH_RATE_LIMIT_MAX_REQUESTS,
-        window_seconds=_AUTH_RATE_LIMIT_WINDOW_SECONDS,
+        max_requests=settings.auth_rate_limit_max_requests,
+        window_seconds=settings.auth_rate_limit_window_seconds,
         code="too_many_requests",
         message="Too many registration attempts, please try again later",
     )
@@ -92,8 +89,8 @@ async def login(
     await check_rate_limit(
         request,
         session,
-        max_requests=_AUTH_RATE_LIMIT_MAX_REQUESTS,
-        window_seconds=_AUTH_RATE_LIMIT_WINDOW_SECONDS,
+        max_requests=settings.auth_rate_limit_max_requests,
+        window_seconds=settings.auth_rate_limit_window_seconds,
         code="too_many_requests",
         message="Too many login attempts, please try again later",
     )
