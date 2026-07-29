@@ -873,9 +873,17 @@ async def assert_durable_results(
         assert route.json()["consecutive_failures"] == 0
         assert route.json()["last_error_code"] is None
 
-    ledger = await client.get(f"/admin/users/{state.user_id}/ledger", headers=state.admin_headers)
-    assert ledger.status_code == 200, ledger.text
-    entries = ledger.json()
+    entries: list[dict[str, Any]] = []
+    for _ in range(100):
+        ledger = await client.get(
+            f"/admin/users/{state.user_id}/ledger",
+            headers=state.admin_headers,
+        )
+        assert ledger.status_code == 200, ledger.text
+        entries = ledger.json()
+        if len(entries) == 16:
+            break
+        await asyncio.sleep(0.02)
     assert len(entries) == 16
     totals: dict[str, Decimal] = defaultdict(Decimal)
     counts: dict[str, int] = defaultdict(int)
