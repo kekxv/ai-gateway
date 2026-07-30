@@ -5,7 +5,7 @@ import random
 import socket
 import ssl
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from uuid import uuid4
 
 import httpx
@@ -27,7 +27,7 @@ from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFail
 
 
 def utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
+    return datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
 
 
 def caused_by(exception: BaseException, cause: BaseException) -> BaseException:
@@ -70,7 +70,25 @@ async def committed_route(
             weight=100,
             enabled=True,
         )
-        setup_session.add_all([provider_protocol, route])
+        standby_provider = Provider(
+            name=f"health-standby-{suffix}",
+            credential_encrypted=b"standby-secret",
+            enabled=True,
+        )
+        standby_protocol = ProviderProtocol(
+            provider=standby_provider,
+            protocol=Protocol.OPENAI,
+            base_url="https://standby.provider.invalid/v1",
+            enabled=True,
+        )
+        standby_route = ModelRoute(
+            model=model,
+            provider=standby_provider,
+            upstream_model="standby-upstream",
+            weight=100,
+            enabled=True,
+        )
+        setup_session.add_all([provider_protocol, route, standby_protocol, standby_route])
         await setup_session.commit()
         resolved = ResolvedModel(
             model_id=model.id,
@@ -201,7 +219,7 @@ async def test_concurrent_third_failure_opens_route_atomically(
 
     async def fail_once(status_code: int) -> None:
         async with AsyncSession(test_engine, expire_on_commit=False) as session:
-            await RouteHealth(session).record_failure(route_id, status_code)
+            await RouteHealth(session, failure_threshold=3).record_failure(route_id, status_code)
 
     before = utcnow()
     await asyncio.gather(fail_once(500), fail_once(502), fail_once(503))
@@ -493,3 +511,51 @@ async def test_failed_half_open_claim_does_not_commit_caller_work(
 
     async with mutation_sessions() as observer:
         assert await _provider_count(observer, unrelated_name) == 0
+
+
+async def test_only_route_for_model_is_not_disabled_even_after_threshold_failures(
+    test_engine: AsyncEngine,
+) -> None:
+    """When a route is the only enabled route for a model, it should not be disabled."""
+    suffix = uuid4().hex
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as setup_session:
+        model = Model(
+            canonical_name=f"only-route-model-{suffix}",
+            display_name="Only Route Model",
+            enabled=True,
+        )
+        provider = Provider(
+            name=f"only-route-provider-{suffix}",
+            credential_encrypted=b"secret",
+            enabled=True,
+        )
+        provider_protocol = ProviderProtocol(
+            provider=provider,
+            protocol=Protocol.OPENAI,
+            base_url="https://only.provider.invalid/v1",
+            enabled=True,
+        )
+        route = ModelRoute(
+            model=model,
+            provider=provider,
+            upstream_model="only-upstream",
+            weight=100,
+            enabled=True,
+        )
+        setup_session.add_all([provider_protocol, route])
+        await setup_session.commit()
+        route_id = route.id
+
+    for status in (500, 502, 503):
+        async with AsyncSession(test_engine, expire_on_commit=False) as session:
+            await RouteHealth(session, failure_threshold=3).record_failure(route_id, status)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        route = await _load_route(session, route_id)
+
+    assert route.consecutive_failures == 3
+    assert route.runtime_state is RouteRuntimeState.CLOSED
+    assert route.disabled_until is None
+    assert route.last_error_code == "http_503"
+    assert route.last_error_at is not None

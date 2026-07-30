@@ -26,6 +26,12 @@ def _utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def _now_plus8() -> datetime:
+    from datetime import timedelta, timezone
+
+    return datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
+
+
 def choose_weighted_route(
     candidates: Sequence[RouteCandidate],
     rng: random.Random,
@@ -51,9 +57,9 @@ class Router:
         session: AsyncSession,
         *,
         rng: random.Random | None = None,
-        clock: Clock = _utcnow,
+        clock: Clock = _now_plus8,
         mutation_session_factory: MutationSessionFactory | None = None,
-        failure_threshold: int = 3,
+        failure_threshold: int = 10,
         cooldown: timedelta = timedelta(seconds=60),
     ) -> None:
         self._session = session
@@ -140,6 +146,30 @@ class Router:
             removed_by_health=removed_by_health,
         )
 
+    async def has_eligible_route(
+        self,
+        model_id: int,
+        principal: ApiKeyPrincipal,
+        required_protocol: Protocol | str | None = None,
+    ) -> bool:
+        protocol = Protocol(required_protocol) if required_protocol is not None else None
+        rows = (
+            (
+                await self._session.execute(
+                    _candidate_query(
+                        model_id=model_id,
+                        principal=principal,
+                        required_protocol=protocol,
+                        require_websocket=False,
+                        now=self._clock(),
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return bool(_candidates_from_rows(rows, protocol))
+
     async def _claim_half_open(self, route_id: int, now: datetime) -> bool:
         async with self._mutation_session_factory() as mutation_session:
             async with mutation_session.begin():
@@ -196,7 +226,7 @@ async def select_route(
     *,
     preferred_protocol: Protocol | str | None = None,
     rng: random.Random | None = None,
-    clock: Clock = _utcnow,
+    clock: Clock = _now_plus8,
     requested_model: str | None = None,
     mutation_session_factory: MutationSessionFactory | None = None,
     excluded_route_ids: frozenset[int] | set[int] = frozenset(),

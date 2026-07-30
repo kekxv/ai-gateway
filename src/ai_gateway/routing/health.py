@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import httpx
-from sqlalchemy import case, update
+from sqlalchemy import case, func, literal, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,12 @@ PENALIZING_WEBSOCKET_CLOSE_CODES = frozenset({1002, 1006, 1011, 1012, 1013, 1014
 
 def _utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _now_plus8() -> datetime:
+    from datetime import timedelta, timezone
+
+    return datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
 
 
 def _status_code(failure: object) -> int | None:
@@ -123,9 +129,9 @@ class RouteHealth:
         self,
         session: AsyncSession,
         *,
-        failure_threshold: int = 3,
+        failure_threshold: int = 10,
         cooldown: timedelta = timedelta(seconds=60),
-        clock: Clock = _utcnow,
+        clock: Clock = _now_plus8,
         mutation_session_factory: MutationSessionFactory | None = None,
     ) -> None:
         if failure_threshold < 1:
@@ -140,6 +146,31 @@ class RouteHealth:
         self._failure_threshold = failure_threshold
         self._cooldown = cooldown
         self._clock = clock
+
+    async def _is_only_enabled_route(self, session: AsyncSession, route_id: int) -> bool:
+        """Check if this is the only enabled route for its model."""
+        route_info = await session.execute(
+            select(ModelRoute.model_id, ModelRoute.enabled, ModelRoute.weight).where(
+                ModelRoute.id == route_id
+            )
+        )
+        row = route_info.one_or_none()
+        if row is None:
+            return True
+
+        model_id, enabled, weight = row
+        if not enabled or weight <= 0:
+            return True
+
+        other_count = await session.execute(
+            select(func.count(ModelRoute.id)).where(
+                ModelRoute.model_id == model_id,
+                ModelRoute.id != route_id,
+                ModelRoute.enabled.is_(True),
+                ModelRoute.weight > 0,
+            )
+        )
+        return other_count.scalar_one() == 0
 
     async def record_success(self, route_id: int) -> bool:
         async with self._mutation_session_factory() as mutation_session:
@@ -164,37 +195,53 @@ class RouteHealth:
 
         now = self._clock()
         async with self._mutation_session_factory() as mutation_session:
-            next_failure_count = ModelRoute.consecutive_failures + 1
-            opens_route = (ModelRoute.runtime_state == RouteRuntimeState.HALF_OPEN) | (
-                next_failure_count >= self._failure_threshold
-            )
+            is_only_route = await self._is_only_enabled_route(mutation_session, route_id)
+
             async with mutation_session.begin():
-                result = await mutation_session.execute(
-                    update(ModelRoute)
-                    .where(ModelRoute.id == route_id)
-                    .ordered_values(
-                        (
-                            ModelRoute.disabled_until,
-                            case(
-                                (opens_route, now + self._cooldown),
-                                else_=ModelRoute.disabled_until,
+                if is_only_route:
+                    result = await mutation_session.execute(
+                        update(ModelRoute)
+                        .where(ModelRoute.id == route_id)
+                        .ordered_values(
+                            (
+                                ModelRoute.consecutive_failures,
+                                ModelRoute.consecutive_failures + 1,
                             ),
-                        ),
-                        (
-                            ModelRoute.runtime_state,
-                            case(
-                                (opens_route, RouteRuntimeState.OPEN),
-                                else_=ModelRoute.runtime_state,
-                            ),
-                        ),
-                        (
-                            ModelRoute.consecutive_failures,
-                            next_failure_count,
-                        ),
-                        (ModelRoute.last_error_code, health_failure_code(failure)),
-                        (ModelRoute.last_error_at, now),
+                            (ModelRoute.last_error_code, health_failure_code(failure)),
+                            (ModelRoute.last_error_at, now),
+                        )
                     )
-                )
+                else:
+                    next_failure_count = ModelRoute.consecutive_failures + 1
+                    opens_route = (ModelRoute.runtime_state == RouteRuntimeState.HALF_OPEN) | (
+                        next_failure_count >= self._failure_threshold
+                    )
+                    result = await mutation_session.execute(
+                        update(ModelRoute)
+                        .where(ModelRoute.id == route_id)
+                        .ordered_values(
+                            (
+                                ModelRoute.disabled_until,
+                                case(
+                                    (opens_route, now + self._cooldown),
+                                    else_=ModelRoute.disabled_until,
+                                ),
+                            ),
+                            (
+                                ModelRoute.runtime_state,
+                                case(
+                                    (opens_route, RouteRuntimeState.OPEN),
+                                    else_=ModelRoute.runtime_state,
+                                ),
+                            ),
+                            (
+                                ModelRoute.consecutive_failures,
+                                next_failure_count,
+                            ),
+                            (ModelRoute.last_error_code, health_failure_code(failure)),
+                            (ModelRoute.last_error_at, now),
+                        )
+                    )
                 changed = cast(CursorResult[Any], result).rowcount == 1
         return changed
 
