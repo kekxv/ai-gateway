@@ -195,9 +195,9 @@ class RouteHealth:
 
         now = self._clock()
         async with self._mutation_session_factory() as mutation_session:
-            is_only_route = await self._is_only_enabled_route(mutation_session, route_id)
-
             async with mutation_session.begin():
+                is_only_route = await self._is_only_enabled_route(mutation_session, route_id)
+
                 if is_only_route:
                     result = await mutation_session.execute(
                         update(ModelRoute)
