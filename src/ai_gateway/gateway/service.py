@@ -71,6 +71,7 @@ from ai_gateway.transport.upstream import build_upstream_request
 logger = logging.getLogger(__name__)
 
 _SAFE_NATIVE_ERROR_HEADERS = frozenset({"retry-after", "www-authenticate"})
+_STREAM_RECOVERY_CHECKPOINT_SECONDS = 5.0
 
 type OpenAIOperation = Literal[
     "chat_completions",
@@ -1199,6 +1200,7 @@ class _StreamLifecycle:
         self._downstream_failed = False
         self._finalize_lock = asyncio.Lock()
         self._finalize_task: asyncio.Task[None] | None = None
+        self._last_recovery_checkpoint_at = monotonic()
 
     def iterator(self) -> _StreamLifecycleIterator:
         return _StreamLifecycleIterator(self)
@@ -1217,6 +1219,10 @@ class _StreamLifecycle:
             self._prefetched_frame = b""
             return frame
         frame = await anext(self._source)
+        checkpoint_at = monotonic()
+        if checkpoint_at - self._last_recovery_checkpoint_at < _STREAM_RECOVERY_CHECKPOINT_SECONDS:
+            return frame
+        self._last_recovery_checkpoint_at = checkpoint_at
         usage_result = _stream_usage_result(self.context, self._request)
         pending_cost, pending_cost_amount = _settlement_costs(
             model=self._priced_model,

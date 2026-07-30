@@ -51,6 +51,20 @@ class ModelSyncResult:
     disabled_routes: int
 
 
+@dataclass(frozen=True, slots=True)
+class _DiscoveryProviderSnapshot:
+    credential_encrypted: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _DiscoveryProtocolSnapshot:
+    id: int
+    protocol: Protocol
+    base_url: str
+    extra_headers_encrypted: bytes | None
+    provider: _DiscoveryProviderSnapshot
+
+
 class SyncProviderNotFoundError(LookupError):
     pass
 
@@ -88,6 +102,7 @@ async def discover_provider_models_endpoint(
             session=session,
             http_client_factory=http_client_factory,
             settings=settings,
+            release_connection_before_discovery=True,
         )
         return models_by_protocol
     except SyncProviderNotFoundError:
@@ -135,6 +150,7 @@ async def sync_provider_models_endpoint(
             http_client_factory=http_client_factory,
             settings=settings,
             selected_models=selected_models,
+            release_connection_before_discovery=True,
         )
     except SyncProviderNotFoundError:
         raise_auth_error(
@@ -163,6 +179,7 @@ async def discover_provider_models(
     session: AsyncSession,
     http_client_factory: HttpClientProvider,
     settings: Settings,
+    release_connection_before_discovery: bool = False,
 ) -> dict[str, list[str]]:
     """Discover models through the preferred enabled provider protocol."""
     provider = await session.scalar(
@@ -174,14 +191,17 @@ async def discover_provider_models(
     provider_protocol = _preferred_discovery_protocol(provider.protocols)
     if provider_protocol is None:
         return {}
-    url = discovery_url(provider_protocol)
+    discovery_protocol = _discovery_snapshot(provider_protocol)
+    if release_connection_before_discovery:
+        await session.commit()
+    url = discovery_url(discovery_protocol)
     client = await http_client_factory.client_for(url)
     models = await discover_models(
-        provider_protocol,
+        discovery_protocol,
         client=client,
         settings=settings,
     )
-    return {provider_protocol.protocol.value: models}
+    return {discovery_protocol.protocol.value: models}
 
 
 async def sync_provider_models(
@@ -192,6 +212,7 @@ async def sync_provider_models(
     settings: Settings,
     clock: Clock = _utcnow,
     selected_models: list[str] | None = None,
+    release_connection_before_discovery: bool = False,
 ) -> ModelSyncResult:
     """Synchronize one provider through its preferred discovery protocol.
 
@@ -207,17 +228,20 @@ async def sync_provider_models(
     discovered_by_protocol: dict[int, list[str]] = {}
     provider_protocol = _preferred_discovery_protocol(provider.protocols)
     if provider_protocol is not None:
-        url = discovery_url(provider_protocol)
+        discovery_protocol = _discovery_snapshot(provider_protocol)
+        if release_connection_before_discovery:
+            await session.commit()
+        url = discovery_url(discovery_protocol)
         client = await http_client_factory.client_for(url)
         discovered = await discover_models(
-            provider_protocol,
+            discovery_protocol,
             client=client,
             settings=settings,
         )
         # Filter to selected models if specified
         if selected_models:
             discovered = [m for m in discovered if m in selected_models]
-        discovered_by_protocol[provider_protocol.id] = discovered
+        discovered_by_protocol[discovery_protocol.id] = discovered
 
     for attempt in range(_SYNC_WRITE_ATTEMPTS):
         try:
@@ -244,6 +268,18 @@ def _preferred_discovery_protocol(
     return min(
         enabled_protocols,
         key=lambda protocol: (protocol.protocol is not Protocol.OPENAI, protocol.id),
+    )
+
+
+def _discovery_snapshot(provider_protocol: ProviderProtocol) -> _DiscoveryProtocolSnapshot:
+    return _DiscoveryProtocolSnapshot(
+        id=provider_protocol.id,
+        protocol=provider_protocol.protocol,
+        base_url=provider_protocol.base_url,
+        extra_headers_encrypted=provider_protocol.extra_headers_encrypted,
+        provider=_DiscoveryProviderSnapshot(
+            credential_encrypted=bytes(provider_protocol.provider.credential_encrypted)
+        ),
     )
 
 

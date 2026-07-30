@@ -5,6 +5,7 @@ import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import orjson
@@ -12,7 +13,12 @@ import pytest
 from cryptography.fernet import Fernet
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import selectinload
 
 from ai_gateway.admin.model_sync import discover_provider_models, sync_provider_models
@@ -85,6 +91,118 @@ def _provider(
 
 def _json_response(request: httpx.Request, payload: dict[str, object]) -> httpx.Response:
     return httpx.Response(200, json=payload, request=request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["discover", "sync"])
+async def test_model_discovery_releases_orm_connection_during_upstream_io(
+    test_engine: AsyncEngine,
+    sync_settings: Settings,
+    operation: str,
+) -> None:
+    database_url = test_engine.url.render_as_string(hide_password=False)
+    engine = create_async_engine(
+        database_url,
+        pool_pre_ping=True,
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=0.1,
+    )
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    provider_name = f"pool-discovery-{operation}-{uuid4().hex}"
+    async with sessions() as setup_session:
+        provider = _provider(sync_settings, name=provider_name)
+        setup_session.add(provider)
+        await setup_session.commit()
+        provider_id = provider.id
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        checked_out = engine.sync_engine.pool.checkedout()  # type: ignore[attr-defined]
+        assert checked_out == 0, "ORM connection was retained across upstream discovery I/O"
+        return _json_response(request, {"data": [], "has_more": False})
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        async with sessions() as discovery_session:
+            if operation == "discover":
+                await discover_provider_models(
+                    provider_id,
+                    session=discovery_session,
+                    http_client_factory=FakeHttpClientFactory(upstream_client),
+                    settings=sync_settings,
+                    release_connection_before_discovery=True,
+                )
+            else:
+                await sync_provider_models(
+                    provider_id,
+                    session=discovery_session,
+                    http_client_factory=FakeHttpClientFactory(upstream_client),
+                    settings=sync_settings,
+                    release_connection_before_discovery=True,
+                )
+    finally:
+        await upstream_client.aclose()
+        async with sessions() as cleanup_session:
+            await cleanup_session.execute(
+                delete(ModelRoute).where(ModelRoute.provider_id == provider_id)
+            )
+            await cleanup_session.execute(
+                delete(ProviderProtocol).where(ProviderProtocol.provider_id == provider_id)
+            )
+            await cleanup_session.execute(delete(Provider).where(Provider.id == provider_id))
+            await cleanup_session.commit()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_retains_only_advisory_lock_connection_during_discovery(
+    test_engine: AsyncEngine,
+    sync_settings: Settings,
+) -> None:
+    from ai_gateway.catalog.scheduler import ModelSyncScheduler
+
+    database_url = test_engine.url.render_as_string(hide_password=False)
+    engine = create_async_engine(
+        database_url,
+        pool_pre_ping=True,
+        pool_size=2,
+        max_overflow=0,
+        pool_timeout=0.1,
+    )
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    provider_name = f"scheduler-pool-discovery-{uuid4().hex}"
+    async with sessions() as setup_session:
+        provider = _provider(sync_settings, name=provider_name)
+        setup_session.add(provider)
+        await setup_session.commit()
+        provider_id = provider.id
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        checked_out = engine.sync_engine.pool.checkedout()  # type: ignore[attr-defined]
+        assert checked_out == 1, "scheduler retained an ORM connection in addition to GET_LOCK"
+        return _json_response(request, {"data": [], "has_more": False})
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    scheduler = ModelSyncScheduler(
+        engine=engine,
+        session_factory=sessions,
+        http_client_factory=FakeHttpClientFactory(upstream_client),
+        settings=sync_settings,
+    )
+    try:
+        await scheduler.run_once()
+    finally:
+        await upstream_client.aclose()
+        async with sessions() as cleanup_session:
+            await cleanup_session.execute(
+                delete(ModelRoute).where(ModelRoute.provider_id == provider_id)
+            )
+            await cleanup_session.execute(
+                delete(ProviderProtocol).where(ProviderProtocol.provider_id == provider_id)
+            )
+            await cleanup_session.execute(delete(Provider).where(Provider.id == provider_id))
+            await cleanup_session.commit()
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

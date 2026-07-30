@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import httpx
-from sqlalchemy import case, func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -147,31 +147,6 @@ class RouteHealth:
         self._cooldown = cooldown
         self._clock = clock
 
-    async def _is_only_enabled_route(self, session: AsyncSession, route_id: int) -> bool:
-        """Check if this is the only enabled route for its model."""
-        route_info = await session.execute(
-            select(ModelRoute.model_id, ModelRoute.enabled, ModelRoute.weight).where(
-                ModelRoute.id == route_id
-            )
-        )
-        row = route_info.one_or_none()
-        if row is None:
-            return True
-
-        model_id, enabled, weight = row
-        if not enabled or weight <= 0:
-            return True
-
-        other_count = await session.execute(
-            select(func.count(ModelRoute.id)).where(
-                ModelRoute.model_id == model_id,
-                ModelRoute.id != route_id,
-                ModelRoute.enabled.is_(True),
-                ModelRoute.weight > 0,
-            )
-        )
-        return other_count.scalar_one() == 0
-
     async def record_success(self, route_id: int) -> bool:
         async with self._mutation_session_factory() as mutation_session:
             async with mutation_session.begin():
@@ -196,9 +171,27 @@ class RouteHealth:
         now = self._clock()
         async with self._mutation_session_factory() as mutation_session:
             async with mutation_session.begin():
-                is_only_route = await self._is_only_enabled_route(mutation_session, route_id)
+                model_id = await mutation_session.scalar(
+                    select(ModelRoute.model_id).where(ModelRoute.id == route_id)
+                )
+                if model_id is None:
+                    return False
+                eligible_routes = list(
+                    await mutation_session.scalars(
+                        select(ModelRoute)
+                        .where(
+                            ModelRoute.model_id == model_id,
+                            ModelRoute.enabled.is_(True),
+                            ModelRoute.weight > 0,
+                        )
+                        .order_by(ModelRoute.id)
+                        .with_for_update()
+                    )
+                )
+                route = next((item for item in eligible_routes if item.id == route_id), None)
+                error_code = health_failure_code(failure)
 
-                if is_only_route:
+                if route is None:
                     result = await mutation_session.execute(
                         update(ModelRoute)
                         .where(ModelRoute.id == route_id)
@@ -207,42 +200,43 @@ class RouteHealth:
                                 ModelRoute.consecutive_failures,
                                 ModelRoute.consecutive_failures + 1,
                             ),
-                            (ModelRoute.last_error_code, health_failure_code(failure)),
+                            (ModelRoute.last_error_code, error_code),
                             (ModelRoute.last_error_at, now),
                         )
                     )
+                    changed = cast(CursorResult[Any], result).rowcount == 1
+                elif len(eligible_routes) == 1:
+                    route.consecutive_failures += 1
+                    route.runtime_state = RouteRuntimeState.CLOSED
+                    route.disabled_until = None
+                    route.last_error_code = error_code
+                    route.last_error_at = now
+                    changed = True
                 else:
-                    next_failure_count = ModelRoute.consecutive_failures + 1
-                    opens_route = (ModelRoute.runtime_state == RouteRuntimeState.HALF_OPEN) | (
-                        next_failure_count >= self._failure_threshold
+                    next_failure_count = route.consecutive_failures + 1
+                    opens_route = (
+                        route.runtime_state is RouteRuntimeState.HALF_OPEN
+                        or next_failure_count >= self._failure_threshold
                     )
-                    result = await mutation_session.execute(
-                        update(ModelRoute)
-                        .where(ModelRoute.id == route_id)
-                        .ordered_values(
-                            (
-                                ModelRoute.disabled_until,
-                                case(
-                                    (opens_route, now + self._cooldown),
-                                    else_=ModelRoute.disabled_until,
-                                ),
-                            ),
-                            (
-                                ModelRoute.runtime_state,
-                                case(
-                                    (opens_route, RouteRuntimeState.OPEN),
-                                    else_=ModelRoute.runtime_state,
-                                ),
-                            ),
-                            (
-                                ModelRoute.consecutive_failures,
-                                next_failure_count,
-                            ),
-                            (ModelRoute.last_error_code, health_failure_code(failure)),
-                            (ModelRoute.last_error_at, now),
-                        )
+                    other_closed_route_exists = any(
+                        item.id != route_id and item.runtime_state is RouteRuntimeState.CLOSED
+                        for item in eligible_routes
                     )
-                changed = cast(CursorResult[Any], result).rowcount == 1
+                    if opens_route and not other_closed_route_exists:
+                        for item in eligible_routes:
+                            item.runtime_state = RouteRuntimeState.CLOSED
+                            item.consecutive_failures = 0
+                            item.disabled_until = None
+                        route.last_error_code = error_code
+                        route.last_error_at = now
+                    else:
+                        route.consecutive_failures = next_failure_count
+                        route.last_error_code = error_code
+                        route.last_error_at = now
+                        if opens_route:
+                            route.runtime_state = RouteRuntimeState.OPEN
+                            route.disabled_until = now + self._cooldown
+                    changed = True
         return changed
 
 

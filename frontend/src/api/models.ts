@@ -96,3 +96,15 @@ export async function updateModelRoute(
 export async function deleteModelRoute(routeId: number, signal?: AbortSignal): Promise<void> {
   await apiClient.delete(`/admin/model-routes/${String(routeId)}`, signalConfig(signal))
 }
+
+export async function recoverModelRoute(
+  routeId: number,
+  signal?: AbortSignal,
+): Promise<ModelRouteResponse> {
+  const { data } = await apiClient.post<ModelRouteResponse>(
+    `/admin/model-routes/${String(routeId)}/recover`,
+    undefined,
+    signalConfig(signal),
+  )
+  return data
+}

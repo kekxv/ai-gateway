@@ -497,6 +497,81 @@ describe('加权模型路由管理', () => {
     wrapper.unmount()
   })
 
+  it('只为已启用且不健康的路由显示手动恢复操作', async () => {
+    const wrapper = await mountRoutes()
+
+    await wrapper.get('[data-test="model-card-1"] .routes-toggle').trigger('click')
+    await wrapper.get('[data-test="model-card-2"] .routes-toggle').trigger('click')
+
+    expect(wrapper.find('[data-test="recover-route-201"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="recover-route-202"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="recover-route-203"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('恢复路由调用专用接口并更新健康状态和通知', async () => {
+    const requests: Request[] = []
+    useCatalog()
+    server.use(
+      http.post('/admin/model-routes/203/recover', ({ request }) => {
+        requests.push(request)
+        return HttpResponse.json({
+          ...openRoute,
+          runtime_state: 'closed',
+          consecutive_failures: 0,
+          disabled_until: null,
+          last_error_code: null,
+          last_error_at: null,
+        })
+      }),
+    )
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="model-card-2"] .routes-toggle').trigger('click')
+    await wrapper.get('[data-test="recover-route-203"]').trigger('click')
+    await flushPromises()
+
+    expect(requests).toHaveLength(1)
+    expect(await requests[0]?.text()).toBe('')
+    expect(wrapper.get('[data-test="model-card-2"]').text()).toContain('健康')
+    expect(wrapper.find('[data-test="recover-route-203"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="route-notice"]').text()).toContain('已恢复')
+    wrapper.unmount()
+  })
+
+  it('恢复响应编号不匹配时不改写路由且恢复失败可见', async () => {
+    useCatalog()
+    server.use(
+      http.post('/admin/model-routes/203/recover', () =>
+        HttpResponse.json({ ...openRoute, id: 202, runtime_state: 'closed' }),
+      ),
+    )
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="model-card-2"] .routes-toggle').trigger('click')
+    await wrapper.get('[data-test="recover-route-203"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="model-card-2"]').text()).toContain('不可用')
+    expect(wrapper.find('[data-test="route-notice"]').exists()).toBe(false)
+
+    server.use(
+      http.post('/admin/model-routes/203/recover', () =>
+        HttpResponse.json(
+          { detail: { code: 'recovery_unavailable', message: '恢复服务暂不可用' } },
+          { status: 503 },
+        ),
+      ),
+    )
+    await wrapper.get('[data-test="recover-route-203"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="route-notice"]').text()).toContain('服务暂时不可用')
+    wrapper.unmount()
+  })
+
   it('停用响应的路由编号不匹配时不改写其他路由或显示成功', async () => {
     useCatalog()
     server.use(

@@ -250,7 +250,39 @@ async def test_client_authorization_does_not_commit_usage_or_recovery() -> None:
     await cycle.commit_frame("client", frame)
 
     assert usage.snapshot().usage == CanonicalUsage(1, 0)
+    assert billing.recovery_updates == []
+
+    await cycle.finalize()
+
     assert billing.recovery_updates[-1]["recovery"].usage == CanonicalUsage(1, 0)
+
+
+@pytest.mark.asyncio
+async def test_many_websocket_frames_share_one_final_recovery_checkpoint() -> None:
+    billing = FakeBilling()
+    usage = WebSocketUsage(Protocol.OPENAI)
+    cycle = WebSocketBillingCycle(
+        billing=billing,  # type: ignore[arg-type]
+        user_id=7,
+        model=PricedModel(),  # type: ignore[arg-type]
+        billing_key="websocket:bounded-recovery",
+        usage=usage,
+        max_output_tokens=1000,
+        token_threshold=100_000,
+        interval_seconds=60,
+    )
+    await cycle.reserve_initial(estimated_input_tokens=0)
+
+    for index in range(100):
+        await cycle.commit_frame("client", f'{{"text":"frame-{index}"}}')
+
+    assert billing.recovery_updates == []
+
+    final_usage = usage.snapshot().usage
+    await cycle.finalize()
+
+    assert len(billing.recovery_updates) == 1
+    assert billing.recovery_updates[0]["recovery"].usage == final_usage
 
 
 @pytest.mark.asyncio

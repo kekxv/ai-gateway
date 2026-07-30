@@ -28,7 +28,7 @@ from ai_gateway.catalog.schemas import (
     UserModelResponse,
     alias_values,
 )
-from ai_gateway.core.enums import RouteSource
+from ai_gateway.core.enums import RouteRuntimeState, RouteSource
 from ai_gateway.db.models import (
     ApiKeyModel,
     Model,
@@ -277,6 +277,24 @@ async def list_model_routes(
 @routes_router.get("/{route_id}", response_model=ModelRouteResponse)
 async def get_model_route(route_id: int, session: Session, _: AdminUser) -> ModelRouteResponse:
     return _route_response(await _get_route(session, route_id))
+
+
+@routes_router.post("/{route_id}/recover", response_model=ModelRouteResponse)
+async def recover_model_route(
+    route_id: int,
+    session: Session,
+    _: AdminUser,
+) -> ModelRouteResponse:
+    route = await _get_route(session, route_id)
+    route.runtime_state = RouteRuntimeState.CLOSED
+    route.consecutive_failures = 0
+    route.disabled_until = None
+    route.last_error_code = None
+    route.last_error_at = None
+    await session.flush()
+    response = _route_response(route)
+    await session.commit()
+    return response
 
 
 @routes_router.patch("/{route_id}", response_model=ModelRouteResponse)

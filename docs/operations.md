@@ -41,6 +41,21 @@ unreachable.
 Gateway provider requests release their catalog/routing read connection before upstream HTTP,
 SSE, or WebSocket I/O. If pool usage remains at its ceiling, inspect billing and audit transaction
 latency and compare the configured per-process maximum with the number of running replicas.
+Streaming recovery metadata is checkpointed instead of being written for every emitted frame:
+HTTP/SSE streams checkpoint at most once every five seconds and force a final snapshot before
+settlement, while WebSocket streams use their existing time, token, and reservation thresholds
+and also force a final snapshot. A recovery-update rate that tracks frame or token-event rate
+indicates a lifecycle regression.
+Manual and scheduled provider model discovery also copy the required protocol/credential fields
+and return the ORM connection before waiting on the provider's `/models` endpoint. Scheduled
+discovery intentionally retains one separate connection while it owns MySQL `GET_LOCK`; seeing a
+second checked-out connection throughout the upstream request indicates a lifecycle regression.
+
+The proxy-aware DNS matcher is the only request path that delegates work to Python's default
+thread executor, and each lookup has a two-second async timeout. A database checkout stack ending
+in SQLAlchemy `QueuePool._do_get` is therefore a database-pool timeout, not an HTTP-client pool or
+thread-pool timeout. Repeated DNS failures can still leave resolver calls finishing in background
+threads temporarily, so diagnose them separately from MySQL checkout pressure.
 
 ## First administrator initialization
 

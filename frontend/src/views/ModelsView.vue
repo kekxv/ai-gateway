@@ -31,6 +31,7 @@ import {
   listAvailableModels,
   listModelRoutes,
   listModels,
+  recoverModelRoute,
   updateModel,
   updateModelRoute,
 } from '@/api/models'
@@ -52,7 +53,7 @@ import { useAuthStore } from '@/stores/auth'
 
 type NoticeType = 'success' | 'warning' | 'error'
 type ModelOperation = 'edit' | 'delete' | 'disable'
-type RouteOperation = 'edit' | 'delete' | 'disable'
+type RouteOperation = 'edit' | 'delete' | 'disable' | 'recover'
 
 interface Notice {
   type: NoticeType
@@ -669,6 +670,44 @@ async function disableRoute(routeId: number, modelId: number): Promise<void> {
   }
 }
 
+async function recoverRoute(routeId: number, modelId: number): Promise<void> {
+  if (
+    !catalogReady.value ||
+    loading.value ||
+    controlsLocked.value ||
+    !allRoutes.value.some((route) => route.id === routeId && route.model_id === modelId) ||
+    !beginRouteOperation(routeId, modelId, 'recover')
+  ) return
+  const controller = operationController()
+  try {
+    const updated = await recoverModelRoute(routeId, controller.signal)
+    if (
+      updated.id !== routeId ||
+      updated.model_id !== modelId ||
+      !isCurrentRouteOperation(controller, routeId, modelId, 'recover')
+    ) return
+    replaceRoute(updated)
+    routeNotice.value = {
+      type: 'success',
+      text: `路由“${updated.upstream_model}”已恢复`,
+      modelId,
+    }
+  } catch (error: unknown) {
+    if (isCurrentRouteOperation(controller, routeId, modelId, 'recover')) {
+      routeNotice.value = {
+        type: 'error',
+        text: errorText(error, '模型路由恢复失败'),
+        modelId,
+      }
+    }
+  } finally {
+    operationControllers.delete(controller)
+    if (isCurrentRouteOperation(controller, routeId, modelId, 'recover')) {
+      finishRouteOperation(routeId, modelId, 'recover')
+    }
+  }
+}
+
 onMounted(() => {
   void load()
 })
@@ -800,6 +839,7 @@ onBeforeUnmount(() => {
           @edit-route="openEditRoute"
           @delete-route="removeRoute"
           @disable-route="disableRoute"
+          @recover-route="recoverRoute"
           @create-route="openCreateRouteForModel(model.id)"
         />
       </div>

@@ -580,3 +580,79 @@ async def test_only_route_for_model_is_not_disabled_even_after_threshold_failure
     assert route.disabled_until is None
     assert route.last_error_code == "http_503"
     assert route.last_error_at is not None
+
+
+async def test_failure_of_last_healthy_route_recovers_all_model_routes(
+    test_engine: AsyncEngine,
+    committed_route: tuple[ResolvedModel, int],
+) -> None:
+    model, first_route_id = committed_route
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        second_route_id = await session.scalar(
+            select(ModelRoute.id).where(
+                ModelRoute.model_id == model.model_id,
+                ModelRoute.id != first_route_id,
+            )
+        )
+        assert second_route_id is not None
+
+    async with session_factory() as session:
+        await RouteHealth(session, failure_threshold=1).record_failure(first_route_id, 500)
+    async with session_factory() as session:
+        first = await _load_route(session, first_route_id)
+        second = await _load_route(session, second_route_id)
+        assert first.runtime_state is RouteRuntimeState.OPEN
+        assert second.runtime_state is RouteRuntimeState.CLOSED
+
+    async with session_factory() as session:
+        await RouteHealth(session, failure_threshold=1).record_failure(second_route_id, 503)
+
+    async with session_factory() as session:
+        routes = list(
+            await session.scalars(
+                select(ModelRoute)
+                .where(ModelRoute.model_id == model.model_id)
+                .order_by(ModelRoute.id)
+            )
+        )
+    assert [route.runtime_state for route in routes] == [
+        RouteRuntimeState.CLOSED,
+        RouteRuntimeState.CLOSED,
+    ]
+    assert [route.consecutive_failures for route in routes] == [0, 0]
+    assert all(route.disabled_until is None for route in routes)
+    assert routes[1].last_error_code == "http_503"
+
+
+async def test_concurrent_route_failures_never_leave_model_without_a_closed_route(
+    test_engine: AsyncEngine,
+    committed_route: tuple[ResolvedModel, int],
+) -> None:
+    model, first_route_id = committed_route
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        route_ids = list(
+            await session.scalars(
+                select(ModelRoute.id)
+                .where(ModelRoute.model_id == model.model_id)
+                .order_by(ModelRoute.id)
+            )
+        )
+    assert len(route_ids) == 2
+
+    async def fail(route_id: int) -> None:
+        async with session_factory() as session:
+            await RouteHealth(session, failure_threshold=1).record_failure(route_id, 500)
+
+    await asyncio.gather(*(fail(route_id) for route_id in route_ids))
+
+    async with session_factory() as session:
+        states = list(
+            await session.scalars(
+                select(ModelRoute.runtime_state)
+                .where(ModelRoute.model_id == model.model_id)
+                .order_by(ModelRoute.id)
+            )
+        )
+    assert RouteRuntimeState.CLOSED in states

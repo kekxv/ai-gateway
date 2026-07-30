@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from hashlib import sha256
@@ -185,13 +185,22 @@ def _app(service: GatewayService) -> FastAPI:
 
 
 class ChunkStream(httpx.AsyncByteStream):
-    def __init__(self, chunks: Iterable[bytes], *, fail_at: int | None = None) -> None:
+    def __init__(
+        self,
+        chunks: Iterable[bytes],
+        *,
+        fail_at: int | None = None,
+        before_chunk: Callable[[int], None] | None = None,
+    ) -> None:
         self.chunks = tuple(chunks)
         self.fail_at = fail_at
+        self.before_chunk = before_chunk
         self.closed = False
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         for index, chunk in enumerate(self.chunks):
+            if self.before_chunk is not None:
+                self.before_chunk(index)
             if index == self.fail_at:
                 raise httpx.ReadError("failed during stream read")
             yield chunk
@@ -349,6 +358,35 @@ def _source_frames(protocol: Protocol) -> tuple[bytes, ...]:
                 "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 3},
             }
         ),
+    )
+
+
+def _long_openai_stream_frames(content_chunks: int) -> tuple[bytes, ...]:
+    content = tuple(
+        _sse(
+            {
+                "model": "m",
+                "choices": [{"index": 0, "delta": {"content": str(index)}}],
+            }
+        )
+        for index in range(content_chunks)
+    )
+    return (
+        _sse(
+            {
+                "model": "m",
+                "choices": [{"index": 0, "delta": {"role": "assistant"}}],
+            }
+        ),
+        *content,
+        _sse(
+            {
+                "model": "m",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 2, "completion_tokens": content_chunks},
+            }
+        ),
+        b"data: [DONE]\n\n",
     )
 
 
@@ -980,6 +1018,91 @@ async def test_same_protocol_truncated_eof_records_upstream_failure(
     assert route_router.failures == [route.route_id]
     assert audit.completed is None
     assert audit.failed is not None
+
+
+async def test_fast_long_stream_does_not_write_recovery_for_every_frame(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    alias = model.aliases[0].alias
+    route = _route(model.id, 109, "fast-long-stream", settings)
+    frames = _long_openai_stream_frames(100)
+    stream = ChunkStream(frames)
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=stream, headers={"content-type": "text/event-stream"})
+
+    billing = FakeBilling()
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=billing,  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([route]),  # type: ignore[list-item]
+    )
+    path, body = _request(Protocol.OPENAI, alias)
+    body["stream"] = True
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service), raise_app_exceptions=False),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200
+    assert response.content == b"".join(frames)
+    assert len(billing.recovery_updates) == 2
+    assert billing.recovery_updates[-1].usage == CanonicalUsage(2, 100)
+
+
+async def test_long_running_stream_checkpoints_periodically_without_per_frame_writes(
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_gateway.gateway import service as gateway_service_module
+
+    clock = [0.0]
+    monkeypatch.setattr(gateway_service_module, "monotonic", lambda: clock[0])
+    settings = _settings()
+    model = await _catalog(session)
+    alias = model.aliases[0].alias
+    route = _route(model.id, 109, "slow-long-stream", settings)
+    frames = _long_openai_stream_frames(20)
+    stream = ChunkStream(
+        frames,
+        before_chunk=lambda _: clock.__setitem__(0, clock[0] + 1.0),
+    )
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=stream, headers={"content-type": "text/event-stream"})
+
+    billing = FakeBilling()
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=billing,  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([route]),  # type: ignore[list-item]
+    )
+    path, body = _request(Protocol.OPENAI, alias)
+    body["stream"] = True
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service), raise_app_exceptions=False),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200
+    assert 3 <= len(billing.recovery_updates) <= 7
+    assert billing.recovery_updates[-1].usage == CanonicalUsage(2, 20)
 
 
 async def test_complete_stream_retains_recovery_snapshot_when_final_settlement_fails(

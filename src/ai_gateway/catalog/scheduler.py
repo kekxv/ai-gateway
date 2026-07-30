@@ -96,6 +96,7 @@ class ModelSyncScheduler:
                         http_client_factory=self._http_client_factory,
                         settings=self._settings,
                         clock=self._clock,
+                        release_connection_before_discovery=True,
                     )
             except asyncio.CancelledError:
                 raise

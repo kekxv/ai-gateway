@@ -323,7 +323,6 @@ class WebSocketBillingCycle:
             if not force_time and _total_tokens(delta) < self._token_threshold:
                 if elapsed < self._interval_seconds:
                     return False
-            await self._update_recovery_locked(current)
             await self._checkpoint_locked(current)
             return True
 
@@ -372,7 +371,6 @@ class WebSocketBillingCycle:
 
     async def _commit_incurred_locked(self) -> None:
         current = self._usage.snapshot()
-        await self._update_recovery_locked(current)
         if await self._reconcile_locked(current):
             return
         current_delta = _usage_delta(current.usage, self._settled_usage)
@@ -393,7 +391,6 @@ class WebSocketBillingCycle:
                     if self._finalized:
                         return
                     if self._reservation is not None:
-                        await self._update_recovery_locked(self._usage.snapshot())
                         await self._checkpoint_locked(self._usage.snapshot(), final=True)
                     self._finalized = True
                 return
@@ -437,6 +434,7 @@ class WebSocketBillingCycle:
                 current = self._usage.snapshot()
             else:
                 return
+        await self._update_recovery_locked(current)
         usage_delta = _usage_delta(current.usage, self._settled_usage)
         target_cost, target_cost_amount = self._costs(current.usage)
         monetary_delta = max(Decimal("0"), target_cost - self.charged_cost)

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -6,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.catalog.repository import CatalogRepository
-from ai_gateway.core.enums import Protocol
+from ai_gateway.core.enums import Protocol, RouteRuntimeState
 from ai_gateway.core.security import decrypt_secret
 from ai_gateway.db.models import ModelRoute, Provider, RequestLog, User
 
@@ -546,6 +547,62 @@ async def test_models_and_routes_have_list_and_detail_crud_views(
     assert route_listing.status_code == route_detail.status_code == 200
     assert route_listing.json() == [route_body]
     assert route_detail.json() == route_body
+
+
+async def test_admin_can_recover_automatically_unhealthy_route(
+    admin_client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    provider = await _create_provider(admin_client)
+    model = await _create_model(admin_client)
+    created = await admin_client.post(
+        "/admin/model-routes",
+        json={
+            "model_id": model["id"],
+            "provider_id": provider["id"],
+            "upstream_model": "native-recovery",
+        },
+    )
+    assert created.status_code == 201, created.text
+    route = await session.get(ModelRoute, created.json()["id"])
+    assert route is not None
+    route.runtime_state = RouteRuntimeState.OPEN
+    route.consecutive_failures = 7
+    route.disabled_until = datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=5)
+    route.last_error_code = "connect_timeout"
+    route.last_error_at = datetime.now(UTC).replace(tzinfo=None)
+    await session.commit()
+
+    response = await admin_client.post(f"/admin/model-routes/{route.id}/recover")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        **created.json(),
+        "runtime_state": "closed",
+        "consecutive_failures": 0,
+        "disabled_until": None,
+        "last_error_code": None,
+        "last_error_at": None,
+    }
+    await session.refresh(route)
+    assert route.enabled is True
+    assert route.runtime_state is RouteRuntimeState.CLOSED
+
+
+async def test_recover_route_returns_not_found_for_unknown_route(
+    admin_client: AsyncClient,
+) -> None:
+    response = await admin_client.post("/admin/model-routes/999999999/recover")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "model_route_not_found"
+
+
+async def test_non_admin_cannot_recover_route(non_admin_client: AsyncClient) -> None:
+    response = await non_admin_client.post("/admin/model-routes/1/recover")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "admin_required"
 
 
 async def test_model_cache_prices_round_trip_and_update(admin_client: AsyncClient) -> None:

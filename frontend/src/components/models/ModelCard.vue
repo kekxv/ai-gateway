@@ -30,6 +30,7 @@ const emit = defineEmits<{
   editRoute: [route: ModelRouteResponse]
   deleteRoute: [route: ModelRouteResponse]
   disableRoute: [routeId: number, modelId: number]
+  recoverRoute: [routeId: number, modelId: number]
   createRoute: []
 }>()
 
@@ -301,6 +302,17 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
                 <span class="provider-name">{{ providerName(route.provider_id) }}</span>
               </div>
               <div class="route-actions">
+                <ElButton
+                  v-if="route.enabled && route.runtime_state !== 'closed'"
+                  :data-test="`recover-route-${String(route.id)}`"
+                  size="small"
+                  text
+                  type="success"
+                  :disabled="loading === true"
+                  @click="emit('recoverRoute', route.id, route.model_id)"
+                >
+                  恢复
+                </ElButton>
                 <ElButton
                   :data-test="`edit-route-${String(route.id)}`"
                   :aria-label="`编辑路由 ${route.upstream_model}`"
