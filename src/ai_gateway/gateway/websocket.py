@@ -43,6 +43,7 @@ from ai_gateway.core.enums import Protocol, UsageSource
 from ai_gateway.core.errors import GatewayError
 from ai_gateway.db.models import Model, Provider
 from ai_gateway.db.session import get_session
+from ai_gateway.gateway.service import _release_read_session
 from ai_gateway.protocols.types import CanonicalUsage
 from ai_gateway.routing.service import router_for_settings
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFailure
@@ -632,6 +633,7 @@ class WebSocketGatewayService:
 
             # Load provider for billing multiplier application
             provider = await self._session.get(Provider, route.provider_id)
+            await _release_read_session(self._session)
 
             request_id = uuid4()
             billing_key = f"websocket:{principal.user_id}:{principal.api_key_id}:{request_id}"

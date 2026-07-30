@@ -119,7 +119,11 @@ async def test_non_production_startup_still_requires_current_migration_head(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = StubEngine(StubConnection({"0003"}))
-    monkeypatch.setattr(main_module, "get_engine_for_url", lambda _: cast(AsyncEngine, engine))
+    monkeypatch.setattr(
+        main_module,
+        "get_engine_for_url",
+        lambda _, **__: cast(AsyncEngine, engine),
+    )
     app = create_app(runtime_settings(environment="development"))
 
     with pytest.raises(RuntimeError, match=REQUIRED_MIGRATION_HEAD):
@@ -176,7 +180,11 @@ async def test_lifespan_starts_and_closes_shared_resources_exactly_once(
         assert require_migration_head is True
         return None
 
-    monkeypatch.setattr(main_module, "get_engine_for_url", lambda _: cast(AsyncEngine, engine))
+    monkeypatch.setattr(
+        main_module,
+        "get_engine_for_url",
+        lambda _, **__: cast(AsyncEngine, engine),
+    )
     monkeypatch.setattr(main_module, "verify_database", verified)
     monkeypatch.setattr(main_module, "HttpClientFactory", StubHttpClientFactory)
     monkeypatch.setattr(main_module, "ModelSyncScheduler", StubModelSyncScheduler)
@@ -200,7 +208,13 @@ def test_multiple_apps_own_distinct_engines_across_event_loops(
 ) -> None:
     engines: list[StubEngine] = []
 
-    def create_engine(_: str) -> AsyncEngine:
+    def create_engine(_: str, **kwargs: object) -> AsyncEngine:
+        assert kwargs == {
+            "pool_size": 20,
+            "max_overflow": 20,
+            "pool_timeout": 30.0,
+            "pool_recycle": 1800,
+        }
         engine = StubEngine(StubConnection({REQUIRED_MIGRATION_HEAD}))
         engines.append(engine)
         return cast(AsyncEngine, engine)

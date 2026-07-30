@@ -313,6 +313,7 @@ class GatewayService:
             if maximum_public_multiplier is not None
             else None
         )
+        await _release_read_session(self._session)
         request_id = uuid4()
         billing_key = _billing_key(principal, request_id)
         estimated_input_tokens = estimate_request_tokens(canonical)
@@ -394,6 +395,7 @@ class GatewayService:
                     prefetched_provider = await self._session.get(
                         Provider, attempt_response.route.provider_id
                     )
+                    await _release_read_session(self._session)
                     prefetched_cost, prefetched_cost_amount = _settlement_costs(
                         model=priced_model,
                         usage=prefetched_usage.usage,
@@ -423,6 +425,7 @@ class GatewayService:
 
             # Load the provider for billing multiplier application
             provider = await self._session.get(Provider, route.provider_id)
+            await _release_read_session(self._session)
 
             if upstream.status_code >= 400:
                 if canonical.stream:
@@ -472,6 +475,7 @@ class GatewayService:
                     attempts=attempt_response.attempts,
                     router=attempt_response.router,
                     priced_model=priced_model,
+                    provider=provider,
                     started_at=started_at,
                 )
                 return GatewayStreamOutput(
@@ -720,6 +724,7 @@ class GatewayService:
 
         # Load provider for billing multiplier application
         provider = await self._session.get(Provider, route.provider_id)
+        await _release_read_session(self._session)
 
         usage_result = _stream_usage_result(context, request)
         settlement_cost = Decimal("0")
@@ -864,6 +869,7 @@ class GatewayService:
         provider: Provider | None = None
         if final_route is not None:
             provider = await self._session.get(Provider, final_route.provider_id)
+            await _release_read_session(self._session)
 
         cleanup_cost = settled_cost
         cleanup_cost_amount = settled_cost_amount
@@ -969,6 +975,7 @@ class GatewayService:
                     excluded_route_ids=attempted_route_ids,
                 )
             except NoRouteAvailable:
+                await _release_read_session(self._session)
                 if not attempts:
                     raise
                 if isinstance(last_failure, httpx.TimeoutException):
@@ -982,6 +989,8 @@ class GatewayService:
                     route=last_route,
                     attempts=tuple(attempts),
                 )
+
+            await _release_read_session(self._session)
 
             attempted_route_ids.add(route.route_id)
             last_route = route
@@ -1167,6 +1176,7 @@ class _StreamLifecycle:
         attempts: tuple[dict[str, Any], ...],
         router: RouteSelector,
         priced_model: Model,
+        provider: Provider | None,
         started_at: float,
     ) -> None:
         self.context = context
@@ -1182,6 +1192,7 @@ class _StreamLifecycle:
         self._attempts = attempts
         self._router = router
         self._priced_model = priced_model
+        self._provider = provider
         self._started_at = started_at
         self._completed = False
         self._terminal_error: BaseException | None = None
@@ -1207,13 +1218,12 @@ class _StreamLifecycle:
             return frame
         frame = await anext(self._source)
         usage_result = _stream_usage_result(self.context, self._request)
-        provider = await self._service._session.get(Provider, self._route.provider_id)
         pending_cost, pending_cost_amount = _settlement_costs(
             model=self._priced_model,
             usage=usage_result.usage,
             cost=None,
             cost_amount=None,
-            provider=provider,
+            provider=self._provider,
         )
         await self._service._persist_recovery(
             self._reservation,
@@ -1874,6 +1884,13 @@ def _log_auxiliary_failure(operation: str, exc: BaseException) -> None:
         operation,
         type(exc).__name__,
     )
+
+
+async def _release_read_session(session: object) -> None:
+    """Release a gateway read connection before billing or upstream I/O."""
+
+    if isinstance(session, AsyncSession):
+        await session.close()
 
 
 def _elapsed_ms(started_at: float) -> int:

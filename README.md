@@ -302,6 +302,10 @@ and the [operations runbook](docs/operations.md). The most important settings ar
 | Setting | Purpose |
 | --- | --- |
 | `GATEWAY_DATABASE_URL` | Async SQLAlchemy URL for the MySQL application database |
+| `GATEWAY_DATABASE_POOL_SIZE` | Persistent connections retained per gateway process; default `20` |
+| `GATEWAY_DATABASE_MAX_OVERFLOW` | Temporary connections allowed above the pool size; default `20` |
+| `GATEWAY_DATABASE_POOL_TIMEOUT_SECONDS` | Maximum wait for a pooled connection before returning a database error; default `30` |
+| `GATEWAY_DATABASE_POOL_RECYCLE_SECONDS` | Maximum connection age before replacement on checkout; default `1800` |
 | `GATEWAY_JWT_SECRET` | Signs access and refresh tokens; use a unique high-entropy value |
 | `GATEWAY_ENCRYPTION_KEY` | Fernet key for provider credentials, headers, and TOTP secrets |
 | `GATEWAY_BOOTSTRAP_ADMIN_EMAIL` | Optional first-run administrator email; requires the password setting |
@@ -311,6 +315,12 @@ and the [operations runbook](docs/operations.md). The most important settings ar
 | `GATEWAY_NO_PROXY` | Comma-separated host, suffix, port, IP, CIDR, or `*` bypass rules |
 | `GATEWAY_AUDIT_BODY_LIMIT_BYTES` | Maximum request/response body size retained for audit detail |
 | `GATEWAY_BILLING_DEFAULT_MAX_OUTPUT_TOKENS` | Reservation fallback when a request omits an output limit |
+
+Each gateway process can open at most `GATEWAY_DATABASE_POOL_SIZE +
+GATEWAY_DATABASE_MAX_OVERFLOW` application connections. Size MySQL `max_connections` above that
+sum multiplied by the number of gateway processes, plus capacity for migrations, operators, and
+other clients. A pool checkout timeout indicates local connection demand or a long transaction;
+it is distinct from a failed MySQL connection.
 
 Production startup rejects the example JWT and encryption secrets. Keep all credentials in a
 secret manager. The provided Compose `setup` service is its serialized release step; other

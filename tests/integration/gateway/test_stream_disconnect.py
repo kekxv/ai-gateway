@@ -193,6 +193,7 @@ async def test_mysql_stream_termination_closes_upstream_and_settles_reservation(
             attempts=({"attempt": 1, "route_id": route.route_id},),
             router=router,
             priced_model=model,
+            provider=None,
             started_at=context.started_at,
         )
         body = lifecycle.iterator()

@@ -22,6 +22,26 @@
 - The Compose MySQL port is bound only to `127.0.0.1:3306`. Use private networking rather than
   widening that host binding for remote access.
 
+## MySQL connection-pool sizing
+
+The gateway uses a bounded SQLAlchemy async pool per process. Its defaults are 20 persistent
+connections, 20 temporary overflow connections, a 30-second checkout timeout, and an 1800-second
+recycle interval. Configure them with `GATEWAY_DATABASE_POOL_SIZE`,
+`GATEWAY_DATABASE_MAX_OVERFLOW`, `GATEWAY_DATABASE_POOL_TIMEOUT_SECONDS`, and
+`GATEWAY_DATABASE_POOL_RECYCLE_SECONDS`.
+
+One process can therefore open at most `pool_size + max_overflow` application connections. Set
+MySQL `max_connections` above that value multiplied by the number of gateway processes, then add
+headroom for the setup job, migrations, backups, and operator sessions. Do not use unbounded
+overflow. Increasing the pool can absorb short bursts, but repeated checkout timeouts should be
+investigated for slow MySQL statements, lock contention, or code holding a transaction across
+network I/O. A checkout timeout is emitted by the local pool and is not proof that MySQL itself is
+unreachable.
+
+Gateway provider requests release their catalog/routing read connection before upstream HTTP,
+SSE, or WebSocket I/O. If pool usage remains at its ceiling, inspect billing and audit transaction
+latency and compare the configured per-process maximum with the number of running replicas.
+
 ## First administrator initialization
 
 The root Compose deployment's one-shot `setup` service always applies migrations. All

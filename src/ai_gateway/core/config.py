@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     environment: Literal["development", "test", "production"] = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     database_url: str = "mysql+asyncmy://gateway:gateway@127.0.0.1:3306/gateway"
+    database_pool_size: int = Field(default=20, ge=1)
+    database_max_overflow: int = Field(default=20, ge=0)
+    database_pool_timeout_seconds: float = Field(default=30.0, gt=0)
+    database_pool_recycle_seconds: int = Field(default=1800, ge=1)
     jwt_secret: SecretStr
     jwt_issuer: str = "ai-gateway"
     jwt_access_minutes: int = 15

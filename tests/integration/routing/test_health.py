@@ -262,6 +262,14 @@ async def test_only_one_caller_claims_half_open_probe_after_cooldown(
 ) -> None:
     model, route_id = committed_route
     async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        standby_route_ids = frozenset(
+            await session.scalars(
+                select(ModelRoute.id).where(
+                    ModelRoute.model_id == model.model_id,
+                    ModelRoute.id != route_id,
+                )
+            )
+        )
         route = await _load_route(session, route_id)
         route.runtime_state = RouteRuntimeState.OPEN
         route.consecutive_failures = 3
@@ -284,6 +292,7 @@ async def test_only_one_caller_claims_half_open_probe_after_cooldown(
                 return await Router(session, rng=random.Random(seed)).select_route(
                     model,
                     all_scope_principal,
+                    excluded_route_ids=standby_route_ids,
                 )
             except NoRouteAvailable as exc:
                 return exc
@@ -450,6 +459,14 @@ async def test_half_open_claim_isolated_from_caller_transaction_and_returns_fres
     model, route_id = committed_route
     mutation_sessions = async_sessionmaker(test_engine, expire_on_commit=False)
     async with mutation_sessions() as setup_session:
+        standby_route_ids = frozenset(
+            await setup_session.scalars(
+                select(ModelRoute.id).where(
+                    ModelRoute.model_id == model.model_id,
+                    ModelRoute.id != route_id,
+                )
+            )
+        )
         route = await _load_route(setup_session, route_id)
         route.runtime_state = RouteRuntimeState.OPEN
         route.consecutive_failures = 3
@@ -463,7 +480,11 @@ async def test_half_open_claim_isolated_from_caller_transaction_and_returns_fres
         selected = await Router(
             caller_session,
             mutation_session_factory=mutation_sessions,
-        ).select_route(model, all_scope_principal)
+        ).select_route(
+            model,
+            all_scope_principal,
+            excluded_route_ids=standby_route_ids,
+        )
 
         assert unrelated.id is None
         assert selected.runtime_state is RouteRuntimeState.HALF_OPEN

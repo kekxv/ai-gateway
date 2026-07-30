@@ -42,6 +42,7 @@ from ai_gateway.core.errors import (
 from ai_gateway.core.logging import configure_logging
 from ai_gateway.core.middleware import correlation_middleware
 from ai_gateway.db.session import (
+    close_session_shielded,
     get_engine_for_url,
     get_session,
     get_session_factory_for_engine,
@@ -111,8 +112,18 @@ def _billing_default_max_output_tokens(settings: object) -> int:
     return int(getattr(settings, "billing_default_max_output_tokens", 4096))
 
 
+def _application_engine(settings: Settings) -> AsyncEngine:
+    return get_engine_for_url(
+        settings.database_url,
+        pool_size=settings.database_pool_size,
+        max_overflow=settings.database_max_overflow,
+        pool_timeout=settings.database_pool_timeout_seconds,
+        pool_recycle=settings.database_pool_recycle_seconds,
+    )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
-    configured_engine = get_engine_for_url(settings.database_url) if settings is not None else None
+    configured_engine = _application_engine(settings) if settings is not None else None
     configured_session_factory = (
         get_session_factory_for_engine(configured_engine) if configured_engine is not None else None
     )
@@ -139,7 +150,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         active_settings = app_settings()
-        engine = configured_engine or get_engine_for_url(active_settings.database_url)
+        engine = configured_engine or _application_engine(active_settings)
         try:
             validate_runtime_settings(active_settings)
             configure_logging(level=getattr(active_settings, "log_level", "INFO"))
@@ -234,8 +245,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session_factory = getattr(app.state, "session_factory", configured_session_factory)
         if session_factory is None:
             raise RuntimeError("application database session factory is not initialized")
-        async with session_factory() as session:
+        session = session_factory()
+        try:
             yield session
+        finally:
+            await close_session_shielded(session)
 
     app.dependency_overrides[get_session] = app_session
     app.dependency_overrides[get_settings] = app_settings

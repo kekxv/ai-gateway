@@ -52,25 +52,25 @@ async def _create_model(
     return response.json()
 
 
-async def test_update_provider_price_multiplier_creates_audit_log(
+async def test_update_provider_cost_multiplier_creates_audit_log(
     admin_client: AsyncClient,
     admin_user_record: User,
     session: AsyncSession,
 ) -> None:
-    """Updating provider price_multiplier should create audit log."""
+    """Updating provider cost_multiplier should create an explicit audit log."""
     provider = await _create_provider(admin_client, price_multiplier="1.00")
     provider_id = provider["id"]
 
     await admin_client.patch(
         f"/admin/providers/{provider_id}",
-        json={"price_multiplier": "1.50"},
+        json={"cost_multiplier": "1.50"},
     )
 
     result = await session.execute(
         select(ConfigAuditLog).where(
             ConfigAuditLog.resource_type == "provider",
             ConfigAuditLog.resource_id == provider_id,
-            ConfigAuditLog.action == "provider_price_multiplier_updated",
+            ConfigAuditLog.action == "provider_cost_multiplier_updated",
         )
     )
     audit_logs = result.scalars().all()
@@ -108,11 +108,11 @@ async def test_update_model_price_multiplier_creates_audit_log(
     assert audit_logs[0].user_id == admin_user_record.id
 
 
-async def test_no_audit_log_when_price_multiplier_unchanged_provider(
+async def test_no_audit_log_when_cost_multiplier_unchanged_provider(
     admin_client: AsyncClient,
     session: AsyncSession,
 ) -> None:
-    """No audit log should be created when provider price_multiplier is not changed."""
+    """No audit log should be created when provider cost_multiplier is unchanged."""
     provider = await _create_provider(
         admin_client, name="no-audit-provider", price_multiplier="1.00"
     )
@@ -127,7 +127,7 @@ async def test_no_audit_log_when_price_multiplier_unchanged_provider(
         select(ConfigAuditLog).where(
             ConfigAuditLog.resource_type == "provider",
             ConfigAuditLog.resource_id == provider_id,
-            ConfigAuditLog.action == "provider_price_multiplier_updated",
+            ConfigAuditLog.action == "provider_cost_multiplier_updated",
         )
     )
     audit_logs = result.scalars().all()

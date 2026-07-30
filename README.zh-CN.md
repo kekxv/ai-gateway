@@ -258,6 +258,10 @@ Node.js 或 npm。镜像默认使用生产模式，因此启动时必须提供�
 | 配置项 | 用途 |
 | --- | --- |
 | `GATEWAY_DATABASE_URL` | MySQL 应用数据库的异步 SQLAlchemy URL |
+| `GATEWAY_DATABASE_POOL_SIZE` | 每个网关进程保留的常驻连接数；默认 `20` |
+| `GATEWAY_DATABASE_MAX_OVERFLOW` | 超出常驻连接池后允许临时创建的连接数；默认 `20` |
+| `GATEWAY_DATABASE_POOL_TIMEOUT_SECONDS` | 等待池中连接的最长秒数，超时后返回数据库错误；默认 `30` |
+| `GATEWAY_DATABASE_POOL_RECYCLE_SECONDS` | 连接在下一次签出时被替换前的最长存活秒数；默认 `1800` |
 | `GATEWAY_JWT_SECRET` | 签发 access/refresh token；应使用唯一的高熵值 |
 | `GATEWAY_ENCRYPTION_KEY` | 加密提供商凭据、请求头和 TOTP 密钥的 Fernet key |
 | `GATEWAY_BOOTSTRAP_ADMIN_EMAIL` | 可选的首次初始化管理员邮箱；配置时必须同时提供密码 |
@@ -267,6 +271,10 @@ Node.js 或 npm。镜像默认使用生产模式，因此启动时必须提供�
 | `GATEWAY_NO_PROXY` | 逗号分隔的主机、后缀、端口、IP、CIDR 或 `*` 绕过规则 |
 | `GATEWAY_AUDIT_BODY_LIMIT_BYTES` | 审计详情保留的请求/响应正文大小上限 |
 | `GATEWAY_BILLING_DEFAULT_MAX_OUTPUT_TOKENS` | 请求未指定输出上限时的预留回退值 |
+
+每个网关进程最多打开 `GATEWAY_DATABASE_POOL_SIZE + GATEWAY_DATABASE_MAX_OVERFLOW` 条应用连接。
+MySQL `max_connections` 应高于该数值乘以网关进程数后的结果，并为迁移、运维和其他客户端预留余量。
+连接池签出超时表示本进程连接需求过高或存在长事务，与无法连接 MySQL 是两类不同故障。
 
 生产启动会拒绝示例 JWT 与加密密钥。所有凭据都应保存在密钥管理系统中。提供的 Compose `setup`
 服务就是串行 release step；其他编排器应在启动新版本应用前，通过单独 release job 执行相同的

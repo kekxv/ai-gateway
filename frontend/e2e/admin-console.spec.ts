@@ -546,7 +546,9 @@ test('creates, verifies, and safely cleans up console records', async ({ page })
       '启用路由',
       '24 小时请求',
       '失败率',
-      '24 小时费用',
+      '用户费用',
+      '成本费用',
+      '毛利润',
     ]) {
       await expect(page.getByText(metric).first()).toBeVisible()
     }

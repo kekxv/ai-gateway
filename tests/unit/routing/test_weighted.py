@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import random
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -306,6 +306,7 @@ async def test_api_key_scope_is_applied_by_candidate_query(
 async def test_protocol_and_health_filters_are_reported_without_sensitive_details(
     session: AsyncSession,
 ) -> None:
+    now = datetime(2026, 7, 30, 12, 0, 0)
     model, _ = await _add_route(
         session,
         suffix="transport",
@@ -331,11 +332,11 @@ async def test_protocol_and_health_filters_are_reported_without_sensitive_detail
         session,
         suffix="health",
         runtime_state=RouteRuntimeState.CLOSED,
-        disabled_until=datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=5),
+        disabled_until=now + timedelta(minutes=5),
     )
 
     with pytest.raises(NoRouteAvailable) as health_error:
-        await Router(session).select_route(unhealthy_model, principal())
+        await Router(session, clock=lambda: now).select_route(unhealthy_model, principal())
 
     assert health_error.value.removed_by_health is True
     assert health_error.value.removed_by_scope is False
@@ -347,17 +348,18 @@ async def test_protocol_and_health_filters_are_reported_without_sensitive_detail
 async def test_no_route_diagnostics_report_multiple_independent_filters(
     session: AsyncSession,
 ) -> None:
+    now = datetime(2026, 7, 30, 12, 0, 0)
     model, _ = await _add_route(
         session,
         suffix="combined-filters",
         protocol=Protocol.CLAUDE,
         runtime_state=RouteRuntimeState.OPEN,
-        disabled_until=datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=5),
+        disabled_until=now + timedelta(minutes=5),
     )
     restricted_principal = principal(ApiKeyScope.PROVIDERS)
 
     with pytest.raises(NoRouteAvailable) as error:
-        await Router(session).select_route(
+        await Router(session, clock=lambda: now).select_route(
             model,
             restricted_principal,
             required_protocol=Protocol.OPENAI,

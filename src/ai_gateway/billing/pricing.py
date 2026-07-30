@@ -3,6 +3,8 @@ from __future__ import annotations
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol, overload
 
+from sqlalchemy.orm.exc import DetachedInstanceError
+
 from ai_gateway.protocols.base import validate_usage
 from ai_gateway.protocols.types import CanonicalUsage
 
@@ -30,7 +32,13 @@ def total_input_tokens(usage: CanonicalUsage) -> int:
 def select_price_tier(model: PricedModel, usage: CanonicalUsage) -> PricedModel:
     """Select the inclusive input-length tier, or use legacy model prices."""
 
-    tiers: tuple[PriceTier, ...] | list[PriceTier] = getattr(model, "price_tiers", ())
+    try:
+        tiers: tuple[PriceTier, ...] | list[PriceTier] = getattr(model, "price_tiers", ())
+    except DetachedInstanceError:
+        # Pricing is synchronous and must never trigger ORM I/O. Gateway catalog
+        # lookups eager-load tiers; detached legacy models have no loaded tier
+        # collection and therefore retain their base-price fallback.
+        tiers = ()
     if not tiers:
         return model
 

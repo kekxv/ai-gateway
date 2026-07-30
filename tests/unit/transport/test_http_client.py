@@ -4,8 +4,7 @@ import asyncio
 import logging
 import socket
 from collections.abc import Coroutine
-from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import httpx
 import pytest
@@ -38,16 +37,15 @@ def proxy_settings(
     https_proxy: str | None = None,
     no_proxy: str = "",
 ) -> Settings:
-    return cast(
-        Settings,
-        SimpleNamespace(
-            database_url="mysql+asyncmy://gateway:gateway@127.0.0.1:3306/gateway",
-            http_proxy=http_proxy,
-            https_proxy=https_proxy,
-            no_proxy=no_proxy,
-            audit_log_cleanup_interval_seconds=3600,
-            audit_log_retention_days=30,
-        ),
+    return Settings(
+        _env_file=None,
+        environment="test",
+        database_url="mysql+asyncmy://gateway:gateway@127.0.0.1:3306/gateway",
+        jwt_secret="http-client-test-jwt-secret-at-least-32-bytes",
+        encryption_key="http-client-test-encryption-key",
+        http_proxy=http_proxy,
+        https_proxy=https_proxy,
+        no_proxy=no_proxy,
     )
 
 
