@@ -75,8 +75,16 @@ def test_upgrade_creates_tiers_and_separates_provider_and_request_costs(monkeypa
     assert str(altered["existing_server_default"]) == "1.00"
     # New check constraints for cost_multiplier and public_multiplier
     assert recorder.created_check_constraints == [
-        ("ck_providers_cost_multiplier_range", "providers", "cost_multiplier >= 0.10 AND cost_multiplier <= 10.00"),
-        ("ck_providers_public_multiplier_range", "providers", "public_multiplier >= 0.10 AND public_multiplier <= 10.00"),
+        (
+            "ck_providers_cost_multiplier_range",
+            "providers",
+            "cost_multiplier >= 0.10 AND cost_multiplier <= 10.00",
+        ),
+        (
+            "ck_providers_public_multiplier_range",
+            "providers",
+            "public_multiplier >= 0.10 AND public_multiplier <= 10.00",
+        ),
     ]
     assert [(table, getattr(column, "name")) for table, column in recorder.added_columns] == [
         ("providers", "public_multiplier"),
@@ -125,5 +133,9 @@ def test_downgrade_removes_new_data_and_restores_price_multiplier(monkeypatch) -
     assert recorder.altered_columns[0][2]["new_column_name"] == "price_multiplier"
     # Recreate original check constraint
     assert recorder.created_check_constraints == [
-        ("ck_providers_price_multiplier_range", "providers", "price_multiplier >= 0.10 AND price_multiplier <= 10.00")
+        (
+            "ck_providers_price_multiplier_range",
+            "providers",
+            "price_multiplier >= 0.10 AND price_multiplier <= 10.00",
+        )
     ]
