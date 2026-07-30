@@ -102,9 +102,7 @@ class TestGetEffectiveMultipliers:
                 cost_multiplier=Decimal("0.75"),
             )
 
-            result_model, result_public, result_cost = get_effective_multipliers(
-                model, provider
-            )
+            result_model, result_public, result_cost = get_effective_multipliers(model, provider)
 
             assert result_model == model_mult
             assert result_public == public_mult

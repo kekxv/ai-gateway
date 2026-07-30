@@ -112,12 +112,8 @@ def calculate_cost(
         selected_price = select_price_tier(model, usage)
         input_price = selected_price.input_price_per_million
         output_price = selected_price.output_price_per_million
-        cache_read_price = getattr(
-            selected_price, "cache_read_price_per_million", Decimal("0")
-        )
-        cache_write_price = getattr(
-            selected_price, "cache_write_price_per_million", Decimal("0")
-        )
+        cache_read_price = getattr(selected_price, "cache_read_price_per_million", Decimal("0"))
+        cache_write_price = getattr(selected_price, "cache_write_price_per_million", Decimal("0"))
     if input_price is None or output_price is None:
         raise TypeError("model or both input_price and output_price are required")
     cache_read_price = Decimal("0") if cache_read_price is None else cache_read_price

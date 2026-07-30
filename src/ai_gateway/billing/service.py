@@ -1139,9 +1139,7 @@ def _reservation_recovery(metadata: dict[str, Any]) -> ReservationRecovery | Non
         expires_at = expires_at.astimezone(UTC).replace(tzinfo=None)
     return ReservationRecovery(
         settlement_key=settlement_key,
-        usage=CanonicalUsage(
-            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
-        ),
+        usage=CanonicalUsage(input_tokens, output_tokens, cache_read_tokens, cache_write_tokens),
         usage_source=usage_source,
         expires_at=expires_at,
         cost=cost,

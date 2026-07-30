@@ -28,13 +28,9 @@ def get_effective_multipliers(
         getattr(model, "price_multiplier", Decimal("1.00")) if model else Decimal("1.00")
     )
     public_multiplier = (
-        getattr(provider, "public_multiplier", Decimal("1.00"))
-        if provider
-        else Decimal("1.00")
+        getattr(provider, "public_multiplier", Decimal("1.00")) if provider else Decimal("1.00")
     )
     cost_multiplier = (
-        getattr(provider, "cost_multiplier", Decimal("1.00"))
-        if provider
-        else Decimal("1.00")
+        getattr(provider, "cost_multiplier", Decimal("1.00")) if provider else Decimal("1.00")
     )
     return (model_multiplier, public_multiplier, cost_multiplier)

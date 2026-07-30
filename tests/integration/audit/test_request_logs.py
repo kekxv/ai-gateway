@@ -694,8 +694,7 @@ async def test_admin_list_filters_cursor_and_detail_are_safe(
         assert all("cache_read_tokens" in item for item in first_body["items"])
         assert all("cache_write_tokens" in item for item in first_body["items"])
         assert all(
-            Decimal(item["cost_amount"]) == Decimal("0.00000001")
-            for item in first_body["items"]
+            Decimal(item["cost_amount"]) == Decimal("0.00000001") for item in first_body["items"]
         )
         for item in first_body["items"]:
             assert item["user_email"] == "audit-member@example.com"

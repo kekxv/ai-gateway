@@ -95,9 +95,7 @@ async def test_regular_user_sees_public_price_ranges_without_provider_cost_data(
         provider.protocols = [
             ProviderProtocol(protocol=Protocol.OPENAI, base_url=f"https://{name}.invalid/v1")
         ]
-        provider.routes = [
-            ModelRoute(model=model, upstream_model=f"{name}-model", weight=100)
-        ]
+        provider.routes = [ModelRoute(model=model, upstream_model=f"{name}-model", weight=100)]
         providers.append(provider)
     session.add_all(providers)
     await session.flush()
