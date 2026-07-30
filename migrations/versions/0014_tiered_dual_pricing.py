@@ -16,6 +16,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Drop check constraint before renaming column (MySQL requirement)
+    op.drop_constraint("ck_providers_price_multiplier_range", "providers", type_="check")
     op.alter_column(
         "providers",
         "price_multiplier",
@@ -23,6 +25,12 @@ def upgrade() -> None:
         existing_type=sa.Numeric(precision=4, scale=2),
         existing_nullable=False,
         existing_server_default=sa.text("1.00"),
+    )
+    # Recreate check constraint with new column name
+    op.create_check_constraint(
+        "ck_providers_cost_multiplier_range",
+        "providers",
+        "cost_multiplier >= 0.10 AND cost_multiplier <= 10.00",
     )
     op.add_column(
         "providers",
@@ -32,6 +40,12 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("1.00"),
         ),
+    )
+    # Add check constraint for public_multiplier
+    op.create_check_constraint(
+        "ck_providers_public_multiplier_range",
+        "providers",
+        "public_multiplier >= 0.10 AND public_multiplier <= 10.00",
     )
     op.add_column(
         "request_logs",
@@ -68,6 +82,9 @@ def downgrade() -> None:
     )
     op.drop_table("model_price_tiers")
     op.drop_column("request_logs", "cost_amount")
+    # Drop check constraints before dropping/renaming columns
+    op.drop_constraint("ck_providers_public_multiplier_range", "providers", type_="check")
+    op.drop_constraint("ck_providers_cost_multiplier_range", "providers", type_="check")
     op.drop_column("providers", "public_multiplier")
     op.alter_column(
         "providers",
@@ -76,4 +93,10 @@ def downgrade() -> None:
         existing_type=sa.Numeric(precision=4, scale=2),
         existing_nullable=False,
         existing_server_default=sa.text("1.00"),
+    )
+    # Recreate original check constraint
+    op.create_check_constraint(
+        "ck_providers_price_multiplier_range",
+        "providers",
+        "price_multiplier >= 0.10 AND price_multiplier <= 10.00",
     )
