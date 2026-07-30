@@ -140,7 +140,9 @@ describe('控制台概览', () => {
     expect(wrapper.text()).toContain('启用路由 5 / 6')
     expect(wrapper.text()).toContain('24 小时请求 1,234')
     expect(wrapper.text()).toContain('失败率 2.0%')
-    expect(wrapper.text()).toContain('24 小时费用 ¥0.12500000')
+    expect(wrapper.text()).toContain('用户费用 ¥0.12500000')
+    expect(wrapper.text()).toContain('成本费用 ¥0.10000000')
+    expect(wrapper.text()).toContain('毛利润 ¥0.02500000')
     expect(wrapper.text()).toContain('1 条路由处于熔断状态')
     expect(wrapper.get('.el-alert').text()).toContain('1 条路由处于熔断状态')
 
@@ -218,7 +220,7 @@ describe('控制台概览', () => {
       '近 7 天暂无请求与费用数据',
     )
     expect(wrapper.findComponent({ name: 'VChartStub' }).exists()).toBe(false)
-    expect(wrapper.text()).toContain('24 小时费用 ¥0.00000000')
+    expect(wrapper.text()).toContain('用户费用 ¥0.00000000')
     expect(wrapper.text()).toContain('平均延迟 —')
 
     wrapper.unmount()
@@ -252,7 +254,7 @@ describe('控制台概览', () => {
 
     expect(attempts).toBe(2)
     expect(wrapper.find('[data-test="dashboard-error"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('24 小时费用 ¥0.12500000')
+    expect(wrapper.text()).toContain('用户费用 ¥0.12500000')
 
     wrapper.unmount()
   })
@@ -300,8 +302,8 @@ describe('控制台概览', () => {
     releaseSecond()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('24 小时费用 ¥2.00000000')
-    expect(wrapper.text()).not.toContain('24 小时费用 ¥1.00000000')
+    expect(wrapper.text()).toContain('用户费用 ¥2.00000000')
+    expect(wrapper.text()).not.toContain('用户费用 ¥1.00000000')
     wrapper.unmount()
   })
 

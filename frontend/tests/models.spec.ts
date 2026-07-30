@@ -248,6 +248,7 @@ describe('模型与别名管理', () => {
       cache_read_price_per_million: '0.50000000',
       cache_write_price_per_million: '2.50000000',
       price_multiplier: 1.0,
+      price_tiers: [],
       enabled: true,
       aliases: [{ alias: 'fast-chat', enabled: false }],
       routing_strategy: 'weighted_random',

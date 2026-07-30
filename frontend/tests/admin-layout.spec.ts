@@ -21,6 +21,8 @@ vi.mock('@/api/dashboard', () => ({
     prompt_tokens_24h: 0,
     completion_tokens_24h: 0,
     cost_24h: '0',
+    cost_amount_24h: '0',
+    gross_profit_24h: '0',
     average_latency_ms_24h: null,
     daily_usage: [],
   }),
