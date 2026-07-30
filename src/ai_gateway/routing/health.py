@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import httpx
-from sqlalchemy import case, func, literal, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 

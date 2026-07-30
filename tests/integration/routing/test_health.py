@@ -5,7 +5,7 @@ import random
 import socket
 import ssl
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import httpx
