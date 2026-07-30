@@ -56,7 +56,8 @@ async def create_provider(
             if payload.model_sync_interval_seconds is not None
             else settings.model_sync_interval_seconds
         ),
-        price_multiplier=payload.price_multiplier,
+        cost_multiplier=payload.cost_multiplier,
+        public_multiplier=payload.public_multiplier,
         protocols=[_new_protocol(item, settings) for item in payload.protocols],
     )
     session.add(provider)
@@ -104,7 +105,8 @@ async def update_provider(
     settings: AppSettings,
 ) -> ProviderResponse:
     provider = await _get_provider(session, provider_id)
-    old_multiplier = provider.price_multiplier
+    old_cost_multiplier = provider.cost_multiplier
+    old_public_multiplier = provider.public_multiplier
     if payload.name is not None:
         provider.name = payload.name
     if "credential" in payload.model_fields_set:
@@ -124,15 +126,27 @@ async def update_provider(
     if payload.protocols is not None:
         _validate_protocol_payloads(payload.protocols, creating=False)
         await _replace_protocols(session, provider, payload.protocols, settings)
-    if payload.price_multiplier is not None:
-        provider.price_multiplier = payload.price_multiplier
+    if payload.cost_multiplier is not None:
+        provider.cost_multiplier = payload.cost_multiplier
         await log_multiplier_change(
             session=session,
             user_id=admin.id,
             resource_type="provider",
             resource_id=provider_id,
-            old_value=old_multiplier,
-            new_value=payload.price_multiplier,
+            old_value=old_cost_multiplier,
+            new_value=payload.cost_multiplier,
+            field_name="cost_multiplier",
+        )
+    if payload.public_multiplier is not None:
+        provider.public_multiplier = payload.public_multiplier
+        await log_multiplier_change(
+            session=session,
+            user_id=admin.id,
+            resource_type="provider",
+            resource_id=provider_id,
+            old_value=old_public_multiplier,
+            new_value=payload.public_multiplier,
+            field_name="public_multiplier",
         )
     try:
         await session.flush()
@@ -300,7 +314,8 @@ def _provider_response(provider: Provider, settings: Settings) -> ProviderRespon
             )
             for protocol in protocols
         ],
-        price_multiplier=provider.price_multiplier,
+        cost_multiplier=provider.cost_multiplier,
+        public_multiplier=provider.public_multiplier,
     )
 
 

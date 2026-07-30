@@ -26,7 +26,8 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
         enabled=False,
         auto_load_models=True,
         model_sync_interval_seconds=17,
-        price_multiplier=Decimal("1.25"),
+        cost_multiplier=Decimal("1.25"),
+        public_multiplier=Decimal("1.75"),
     )
     provider_a.protocols = [
         ProviderProtocol(
@@ -95,7 +96,8 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
                 "enabled": False,
                 "auto_load_models": True,
                 "model_sync_interval_seconds": 17,
-                "price_multiplier": 1.25,
+                "cost_multiplier": 1.25,
+                "public_multiplier": 1.75,
                 "protocols": [
                     {
                         "protocol": "openai",
@@ -113,7 +115,8 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
                 "enabled": True,
                 "auto_load_models": False,
                 "model_sync_interval_seconds": 3600,
-                "price_multiplier": 1.0,
+                "cost_multiplier": 1.0,
+                "public_multiplier": 1.0,
                 "protocols": [
                     {
                         "protocol": "claude",
@@ -149,6 +152,7 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
                         "enabled": False,
                     }
                 ],
+                "price_tiers": [],
             },
             {
                 "canonical_name": "model-z",
@@ -162,6 +166,7 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
                 "routing_strategy": "weighted_random",
                 "aliases": [],
                 "routes": [],
+                "price_tiers": [],
             },
         ],
     }
@@ -202,7 +207,8 @@ async def test_admin_exports_catalog_secrets_only_when_explicitly_requested(
             "enabled": True,
             "auto_load_models": False,
             "model_sync_interval_seconds": 3600,
-            "price_multiplier": 1.0,
+            "cost_multiplier": 1.0,
+            "public_multiplier": 1.0,
             "protocols": [
                 {
                     "protocol": "openai",
@@ -328,7 +334,8 @@ async def test_admin_import_creates_catalog_resources_and_redacted_secrets_use_e
     assert provider.enabled is True
     assert provider.auto_load_models is True
     assert provider.model_sync_interval_seconds == 91
-    assert provider.price_multiplier == Decimal("1.25")
+    assert provider.cost_multiplier == Decimal("1.25")
+    assert provider.public_multiplier == Decimal("1.00")
     assert len(provider.protocols) == 1
     assert provider.protocols[0].extra_headers_encrypted is None
     assert model is not None
@@ -436,7 +443,8 @@ async def test_admin_import_merges_without_duplicates_and_preserves_redacted_exi
     assert provider.enabled is False
     assert protocol.enabled is False
     assert model.enabled is False
-    assert provider.price_multiplier == Decimal("2.25")
+    assert provider.cost_multiplier == Decimal("2.25")
+    assert provider.public_multiplier == Decimal("1.00")
     assert model.input_price_per_million == Decimal("1.11000000")
     assert model.output_price_per_million == Decimal("2.22000000")
     assert model.cache_read_price_per_million == Decimal("0.13000000")

@@ -73,6 +73,12 @@ class RequestLog(Base):
         default=Decimal("0"),
         server_default=text("0.00000000"),
     )
+    cost_amount: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8),
+        default=Decimal("0"),
+        server_default=text("0.00000000"),
+        nullable=False,
+    )
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     first_token_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)

@@ -101,6 +101,14 @@ function formatInterval(seconds: number): string {
           <span class="label">上次同步：</span>
           <span class="value">{{ formatSyncTime(provider.last_model_sync_at) }}</span>
         </div>
+        <div class="info-row">
+          <span class="label">成本倍率：</span>
+          <ElTag type="info" size="small">{{ provider.cost_multiplier.toFixed(2) }}x</ElTag>
+        </div>
+        <div class="info-row">
+          <span class="label">公开倍率：</span>
+          <ElTag type="warning" size="small">{{ provider.public_multiplier.toFixed(2) }}x</ElTag>
+        </div>
       </div>
 
       <div v-if="provider.protocols.length > 0" class="protocols-section">

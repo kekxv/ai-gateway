@@ -199,6 +199,7 @@ async def test_request_lifecycle_writes_started_completion_and_redacted_details(
             cache_write_tokens=250,
             usage_source=UsageSource.PROVIDER,
             cost=Decimal("0.00041250"),
+            cost_amount=Decimal("0.00012375"),
             latency_ms=321,
             first_token_ms=87,
             headers={"Set-Cookie": "must-not-be-stored", "Content-Type": "application/json"},
@@ -219,6 +220,7 @@ async def test_request_lifecycle_writes_started_completion_and_redacted_details(
     assert started.cache_write_tokens == 250
     assert started.usage_source is UsageSource.PROVIDER
     assert started.cost == Decimal("0.00041250")
+    assert started.cost_amount == Decimal("0.00012375")
     assert started.latency_ms == 321
     assert started.first_token_ms == 87
     assert started.completed_at is not None
@@ -643,6 +645,7 @@ async def test_admin_list_filters_cursor_and_detail_are_safe(
                 outbound_protocol=Protocol.CLAUDE,
                 http_status=200 + index,
                 cost=Decimal("0.00000001"),
+                cost_amount=Decimal("0.000000005"),
                 body={"secret": "must-not-be-stored", "index": index},
             ),
         )
@@ -690,8 +693,13 @@ async def test_admin_list_filters_cursor_and_detail_are_safe(
         assert all("response_detail" not in item for item in first_body["items"])
         assert all("cache_read_tokens" in item for item in first_body["items"])
         assert all("cache_write_tokens" in item for item in first_body["items"])
+        assert all(
+            Decimal(item["cost_amount"]) == Decimal("0.00000001")
+            for item in first_body["items"]
+        )
         for item in first_body["items"]:
             assert item["user_email"] == "audit-member@example.com"
+            assert item["api_key_name"] == "audit-key"
             assert item["api_key_prefix"] == "sk-gw-audit-"
             assert item["model_name"] == "audit-model"
             assert item["provider_name"] == "audit-provider"
@@ -732,10 +740,12 @@ async def test_admin_list_filters_cursor_and_detail_are_safe(
         detail = await client.get(f"/admin/request-logs/{ids[0]}")
         assert detail.status_code == 200, detail.text
         assert detail.json()["user_email"] == "audit-member@example.com"
+        assert detail.json()["api_key_name"] == "audit-key"
         assert detail.json()["api_key_prefix"] == "sk-gw-audit-"
         assert detail.json()["model_name"] == "audit-model"
         assert detail.json()["provider_name"] == "audit-provider"
         assert detail.json()["route_upstream_model"] == "provider-audit-model"
+        assert Decimal(detail.json()["cost_amount"]) == Decimal("0.00000001")
         assert detail.json()["request_detail"]["body"]["credential"] == "[REDACTED]"
         assert detail.json()["response_detail"]["body"]["secret"] == "[REDACTED]"
 
@@ -766,6 +776,8 @@ async def test_user_list_and_detail_include_readable_catalog_identities(
             model_route_id=route.id,
             outbound_protocol=Protocol.CLAUDE,
             http_status=200,
+            cost=Decimal("0.00000002"),
+            cost_amount=Decimal("0.00000001"),
         ),
     )
 
@@ -780,10 +792,17 @@ async def test_user_list_and_detail_include_readable_catalog_identities(
     assert detail.status_code == 200, detail.text
     for item in (listing.json()["items"][0], detail.json()):
         assert "user_email" not in item
+        assert item["api_key_name"] == "audit-key"
         assert item["api_key_prefix"] == "sk-gw-audit-"
         assert item["model_name"] == "audit-model"
-        assert item["provider_name"] == "audit-provider"
-        assert item["route_upstream_model"] == "provider-audit-model"
+        for hidden_field in (
+            "provider_id",
+            "provider_name",
+            "model_route_id",
+            "route_upstream_model",
+            "cost_amount",
+        ):
+            assert hidden_field not in item
 
 
 async def test_request_log_endpoints_require_admin(

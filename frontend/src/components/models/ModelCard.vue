@@ -89,6 +89,18 @@ function formatDate(value: string | null): string {
   }).format(date)
 }
 
+function tierLabel(maxInputTokens: number | null): string {
+  return maxInputTokens === null
+    ? '不限长度'
+    : `长度 ≤ ${new Intl.NumberFormat('zh-CN').format(maxInputTokens)}`
+}
+
+function formatPriceRange(minimum: string, maximum: string): string {
+  return minimum === maximum
+    ? formatMoney(minimum)
+    : `${formatMoney(minimum)} – ${formatMoney(maximum)}`
+}
+
 const routeStats = computed(() => {
   const enabled = props.routes.filter((r) => r.enabled).length
   const healthy = props.routes.filter((r) => r.runtime_state === 'closed').length
@@ -159,7 +171,31 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
     </div>
 
     <div class="card-body">
-      <div class="basic-info">
+      <div v-if="(model.price_tiers?.length ?? 0) > 0 || (model.public_price_tiers?.length ?? 0) > 0" class="info-item">
+        <span class="label">规范名称：</span>
+        <code>{{ model.canonical_name }}</code>
+      </div>
+      <div v-if="readonly === true && (model.public_price_tiers?.length ?? 0) > 0" class="price-tiers">
+        <div class="section-title">公开价格（每百万令牌）</div>
+        <div v-for="tier in model.public_price_tiers" :key="String(tier.max_input_tokens)" class="price-tier">
+          <ElTag size="small" type="primary" effect="plain">{{ tierLabel(tier.max_input_tokens) }}</ElTag>
+          <span>输入 {{ formatPriceRange(tier.input_price_per_million_min, tier.input_price_per_million_max) }}</span>
+          <span>输出 {{ formatPriceRange(tier.output_price_per_million_min, tier.output_price_per_million_max) }}</span>
+          <span>缓存读 {{ formatPriceRange(tier.cache_read_price_per_million_min, tier.cache_read_price_per_million_max) }}</span>
+          <span>缓存写 {{ formatPriceRange(tier.cache_write_price_per_million_min, tier.cache_write_price_per_million_max) }}</span>
+        </div>
+      </div>
+      <div v-else-if="(model.price_tiers?.length ?? 0) > 0" class="price-tiers">
+        <div class="section-title">分段价格（每百万令牌）</div>
+        <div v-for="tier in model.price_tiers" :key="tier.id" class="price-tier">
+          <ElTag size="small" type="info" effect="plain">{{ tierLabel(tier.max_input_tokens) }}</ElTag>
+          <span>输入 {{ formatMoney(tier.input_price_per_million) }}</span>
+          <span>输出 {{ formatMoney(tier.output_price_per_million) }}</span>
+          <span>缓存读 {{ formatMoney(tier.cache_read_price_per_million) }}</span>
+          <span>缓存写 {{ formatMoney(tier.cache_write_price_per_million) }}</span>
+        </div>
+      </div>
+      <div v-else class="basic-info">
         <div class="info-item">
           <span class="label">规范名称：</span>
           <button
@@ -189,12 +225,10 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
           <span class="label">缓存写入价格：</span>
           <span class="value">{{ formatMoney(model.cache_write_price_per_million) }}</span>
         </div>
-        <div v-if="parseFloat(String(model.price_multiplier ?? 1)) !== 1.00" class="info-item multiplier">
-          <span class="label">价格倍率：</span>
-          <ElTag type="warning" size="small">
-            {{ parseFloat(String(model.price_multiplier ?? 1)).toFixed(2) }}x
-          </ElTag>
-        </div>
+      </div>
+      <div v-if="readonly !== true && parseFloat(String(model.price_multiplier ?? 1)) !== 1.00" class="model-multiplier">
+        <span class="label">模型倍率：</span>
+        <ElTag type="warning" size="small">{{ parseFloat(String(model.price_multiplier ?? 1)).toFixed(2) }}x</ElTag>
       </div>
 
       <div v-if="model.aliases.length > 0" class="aliases-section">
@@ -425,6 +459,31 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
   background: #f8fafc;
   border-radius: 8px;
   border: 1px solid #e2e8f0;
+}
+
+.price-tiers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0.875rem;
+  background: #f8fafc;
+  border: 1px solid var(--gateway-border);
+  border-radius: 10px;
+}
+
+.price-tier {
+  display: grid;
+  grid-template-columns: minmax(8rem, auto) repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  align-items: center;
+  color: var(--gateway-muted);
+  font-size: 0.82rem;
+}
+
+.model-multiplier {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .info-item {

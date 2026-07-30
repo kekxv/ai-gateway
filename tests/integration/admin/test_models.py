@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 from httpx import AsyncClient
 
@@ -85,3 +87,48 @@ async def test_model_price_multiplier_comprehensive_flow(
     models = list_response.json()
     model_in_list = next(m for m in models if m["id"] == model_id)
     assert model_in_list["price_multiplier"] == "10.00"
+
+
+async def test_model_price_tiers_round_trip_and_sync_legacy_prices(
+    admin_client: AsyncClient,
+) -> None:
+    tiers = [
+        {
+            "max_input_tokens": 272000,
+            "input_price_per_million": "1.00",
+            "output_price_per_million": "2.00",
+            "cache_read_price_per_million": "0.50",
+            "cache_write_price_per_million": "0.75",
+        },
+        {
+            "max_input_tokens": None,
+            "input_price_per_million": "10.00",
+            "output_price_per_million": "20.00",
+            "cache_read_price_per_million": "5.00",
+            "cache_write_price_per_million": "7.50",
+        },
+    ]
+
+    created = await admin_client.post(
+        "/admin/models",
+        json={
+            "canonical_name": "tiered-admin-model",
+            "display_name": "Tiered Admin Model",
+            "input_price_per_million": "99.00",
+            "output_price_per_million": "99.00",
+            "price_tiers": tiers,
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["input_price_per_million"] == "1.00"
+    assert body["output_price_per_million"] == "2.00"
+    assert [tier["max_input_tokens"] for tier in body["price_tiers"]] == [272000, None]
+
+    fetched = await admin_client.get(f"/admin/models/{body['id']}")
+    assert fetched.status_code == 200, fetched.text
+    fetched_tiers = fetched.json()["price_tiers"]
+    assert [tier["id"] for tier in fetched_tiers] == [tier["id"] for tier in body["price_tiers"]]
+    assert [tier["max_input_tokens"] for tier in fetched_tiers] == [272000, None]
+    assert Decimal(fetched_tiers[0]["input_price_per_million"]) == Decimal("1.00")

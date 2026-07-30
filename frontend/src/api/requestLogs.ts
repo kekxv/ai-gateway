@@ -77,7 +77,6 @@ function userQueryParams(query: RequestLogQuery): RequestLogParams {
   if (requestId !== undefined) params.request_id = requestId
   if (query.apiKeyId !== undefined) params.api_key_id = query.apiKeyId
   if (query.modelId !== undefined) params.model_id = query.modelId
-  if (query.providerId !== undefined) params.provider_id = query.providerId
   if (query.status !== undefined) params.status = query.status
   if (query.protocol !== undefined) params.protocol = query.protocol
   if (createdFrom !== undefined) params.created_from = createdFrom

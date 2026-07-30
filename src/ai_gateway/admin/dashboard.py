@@ -41,6 +41,8 @@ class DailyUsagePoint(BaseModel):
     requests: int
     failures: int
     cost: Decimal
+    cost_amount: Decimal
+    gross_profit: Decimal
 
 
 class DashboardSummary(BaseModel):
@@ -54,6 +56,8 @@ class DashboardSummary(BaseModel):
     prompt_tokens_24h: int
     completion_tokens_24h: int
     cost_24h: Decimal
+    cost_amount_24h: Decimal
+    gross_profit_24h: Decimal
     average_latency_ms_24h: int | None
     daily_usage: list[DailyUsagePoint]
 
@@ -132,6 +136,7 @@ async def get_dashboard_summary(
                 func.coalesce(func.sum(RequestLog.prompt_tokens), 0),
                 func.coalesce(func.sum(RequestLog.completion_tokens), 0),
                 func.coalesce(func.sum(RequestLog.cost), Decimal("0")),
+                func.coalesce(func.sum(RequestLog.cost_amount), Decimal("0")),
                 func.avg(RequestLog.latency_ms),
             ).where(
                 RequestLog.created_at >= cutoff_24h,
@@ -157,6 +162,9 @@ async def get_dashboard_summary(
                         0,
                     ).label("failures"),
                     func.coalesce(func.sum(RequestLog.cost), Decimal("0")).label("cost"),
+                    func.coalesce(func.sum(RequestLog.cost_amount), Decimal("0")).label(
+                        "cost_amount"
+                    ),
                 )
                 .where(
                     RequestLog.created_at >= first_daily_midnight,
@@ -175,6 +183,8 @@ async def get_dashboard_summary(
             requests=int(row["requests"]),
             failures=int(row["failures"]),
             cost=row["cost"],
+            cost_amount=row["cost_amount"],
+            gross_profit=row["cost"] - row["cost_amount"],
         )
         for row in daily_rows
     }
@@ -189,11 +199,13 @@ async def get_dashboard_summary(
                     requests=0,
                     failures=0,
                     cost=Decimal("0"),
+                    cost_amount=Decimal("0"),
+                    gross_profit=Decimal("0"),
                 ),
             )
         )
 
-    average_latency = request_row[5]
+    average_latency = request_row[6]
     return DashboardSummary(
         users_total=int(users_total or 0),
         active_api_keys=int(active_api_keys or 0),
@@ -209,6 +221,8 @@ async def get_dashboard_summary(
         prompt_tokens_24h=int(request_row[2]),
         completion_tokens_24h=int(request_row[3]),
         cost_24h=request_row[4],
+        cost_amount_24h=request_row[5],
+        gross_profit_24h=request_row[4] - request_row[5],
         average_latency_ms_24h=(
             int(round(average_latency)) if average_latency is not None else None
         ),

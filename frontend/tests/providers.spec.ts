@@ -41,7 +41,8 @@ const providerFixture: ProviderResponse = {
   auto_load_models: true,
   model_sync_interval_seconds: 3600,
   last_model_sync_at: '2026-07-22T08:30:00Z',
-  price_multiplier: 1.0,
+  cost_multiplier: 1.0,
+  public_multiplier: 1.0,
   protocols: [
     {
       id: 11,
@@ -342,7 +343,8 @@ describe('供应商与协议管理', () => {
           enabled: true,
         },
       ],
-      price_multiplier: 1,
+      cost_multiplier: 1,
+      public_multiplier: 1,
     })
     expect(payload).not.toHaveProperty('credential')
     wrapper.unmount()

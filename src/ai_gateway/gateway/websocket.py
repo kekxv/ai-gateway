@@ -14,11 +14,13 @@ from uuid import UUID, uuid4
 import anyio
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, WebSocket
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ai_gateway.audit.service import AuditService, RequestContext, RequestFailure, RequestResult
 from ai_gateway.auth.api_key import ApiKeyPrincipal, authenticate_api_key, extract_api_key
-from ai_gateway.billing.pricing import PricedModel, calculate_cost
+from ai_gateway.billing.pricing import PricedModel
 from ai_gateway.billing.service import (
     AdjustmentResult,
     BalanceReservation,
@@ -26,6 +28,7 @@ from ai_gateway.billing.service import (
     InsufficientBalance,
     ReservationRecovery,
     SettlementResult,
+    _settlement_costs,
 )
 from ai_gateway.billing.usage import (
     UsageResult,
@@ -70,6 +73,7 @@ class BillingBackend(TypingProtocol):
         idempotency_key: str,
         request_id: UUID | str | None = None,
         recovery: ReservationRecovery | None = None,
+        provider: Provider | None = None,
     ) -> BalanceReservation: ...
 
     async def settle_request(
@@ -80,6 +84,7 @@ class BillingBackend(TypingProtocol):
         model: PricedModel | None = None,
         usage: CanonicalUsage | None = None,
         cost: Decimal | None = None,
+        cost_amount: Decimal | None = None,
         usage_source: UsageSource | None = None,
         provider: Provider | None = None,
     ) -> SettlementResult: ...
@@ -281,6 +286,7 @@ class WebSocketBillingCycle:
         self._lock = anyio.Lock()
         self._provider = provider
         self.actual_cost = Decimal("0")
+        self.cost_amount = Decimal("0")
         self.charged_cost = Decimal("0")
         self.uncollected_cost = Decimal("0")
 
@@ -290,7 +296,11 @@ class WebSocketBillingCycle:
 
     @property
     def incurred_cost(self) -> Decimal:
-        return calculate_cost(self._model, self._usage.snapshot().usage)
+        return self._costs(self._usage.snapshot().usage)[0]
+
+    @property
+    def incurred_cost_amount(self) -> Decimal:
+        return self._costs(self._usage.snapshot().usage)[1]
 
     @property
     def reported_uncollected_cost(self) -> Decimal:
@@ -409,6 +419,7 @@ class WebSocketBillingCycle:
             idempotency_key=f"{self._billing_key}:reserve:{sequence}",
             request_id=uuid4(),
             recovery=self._recovery(CanonicalUsage(0, 0), UsageSource.ESTIMATED, sequence),
+            provider=self._provider,
         )
 
     async def _checkpoint_locked(
@@ -426,8 +437,9 @@ class WebSocketBillingCycle:
             else:
                 return
         usage_delta = _usage_delta(current.usage, self._settled_usage)
-        target_cost = calculate_cost(self._model, current.usage)
+        target_cost, target_cost_amount = self._costs(current.usage)
         monetary_delta = max(Decimal("0"), target_cost - self.charged_cost)
+        cost_amount_delta = max(Decimal("0"), target_cost_amount - self.cost_amount)
         settled_reservation = self._reservation
         if settled_reservation is None:
             return
@@ -436,9 +448,11 @@ class WebSocketBillingCycle:
             usage_delta,
             current.usage_source,
             monetary_delta,
+            cost_amount_delta,
         )
         self._reservation = None
         self.actual_cost = target_cost
+        self.cost_amount = target_cost_amount
         self.charged_cost += settlement.charged_amount
         self.uncollected_cost = max(Decimal("0"), target_cost - self.charged_cost)
         self._last_settled_request_id = settled_reservation.request_id
@@ -455,7 +469,7 @@ class WebSocketBillingCycle:
             await self._update_recovery_locked(current)
 
     async def _reconcile_locked(self, current: UsageResult) -> bool:
-        target_cost = calculate_cost(self._model, current.usage)
+        target_cost, target_cost_amount = self._costs(current.usage)
         if target_cost >= self.charged_cost:
             return False
         refund = self.charged_cost - target_cost
@@ -472,6 +486,7 @@ class WebSocketBillingCycle:
             )
             self._reconciliation_sequence += 1
         self.actual_cost = target_cost
+        self.cost_amount = target_cost_amount
         self.charged_cost = target_cost
         self.uncollected_cost = Decimal("0")
         self._settled_usage = current.usage
@@ -489,6 +504,7 @@ class WebSocketBillingCycle:
                 current.usage_source,
                 self._sequence - 1,
                 cost=self._pending_cost(current),
+                cost_amount=self._pending_cost_amount(current),
             ),
         )
 
@@ -499,6 +515,7 @@ class WebSocketBillingCycle:
         sequence: int,
         *,
         cost: Decimal = Decimal("0"),
+        cost_amount: Decimal = Decimal("0"),
     ) -> ReservationRecovery:
         return ReservationRecovery(
             settlement_key=f"{self._billing_key}:settle:{sequence}",
@@ -507,10 +524,23 @@ class WebSocketBillingCycle:
             expires_at=datetime.now(UTC).replace(tzinfo=None)
             + timedelta(seconds=self._reservation_ttl_seconds),
             cost=cost,
+            cost_amount=cost_amount,
         )
 
     def _pending_cost(self, current: UsageResult) -> Decimal:
-        return max(Decimal("0"), calculate_cost(self._model, current.usage) - self.charged_cost)
+        return max(Decimal("0"), self._costs(current.usage)[0] - self.charged_cost)
+
+    def _pending_cost_amount(self, current: UsageResult) -> Decimal:
+        return max(Decimal("0"), self._costs(current.usage)[1] - self.cost_amount)
+
+    def _costs(self, usage: CanonicalUsage) -> tuple[Decimal, Decimal]:
+        return _settlement_costs(
+            model=self._model,
+            usage=usage,
+            cost=None,
+            cost_amount=None,
+            provider=self._provider,
+        )
 
     async def _settle(
         self,
@@ -518,12 +548,14 @@ class WebSocketBillingCycle:
         usage: CanonicalUsage,
         usage_source: UsageSource,
         cost: Decimal,
+        cost_amount: Decimal,
     ) -> SettlementResult:
         return await self._billing.settle_request(
             reservation_id=reservation.ledger_entry_id,
             idempotency_key=f"{self._billing_key}:settle:{self._sequence - 1}",
             usage=usage,
             cost=cost,
+            cost_amount=cost_amount,
             usage_source=usage_source,
             provider=self._provider,
         )
@@ -587,7 +619,14 @@ class WebSocketGatewayService:
                 requested_model=requested_model,
                 require_websocket=True,
             )
-            priced_model = await self._session.get(Model, resolved.model_id)
+            if isinstance(self._session, AsyncSession):
+                priced_model = await self._session.scalar(
+                    select(Model)
+                    .where(Model.id == resolved.model_id)
+                    .options(selectinload(Model.price_tiers))
+                )
+            else:
+                priced_model = await self._session.get(Model, resolved.model_id)
             if priced_model is None:
                 raise RuntimeError("resolved catalog model disappeared")
 
@@ -732,6 +771,11 @@ class WebSocketGatewayService:
                     cost = (
                         billing_cycle.incurred_cost if billing_cycle is not None else Decimal("0")
                     )
+                    cost_amount = (
+                        billing_cycle.incurred_cost_amount
+                        if billing_cycle is not None
+                        else Decimal("0")
+                    )
                     if result is not None and (
                         result.client_disconnected
                         or result.exception is not None
@@ -751,6 +795,7 @@ class WebSocketGatewayService:
                                 cache_write_tokens=usage_result.usage.cache_write_tokens,
                                 usage_source=usage_result.usage_source,
                                 cost=cost,
+                                cost_amount=cost_amount,
                                 latency_ms=_elapsed_ms(started_at),
                                 metadata=_billing_audit_metadata(billing_cycle),
                             ),
@@ -768,6 +813,7 @@ class WebSocketGatewayService:
                                 cache_write_tokens=usage_result.usage.cache_write_tokens,
                                 usage_source=usage_result.usage_source,
                                 cost=cost,
+                                cost_amount=cost_amount,
                                 latency_ms=_elapsed_ms(started_at),
                                 metadata=_billing_audit_metadata(billing_cycle),
                             ),

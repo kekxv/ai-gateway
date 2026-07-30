@@ -186,7 +186,8 @@ def _gateway_for_route(
         id=2,
         name="provider",
         credential_encrypted=b"unused",
-        price_multiplier=Decimal("1"),
+        public_multiplier=Decimal("1"),
+        cost_multiplier=Decimal("1"),
     )
     FakeCatalog.resolved = ResolvedModel(1, "alias", "canonical")
 
@@ -299,7 +300,8 @@ async def test_openai_native_operations_use_matching_upstream_endpoint_and_prese
         id=2,
         name="provider",
         credential_encrypted=b"unused",
-        price_multiplier=Decimal("1"),
+        public_multiplier=Decimal("1"),
+        cost_multiplier=Decimal("1"),
     )
     FakeCatalog.resolved = ResolvedModel(1, "alias", "canonical")
 

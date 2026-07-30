@@ -4,6 +4,7 @@ import random
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any, cast
 
 from sqlalchemy import Select, and_, exists, false, literal, not_, or_, select, true, update
@@ -169,6 +170,39 @@ class Router:
             .all()
         )
         return bool(_candidates_from_rows(rows, protocol))
+
+    async def maximum_eligible_public_multiplier(
+        self,
+        model_id: int,
+        principal: ApiKeyPrincipal,
+        required_protocol: Protocol | str | None = None,
+        *,
+        require_websocket: bool = False,
+    ) -> Decimal | None:
+        """Return the highest public multiplier among currently eligible routes."""
+
+        protocol = Protocol(required_protocol) if required_protocol is not None else None
+        rows = (
+            (
+                await self._session.execute(
+                    _candidate_query(
+                        model_id=model_id,
+                        principal=principal,
+                        required_protocol=protocol,
+                        require_websocket=require_websocket,
+                        now=self._clock(),
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        multipliers = [
+            Decimal(str(row["provider_public_multiplier"]))
+            for row in rows
+            if row["route_id"] is not None
+        ]
+        return max(multipliers) if multipliers else None
 
     async def _claim_half_open(self, route_id: int, now: datetime) -> bool:
         async with self._mutation_session_factory() as mutation_session:
@@ -362,6 +396,7 @@ def _candidate_query(
             ModelRoute.runtime_state,
             ModelRoute.disabled_until,
             Provider.credential_encrypted.label("provider_credential_encrypted"),
+            Provider.public_multiplier.label("provider_public_multiplier"),
             ProviderProtocol.extra_headers_encrypted,
         )
         .select_from(ModelRoute)

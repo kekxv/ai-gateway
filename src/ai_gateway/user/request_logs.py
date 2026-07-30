@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ai_gateway.auth.dependencies import current_user
 from ai_gateway.auth.service import raise_auth_error
 from ai_gateway.core.enums import Protocol, RequestStatus, UsageSource
-from ai_gateway.db.models import ApiKey, Model, ModelRoute, Provider, RequestLog, User
+from ai_gateway.db.models import ApiKey, Model, RequestLog, User
 from ai_gateway.db.session import get_session
 
 router = APIRouter(prefix="/user/request-logs", tags=["user-request-logs"])
@@ -28,13 +28,10 @@ PageSize = Annotated[int, Query(ge=1, le=200)]
 class RequestLogSummary(BaseModel):
     id: UUID
     api_key_id: int | None
+    api_key_name: str | None
     api_key_prefix: str | None
     model_id: int | None
     model_name: str | None
-    provider_id: int | None
-    provider_name: str | None
-    model_route_id: int | None
-    route_upstream_model: str | None
     inbound_protocol: Protocol
     outbound_protocol: Protocol | None
     transport: str
@@ -67,8 +64,6 @@ _SUMMARY_COLUMNS = (
     RequestLog.id,
     RequestLog.api_key_id,
     RequestLog.model_id,
-    RequestLog.provider_id,
-    RequestLog.model_route_id,
     RequestLog.inbound_protocol,
     RequestLog.outbound_protocol,
     RequestLog.transport,
@@ -89,10 +84,9 @@ _SUMMARY_COLUMNS = (
 )
 
 _IDENTITY_COLUMNS = (
+    ApiKey.name.label("api_key_name"),
     ApiKey.key_prefix.label("api_key_prefix"),
     Model.canonical_name.label("model_name"),
-    Provider.name.label("provider_name"),
-    ModelRoute.upstream_model.label("route_upstream_model"),
 )
 
 
@@ -102,8 +96,6 @@ def _summary_query() -> Select[Any]:
         .select_from(RequestLog)
         .outerjoin(ApiKey, ApiKey.id == RequestLog.api_key_id)
         .outerjoin(Model, Model.id == RequestLog.model_id)
-        .outerjoin(Provider, Provider.id == RequestLog.provider_id)
-        .outerjoin(ModelRoute, ModelRoute.id == RequestLog.model_route_id)
     )
 
 
@@ -114,7 +106,6 @@ async def list_user_request_logs(
     request_id: UUID | None = None,
     api_key_id: int | None = None,
     model_id: int | None = None,
-    provider_id: int | None = None,
     status_filter: Annotated[RequestStatus | None, Query(alias="status")] = None,
     protocol_filter: Annotated[Protocol | None, Query(alias="protocol")] = None,
     created_from: datetime | None = None,
@@ -128,7 +119,6 @@ async def list_user_request_logs(
         request_id=request_id,
         api_key_id=api_key_id,
         model_id=model_id,
-        provider_id=provider_id,
         status_filter=status_filter,
         protocol_filter=protocol_filter,
         created_from=created_from,
@@ -198,7 +188,6 @@ def _apply_filters(
     request_id: UUID | None,
     api_key_id: int | None,
     model_id: int | None,
-    provider_id: int | None,
     status_filter: RequestStatus | None,
     protocol_filter: Protocol | None,
     created_from: datetime | None,
@@ -210,8 +199,6 @@ def _apply_filters(
         query = query.where(RequestLog.api_key_id == api_key_id)
     if model_id is not None:
         query = query.where(RequestLog.model_id == model_id)
-    if provider_id is not None:
-        query = query.where(RequestLog.provider_id == provider_id)
     if status_filter is not None:
         query = query.where(RequestLog.status == status_filter)
     if protocol_filter is not None:

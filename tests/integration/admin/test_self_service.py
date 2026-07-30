@@ -1,8 +1,20 @@
+from decimal import Decimal
+
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai_gateway.db.models import ApiKey, Model, ModelAlias, User
+from ai_gateway.core.enums import Protocol
+from ai_gateway.db.models import (
+    ApiKey,
+    Model,
+    ModelAlias,
+    ModelPriceTier,
+    ModelRoute,
+    Provider,
+    ProviderProtocol,
+    User,
+)
 
 
 async def test_regular_user_sees_only_enabled_models_and_aliases(
@@ -42,6 +54,70 @@ async def test_regular_user_sees_only_enabled_models_and_aliases(
         "available-alias",
         "disabled-alias",
     ]
+
+
+async def test_regular_user_sees_public_price_ranges_without_provider_cost_data(
+    non_admin_client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    model = Model(
+        canonical_name="public-range-model",
+        display_name="Public Range Model",
+        price_multiplier=Decimal("1.50"),
+        price_tiers=[
+            ModelPriceTier(
+                max_input_tokens=272000,
+                input_price_per_million=Decimal("1"),
+                output_price_per_million=Decimal("2"),
+                cache_read_price_per_million=Decimal("0.5"),
+                cache_write_price_per_million=Decimal("0.75"),
+            ),
+            ModelPriceTier(
+                max_input_tokens=None,
+                input_price_per_million=Decimal("10"),
+                output_price_per_million=Decimal("20"),
+                cache_read_price_per_million=Decimal("5"),
+                cache_write_price_per_million=Decimal("7.5"),
+            ),
+        ],
+    )
+    providers = []
+    for name, public_multiplier, cost_multiplier in (
+        ("public-range-low", Decimal("1.00"), Decimal("0.50")),
+        ("public-range-high", Decimal("2.00"), Decimal("0.80")),
+    ):
+        provider = Provider(
+            name=name,
+            credential_encrypted=b"secret",
+            public_multiplier=public_multiplier,
+            cost_multiplier=cost_multiplier,
+        )
+        provider.protocols = [
+            ProviderProtocol(protocol=Protocol.OPENAI, base_url=f"https://{name}.invalid/v1")
+        ]
+        provider.routes = [
+            ModelRoute(model=model, upstream_model=f"{name}-model", weight=100)
+        ]
+        providers.append(provider)
+    session.add_all(providers)
+    await session.flush()
+
+    response = await non_admin_client.get("/user/models")
+
+    assert response.status_code == 200, response.text
+    body = next(item for item in response.json() if item["canonical_name"] == model.canonical_name)
+    assert body["public_price_tiers"][0]["input_price_per_million_min"] == "1.50000000"
+    assert body["public_price_tiers"][0]["input_price_per_million_max"] == "3.00000000"
+    assert [tier["max_input_tokens"] for tier in body["public_price_tiers"]] == [272000, None]
+    for hidden in (
+        "provider_id",
+        "provider_name",
+        "cost_multiplier",
+        "public_multiplier",
+    ):
+        assert hidden not in body
+    assert body["input_price_per_million"] == "1.50000000"
+    assert body["price_multiplier"] == "1"
 
 
 async def test_regular_user_creates_and_lists_only_owned_api_keys(

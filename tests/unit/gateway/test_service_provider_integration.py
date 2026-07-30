@@ -35,7 +35,8 @@ class TestGatewayServiceProviderIntegration:
             id=1,
             name="test-provider",
             credential_encrypted=b"encrypted",
-            price_multiplier=Decimal("2.00"),
+            public_multiplier=Decimal("2.00"),
+            cost_multiplier=Decimal("0.80"),
         )
 
         # Mock session.get to return provider when requested
@@ -108,7 +109,8 @@ class TestGatewayServiceProviderIntegration:
             id=1,
             name="test-provider",
             credential_encrypted=b"encrypted",
-            price_multiplier=Decimal("2.00"),
+            public_multiplier=Decimal("2.00"),
+            cost_multiplier=Decimal("0.80"),
         )
 
         # Create a model
@@ -244,7 +246,8 @@ class TestGatewayServiceProviderIntegration:
             id=1,
             name="test-provider",
             credential_encrypted=b"encrypted",
-            price_multiplier=Decimal("2.00"),
+            public_multiplier=Decimal("2.00"),
+            cost_multiplier=Decimal("0.80"),
         )
 
         # Create a model with base prices
@@ -379,7 +382,8 @@ class TestGatewayServiceProviderIntegration:
             id=1,
             name="test-provider",
             credential_encrypted=b"encrypted",
-            price_multiplier=Decimal("1.50"),
+            public_multiplier=Decimal("1.50"),
+            cost_multiplier=Decimal("0.80"),
         )
 
         # Create a model
@@ -455,6 +459,7 @@ class TestGatewayServiceProviderIntegration:
             attempts=(),
             settled=False,
             settled_cost=Decimal("0"),
+            settled_cost_amount=Decimal("0"),
             priced_model=model,
             pending_usage_result=None,
             settled_usage_result=None,

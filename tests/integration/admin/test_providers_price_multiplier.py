@@ -35,7 +35,9 @@ async def test_create_provider_with_price_multiplier(
 ) -> None:
     """Create provider with explicit price_multiplier."""
     provider = await _create_provider(admin_client, price_multiplier="1.50")
-    assert provider["price_multiplier"] == "1.50"
+    assert provider["cost_multiplier"] == "1.50"
+    assert provider["public_multiplier"] == "1.00"
+    assert "price_multiplier" not in provider
 
 
 async def test_get_provider_returns_price_multiplier(
@@ -48,7 +50,7 @@ async def test_get_provider_returns_price_multiplier(
     response = await admin_client.get(f"/admin/providers/{provider_id}")
     assert response.status_code == 200
     provider = response.json()
-    assert provider["price_multiplier"] == "2.00"
+    assert provider["cost_multiplier"] == "2.00"
 
 
 async def test_list_providers_returns_price_multiplier(
@@ -62,7 +64,7 @@ async def test_list_providers_returns_price_multiplier(
     providers = response.json()
     match = [p for p in providers if p["name"] == "pm-list-test"]
     assert len(match) == 1
-    assert match[0]["price_multiplier"] == "1.25"
+    assert match[0]["cost_multiplier"] == "1.25"
 
 
 async def test_update_provider_price_multiplier(
@@ -78,7 +80,7 @@ async def test_update_provider_price_multiplier(
     )
     assert response.status_code == 200
     provider = response.json()
-    assert provider["price_multiplier"] == "1.80"
+    assert provider["cost_multiplier"] == "1.80"
 
 
 async def test_create_provider_validates_price_multiplier_too_low(
@@ -144,7 +146,8 @@ async def test_create_provider_price_multiplier_optional(
 ) -> None:
     """Create provider works without price_multiplier (defaults to 1.00)."""
     provider = await _create_provider(admin_client)
-    assert provider["price_multiplier"] == "1.00"
+    assert provider["cost_multiplier"] == "1.00"
+    assert provider["public_multiplier"] == "1.00"
 
 
 async def test_update_provider_price_multiplier_boundary_values(
@@ -160,7 +163,7 @@ async def test_update_provider_price_multiplier_boundary_values(
         json={"price_multiplier": "0.10"},
     )
     assert response.status_code == 200
-    assert response.json()["price_multiplier"] == "0.10"
+    assert response.json()["cost_multiplier"] == "0.10"
 
     # Upper boundary
     response = await admin_client.patch(
@@ -168,4 +171,17 @@ async def test_update_provider_price_multiplier_boundary_values(
         json={"price_multiplier": "10.00"},
     )
     assert response.status_code == 200
-    assert response.json()["price_multiplier"] == "10.00"
+    assert response.json()["cost_multiplier"] == "10.00"
+
+
+async def test_provider_public_multiplier_is_independent(admin_client: AsyncClient) -> None:
+    created = await _create_provider(admin_client, name="public-multiplier-provider")
+
+    response = await admin_client.patch(
+        f"/admin/providers/{created['id']}",
+        json={"cost_multiplier": "0.80", "public_multiplier": "2.00"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["cost_multiplier"] == "0.80"
+    assert response.json()["public_multiplier"] == "2.00"

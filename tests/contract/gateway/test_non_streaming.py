@@ -138,6 +138,15 @@ class FakeRouter:
         self.failures.append(route_id)
         return True
 
+    async def has_eligible_route(
+        self,
+        _: int,
+        __: Any,
+        required_protocol: Protocol | str | None = None,
+    ) -> bool:
+        del required_protocol
+        return bool(self.routes)
+
 
 class FakeHttpClients:
     def __init__(self, client: httpx.AsyncClient) -> None:
@@ -260,6 +269,112 @@ def _app(service: GatewayService) -> FastAPI:
     app.include_router(gemini_router)
     app.dependency_overrides[get_gateway_service] = lambda: service
     return app
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/messages/count_tokens?beta=true",
+        "/anthropic/v1/messages/count_tokens",
+    ],
+)
+async def test_claude_count_tokens_authenticates_and_counts_locally_without_billing_or_upstream(
+    session: AsyncSession,
+    path: str,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    alias = model.aliases[0].alias
+    route = RouteCandidate(
+        route_id=141,
+        model_id=model.id,
+        provider_id=142,
+        provider_protocol_id=143,
+        protocol=Protocol.CLAUDE,
+        base_url="https://provider.example",
+        websocket_url=None,
+        upstream_model="claude-native",
+        weight=100,
+    )
+    upstream_calls = 0
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal upstream_calls
+        upstream_calls += 1
+        return httpx.Response(500)
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    billing = FakeBilling()
+    audit = FakeAudit()
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=billing,  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([route]),
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"x-api-key": RAW_KEY, "anthropic-version": "2023-06-01"},
+    ) as client:
+        response = await client.post(
+            path,
+            json={
+                "model": alias,
+                "system": "You are concise.",
+                "messages": [{"role": "user", "content": "Count this message."}],
+                "tools": [
+                    {
+                        "name": "lookup",
+                        "description": "Look up a value",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                        },
+                    }
+                ],
+            },
+        )
+    await upstream_client.aclose()
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/json"
+    assert set(response.json()) == {"input_tokens"}
+    assert isinstance(response.json()["input_tokens"], int)
+    assert response.json()["input_tokens"] > 0
+    assert billing.reservation_keys == []
+    assert billing.settlements == 0
+    assert audit.completed is None
+    assert audit.failed is None
+    assert upstream_calls == 0
+
+
+async def test_claude_count_tokens_authenticates_before_parsing(session: AsyncSession) -> None:
+    settings = _settings()
+    await _catalog(session)
+    upstream_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(500))
+    )
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([]),
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+    ) as client:
+        response = await client.post("/v1/messages/count_tokens", content=b"{not-json")
+    await upstream_client.aclose()
+
+    assert response.status_code == 401
+    assert response.json()["type"] == "error"
+    assert response.json()["error"]["type"] == "invalid_api_key"
 
 
 @pytest.mark.parametrize("inbound", list(Protocol))

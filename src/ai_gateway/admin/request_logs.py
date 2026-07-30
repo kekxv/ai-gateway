@@ -34,6 +34,7 @@ class RequestLogSummary(BaseModel):
     user_id: int
     user_email: str
     api_key_id: int | None
+    api_key_name: str | None
     api_key_prefix: str | None
     model_id: int | None
     model_name: str | None
@@ -53,6 +54,7 @@ class RequestLogSummary(BaseModel):
     cache_write_tokens: int
     usage_source: UsageSource | None
     cost: Decimal
+    cost_amount: Decimal
     latency_ms: int | None
     first_token_ms: int | None
     error_code: str | None
@@ -89,6 +91,7 @@ _SUMMARY_COLUMNS = (
     RequestLog.cache_write_tokens,
     RequestLog.usage_source,
     RequestLog.cost,
+    RequestLog.cost_amount,
     RequestLog.latency_ms,
     RequestLog.first_token_ms,
     RequestLog.error_code,
@@ -98,6 +101,7 @@ _SUMMARY_COLUMNS = (
 
 _IDENTITY_COLUMNS = (
     User.email.label("user_email"),
+    ApiKey.name.label("api_key_name"),
     ApiKey.key_prefix.label("api_key_prefix"),
     Model.canonical_name.label("model_name"),
     Provider.name.label("provider_name"),

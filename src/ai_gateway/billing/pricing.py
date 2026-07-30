@@ -17,6 +17,38 @@ class PricedModel(Protocol):
     cache_write_price_per_million: Decimal
 
 
+class PriceTier(PricedModel, Protocol):
+    max_input_tokens: int | None
+
+
+def total_input_tokens(usage: CanonicalUsage) -> int:
+    """Return the context length used to select a pricing tier."""
+
+    return usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens
+
+
+def select_price_tier(model: PricedModel, usage: CanonicalUsage) -> PricedModel:
+    """Select the inclusive input-length tier, or use legacy model prices."""
+
+    tiers: tuple[PriceTier, ...] | list[PriceTier] = getattr(model, "price_tiers", ())
+    if not tiers:
+        return model
+
+    length = total_input_tokens(usage)
+    ordered = sorted(
+        tiers,
+        key=lambda tier: (
+            tier.max_input_tokens is None,
+            tier.max_input_tokens or 0,
+        ),
+    )
+    for tier in ordered:
+        if tier.max_input_tokens is None or length <= tier.max_input_tokens:
+            return tier
+
+    raise ValueError("model price tiers do not include an unbounded tier")
+
+
 @overload
 def calculate_cost(
     model: PricedModel,
@@ -77,10 +109,15 @@ def calculate_cost(
             )
         ):
             raise TypeError("provide either model or explicit prices, not both")
-        input_price = model.input_price_per_million
-        output_price = model.output_price_per_million
-        cache_read_price = getattr(model, "cache_read_price_per_million", Decimal("0"))
-        cache_write_price = getattr(model, "cache_write_price_per_million", Decimal("0"))
+        selected_price = select_price_tier(model, usage)
+        input_price = selected_price.input_price_per_million
+        output_price = selected_price.output_price_per_million
+        cache_read_price = getattr(
+            selected_price, "cache_read_price_per_million", Decimal("0")
+        )
+        cache_write_price = getattr(
+            selected_price, "cache_write_price_per_million", Decimal("0")
+        )
     if input_price is None or output_price is None:
         raise TypeError("model or both input_price and output_price are required")
     cache_read_price = Decimal("0") if cache_read_price is None else cache_read_price

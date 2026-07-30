@@ -61,6 +61,7 @@ def _request_log(
     completion_tokens: int,
     cost: str,
     latency_ms: int | None,
+    cost_amount: str = "0",
 ) -> RequestLog:
     return RequestLog(
         id=str(uuid4()),
@@ -72,6 +73,7 @@ def _request_log(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         cost=Decimal(cost),
+        cost_amount=Decimal(cost_amount),
         latency_ms=latency_ms,
         created_at=created_at,
     )
@@ -200,6 +202,7 @@ async def seeded_dashboard_data(
                 prompt_tokens=200,
                 completion_tokens=20,
                 cost="0.10000000",
+                cost_amount="0.05000000",
                 latency_ms=300,
             ),
             _request_log(
@@ -280,6 +283,8 @@ async def test_dashboard_summary_returns_counts_and_exact_seven_utc_days(
     assert payload["prompt_tokens_24h"] == 635
     assert payload["completion_tokens_24h"] == 68
     assert payload["cost_24h"] == "0.16000000"
+    assert payload["cost_amount_24h"] == "0.05000000"
+    assert payload["gross_profit_24h"] == "0.11000000"
     assert payload["average_latency_ms_24h"] == 240
 
     daily_usage = payload["daily_usage"]
@@ -294,18 +299,24 @@ async def test_dashboard_summary_returns_counts_and_exact_seven_utc_days(
         "requests": 1,
         "failures": 0,
         "cost": "0.50000000",
+        "cost_amount": "0E-8",
+        "gross_profit": "0.50000000",
     }
     assert daily_usage[-2] == {
         "date": expected_dates[-2],
         "requests": 3,
         "failures": 2,
         "cost": "0.07000000",
+        "cost_amount": "0E-8",
+        "gross_profit": "0.07000000",
     }
     assert daily_usage[-1] == {
         "date": expected_dates[-1],
         "requests": 4,
         "failures": 1,
         "cost": "0.13000000",
+        "cost_amount": "0.05000000",
+        "gross_profit": "0.08000000",
     }
     assert all(
         point["requests"] == point["failures"] == 0 and point["cost"] == "0"

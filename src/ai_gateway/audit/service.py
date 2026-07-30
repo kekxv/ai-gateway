@@ -63,6 +63,7 @@ class RequestResult:
     cache_write_tokens: int = 0
     usage_source: UsageSource | None = None
     cost: Decimal = Decimal("0")
+    cost_amount: Decimal = Decimal("0")
     latency_ms: int | None = None
     first_token_ms: int | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
@@ -84,6 +85,7 @@ class RequestFailure:
     cache_write_tokens: int = 0
     usage_source: UsageSource | None = None
     cost: Decimal = Decimal("0")
+    cost_amount: Decimal = Decimal("0")
     latency_ms: int | None = None
     first_token_ms: int | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
@@ -158,6 +160,7 @@ class AuditService:
             cache_write_tokens=result.cache_write_tokens,
             usage_source=result.usage_source,
             cost=result.cost,
+            cost_amount=result.cost_amount,
             latency_ms=result.latency_ms,
             first_token_ms=result.first_token_ms,
             error_code=None,
@@ -185,6 +188,7 @@ class AuditService:
             cache_write_tokens=failure.cache_write_tokens,
             usage_source=failure.usage_source,
             cost=failure.cost,
+            cost_amount=failure.cost_amount,
             latency_ms=failure.latency_ms,
             first_token_ms=failure.first_token_ms,
             error_code=failure.error_code,
@@ -208,6 +212,7 @@ class AuditService:
         cache_write_tokens: int,
         usage_source: UsageSource | None,
         cost: Decimal,
+        cost_amount: Decimal,
         latency_ms: int | None,
         first_token_ms: int | None,
         error_code: str | None,
@@ -246,6 +251,7 @@ class AuditService:
                         cache_write_tokens=cache_write_tokens,
                         usage_source=usage_source,
                         cost=cost,
+                        cost_amount=cost_amount,
                         latency_ms=latency_ms,
                         first_token_ms=first_token_ms,
                         error_code=error_code,

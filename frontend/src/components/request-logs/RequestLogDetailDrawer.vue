@@ -109,8 +109,8 @@ function isRequestLogDetail(value: RequestLogDetail | UserRequestLogDetail): val
   return 'request_detail' in value
 }
 
-function apiKeyLabel(prefix: string | null): string {
-  return prefix === null ? '无密钥' : `${prefix}…`
+function apiKeyLabel(name: string | null): string {
+  return name ?? '无密钥'
 }
 </script>
 
@@ -150,19 +150,21 @@ function apiKeyLabel(prefix: string | null): string {
         <dl class="metadata-grid">
           <div><dt>请求 ID</dt><dd>{{ detail.id }}</dd></div>
           <template v-if="!hideSensitive">
-            <div><dt>用户 / 密钥</dt><dd>{{ (detail as RequestLogDetail).user_email }} / {{ apiKeyLabel(detail.api_key_prefix) }}</dd></div>
+            <div><dt>用户 / 密钥</dt><dd>{{ (detail as RequestLogDetail).user_email }} / {{ apiKeyLabel(detail.api_key_name) }}</dd></div>
           </template>
           <template v-else>
-            <div><dt>密钥</dt><dd>{{ apiKeyLabel(detail.api_key_prefix) }}</dd></div>
+            <div><dt>密钥</dt><dd>{{ apiKeyLabel(detail.api_key_name) }}</dd></div>
           </template>
-          <div><dt>模型 / 供应商 / 上游模型</dt><dd>{{ detail.model_name ?? '已删除模型' }} / {{ detail.provider_name ?? '已删除供应商' }} / {{ detail.route_upstream_model ?? '已删除路由' }}</dd></div>
+          <div v-if="!hideSensitive"><dt>模型 / 供应商 / 上游模型</dt><dd>{{ detail.model_name ?? '已删除模型' }} / {{ (detail as RequestLogDetail).provider_name ?? '已删除供应商' }} / {{ (detail as RequestLogDetail).route_upstream_model ?? '已删除路由' }}</dd></div>
+          <div v-else><dt>模型</dt><dd>{{ detail.model_name ?? '已删除模型' }}</dd></div>
           <div><dt>协议</dt><dd>{{ detail.inbound_protocol }} → {{ detail.outbound_protocol ?? '无出站协议' }}</dd></div>
           <div><dt>传输 / 流式</dt><dd>{{ detail.transport }} / {{ detail.stream ? '是' : '否' }}</dd></div>
           <div><dt>HTTP 状态</dt><dd>{{ detail.http_status ?? '—' }}</dd></div>
           <div><dt>输入 / 输出令牌</dt><dd>{{ detail.prompt_tokens }} / {{ detail.completion_tokens }}</dd></div>
           <div><dt>缓存读取 / 写入令牌</dt><dd>{{ detail.cache_read_tokens }} / {{ detail.cache_write_tokens }}</dd></div>
           <div><dt>用量来源</dt><dd>{{ detail.usage_source === 'provider' ? '供应商' : detail.usage_source === 'estimated' ? '估算' : '—' }}</dd></div>
-          <div><dt>精确费用</dt><dd class="exact-value">{{ formatMoney(detail.cost) }}</dd></div>
+          <div><dt>{{ hideSensitive ? '费用' : '用户费用' }}</dt><dd class="exact-value">{{ formatMoney(detail.cost) }}</dd></div>
+          <div v-if="!hideSensitive"><dt>成本费用</dt><dd class="exact-value">{{ formatMoney((detail as RequestLogDetail).cost_amount ?? '0') }}</dd></div>
           <div><dt>延迟 / 首个令牌</dt><dd>{{ formatDuration(detail.latency_ms) }} / {{ formatDuration(detail.first_token_ms) }}</dd></div>
           <div><dt>错误代码</dt><dd>{{ detail.error_code ?? '—' }}</dd></div>
           <div><dt>创建 / 完成时间</dt><dd>{{ formatDateTime(detail.created_at) }} / {{ formatDateTime(detail.completed_at) }}</dd></div>

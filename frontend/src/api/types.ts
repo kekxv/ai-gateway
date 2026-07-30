@@ -108,6 +108,8 @@ export interface DailyUsagePoint {
   requests: number
   failures: number
   cost: string
+  cost_amount?: string
+  gross_profit?: string
 }
 
 export interface DashboardSummary {
@@ -121,6 +123,8 @@ export interface DashboardSummary {
   prompt_tokens_24h: number
   completion_tokens_24h: number
   cost_24h: string
+  cost_amount_24h: string
+  gross_profit_24h: string
   average_latency_ms_24h: number | null
   daily_usage: DailyUsagePoint[]
 }
@@ -181,7 +185,8 @@ export interface ProviderCreate {
   auto_load_models?: boolean
   model_sync_interval_seconds?: number | null
   protocols?: ProviderProtocolInput[]
-  price_multiplier?: number
+  cost_multiplier?: number
+  public_multiplier?: number
 }
 
 export interface ProviderUpdate {
@@ -191,7 +196,8 @@ export interface ProviderUpdate {
   auto_load_models?: boolean | null
   model_sync_interval_seconds?: number | null
   protocols?: ProviderProtocolInput[] | null
-  price_multiplier?: number | null
+  cost_multiplier?: number | null
+  public_multiplier?: number | null
 }
 
 export interface ProviderProtocolResponse {
@@ -213,7 +219,8 @@ export interface ProviderResponse {
   model_sync_interval_seconds: number
   last_model_sync_at: string | null
   protocols: ProviderProtocolResponse[]
-  price_multiplier: number
+  cost_multiplier: number
+  public_multiplier: number
 }
 
 export interface ModelSyncResult {
@@ -241,6 +248,30 @@ export interface ModelAliasInput {
 
 export type AliasInput = string | ModelAliasInput
 
+export interface ModelPriceTierInput {
+  max_input_tokens: number | null
+  input_price_per_million: string
+  output_price_per_million: string
+  cache_read_price_per_million: string
+  cache_write_price_per_million: string
+}
+
+export interface ModelPriceTierResponse extends ModelPriceTierInput {
+  id: number
+}
+
+export interface PublicModelPriceTierResponse {
+  max_input_tokens: number | null
+  input_price_per_million_min: string
+  input_price_per_million_max: string
+  output_price_per_million_min: string
+  output_price_per_million_max: string
+  cache_read_price_per_million_min: string
+  cache_read_price_per_million_max: string
+  cache_write_price_per_million_min: string
+  cache_write_price_per_million_max: string
+}
+
 export interface ModelCreate {
   canonical_name: string
   display_name: string
@@ -252,6 +283,7 @@ export interface ModelCreate {
   enabled?: boolean
   aliases?: AliasInput[]
   routing_strategy?: RoutingStrategy
+  price_tiers?: ModelPriceTierInput[]
 }
 
 export interface ModelUpdate {
@@ -265,6 +297,7 @@ export interface ModelUpdate {
   enabled?: boolean | null
   aliases?: AliasInput[] | null
   routing_strategy?: RoutingStrategy | null
+  price_tiers?: ModelPriceTierInput[] | null
 }
 
 export interface ModelAliasResponse {
@@ -287,6 +320,8 @@ export interface ModelResponse {
   routing_strategy: RoutingStrategy
   created_at: string
   updated_at: string
+  price_tiers?: ModelPriceTierResponse[]
+  public_price_tiers?: PublicModelPriceTierResponse[]
 }
 
 export interface ModelRouteCreate {
@@ -407,6 +442,7 @@ export interface RequestLogSummary {
   user_id: number
   user_email: string
   api_key_id: number | null
+  api_key_name: string | null
   api_key_prefix: string | null
   model_id: number | null
   model_name: string | null
@@ -426,6 +462,7 @@ export interface RequestLogSummary {
   cache_write_tokens: number
   usage_source: UsageSource | null
   cost: string
+  cost_amount?: string
   latency_ms: number | null
   first_token_ms: number | null
   error_code: string | null
@@ -443,10 +480,19 @@ export interface RequestLogDetail extends RequestLogSummary {
   response_detail: Record<string, unknown> | null
 }
 
-export type UserRequestLogSummary = Omit<RequestLogSummary, 'user_id' | 'user_email'>
+type UserHiddenRequestLogFields =
+  | 'user_id'
+  | 'user_email'
+  | 'provider_id'
+  | 'provider_name'
+  | 'model_route_id'
+  | 'route_upstream_model'
+  | 'cost_amount'
+
+export type UserRequestLogSummary = Omit<RequestLogSummary, UserHiddenRequestLogFields>
 export type UserRequestLogDetail = Omit<
   RequestLogDetail,
-  'user_id' | 'user_email' | 'request_detail' | 'response_detail'
+  UserHiddenRequestLogFields | 'request_detail' | 'response_detail'
 >
 
 export interface UserRequestLogListResponse {

@@ -16,8 +16,10 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from starlette.requests import ClientDisconnect
 from starlette.types import Receive, Scope, Send
 
@@ -28,13 +30,13 @@ from ai_gateway.audit.service import (
     RequestResult,
 )
 from ai_gateway.auth.api_key import ApiKeyPrincipal, authenticate_api_key, extract_api_key
-from ai_gateway.billing.pricing import calculate_cost
 from ai_gateway.billing.service import (
     BalanceReservation,
     BillingService,
     IdempotencyConflict,
     ReservationRecovery,
     SettlementResult,
+    _settlement_costs,
 )
 from ai_gateway.billing.usage import (
     UsageResult,
@@ -97,6 +99,22 @@ class RouteSelector(TypingProtocol):
     async def record_success(self, route_id: int) -> bool: ...
 
     async def record_failure(self, route_id: int, failure: object) -> bool: ...
+
+    async def has_eligible_route(
+        self,
+        model_id: int,
+        principal: ApiKeyPrincipal,
+        required_protocol: Protocol | str | None = None,
+    ) -> bool: ...
+
+    async def maximum_eligible_public_multiplier(
+        self,
+        model_id: int,
+        principal: ApiKeyPrincipal,
+        required_protocol: Protocol | str | None = None,
+        *,
+        require_websocket: bool = False,
+    ) -> Decimal | None: ...
 
 
 class InvalidRequestError(GatewayError):
@@ -219,6 +237,24 @@ class GatewayService:
             lambda active_session: router_for_settings(active_session, settings)
         )
 
+    async def count_claude_tokens(self, request: Request) -> GatewayOutput:
+        principal = await authenticate_api_key(extract_api_key(request), self._session)
+        raw_body = await request.body()
+        payload, requested_model = _request_payload(raw_body, Protocol.CLAUDE, None)
+        resolved = await CatalogRepository(self._session).resolve_model(requested_model)
+        router = self._router_factory(self._session)
+        if not await router.has_eligible_route(resolved.model_id, principal):
+            raise NoRouteAvailable(requested_model)
+        try:
+            canonical = get_adapter(Protocol.CLAUDE).decode_request(payload)
+        except (GatewayError, ValueError) as exc:
+            raise InvalidRequestError(str(exc)) from exc
+        return GatewayOutput(
+            orjson.dumps({"input_tokens": estimate_request_tokens(canonical)}),
+            status.HTTP_200_OK,
+            "application/json",
+        )
+
     async def handle(
         self,
         request: Request,
@@ -252,9 +288,31 @@ class GatewayService:
             required_protocol,
         )
 
-        priced_model = await self._session.get(Model, resolved.model_id)
+        if isinstance(self._session, AsyncSession):
+            priced_model = await self._session.scalar(
+                select(Model)
+                .where(Model.id == resolved.model_id)
+                .options(selectinload(Model.price_tiers))
+            )
+        else:
+            priced_model = await self._session.get(Model, resolved.model_id)
         if priced_model is None:
             raise RuntimeError("resolved catalog model disappeared")
+        pricing_router = self._router_factory(self._session)
+        maximum_public_multiplier = getattr(
+            pricing_router,
+            "maximum_eligible_public_multiplier",
+            None,
+        )
+        reservation_public_multiplier = (
+            await maximum_public_multiplier(
+                resolved.model_id,
+                principal,
+                required_protocol,
+            )
+            if maximum_public_multiplier is not None
+            else None
+        )
         request_id = uuid4()
         billing_key = _billing_key(principal, request_id)
         estimated_input_tokens = estimate_request_tokens(canonical)
@@ -270,6 +328,12 @@ class GatewayService:
                 CanonicalUsage(0, 0),
                 UsageSource.ESTIMATED,
                 cost=Decimal("0"),
+                cost_amount=Decimal("0"),
+            ),
+            **(
+                {"provider_public_multiplier": reservation_public_multiplier}
+                if reservation_public_multiplier is not None
+                else {}
             ),
         )
 
@@ -277,6 +341,7 @@ class GatewayService:
         attempt_response: _AttemptResponse | None = None
         settled = False
         settled_cost = Decimal("0")
+        settled_cost_amount = Decimal("0")
         pending_usage_result: UsageResult | None = None
         settled_usage_result: UsageResult | None = None
         audit_terminal = False
@@ -326,13 +391,24 @@ class GatewayService:
                         stream_context,
                         replace(canonical, model=attempt_response.route.upstream_model),
                     )
+                    prefetched_provider = await self._session.get(
+                        Provider, attempt_response.route.provider_id
+                    )
+                    prefetched_cost, prefetched_cost_amount = _settlement_costs(
+                        model=priced_model,
+                        usage=prefetched_usage.usage,
+                        cost=None,
+                        cost_amount=None,
+                        provider=prefetched_provider,
+                    )
                     await self._persist_recovery(
                         reservation,
                         self._recovery_snapshot(
                             billing_key,
                             prefetched_usage.usage,
                             prefetched_usage.usage_source,
-                            cost=calculate_cost(priced_model, prefetched_usage.usage),
+                            cost=prefetched_cost,
+                            cost_amount=prefetched_cost_amount,
                         ),
                     )
             else:
@@ -354,6 +430,7 @@ class GatewayService:
                 settlement = await self._settle_zero(reservation, billing_key)
                 settled = True
                 settled_cost = settlement.actual_cost
+                settled_cost_amount = settlement.cost_amount
                 output = _same_protocol_error_output(inbound_protocol, route, upstream)
                 await self._audit.fail_request(
                     audit_id,
@@ -364,6 +441,7 @@ class GatewayService:
                         outbound_protocol=route.protocol,
                         http_status=upstream.status_code,
                         cost=settlement.actual_cost,
+                        cost_amount=settlement.cost_amount,
                         latency_ms=_elapsed_ms(started_at),
                         headers=dict(upstream.headers),
                         body=upstream.content,
@@ -419,13 +497,21 @@ class GatewayService:
                 native_openai_operation=_route_uses_native_openai_operation(prepared, route),
             )
             pending_usage_result = usage_result
+            pending_cost, pending_cost_amount = _settlement_costs(
+                model=priced_model,
+                usage=usage_result.usage,
+                cost=None,
+                cost_amount=None,
+                provider=provider,
+            )
             await self._persist_recovery(
                 reservation,
                 self._recovery_snapshot(
                     billing_key,
                     usage_result.usage,
                     usage_result.usage_source,
-                    cost=calculate_cost(priced_model, usage_result.usage),
+                    cost=pending_cost,
+                    cost_amount=pending_cost_amount,
                 ),
             )
             settlement = await self._billing.settle_request(
@@ -438,6 +524,7 @@ class GatewayService:
             )
             settled = True
             settled_cost = settlement.actual_cost
+            settled_cost_amount = settlement.cost_amount
             settled_usage_result = usage_result
             await self._audit.complete_request(
                 audit_id,
@@ -452,6 +539,7 @@ class GatewayService:
                     cache_write_tokens=usage_result.usage.cache_write_tokens,
                     usage_source=usage_result.usage_source,
                     cost=settlement.actual_cost,
+                    cost_amount=settlement.cost_amount,
                     latency_ms=_elapsed_ms(started_at),
                     headers=dict(upstream.headers),
                     body=output.body,
@@ -487,6 +575,7 @@ class GatewayService:
                     attempts=attempts,
                     settled=settled,
                     settled_cost=settled_cost,
+                    settled_cost_amount=settled_cost_amount,
                     priced_model=priced_model,
                     pending_usage_result=pending_usage_result,
                     settled_usage_result=settled_usage_result,
@@ -634,15 +723,24 @@ class GatewayService:
 
         usage_result = _stream_usage_result(context, request)
         settlement_cost = Decimal("0")
+        settlement_cost_amount = Decimal("0")
         billing_recovery_pending = False
         try:
+            pending_cost, pending_cost_amount = _settlement_costs(
+                model=priced_model,
+                usage=usage_result.usage,
+                cost=None,
+                cost_amount=None,
+                provider=provider,
+            )
             await self._persist_recovery(
                 reservation,
                 self._recovery_snapshot(
                     billing_key,
                     usage_result.usage,
                     usage_result.usage_source,
-                    cost=calculate_cost(priced_model, usage_result.usage),
+                    cost=pending_cost,
+                    cost_amount=pending_cost_amount,
                 ),
             )
             settlement = await self._billing.settle_request(
@@ -654,6 +752,7 @@ class GatewayService:
                 provider=provider,
             )
             settlement_cost = settlement.actual_cost
+            settlement_cost_amount = settlement.cost_amount
         except BaseException as cleanup_exc:
             billing_recovery_pending = True
             _log_cleanup_failure("stream_settlement", cleanup_exc)
@@ -681,6 +780,7 @@ class GatewayService:
                         cache_write_tokens=usage_result.usage.cache_write_tokens,
                         usage_source=usage_result.usage_source,
                         cost=settlement_cost,
+                        cost_amount=settlement_cost_amount,
                         latency_ms=_elapsed_ms(started_at),
                         first_token_ms=context.first_token_ms,
                         headers=dict(upstream.headers),
@@ -713,6 +813,7 @@ class GatewayService:
                         cache_write_tokens=usage_result.usage.cache_write_tokens,
                         usage_source=usage_result.usage_source,
                         cost=settlement_cost,
+                        cost_amount=settlement_cost_amount,
                         latency_ms=_elapsed_ms(started_at),
                         first_token_ms=context.first_token_ms,
                         headers=dict(upstream.headers),
@@ -752,6 +853,7 @@ class GatewayService:
         attempts: tuple[dict[str, Any], ...],
         settled: bool,
         settled_cost: Decimal,
+        settled_cost_amount: Decimal,
         priced_model: Model,
         pending_usage_result: UsageResult | None,
         settled_usage_result: UsageResult | None,
@@ -764,11 +866,14 @@ class GatewayService:
             provider = await self._session.get(Provider, final_route.provider_id)
 
         cleanup_cost = settled_cost
+        cleanup_cost_amount = settled_cost_amount
         charged_usage_result = settled_usage_result
         if not settled:
             try:
                 if pending_usage_result is None:
-                    cleanup_cost = (await self._settle_zero(reservation, billing_key)).actual_cost
+                    zero_settlement = await self._settle_zero(reservation, billing_key)
+                    cleanup_cost = zero_settlement.actual_cost
+                    cleanup_cost_amount = zero_settlement.cost_amount
                 else:
                     recovered = await self._billing.settle_request(
                         reservation_id=reservation.ledger_entry_id,
@@ -779,6 +884,7 @@ class GatewayService:
                         provider=provider,
                     )
                     cleanup_cost = recovered.actual_cost
+                    cleanup_cost_amount = recovered.cost_amount
                     charged_usage_result = pending_usage_result
             except IdempotencyConflict:
                 pass
@@ -822,6 +928,7 @@ class GatewayService:
                         else None
                     ),
                     cost=cleanup_cost,
+                    cost_amount=cleanup_cost_amount,
                     latency_ms=_elapsed_ms(started_at),
                     metadata={
                         "attempts": attempts,
@@ -1010,6 +1117,7 @@ class GatewayService:
         usage_source: UsageSource,
         *,
         cost: Decimal,
+        cost_amount: Decimal,
     ) -> ReservationRecovery:
         return ReservationRecovery(
             settlement_key=billing_key,
@@ -1018,6 +1126,7 @@ class GatewayService:
             expires_at=datetime.now(UTC).replace(tzinfo=None)
             + timedelta(seconds=self._settings.billing_reservation_ttl_seconds),
             cost=cost,
+            cost_amount=cost_amount,
         )
 
     async def _persist_recovery(
@@ -1098,13 +1207,22 @@ class _StreamLifecycle:
             return frame
         frame = await anext(self._source)
         usage_result = _stream_usage_result(self.context, self._request)
+        provider = await self._service._session.get(Provider, self._route.provider_id)
+        pending_cost, pending_cost_amount = _settlement_costs(
+            model=self._priced_model,
+            usage=usage_result.usage,
+            cost=None,
+            cost_amount=None,
+            provider=provider,
+        )
         await self._service._persist_recovery(
             self._reservation,
             self._service._recovery_snapshot(
                 self._billing_key,
                 usage_result.usage,
                 usage_result.usage_source,
-                cost=calculate_cost(self._priced_model, usage_result.usage),
+                cost=pending_cost,
+                cost_amount=pending_cost_amount,
             ),
         )
         return frame

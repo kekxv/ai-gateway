@@ -34,6 +34,8 @@ const summaryFixture: DashboardSummary = {
   prompt_tokens_24h: 456_789,
   completion_tokens_24h: 123_456,
   cost_24h: '0.125',
+  cost_amount_24h: '0.100',
+  gross_profit_24h: '0.025',
   average_latency_ms_24h: 248,
   daily_usage: [
     { date: '2026-07-16', requests: 40, failures: 2, cost: '0.01000000' },

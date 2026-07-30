@@ -20,3 +20,15 @@ async def messages(
         return (await service.handle(request, Protocol.CLAUDE)).response()
     except Exception as exc:
         return native_error_response(Protocol.CLAUDE, exc)
+
+
+@router.post("/v1/messages/count_tokens")
+@router.post("/anthropic/v1/messages/count_tokens")
+async def count_tokens(
+    request: Request,
+    service: Annotated[GatewayService, Depends(get_gateway_service)],
+) -> Response:
+    try:
+        return (await service.count_claude_tokens(request)).response()
+    except Exception as exc:
+        return native_error_response(Protocol.CLAUDE, exc)

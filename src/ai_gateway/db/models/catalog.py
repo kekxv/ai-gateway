@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Enum,
@@ -45,7 +46,13 @@ class Provider(Base):
         server_default=text("3600"),
     )
     last_model_sync_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    price_multiplier: Mapped[Decimal] = mapped_column(
+    cost_multiplier: Mapped[Decimal] = mapped_column(
+        Numeric(4, 2),
+        default=Decimal("1.00"),
+        server_default=text("1.00"),
+        nullable=False,
+    )
+    public_multiplier: Mapped[Decimal] = mapped_column(
         Numeric(4, 2),
         default=Decimal("1.00"),
         server_default=text("1.00"),
@@ -144,6 +151,32 @@ class Model(Base):
         cascade="all, delete-orphan",
     )
     api_key_links: Mapped[list[ApiKeyModel]] = relationship(back_populates="model")
+    price_tiers: Mapped[list[ModelPriceTier]] = relationship(
+        back_populates="model",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class ModelPriceTier(Base):
+    __tablename__ = "model_price_tiers"
+    __table_args__ = (
+        Index(
+            "ix_model_price_tiers_model_max_input",
+            "model_id",
+            "max_input_tokens",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    model_id: Mapped[int] = mapped_column(ForeignKey("models.id", ondelete="CASCADE"))
+    max_input_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    input_price_per_million: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    output_price_per_million: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    cache_read_price_per_million: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    cache_write_price_per_million: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+
+    model: Mapped[Model] = relationship(back_populates="price_tiers")
 
 
 class ModelAlias(Base):

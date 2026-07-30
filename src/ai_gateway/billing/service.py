@@ -105,6 +105,7 @@ class SettlementResult:
     total_spent: Decimal
     exhausted: bool
     uncollected_amount: Decimal = Decimal("0")
+    cost_amount: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +124,7 @@ class ReservationRecovery:
     usage_source: UsageSource
     expires_at: datetime
     cost: Decimal | None = None
+    cost_amount: Decimal | None = None
     version: int = 0
 
 
@@ -160,6 +162,7 @@ class BillingService:
         request_id: UUID | str | None = None,
         recovery: ReservationRecovery | None = None,
         provider: Provider | None = None,
+        provider_public_multiplier: Decimal | None = None,
     ) -> BalanceReservation:
         if estimated_input_tokens < 0:
             raise ValueError("estimated_input_tokens must be nonnegative")
@@ -169,12 +172,16 @@ class BillingService:
         if selected_max_output < 0:
             raise ValueError("max_output_tokens must be nonnegative")
         normalized_key = _normalize_idempotency_key(idempotency_key)
-        model_mult, provider_mult = get_effective_multipliers(model, provider)
+        model_mult, public_mult, _ = get_effective_multipliers(model, provider)
+        if provider_public_multiplier is not None:
+            if provider_public_multiplier < 0:
+                raise ValueError("provider_public_multiplier must be nonnegative")
+            public_mult = provider_public_multiplier
         reserved_amount = calculate_cost(
             model,
             CanonicalUsage(estimated_input_tokens, selected_max_output),
             model_multiplier=model_mult,
-            provider_multiplier=provider_mult,
+            provider_multiplier=public_mult,
         )
         _validate_money_magnitude(reserved_amount, "reservation amount")
 
@@ -201,6 +208,8 @@ class BillingService:
                             estimated_input_tokens=estimated_input_tokens,
                             max_output_tokens=selected_max_output,
                             reserved_amount=reserved_amount,
+                            model_multiplier=model_mult,
+                            public_multiplier=public_mult,
                         )
                         await _validate_reservation_replay(
                             session,
@@ -218,6 +227,8 @@ class BillingService:
                         estimated_input_tokens=estimated_input_tokens,
                         max_output_tokens=selected_max_output,
                         reserved_amount=reserved_amount,
+                        model_multiplier=model_mult,
+                        public_multiplier=public_mult,
                     )
                     existing_request = await session.scalar(
                         select(LedgerEntry)
@@ -250,6 +261,8 @@ class BillingService:
                         "cache_read_price_per_million": str(_cache_read_price(model)),
                         "cache_write_price_per_million": str(_cache_write_price(model)),
                         "reserved_amount": str(reserved_amount),
+                        "model_multiplier": str(model_mult),
+                        "public_multiplier": str(public_mult),
                         "reservation_fingerprint": fingerprint,
                     }
                     if recovery is not None:
@@ -285,6 +298,7 @@ class BillingService:
         model: PricedModel | None = None,
         usage: CanonicalUsage | None = None,
         cost: Decimal | None = None,
+        cost_amount: Decimal | None = None,
         usage_source: UsageSource | None = None,
         expected_recovery_version: int | None = None,
         expected_recovery_claim: str | None = None,
@@ -294,10 +308,17 @@ class BillingService:
             idempotency_key,
             suffix_length=max(len(":release"), len(":usage")),
         )
-        actual_cost = _settlement_cost(model=model, usage=usage, cost=cost, provider=provider)
+        actual_cost, platform_cost = _settlement_costs(
+            model=model,
+            usage=usage,
+            cost=cost,
+            cost_amount=cost_amount,
+            provider=provider,
+        )
         fingerprint = _settlement_fingerprint(
             reservation_id=reservation_id,
             actual_cost=actual_cost,
+            cost_amount=platform_cost,
             usage=usage,
             usage_source=usage_source,
         )
@@ -404,6 +425,7 @@ class BillingService:
                     usage_metadata = {
                         **common_metadata,
                         "actual_cost": str(actual_cost),
+                        "cost_amount": str(platform_cost),
                         "charged_amount": str(charged_amount),
                         "uncollected_amount": str(uncollected),
                         "total_spent_after": str(total_spent),
@@ -447,6 +469,7 @@ class BillingService:
                         total_spent=total_spent,
                         exhausted=exhausted,
                         uncollected_amount=uncollected,
+                        cost_amount=platform_cost,
                     )
         except IntegrityError as exc:
             raise IdempotencyConflict from exc
@@ -598,6 +621,7 @@ class BillingService:
                         model=model if recovery.cost is None else None,
                         usage=recovery.usage,
                         cost=recovery.cost,
+                        cost_amount=recovery.cost_amount,
                         usage_source=recovery.usage_source,
                         expected_recovery_version=recovery.version,
                         expected_recovery_claim=claim_token,
@@ -782,6 +806,7 @@ async def reserve_balance(
     default_max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     recovery: ReservationRecovery | None = None,
     provider: Provider | None = None,
+    provider_public_multiplier: Decimal | None = None,
 ) -> BalanceReservation:
     return await BillingService(
         mutation_session_factory_for(session),
@@ -795,6 +820,7 @@ async def reserve_balance(
         request_id=request_id,
         recovery=recovery,
         provider=provider,
+        provider_public_multiplier=provider_public_multiplier,
     )
 
 
@@ -806,6 +832,7 @@ async def settle_request(
     model: PricedModel | None = None,
     usage: CanonicalUsage | None = None,
     cost: Decimal | None = None,
+    cost_amount: Decimal | None = None,
     usage_source: UsageSource | None = None,
     provider: Provider | None = None,
 ) -> SettlementResult:
@@ -815,6 +842,7 @@ async def settle_request(
         model=model,
         usage=usage,
         cost=cost,
+        cost_amount=cost_amount,
         usage_source=usage_source,
         provider=provider,
     )
@@ -949,24 +977,57 @@ def _settlement_cost(
     cost: Decimal | None,
     provider: Provider | None = None,
 ) -> Decimal:
+    return _settlement_costs(
+        model=model,
+        usage=usage,
+        cost=cost,
+        cost_amount=None,
+        provider=provider,
+    )[0]
+
+
+def _settlement_costs(
+    *,
+    model: PricedModel | None,
+    usage: CanonicalUsage | None,
+    cost: Decimal | None,
+    cost_amount: Decimal | None,
+    provider: Provider | None = None,
+) -> tuple[Decimal, Decimal]:
     if cost is not None:
         if model is not None:
             raise TypeError("model cannot be provided with cost")
         if cost < 0:
             raise ValueError("cost must be nonnegative")
-        return _money(cost)
+        if cost_amount is not None and cost_amount < 0:
+            raise ValueError("cost_amount must be nonnegative")
+        public_cost = _money(cost)
+        platform_cost = public_cost if cost_amount is None else _money(cost_amount)
+        return public_cost, platform_cost
+    if cost_amount is not None:
+        raise TypeError("cost_amount cannot be provided when cost is omitted")
     if model is None or usage is None:
         raise TypeError("model and usage are required when cost is omitted")
-    model_mult, provider_mult = get_effective_multipliers(model, provider)
-    return _money(
+    model_mult, public_mult, cost_mult = get_effective_multipliers(model, provider)
+    public_cost = _money(
         calculate_cost(
             model,
             usage,
             model_multiplier=model_mult,
-            provider_multiplier=provider_mult,
+            provider_multiplier=public_mult,
         ),
         "settlement cost",
     )
+    platform_cost = _money(
+        calculate_cost(
+            model,
+            usage,
+            model_multiplier=model_mult,
+            provider_multiplier=cost_mult,
+        ),
+        "settlement cost amount",
+    )
+    return public_cost, platform_cost
 
 
 def _reservation_from_entry(entry: LedgerEntry, *, user_id: int) -> BalanceReservation:
@@ -1001,6 +1062,7 @@ def _settlement_from_entries(
         total_spent=Decimal(str(metadata["total_spent_after"])),
         exhausted=bool(metadata["exhausted"]),
         uncollected_amount=Decimal(str(metadata.get("uncollected_amount", "0"))),
+        cost_amount=Decimal(str(metadata.get("cost_amount", metadata["actual_cost"]))),
     )
 
 
@@ -1036,6 +1098,12 @@ def _recovery_metadata(
         metadata["recovery_cost"] = str(_money(recovery.cost))
     else:
         metadata["recovery_cost"] = None
+    if recovery.cost_amount is not None:
+        if recovery.cost_amount < 0:
+            raise ValueError("recovery cost_amount must be nonnegative")
+        metadata["recovery_cost_amount"] = str(_money(recovery.cost_amount))
+    else:
+        metadata["recovery_cost_amount"] = None
     return metadata
 
 
@@ -1053,6 +1121,8 @@ def _reservation_recovery(metadata: dict[str, Any]) -> ReservationRecovery | Non
         version = int(metadata.get("recovery_version", 0))
         raw_cost = metadata.get("recovery_cost")
         cost = Decimal(str(raw_cost)) if raw_cost is not None else None
+        raw_cost_amount = metadata.get("recovery_cost_amount")
+        cost_amount = Decimal(str(raw_cost_amount)) if raw_cost_amount is not None else None
     except (KeyError, TypeError, ValueError):
         return None
     if (
@@ -1062,17 +1132,21 @@ def _reservation_recovery(metadata: dict[str, Any]) -> ReservationRecovery | Non
         or cache_write_tokens < 0
         or version < 0
         or (cost is not None and cost < 0)
+        or (cost_amount is not None and cost_amount < 0)
     ):
         return None
     if expires_at.tzinfo is not None:
         expires_at = expires_at.astimezone(UTC).replace(tzinfo=None)
     return ReservationRecovery(
-        settlement_key,
-        CanonicalUsage(input_tokens, output_tokens, cache_read_tokens, cache_write_tokens),
-        usage_source,
-        expires_at,
-        cost,
-        version,
+        settlement_key=settlement_key,
+        usage=CanonicalUsage(
+            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
+        ),
+        usage_source=usage_source,
+        expires_at=expires_at,
+        cost=cost,
+        cost_amount=cost_amount,
+        version=version,
     )
 
 
@@ -1085,6 +1159,8 @@ def _reservation_fingerprint(
     estimated_input_tokens: int,
     max_output_tokens: int,
     reserved_amount: Decimal,
+    model_multiplier: Decimal = Decimal("1.00"),
+    public_multiplier: Decimal = Decimal("1.00"),
 ) -> str:
     return _fingerprint(
         {
@@ -1099,6 +1175,8 @@ def _reservation_fingerprint(
             "estimated_input_tokens": estimated_input_tokens,
             "max_output_tokens": max_output_tokens,
             "reserved_amount": str(reserved_amount),
+            "model_multiplier": str(model_multiplier),
+            "public_multiplier": str(public_multiplier),
         }
     )
 
@@ -1107,6 +1185,7 @@ def _settlement_fingerprint(
     *,
     reservation_id: int,
     actual_cost: Decimal,
+    cost_amount: Decimal | None = None,
     usage: CanonicalUsage | None,
     usage_source: UsageSource | None,
 ) -> str:
@@ -1114,6 +1193,7 @@ def _settlement_fingerprint(
         {
             "reservation_id": reservation_id,
             "actual_cost": str(actual_cost),
+            "cost_amount": str(actual_cost if cost_amount is None else cost_amount),
             "input_tokens": usage.input_tokens if usage is not None else None,
             "output_tokens": usage.output_tokens if usage is not None else None,
             "cache_read_tokens": usage.cache_read_tokens if usage is not None else None,

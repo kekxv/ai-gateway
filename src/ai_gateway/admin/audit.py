@@ -16,6 +16,7 @@ async def log_multiplier_change(
     resource_id: int,
     old_value: Decimal,
     new_value: Decimal,
+    field_name: str = "price_multiplier",
 ) -> None:
     """Log price_multiplier change to audit trail.
 
@@ -29,7 +30,7 @@ async def log_multiplier_change(
     """
     audit_log = ConfigAuditLog(
         user_id=user_id,
-        action=f"{resource_type}_price_multiplier_updated",
+        action=f"{resource_type}_{field_name}_updated",
         resource_type=resource_type,
         resource_id=resource_id,
         old_value=str(old_value),

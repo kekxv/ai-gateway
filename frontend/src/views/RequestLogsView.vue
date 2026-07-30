@@ -24,7 +24,20 @@ import {
   listUserRequestLogs,
   type RequestLogQuery,
 } from '@/api/requestLogs'
-import type { Protocol, RequestLogSummary, RequestStatus, UserRequestLogSummary } from '@/api/types'
+import { listApiKeys, listOwnApiKeys } from '@/api/apiKeys'
+import { listAvailableModels, listModels } from '@/api/models'
+import { listProviders } from '@/api/providers'
+import type {
+  ApiKeyResponse,
+  ModelResponse,
+  Protocol,
+  ProviderResponse,
+  RequestLogSummary,
+  RequestStatus,
+  UserRequestLogSummary,
+  UserResponse,
+} from '@/api/types'
+import { listUsers } from '@/api/users'
 import PageHeader from '@/components/common/PageHeader.vue'
 import RequestLogDetailDrawer from '@/components/request-logs/RequestLogDetailDrawer.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -64,8 +77,14 @@ const nextCursor = ref<string | null>(null)
 const cursorStack = ref<Array<string | null>>([])
 const detailOpen = ref(false)
 const selectedRequestId = ref<string | null>(null)
+const users = ref<UserResponse[]>([])
+const apiKeys = ref<ApiKeyResponse[]>([])
+const models = ref<ModelResponse[]>([])
+const providers = ref<ProviderResponse[]>([])
+const filterOptionsLoading = ref(true)
 
 let loadController: AbortController | undefined
+let filterOptionsController: AbortController | undefined
 let loadGeneration = 0
 let mounted = true
 
@@ -74,6 +93,18 @@ const statusLabels: Readonly<Record<RequestStatus, string>> = {
   completed: '已完成',
   failed: '失败',
   client_disconnected: '客户端已断开',
+}
+
+const protocolLabels: Readonly<Record<Protocol, string>> = {
+  openai: 'OpenAI',
+  claude: 'Claude',
+  gemini: 'Gemini',
+}
+
+function statusTagType(status: RequestStatus): 'success' | 'danger' | 'info' {
+  if (status === 'completed') return 'success'
+  if (status === 'failed') return 'danger'
+  return 'info'
 }
 
 function optionalInteger(value: string | number): number | undefined {
@@ -94,10 +125,12 @@ function currentQuery(cursor: string | null): RequestLogQuery {
   }
   const apiKeyId = optionalInteger(filters.apiKeyId)
   const modelId = optionalInteger(filters.modelId)
-  const providerId = optionalInteger(filters.providerId)
   if (apiKeyId !== undefined) query.apiKeyId = apiKeyId
   if (modelId !== undefined) query.modelId = modelId
-  if (providerId !== undefined) query.providerId = providerId
+  if (auth.isAdmin) {
+    const providerId = optionalInteger(filters.providerId)
+    if (providerId !== undefined) query.providerId = providerId
+  }
   if (filters.status !== '') query.status = filters.status
   if (filters.protocol !== '') query.protocol = filters.protocol
   if (cursor !== null) query.cursor = cursor
@@ -140,6 +173,41 @@ async function load(): Promise<void> {
   } finally {
     if (isCurrentLoad(controller, generation)) loading.value = false
     if (loadController === controller) loadController = undefined
+  }
+}
+
+async function loadFilterOptions(): Promise<void> {
+  filterOptionsController?.abort()
+  const controller = new AbortController()
+  filterOptionsController = controller
+  filterOptionsLoading.value = true
+  try {
+    if (auth.isAdmin) {
+      const [loadedUsers, loadedApiKeys, loadedModels, loadedProviders] = await Promise.all([
+        listUsers(controller.signal),
+        listApiKeys(undefined, controller.signal),
+        listModels(controller.signal),
+        listProviders(controller.signal),
+      ])
+      if (!mounted || controller.signal.aborted || filterOptionsController !== controller) return
+      users.value = loadedUsers
+      apiKeys.value = loadedApiKeys
+      models.value = loadedModels
+      providers.value = loadedProviders
+    } else {
+      const [loadedApiKeys, loadedModels] = await Promise.all([
+        listOwnApiKeys(controller.signal),
+        listAvailableModels(controller.signal),
+      ])
+      if (!mounted || controller.signal.aborted || filterOptionsController !== controller) return
+      apiKeys.value = loadedApiKeys
+      models.value = loadedModels
+    }
+  } catch {
+    // The log query remains usable even when optional filter catalogs fail to load.
+  } finally {
+    if (mounted && filterOptionsController === controller) filterOptionsLoading.value = false
+    if (filterOptionsController === controller) filterOptionsController = undefined
   }
 }
 
@@ -188,12 +256,19 @@ function setDetailOpen(open: boolean): void {
   if (!open) selectedRequestId.value = null
 }
 
-function apiKeyLabel(prefix: string | null): string {
-  return prefix === null ? '无密钥' : `${prefix}…`
+function apiKeyLabel(name: string | null): string {
+  return name ?? '无密钥'
+}
+
+function apiKeyOptionLabel(apiKey: ApiKeyResponse): string {
+  if (!auth.isAdmin) return apiKey.name
+  const owner = users.value.find((user) => user.id === apiKey.user_id)
+  return owner === undefined ? apiKey.name : `${apiKey.name} · ${owner.email}`
 }
 
 onMounted(() => {
   void load()
+  void loadFilterOptions()
 })
 
 onBeforeUnmount(() => {
@@ -201,6 +276,8 @@ onBeforeUnmount(() => {
   loadGeneration += 1
   loadController?.abort()
   loadController = undefined
+  filterOptionsController?.abort()
+  filterOptionsController = undefined
 })
 </script>
 
@@ -220,13 +297,10 @@ onBeforeUnmount(() => {
 
     <section class="filter-panel" aria-labelledby="request-log-filter-title">
       <div class="filter-heading">
-        <div>
-          <h2 id="request-log-filter-title">搜索条件</h2>
-          <p>条件变化后从第一页重新查询。</p>
-        </div>
+        <h2 id="request-log-filter-title">筛选</h2>
         <div class="filter-actions">
-          <ElButton @click="clearFilters">清空条件</ElButton>
-          <ElButton type="primary" @click="applyFilters">
+          <ElButton size="small" @click="clearFilters">清空</ElButton>
+          <ElButton size="small" type="primary" @click="applyFilters">
             <ElIcon><Search /></ElIcon>
             查询
           </ElButton>
@@ -239,20 +313,32 @@ onBeforeUnmount(() => {
           <input v-model="filters.requestId" data-test="log-request-id" type="search" placeholder="输入完整请求 ID" @change="applyFilters">
         </label>
         <label v-if="auth.isAdmin">
-          <span>用户 ID</span>
-          <input v-model="filters.userId" data-test="log-user-id" type="number" min="1" placeholder="例如 2" @change="applyFilters">
+          <span>用户</span>
+          <select v-model="filters.userId" data-test="log-user-id" :disabled="filterOptionsLoading" @change="applyFilters">
+            <option value="">全部用户</option>
+            <option v-for="user in users" :key="user.id" :value="user.id">{{ user.email }}</option>
+          </select>
         </label>
         <label>
-          <span>密钥 ID</span>
-          <input v-model="filters.apiKeyId" data-test="log-api-key-id" type="number" min="1" placeholder="例如 31" @change="applyFilters">
+          <span>密钥</span>
+          <select v-model="filters.apiKeyId" data-test="log-api-key-id" :disabled="filterOptionsLoading" @change="applyFilters">
+            <option value="">全部密钥</option>
+            <option v-for="apiKey in apiKeys" :key="apiKey.id" :value="apiKey.id">{{ apiKeyOptionLabel(apiKey) }}</option>
+          </select>
         </label>
         <label>
-          <span>模型 ID</span>
-          <input v-model="filters.modelId" data-test="log-model-id" type="number" min="1" placeholder="例如 21" @change="applyFilters">
+          <span>模型</span>
+          <select v-model="filters.modelId" data-test="log-model-id" :disabled="filterOptionsLoading" @change="applyFilters">
+            <option value="">全部模型</option>
+            <option v-for="model in models" :key="model.id" :value="model.id">{{ model.display_name }}</option>
+          </select>
         </label>
-        <label>
-          <span>供应商 ID</span>
-          <input v-model="filters.providerId" data-test="log-provider-id" type="number" min="1" placeholder="例如 11" @change="applyFilters">
+        <label v-if="auth.isAdmin">
+          <span>供应商</span>
+          <select v-model="filters.providerId" data-test="log-provider-id" :disabled="filterOptionsLoading" @change="applyFilters">
+            <option value="">全部供应商</option>
+            <option v-for="provider in providers" :key="provider.id" :value="provider.id">{{ provider.name }}</option>
+          </select>
         </label>
         <label>
           <span>状态</span>
@@ -328,12 +414,11 @@ onBeforeUnmount(() => {
             <tr>
               <th v-if="auth.isAdmin">用户 / 密钥</th>
               <th v-else>密钥</th>
-              <th>模型 / 供应商 / 上游模型</th>
-              <th>入站 → 出站协议</th>
-              <th>传输 / 流式</th>
-              <th>状态 / HTTP</th>
+              <th v-if="auth.isAdmin">模型 / 供应商 / 上游模型</th>
+              <th v-else>模型</th>
+              <th>请求信息</th>
               <th>令牌</th>
-              <th>精确费用</th>
+              <th>{{ auth.isAdmin ? '用户费用 / 成本费用' : '费用' }}</th>
               <th>延迟 / 首个令牌</th>
               <th>错误代码</th>
               <th>创建时间</th>
@@ -345,32 +430,44 @@ onBeforeUnmount(() => {
               <td v-if="auth.isAdmin">
                 <div class="entity-cell">
                   <strong>{{ (log as RequestLogSummary).user_email }}</strong>
-                  <small>{{ apiKeyLabel(log.api_key_prefix) }}</small>
+                  <small>{{ apiKeyLabel(log.api_key_name) }}</small>
                 </div>
               </td>
-              <td v-else>{{ apiKeyLabel(log.api_key_prefix) }}</td>
+              <td v-else>{{ apiKeyLabel(log.api_key_name) }}</td>
               <td>
                 <div class="entity-cell">
                   <strong>{{ log.model_name ?? '已删除模型' }}</strong>
-                  <span>{{ log.provider_name ?? '已删除供应商' }}</span>
-                  <small>上游：{{ log.route_upstream_model ?? '已删除路由' }}</small>
+                  <template v-if="auth.isAdmin">
+                    <span>{{ (log as RequestLogSummary).provider_name ?? '已删除供应商' }}</span>
+                    <small>上游：{{ (log as RequestLogSummary).route_upstream_model ?? '已删除路由' }}</small>
+                  </template>
                 </div>
               </td>
-              <td>{{ log.inbound_protocol }} → {{ log.outbound_protocol ?? '无出站协议' }}</td>
-              <td>{{ log.transport }} / {{ log.stream ? '是' : '否' }}</td>
               <td>
-                <div class="status-cell">
-                  <ElTag effect="light" :type="log.status === 'completed' ? 'success' : log.status === 'failed' ? 'danger' : 'info'">
+                <div class="request-info-tags">
+                  <ElTag size="small" effect="plain">
+                    {{ protocolLabels[log.inbound_protocol] }} → {{ log.outbound_protocol === null ? '无出站协议' : protocolLabels[log.outbound_protocol] }}
+                  </ElTag>
+                  <ElTag size="small" effect="plain">{{ log.transport.toUpperCase() }}</ElTag>
+                  <ElTag size="small" effect="plain" :type="log.stream ? 'primary' : 'info'">
+                    {{ log.stream ? '流式' : '非流式' }}
+                  </ElTag>
+                  <ElTag size="small" effect="light" :type="statusTagType(log.status)">
                     {{ statusLabels[log.status] }}
                   </ElTag>
-                  <span>{{ log.http_status ?? '—' }}</span>
+                  <ElTag v-if="log.http_status !== null" size="small" effect="plain" :type="log.http_status >= 400 ? 'danger' : 'success'">
+                    HTTP {{ log.http_status }}
+                  </ElTag>
                 </div>
               </td>
               <td>
                 <div>{{ log.prompt_tokens }} / {{ log.completion_tokens }}</div>
                 <small>缓存 {{ log.cache_read_tokens }} / {{ log.cache_write_tokens }}</small>
               </td>
-              <td class="exact-value">{{ formatMoney(log.cost) }}</td>
+              <td class="exact-value">
+                <div>{{ formatMoney(log.cost) }}</div>
+                <small v-if="auth.isAdmin">成本 {{ formatMoney((log as RequestLogSummary).cost_amount ?? '0') }}</small>
+              </td>
               <td>{{ formatDuration(log.latency_ms) }} / {{ formatDuration(log.first_token_ms) }}</td>
               <td>{{ log.error_code ?? '—' }}</td>
               <td>{{ formatDateTime(log.created_at) }}</td>
@@ -413,7 +510,7 @@ onBeforeUnmount(() => {
 
 .filter-panel {
   margin-bottom: 1rem;
-  padding: 1rem 1.15rem;
+  padding: 0.7rem 0.85rem 0.8rem;
 }
 
 .filter-heading,
@@ -425,7 +522,6 @@ onBeforeUnmount(() => {
 }
 
 .filter-heading h2,
-.filter-heading p,
 .list-heading h2,
 .list-heading p {
   margin: 0;
@@ -436,7 +532,6 @@ onBeforeUnmount(() => {
   font-size: 1.05rem;
 }
 
-.filter-heading p,
 .list-heading p {
   margin-top: 0.2rem;
   color: var(--gateway-muted);
@@ -444,8 +539,7 @@ onBeforeUnmount(() => {
 }
 
 .filter-actions,
-.pagination,
-.status-cell {
+.pagination {
   display: flex;
   gap: 0.5rem;
   align-items: center;
@@ -453,27 +547,27 @@ onBeforeUnmount(() => {
 
 .filter-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(9rem, 1fr));
-  gap: 0.85rem;
-  margin-top: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.5rem 0.65rem;
+  margin-top: 0.6rem;
 }
 
 .filter-grid--compact {
-  grid-template-columns: repeat(4, minmax(9rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
 }
 
 .filter-grid label {
   display: grid;
-  gap: 0.35rem;
+  gap: 0.2rem;
   color: var(--gateway-muted);
-  font-size: 0.78rem;
+  font-size: 0.72rem;
 }
 
 .filter-grid input,
 .filter-grid select {
   width: 100%;
-  min-height: 2.35rem;
-  padding: 0.45rem 0.6rem;
+  min-height: 2rem;
+  padding: 0.3rem 0.5rem;
   color: var(--gateway-text);
   background: #fff;
   border: 1px solid #dcdfe6;
@@ -507,7 +601,7 @@ onBeforeUnmount(() => {
 
 .log-table {
   width: 100%;
-  min-width: 116rem;
+  min-width: 94rem;
   border-collapse: collapse;
 }
 
@@ -543,6 +637,13 @@ onBeforeUnmount(() => {
 
 .entity-cell small {
   color: var(--gateway-muted);
+}
+
+.request-info-tags {
+  display: flex;
+  max-width: 18rem;
+  flex-wrap: wrap;
+  gap: 0.3rem;
 }
 
 .table-skeleton {

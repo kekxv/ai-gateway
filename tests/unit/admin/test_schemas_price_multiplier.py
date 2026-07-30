@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from ai_gateway.catalog.schemas import (
     ModelCreate,
+    ModelPriceTierInput,
     ModelResponse,
     ModelUpdate,
     ProviderResponse,
@@ -50,11 +51,63 @@ class TestModelCachePrices:
             ModelUpdate(**{field: value})
 
 
-class TestProviderResponsePriceMultiplier:
-    """Tests for price_multiplier on ProviderResponse."""
+class TestModelPriceTiers:
+    def test_accepts_strictly_increasing_tiers_with_final_unbounded_bucket(self) -> None:
+        payload = ModelCreate(
+            canonical_name="tiered-model",
+            display_name="Tiered Model",
+            price_tiers=[
+                ModelPriceTierInput(
+                    max_input_tokens=272_000,
+                    input_price_per_million="1",
+                    output_price_per_million="2",
+                    cache_read_price_per_million="0.5",
+                    cache_write_price_per_million="0.75",
+                ),
+                ModelPriceTierInput(
+                    max_input_tokens=None,
+                    input_price_per_million="10",
+                    output_price_per_million="20",
+                    cache_read_price_per_million="5",
+                    cache_write_price_per_million="7.5",
+                ),
+            ],
+        )
 
-    def test_provider_response_includes_price_multiplier(self) -> None:
-        """ProviderResponse should include price_multiplier field."""
+        assert [tier.max_input_tokens for tier in payload.price_tiers] == [272_000, None]
+
+    @pytest.mark.parametrize(
+        "limits",
+        [
+            [272_000],
+            [None, 272_000],
+            [272_000, 272_000, None],
+            [300_000, 272_000, None],
+        ],
+    )
+    def test_rejects_missing_or_misordered_tier_boundaries(
+        self,
+        limits: list[int | None],
+    ) -> None:
+        with pytest.raises(ValidationError):
+            ModelUpdate(
+                price_tiers=[
+                    ModelPriceTierInput(
+                        max_input_tokens=limit,
+                        input_price_per_million="1",
+                        output_price_per_million="2",
+                        cache_read_price_per_million="0",
+                        cache_write_price_per_million="0",
+                    )
+                    for limit in limits
+                ]
+            )
+
+
+class TestProviderResponsePriceMultiplier:
+    """Tests for dual multipliers on ProviderResponse."""
+
+    def test_provider_response_includes_dual_multipliers(self) -> None:
         provider = ProviderResponse(
             id=1,
             name="test-provider",
@@ -64,10 +117,11 @@ class TestProviderResponsePriceMultiplier:
             model_sync_interval_seconds=300,
             last_model_sync_at=None,
             protocols=[],
-            price_multiplier=Decimal("1.50"),
+            cost_multiplier=Decimal("0.80"),
+            public_multiplier=Decimal("1.50"),
         )
-        assert hasattr(provider, "price_multiplier")
-        assert provider.price_multiplier == Decimal("1.50")
+        assert provider.cost_multiplier == Decimal("0.80")
+        assert provider.public_multiplier == Decimal("1.50")
 
     def test_provider_response_requires_price_multiplier(self) -> None:
         """ProviderResponse must require price_multiplier (no default)."""
@@ -106,6 +160,7 @@ class TestModelResponsePriceMultiplier:
             created_at=now,
             updated_at=now,
             price_multiplier=Decimal("2.00"),
+            price_tiers=[],
         )
         assert hasattr(model, "price_multiplier")
         assert model.price_multiplier == Decimal("2.00")
@@ -131,40 +186,43 @@ class TestModelResponsePriceMultiplier:
                 routing_strategy="weighted_random",
                 created_at=now,
                 updated_at=now,
+                price_tiers=[],
             )
 
 
 class TestProviderUpdatePriceMultiplier:
-    """Tests for price_multiplier on ProviderUpdate."""
+    """Tests for dual multipliers on ProviderUpdate."""
 
     def test_provider_update_accepts_price_multiplier(self) -> None:
         """ProviderUpdate should accept price_multiplier."""
         update = ProviderUpdate(price_multiplier=Decimal("1.50"))
-        assert update.price_multiplier == Decimal("1.50")
+        assert update.cost_multiplier == Decimal("1.50")
+        assert update.public_multiplier is None
 
     def test_provider_update_price_multiplier_optional(self) -> None:
         """ProviderUpdate price_multiplier should be optional."""
         update = ProviderUpdate()
-        assert update.price_multiplier is None
+        assert update.cost_multiplier is None
+        assert update.public_multiplier is None
 
     def test_provider_update_validates_range(self) -> None:
         """ProviderUpdate should validate price_multiplier range [0.10, 10.00]."""
         # Valid boundary values
-        ProviderUpdate(price_multiplier=Decimal("0.10"))
-        ProviderUpdate(price_multiplier=Decimal("1.00"))
-        ProviderUpdate(price_multiplier=Decimal("10.00"))
+        ProviderUpdate(cost_multiplier=Decimal("0.10"))
+        ProviderUpdate(public_multiplier=Decimal("1.00"))
+        ProviderUpdate(public_multiplier=Decimal("10.00"))
 
         # Invalid below lower bound
         with pytest.raises(ValidationError):
-            ProviderUpdate(price_multiplier=Decimal("0.09"))
+            ProviderUpdate(cost_multiplier=Decimal("0.09"))
 
         # Invalid above upper bound
         with pytest.raises(ValidationError):
-            ProviderUpdate(price_multiplier=Decimal("10.01"))
+            ProviderUpdate(public_multiplier=Decimal("10.01"))
 
         # Invalid negative
         with pytest.raises(ValidationError):
-            ProviderUpdate(price_multiplier=Decimal("-1.00"))
+            ProviderUpdate(cost_multiplier=Decimal("-1.00"))
 
 
 class TestModelUpdatePriceMultiplier:

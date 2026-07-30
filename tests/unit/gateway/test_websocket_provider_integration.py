@@ -96,7 +96,8 @@ class TestWebSocketProviderIntegration:
             id=42,
             name="ws-test-provider",
             credential_encrypted=b"enc",
-            price_multiplier=Decimal("2.00"),
+            public_multiplier=Decimal("2.00"),
+            cost_multiplier=Decimal("0.80"),
         )
         cycle = WebSocketBillingCycle(
             billing=billing,  # type: ignore[arg-type]
@@ -131,7 +132,8 @@ class TestWebSocketProviderIntegration:
             id=10,
             name="connection-provider",
             credential_encrypted=b"enc",
-            price_multiplier=Decimal("1.50"),
+            public_multiplier=Decimal("1.50"),
+            cost_multiplier=Decimal("0.90"),
         )
 
         cycle = WebSocketBillingCycle(
@@ -165,7 +167,8 @@ class TestWebSocketProviderIntegration:
             id=99,
             name="multi-checkpoint-provider",
             credential_encrypted=b"enc",
-            price_multiplier=Decimal("3.00"),
+            public_multiplier=Decimal("3.00"),
+            cost_multiplier=Decimal("0.70"),
         )
         cycle = WebSocketBillingCycle(
             billing=billing,  # type: ignore[arg-type]
@@ -227,3 +230,34 @@ class TestWebSocketProviderIntegration:
         assert len(billing.settlements) >= 1
         # When no provider is given, settle_request should receive provider=None
         assert billing.settlements[0].get("provider") is None
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_passes_public_charge_and_platform_cost(self) -> None:
+        billing = FakeBillingWithProvider(reservation_amount=Decimal("100"))
+        usage = WebSocketUsage(Protocol.OPENAI)
+        provider = Provider(
+            id=77,
+            name="dual-cost-provider",
+            credential_encrypted=b"enc",
+            public_multiplier=Decimal("2.00"),
+            cost_multiplier=Decimal("0.80"),
+        )
+        cycle = WebSocketBillingCycle(
+            billing=billing,  # type: ignore[arg-type]
+            user_id=7,
+            model=_PricedModel(),  # type: ignore[arg-type]
+            billing_key="websocket:dual-cost",
+            usage=usage,
+            max_output_tokens=8,
+            provider=provider,
+        )
+
+        await cycle.reserve_initial(estimated_input_tokens=0)
+        usage.observe_upstream(
+            '{"type":"response.done","response":{"id":"dual","usage":'
+            '{"input_tokens":1000000,"output_tokens":0}}}'
+        )
+        await cycle.finalize()
+
+        assert billing.settlements[0]["cost"] == Decimal("2.00000000")
+        assert billing.settlements[0]["cost_amount"] == Decimal("0.80000000")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import event
@@ -208,6 +209,38 @@ async def test_select_route_uses_one_unlocked_query_for_eligible_route(
     assert len(statements) == 1
     assert statements[0].lstrip().upper().startswith("SELECT")
     assert "FOR UPDATE" not in statements[0].upper()
+
+
+async def test_maximum_eligible_public_multiplier_uses_scoped_enabled_routes(
+    session: AsyncSession,
+) -> None:
+    model, first_route = await _add_route(session, suffix="public-multiplier-first")
+    first_route.provider.public_multiplier = Decimal("1.25")
+    second_provider = Provider(
+        name="provider-public-multiplier-second",
+        credential_encrypted=b"secret",
+        public_multiplier=Decimal("2.50"),
+    )
+    second_protocol = ProviderProtocol(
+        provider=second_provider,
+        protocol=Protocol.OPENAI,
+        base_url="https://public-multiplier-second.invalid/v1",
+    )
+    second_route = ModelRoute(
+        model_id=model.model_id,
+        provider=second_provider,
+        upstream_model="upstream-public-multiplier-second",
+        weight=100,
+    )
+    session.add_all([second_protocol, second_route])
+    await session.flush()
+
+    multiplier = await Router(session).maximum_eligible_public_multiplier(
+        model.model_id,
+        principal(ApiKeyScope.PROVIDERS, provider_ids=frozenset({first_route.provider_id})),
+    )
+
+    assert multiplier == Decimal("1.25")
 
 
 @pytest.mark.parametrize(

@@ -103,7 +103,7 @@ const userBalanceCards = computed(() => {
 const usageCards = computed(() => {
   const data = auth.isAdmin ? adminSummary.value : userSummary.value
   if (data === null) return []
-  return [
+  const cards = [
     { label: '24 小时请求', value: formatInteger(data.requests_24h) },
     {
       label: '失败率',
@@ -111,9 +111,18 @@ const usageCards = computed(() => {
     },
     { label: '提示词令牌', value: formatInteger(data.prompt_tokens_24h) },
     { label: '补全令牌', value: formatInteger(data.completion_tokens_24h) },
-    { label: '24 小时费用', value: formatMoney(data.cost_24h) },
+    { label: auth.isAdmin ? '用户费用' : '24 小时费用', value: formatMoney(data.cost_24h) },
     { label: '平均延迟', value: formatDuration(data.average_latency_ms_24h) },
   ]
+  if (auth.isAdmin && adminSummary.value !== null) {
+    cards.splice(
+      cards.length - 1,
+      0,
+      { label: '成本费用', value: formatMoney(adminSummary.value.cost_amount_24h) },
+      { label: '毛利润', value: formatMoney(adminSummary.value.gross_profit_24h) },
+    )
+  }
+  return cards
 })
 
 function isZeroDecimal(value: string): boolean {

@@ -25,6 +25,7 @@ from ai_gateway.billing.service import (
     _reservation_fingerprint,
     _reservation_recovery,
     _settlement_cost,
+    _settlement_costs,
     _settlement_fingerprint,
 )
 from ai_gateway.billing.service import (
@@ -68,12 +69,17 @@ def _make_model(*, price_multiplier: Decimal = Decimal("1.50")) -> Model:
     return model
 
 
-def _make_provider(*, price_multiplier: Decimal = Decimal("2.00")) -> Provider:
+def _make_provider(
+    *,
+    public_multiplier: Decimal = Decimal("2.00"),
+    cost_multiplier: Decimal = Decimal("0.80"),
+) -> Provider:
     return Provider(
         id=1,
         name="test-provider",
         enabled=True,
-        price_multiplier=price_multiplier,
+        public_multiplier=public_multiplier,
+        cost_multiplier=cost_multiplier,
         credential_encrypted=b"fake",
     )
 
@@ -151,6 +157,42 @@ class TestReserveWithMultipliers:
     @patch("ai_gateway.billing.service._locked_account_for_user", new_callable=AsyncMock)
     @patch("ai_gateway.billing.service.get_effective_multipliers")
     @patch("ai_gateway.billing.service.calculate_cost")
+    async def test_reserve_uses_maximum_eligible_public_multiplier_override(
+        self,
+        mock_calculate_cost: MagicMock,
+        mock_get_multipliers: MagicMock,
+        mock_locked_account: AsyncMock,
+    ) -> None:
+        model = _make_model(price_multiplier=Decimal("1.50"))
+        mock_calculate_cost.return_value = Decimal("0.37500000")
+        mock_get_multipliers.return_value = (
+            Decimal("1.50"),
+            Decimal("1.00"),
+            Decimal("1.00"),
+        )
+        mock_locked_account.return_value = _make_account()
+        mock_session = _build_session_mock(scalar_returns=[None, None])
+        service = BillingService(_build_session_factory(mock_session))
+
+        await service.reserve_balance(
+            user_id=1,
+            model=model,
+            estimated_input_tokens=1000,
+            max_output_tokens=500,
+            idempotency_key=f"reserve-public-max-{uuid4().hex[:8]}",
+            provider_public_multiplier=Decimal("2.50"),
+        )
+
+        mock_calculate_cost.assert_called_once_with(
+            model,
+            CanonicalUsage(1000, 500),
+            model_multiplier=Decimal("1.50"),
+            provider_multiplier=Decimal("2.50"),
+        )
+
+    @patch("ai_gateway.billing.service._locked_account_for_user", new_callable=AsyncMock)
+    @patch("ai_gateway.billing.service.get_effective_multipliers")
+    @patch("ai_gateway.billing.service.calculate_cost")
     async def test_reserve_includes_model_multiplier(
         self,
         mock_calculate_cost: MagicMock,
@@ -159,9 +201,13 @@ class TestReserveWithMultipliers:
     ) -> None:
         """Reserve should pass model multiplier to calculate_cost."""
         model = _make_model(price_multiplier=Decimal("1.50"))
-        provider = _make_provider(price_multiplier=Decimal("2.00"))
+        provider = _make_provider(public_multiplier=Decimal("2.00"))
         mock_calculate_cost.return_value = Decimal("0.10000000")
-        mock_get_multipliers.return_value = (Decimal("1.50"), Decimal("2.00"))
+        mock_get_multipliers.return_value = (
+            Decimal("1.50"),
+            Decimal("2.00"),
+            Decimal("0.80"),
+        )
         mock_locked_account.return_value = _make_account()
         mock_session = _build_session_mock(scalar_returns=[None, None])
         service = BillingService(_build_session_factory(mock_session))
@@ -196,7 +242,11 @@ class TestReserveWithMultipliers:
         """When provider is None, helper should still be called with None."""
         model = _make_model(price_multiplier=Decimal("1.50"))
         mock_calculate_cost.return_value = Decimal("0.10000000")
-        mock_get_multipliers.return_value = (Decimal("1.50"), Decimal("1.00"))
+        mock_get_multipliers.return_value = (
+            Decimal("1.50"),
+            Decimal("1.00"),
+            Decimal("1.00"),
+        )
         mock_locked_account.return_value = _make_account()
         mock_session = _build_session_mock(scalar_returns=[None, None])
         service = BillingService(_build_session_factory(mock_session))
@@ -228,10 +278,14 @@ class TestReserveWithMultipliers:
     ) -> None:
         """Both multipliers are passed to calculate_cost for multiplication."""
         model = _make_model(price_multiplier=Decimal("1.50"))
-        provider = _make_provider(price_multiplier=Decimal("2.00"))
+        provider = _make_provider(public_multiplier=Decimal("2.00"))
         # Effective multiplier: 1.50 * 2.00 = 3.00
         mock_calculate_cost.return_value = Decimal("0.30000000")
-        mock_get_multipliers.return_value = (Decimal("1.50"), Decimal("2.00"))
+        mock_get_multipliers.return_value = (
+            Decimal("1.50"),
+            Decimal("2.00"),
+            Decimal("0.80"),
+        )
         mock_locked_account.return_value = _make_account()
         mock_session = _build_session_mock(scalar_returns=[None, None])
         service = BillingService(_build_session_factory(mock_session))
@@ -286,7 +340,7 @@ class TestSettleWithMultipliers:
     async def test_settle_includes_provider_multiplier(self) -> None:
         """Settle should call calculate_cost with provider multiplier."""
         model = _make_model(price_multiplier=Decimal("1.00"))
-        provider = _make_provider(price_multiplier=Decimal("2.00"))
+        provider = _make_provider(public_multiplier=Decimal("2.00"))
         usage = CanonicalUsage(1000, 500)
         request_id = str(uuid4())
 
@@ -297,7 +351,7 @@ class TestSettleWithMultipliers:
             ) as mock_calc,
             patch(
                 "ai_gateway.billing.service.get_effective_multipliers",
-                return_value=(Decimal("1.00"), Decimal("2.00")),
+                return_value=(Decimal("1.00"), Decimal("2.00"), Decimal("0.80")),
             ) as mock_get,
         ):
             reservation_entry = _make_ledger_entry(
@@ -320,12 +374,13 @@ class TestSettleWithMultipliers:
             )
 
         mock_get.assert_called_once_with(model, provider)
-        mock_calc.assert_called_once_with(
+        mock_calc.assert_any_call(
             model,
             usage,
             model_multiplier=Decimal("1.00"),
             provider_multiplier=Decimal("2.00"),
         )
+        assert mock_calc.call_count == 2
         assert isinstance(result, SettlementResult)
 
     async def test_settle_with_none_provider_defaults_to_one(self) -> None:
@@ -341,7 +396,7 @@ class TestSettleWithMultipliers:
             ) as mock_calc,
             patch(
                 "ai_gateway.billing.service.get_effective_multipliers",
-                return_value=(Decimal("1.50"), Decimal("1.00")),
+                return_value=(Decimal("1.50"), Decimal("1.00"), Decimal("1.00")),
             ) as mock_get,
         ):
             reservation_entry = _make_ledger_entry(
@@ -363,17 +418,18 @@ class TestSettleWithMultipliers:
             )
 
         mock_get.assert_called_once_with(model, None)
-        mock_calc.assert_called_once_with(
+        mock_calc.assert_any_call(
             model,
             usage,
             model_multiplier=Decimal("1.50"),
             provider_multiplier=Decimal("1.00"),
         )
+        assert mock_calc.call_count == 2
 
     async def test_both_multipliers_applied_multiplicatively(self) -> None:
         """Both model and provider multipliers applied in settle."""
         model = _make_model(price_multiplier=Decimal("1.50"))
-        provider = _make_provider(price_multiplier=Decimal("2.00"))
+        provider = _make_provider(public_multiplier=Decimal("2.00"))
         usage = CanonicalUsage(1000, 500)
         request_id = str(uuid4())
 
@@ -384,7 +440,7 @@ class TestSettleWithMultipliers:
             ) as mock_calc,
             patch(
                 "ai_gateway.billing.service.get_effective_multipliers",
-                return_value=(Decimal("1.50"), Decimal("2.00")),
+                return_value=(Decimal("1.50"), Decimal("2.00"), Decimal("0.80")),
             ) as mock_get,
         ):
             reservation_entry = _make_ledger_entry(
@@ -407,12 +463,19 @@ class TestSettleWithMultipliers:
             )
 
         mock_get.assert_called_once_with(model, provider)
-        mock_calc.assert_called_once_with(
+        mock_calc.assert_any_call(
             model,
             usage,
             model_multiplier=Decimal("1.50"),
             provider_multiplier=Decimal("2.00"),
         )
+        mock_calc.assert_any_call(
+            model,
+            usage,
+            model_multiplier=Decimal("1.50"),
+            provider_multiplier=Decimal("0.80"),
+        )
+        assert mock_calc.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -423,10 +486,33 @@ class TestSettleWithMultipliers:
 class TestSettlementCostHelper:
     """Verify _settlement_cost helper handles provider multiplier."""
 
+    def test_public_charge_and_platform_cost_use_independent_multipliers(self) -> None:
+        model = Model(
+            canonical_name="dual-priced-model",
+            display_name="Dual priced model",
+            input_price_per_million=Decimal("10.00"),
+            output_price_per_million=Decimal("0"),
+            price_multiplier=Decimal("1.50"),
+        )
+        provider = Provider(
+            name="dual-priced-provider",
+            credential_encrypted=b"fake",
+            public_multiplier=Decimal("2.00"),
+            cost_multiplier=Decimal("0.80"),
+        )
+
+        assert _settlement_costs(
+            model=model,
+            usage=CanonicalUsage(1_000_000, 0),
+            cost=None,
+            cost_amount=None,
+            provider=provider,
+        ) == (Decimal("30.00000000"), Decimal("12.00000000"))
+
     def test_settlement_cost_with_provider_multiplier(self) -> None:
         """_settlement_cost should pass provider to calculate_cost."""
         model = _make_model()
-        provider = _make_provider(price_multiplier=Decimal("2.00"))
+        provider = _make_provider(public_multiplier=Decimal("2.00"))
         usage = CanonicalUsage(1000, 500)
 
         with (
@@ -436,18 +522,19 @@ class TestSettlementCostHelper:
             ) as mock_calc,
             patch(
                 "ai_gateway.billing.service.get_effective_multipliers",
-                return_value=(Decimal("1.50"), Decimal("2.00")),
+                return_value=(Decimal("1.50"), Decimal("2.00"), Decimal("0.80")),
             ) as mock_get,
         ):
             result = _settlement_cost(model=model, usage=usage, cost=None, provider=provider)
 
         mock_get.assert_called_once_with(model, provider)
-        mock_calc.assert_called_once_with(
+        mock_calc.assert_any_call(
             model,
             usage,
             model_multiplier=Decimal("1.50"),
             provider_multiplier=Decimal("2.00"),
         )
+        assert mock_calc.call_count == 2
         assert result == Decimal("0.20000000")
 
     def test_settlement_cost_with_no_provider(self) -> None:
@@ -462,18 +549,19 @@ class TestSettlementCostHelper:
             ) as mock_calc,
             patch(
                 "ai_gateway.billing.service.get_effective_multipliers",
-                return_value=(Decimal("1.50"), Decimal("1.00")),
+                return_value=(Decimal("1.50"), Decimal("1.00"), Decimal("1.00")),
             ) as mock_get,
         ):
             result = _settlement_cost(model=model, usage=usage, cost=None, provider=None)
 
         mock_get.assert_called_once_with(model, None)
-        mock_calc.assert_called_once_with(
+        mock_calc.assert_any_call(
             model,
             usage,
             model_multiplier=Decimal("1.50"),
             provider_multiplier=Decimal("1.00"),
         )
+        assert mock_calc.call_count == 2
         assert result == Decimal("0.15000000")
 
     def test_settlement_cost_ignores_multipliers_when_cost_provided(self) -> None:
@@ -526,7 +614,11 @@ class TestBackwardCompatibility:
         """reserve_balance without provider should default multipliers to 1.00."""
         model = _make_model(price_multiplier=Decimal("1.00"))
         mock_calculate_cost.return_value = Decimal("0.05000000")
-        mock_get_multipliers.return_value = (Decimal("1.00"), Decimal("1.00"))
+        mock_get_multipliers.return_value = (
+            Decimal("1.00"),
+            Decimal("1.00"),
+            Decimal("1.00"),
+        )
         mock_locked_account.return_value = _make_account()
         mock_session = _build_session_mock(scalar_returns=[None, None])
         service = BillingService(_build_session_factory(mock_session))
@@ -561,7 +653,7 @@ class TestBackwardCompatibility:
             ) as mock_calc,
             patch(
                 "ai_gateway.billing.service.get_effective_multipliers",
-                return_value=(Decimal("1.00"), Decimal("1.00")),
+                return_value=(Decimal("1.00"), Decimal("1.00"), Decimal("1.00")),
             ) as mock_get,
         ):
             reservation_entry = _make_ledger_entry(
@@ -583,12 +675,13 @@ class TestBackwardCompatibility:
             )
 
         mock_get.assert_called_once_with(model, None)
-        mock_calc.assert_called_once_with(
+        mock_calc.assert_any_call(
             model,
             usage,
             model_multiplier=Decimal("1.00"),
             provider_multiplier=Decimal("1.00"),
         )
+        assert mock_calc.call_count == 2
         assert isinstance(result, SettlementResult)
 
     def test_recovered_model_without_price_multiplier_defaults_to_one(self) -> None:
@@ -614,7 +707,7 @@ class TestBackwardCompatibility:
 
         with patch(
             "ai_gateway.billing.service.get_effective_multipliers",
-            return_value=(Decimal("1.00"), Decimal("1.00")),
+            return_value=(Decimal("1.00"), Decimal("1.00"), Decimal("1.00")),
         ) as mock_get:
             result = _settlement_cost(
                 model=recovered,
@@ -629,6 +722,22 @@ class TestBackwardCompatibility:
 
 
 class TestCacheRecoveryMetadata:
+    def test_recovery_round_trips_public_charge_and_platform_cost(self) -> None:
+        recovery = ReservationRecovery(
+            settlement_key="dual-cost-recovery",
+            usage=CanonicalUsage(10, 5),
+            usage_source=UsageSource.PROVIDER,
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            cost=Decimal("30.00000000"),
+            cost_amount=Decimal("12.00000000"),
+        )
+
+        restored = _reservation_recovery(_recovery_metadata(recovery))
+
+        assert restored is not None
+        assert restored.cost == Decimal("30.00000000")
+        assert restored.cost_amount == Decimal("12.00000000")
+
     def test_recovery_usage_round_trips_cache_buckets(self) -> None:
         recovery = ReservationRecovery(
             settlement_key="cache-recovery",

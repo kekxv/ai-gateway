@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal
-from typing import Annotated, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
 import orjson
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,16 +18,27 @@ from ai_gateway.auth.service import raise_auth_error
 from ai_gateway.catalog.schemas import (
     BaseUrl,
     CatalogName,
+    ModelPriceTierInput,
     Price,
     PriceMultiplier,
     ProviderCredentialObject,
     RoutingStrategy,
     WebsocketUrl,
+    _provider_multiplier_fields,
+    _validate_price_tiers,
 )
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import Protocol, RouteRuntimeState, RouteSource
 from ai_gateway.core.security import decrypt_secret, encrypt_secret
-from ai_gateway.db.models import Model, ModelAlias, ModelRoute, Provider, ProviderProtocol, User
+from ai_gateway.db.models import (
+    Model,
+    ModelAlias,
+    ModelPriceTier,
+    ModelRoute,
+    Provider,
+    ProviderProtocol,
+    User,
+)
 from ai_gateway.db.session import get_session
 
 router = APIRouter(prefix="/admin/configuration", tags=["admin-configuration"])
@@ -57,8 +68,14 @@ class CatalogProvider(BaseModel):
     enabled: bool = True
     auto_load_models: bool = False
     model_sync_interval_seconds: int = Field(ge=1)
-    price_multiplier: PriceMultiplier = Decimal("1.00")
+    cost_multiplier: PriceMultiplier = Decimal("1.00")
+    public_multiplier: PriceMultiplier = Decimal("1.00")
     protocols: list[CatalogProtocol] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_price_multiplier(cls, value: Any) -> Any:
+        return _provider_multiplier_fields(value)
 
 
 class CatalogAlias(BaseModel):
@@ -93,6 +110,12 @@ class CatalogModel(BaseModel):
     routing_strategy: RoutingStrategy = "weighted_random"
     aliases: list[CatalogAlias] = Field(default_factory=list)
     routes: list[CatalogRoute] = Field(default_factory=list)
+    price_tiers: list[ModelPriceTierInput] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_price_tiers(self) -> CatalogModel:
+        _validate_price_tiers(self.price_tiers)
+        return self
 
 
 class CatalogBundle(BaseModel):
@@ -131,6 +154,7 @@ async def export_catalog_bundle(
             .options(
                 selectinload(Model.aliases),
                 selectinload(Model.routes).selectinload(ModelRoute.provider),
+                selectinload(Model.price_tiers),
             )
             .order_by(Model.canonical_name)
         )
@@ -302,7 +326,8 @@ async def _merge_catalog_bundle(
         provider.enabled = provider_payload.enabled
         provider.auto_load_models = provider_payload.auto_load_models
         provider.model_sync_interval_seconds = provider_payload.model_sync_interval_seconds
-        provider.price_multiplier = provider_payload.price_multiplier
+        provider.cost_multiplier = provider_payload.cost_multiplier
+        provider.public_multiplier = provider_payload.public_multiplier
         known_protocols = {(item.protocol, item.base_url): item for item in provider.protocols}
         for protocol_payload in provider_payload.protocols:
             key = (protocol_payload.protocol, protocol_payload.base_url)
@@ -350,7 +375,7 @@ async def _merge_catalog_bundle(
         for model in (
             await session.scalars(
                 select(Model)
-                .options(selectinload(Model.aliases))
+                .options(selectinload(Model.aliases), selectinload(Model.price_tiers))
                 .where(Model.canonical_name.in_([item.canonical_name for item in bundle.models]))
             )
         ).all()
@@ -377,6 +402,22 @@ async def _merge_catalog_bundle(
         model.price_multiplier = model_payload.price_multiplier
         model.enabled = model_payload.enabled
         model.routing_strategy = model_payload.routing_strategy
+        model.price_tiers = [
+            ModelPriceTier(
+                max_input_tokens=tier.max_input_tokens,
+                input_price_per_million=tier.input_price_per_million,
+                output_price_per_million=tier.output_price_per_million,
+                cache_read_price_per_million=tier.cache_read_price_per_million,
+                cache_write_price_per_million=tier.cache_write_price_per_million,
+            )
+            for tier in model_payload.price_tiers
+        ]
+        if model_payload.price_tiers:
+            first_tier = model_payload.price_tiers[0]
+            model.input_price_per_million = first_tier.input_price_per_million
+            model.output_price_per_million = first_tier.output_price_per_million
+            model.cache_read_price_per_million = first_tier.cache_read_price_per_million
+            model.cache_write_price_per_million = first_tier.cache_write_price_per_million
         aliases = {alias.alias: alias for alias in model.aliases}
         for alias_payload in model_payload.aliases:
             alias = aliases.get(alias_payload.alias)
@@ -490,7 +531,8 @@ def _catalog_provider(
         enabled=provider.enabled,
         auto_load_models=provider.auto_load_models,
         model_sync_interval_seconds=provider.model_sync_interval_seconds,
-        price_multiplier=provider.price_multiplier,
+        cost_multiplier=provider.cost_multiplier,
+        public_multiplier=provider.public_multiplier,
         protocols=[
             CatalogProtocol(
                 protocol=protocol.protocol,
@@ -539,6 +581,22 @@ def _catalog_model(model: Model) -> CatalogModel:
             for route in sorted(
                 model.routes,
                 key=lambda item: item.provider.name,
+            )
+        ],
+        price_tiers=[
+            ModelPriceTierInput(
+                max_input_tokens=tier.max_input_tokens,
+                input_price_per_million=tier.input_price_per_million,
+                output_price_per_million=tier.output_price_per_million,
+                cache_read_price_per_million=tier.cache_read_price_per_million,
+                cache_write_price_per_million=tier.cache_write_price_per_million,
+            )
+            for tier in sorted(
+                model.price_tiers,
+                key=lambda item: (
+                    item.max_input_tokens is None,
+                    item.max_input_tokens or 0,
+                ),
             )
         ],
     )

@@ -65,7 +65,8 @@ const customAuthHeader = ref('')
 const enabled = ref(true)
 const autoLoadModels = ref(false)
 const syncInterval = ref<number | null>(3600)
-const priceMultiplier = ref(1.0)
+const costMultiplier = ref(1.0)
+const publicMultiplier = ref(1.0)
 const protocols = ref<ProtocolRow[]>([])
 const nameError = ref('')
 const advancedCredentialError = ref('')
@@ -120,7 +121,8 @@ function resetForm(): void {
   enabled.value = provider?.enabled ?? true
   autoLoadModels.value = provider?.auto_load_models ?? false
   syncInterval.value = provider?.model_sync_interval_seconds ?? 3600
-  priceMultiplier.value = provider?.price_multiplier ?? 1.0
+  costMultiplier.value = provider?.cost_multiplier ?? 1.0
+  publicMultiplier.value = provider?.public_multiplier ?? 1.0
   protocols.value =
     provider === null
       ? [newProtocolRow()]
@@ -386,7 +388,8 @@ function submitForm(): void {
       auto_load_models: autoLoadModels.value,
       model_sync_interval_seconds: interval,
       protocols: protocolPayload,
-      price_multiplier: priceMultiplier.value,
+      cost_multiplier: costMultiplier.value,
+      public_multiplier: publicMultiplier.value,
     }
     if (credential !== undefined) payload.credential = credential
     emit('submit', payload)
@@ -406,8 +409,11 @@ function submitForm(): void {
     payload.model_sync_interval_seconds = interval
   }
   if (protocolsChanged()) payload.protocols = protocolPayload
-  if (priceMultiplier.value !== provider.price_multiplier) {
-    payload.price_multiplier = priceMultiplier.value
+  if (costMultiplier.value !== provider.cost_multiplier) {
+    payload.cost_multiplier = costMultiplier.value
+  }
+  if (publicMultiplier.value !== provider.public_multiplier) {
+    payload.public_multiplier = publicMultiplier.value
   }
   emit('submit', payload)
 }
@@ -453,13 +459,13 @@ function submitForm(): void {
             />
           </ElFormItem>
           <ElFormItem
-            data-test="price-multiplier-field"
-            data-validation="price-multiplier"
-            label="价格倍率"
+            data-test="cost-multiplier-field"
+            data-validation="cost-multiplier"
+            label="成本倍率"
           >
             <ElInputNumber
-              v-model="priceMultiplier"
-              data-test="provider-price-multiplier"
+              v-model="costMultiplier"
+              data-test="provider-cost-multiplier"
               :min="0.10"
               :max="10.00"
               :step="0.1"
@@ -467,8 +473,24 @@ function submitForm(): void {
               controls-position="right"
             />
             <div class="form-help">
-              应用于该供应商所有模型的价格倍率（0.10 ~ 10.00）
+              用于计算平台实际成本（0.10 ~ 10.00）
             </div>
+          </ElFormItem>
+          <ElFormItem
+            data-test="public-multiplier-field"
+            data-validation="public-multiplier"
+            label="公开倍率"
+          >
+            <ElInputNumber
+              v-model="publicMultiplier"
+              data-test="provider-public-multiplier"
+              :min="0.10"
+              :max="10.00"
+              :step="0.1"
+              :precision="2"
+              controls-position="right"
+            />
+            <div class="form-help">用于用户价格展示与账户扣费（0.10 ~ 10.00）</div>
           </ElFormItem>
         </div>
 

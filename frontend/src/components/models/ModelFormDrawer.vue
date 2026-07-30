@@ -20,12 +20,22 @@ import 'element-plus/theme-chalk/el-input-number.css'
 import 'element-plus/theme-chalk/el-overlay.css'
 import 'element-plus/theme-chalk/el-switch.css'
 
-import type { ModelCreate, ModelResponse, ModelUpdate } from '@/api/types'
+import type { ModelCreate, ModelPriceTierInput, ModelResponse, ModelUpdate } from '@/api/types'
 
 interface AliasRow {
   key: number
   alias: string
   enabled: boolean
+  error: string
+}
+
+interface PriceTierRow {
+  key: number
+  maxInputTokens: number | null
+  inputPrice: string
+  outputPrice: string
+  cacheReadPrice: string
+  cacheWritePrice: string
   error: string
 }
 
@@ -52,6 +62,7 @@ const cacheWritePrice = ref('0')
 const priceMultiplier = ref(1.0)
 const enabled = ref(true)
 const aliases = ref<AliasRow[]>([])
+const priceTiers = ref<PriceTierRow[]>([])
 const canonicalNameError = ref('')
 const displayNameError = ref('')
 const inputPriceError = ref('')
@@ -60,6 +71,7 @@ const cacheReadPriceError = ref('')
 const cacheWritePriceError = ref('')
 const formContent = ref<HTMLElement | null>(null)
 let nextAliasKey = 1
+let nextTierKey = 1
 
 const editing = computed(() => props.model !== null)
 const drawerTitle = computed(() => (editing.value ? '编辑模型' : '新建模型'))
@@ -120,6 +132,7 @@ function resetErrors(): void {
   cacheReadPriceError.value = ''
   cacheWritePriceError.value = ''
   for (const row of aliases.value) row.error = ''
+  for (const row of priceTiers.value) row.error = ''
 }
 
 function clearDraft(): void {
@@ -132,6 +145,7 @@ function clearDraft(): void {
   priceMultiplier.value = 1.0
   enabled.value = true
   aliases.value = []
+  priceTiers.value = []
   resetErrors()
 }
 
@@ -150,6 +164,16 @@ function resetForm(): void {
       key: nextAliasKey++,
       alias: alias.alias,
       enabled: alias.enabled,
+      error: '',
+    })) ?? []
+  priceTiers.value =
+    model?.price_tiers?.map((tier) => ({
+      key: nextTierKey++,
+      maxInputTokens: tier.max_input_tokens,
+      inputPrice: normalizeDecimalInput(tier.input_price_per_million),
+      outputPrice: normalizeDecimalInput(tier.output_price_per_million),
+      cacheReadPrice: normalizeDecimalInput(tier.cache_read_price_per_million),
+      cacheWritePrice: normalizeDecimalInput(tier.cache_write_price_per_million),
       error: '',
     })) ?? []
   resetErrors()
@@ -175,6 +199,26 @@ function addAlias(): void {
 
 function removeAlias(index: number): void {
   aliases.value.splice(index, 1)
+}
+
+function addPriceTier(): void {
+  const row: PriceTierRow = {
+    key: nextTierKey++,
+    maxInputTokens: null,
+    inputPrice: inputPrice.value,
+    outputPrice: outputPrice.value,
+    cacheReadPrice: cacheReadPrice.value,
+    cacheWritePrice: cacheWritePrice.value,
+    error: '',
+  }
+  if (priceTiers.value.length === 0) priceTiers.value.push(row)
+  else priceTiers.value.splice(priceTiers.value.length - 1, 0, row)
+}
+
+function removePriceTier(index: number): void {
+  priceTiers.value.splice(index, 1)
+  const last = priceTiers.value.at(-1)
+  if (last !== undefined) last.maxInputTokens = null
 }
 
 function requestClose(): void {
@@ -213,6 +257,37 @@ function aliasesChanged(model: ModelResponse): boolean {
   })
 }
 
+function tierPayload(): ModelPriceTierInput[] {
+  return priceTiers.value.map((row, index) => ({
+    max_input_tokens: index === priceTiers.value.length - 1 ? null : row.maxInputTokens,
+    input_price_per_million: row.inputPrice,
+    output_price_per_million: row.outputPrice,
+    cache_read_price_per_million: row.cacheReadPrice,
+    cache_write_price_per_million: row.cacheWritePrice,
+  }))
+}
+
+function priceTiersChanged(model: ModelResponse): boolean {
+  const original = model.price_tiers ?? []
+  const current = tierPayload()
+  if (original.length !== current.length) return true
+  return current.some((tier, index) => {
+    const stored = original[index]
+    return (
+      stored === undefined ||
+      tier.max_input_tokens !== stored.max_input_tokens ||
+      normalizeDecimalInput(tier.input_price_per_million) !==
+        normalizeDecimalInput(stored.input_price_per_million) ||
+      normalizeDecimalInput(tier.output_price_per_million) !==
+        normalizeDecimalInput(stored.output_price_per_million) ||
+      normalizeDecimalInput(tier.cache_read_price_per_million) !==
+        normalizeDecimalInput(stored.cache_read_price_per_million) ||
+      normalizeDecimalInput(tier.cache_write_price_per_million) !==
+        normalizeDecimalInput(stored.cache_write_price_per_million)
+    )
+  })
+}
+
 function validate(): string | null {
   resetErrors()
   const canonical = canonicalName.value.trim()
@@ -240,6 +315,23 @@ function validate(): string | null {
     seen.add(value)
   }
 
+  let previousLimit = 0
+  for (const [index, row] of priceTiers.value.entries()) {
+    const prices = [row.inputPrice, row.outputPrice, row.cacheReadPrice, row.cacheWritePrice]
+    if (prices.some((price) => !decimalPattern.test(price))) {
+      row.error = '四项价格均需为非负小数，最多 8 位小数'
+      continue
+    }
+    if (index < priceTiers.value.length - 1) {
+      const limit = row.maxInputTokens
+      if (limit === null || !Number.isInteger(limit) || limit <= previousLimit) {
+        row.error = '长度上限必须是严格递增的正整数'
+        continue
+      }
+      previousLimit = limit
+    }
+  }
+
   if (canonicalNameError.value !== '') return '[data-validation="model-canonical-name"] input'
   if (displayNameError.value !== '') return '[data-validation="model-display-name"] input'
   if (inputPriceError.value !== '') return '[data-validation="model-input-price"] input'
@@ -249,6 +341,10 @@ function validate(): string | null {
   }
   if (cacheWritePriceError.value !== '') {
     return '[data-validation="model-cache-write-price"] input'
+  }
+  const invalidTier = priceTiers.value.findIndex((row) => row.error !== '')
+  if (invalidTier !== -1) {
+    return `[data-validation="model-price-tier-${String(invalidTier)}"] input`
   }
   const invalidAlias = aliases.value.findIndex((row) => row.error !== '')
   return invalidAlias === -1
@@ -282,6 +378,7 @@ function submitForm(): void {
       enabled: enabled.value,
       aliases: aliasPayload,
       routing_strategy: 'weighted_random',
+      price_tiers: tierPayload(),
     })
     return
   }
@@ -308,6 +405,7 @@ function submitForm(): void {
   }
   if (enabled.value !== model.enabled) payload.enabled = enabled.value
   if (aliasesChanged(model)) payload.aliases = aliasPayload
+  if (priceTiersChanged(model)) payload.price_tiers = tierPayload()
   emit('submit', payload)
 }
 </script>
@@ -415,6 +513,49 @@ function submitForm(): void {
             </div>
           </ElFormItem>
         </div>
+
+        <section class="tier-section" aria-labelledby="model-tier-heading">
+          <div class="section-heading">
+            <div>
+              <h3 id="model-tier-heading">分段计费</h3>
+              <p>按输入上下文长度（输入 + 缓存读写令牌）选价，边界按“长度 ≤ 上限”计算。</p>
+            </div>
+            <ElButton data-test="add-model-price-tier" plain :disabled="submitting" @click="addPriceTier">
+              <ElIcon><Plus /></ElIcon>添加分段
+            </ElButton>
+          </div>
+          <div v-if="priceTiers.length === 0" class="empty-alias">未启用分段计费，使用基础价格。</div>
+          <div
+            v-for="(row, index) in priceTiers"
+            :key="row.key"
+            class="tier-row"
+            :data-validation="`model-price-tier-${String(index)}`"
+          >
+            <div class="tier-row__header">
+              <strong>分段 {{ String(index + 1) }}</strong>
+              <ElButton text type="danger" :data-test="`remove-model-price-tier-${String(index)}`" @click="removePriceTier(index)">
+                <ElIcon><Delete /></ElIcon>移除
+              </ElButton>
+            </div>
+            <div class="tier-grid">
+              <ElFormItem label="输入长度上限" :error="row.error">
+                <span v-if="index === priceTiers.length - 1" class="tier-unbounded">不限（最终分段）</span>
+                <ElInputNumber
+                  v-else
+                  v-model="row.maxInputTokens"
+                  :data-test="`model-tier-limit-${String(index)}`"
+                  :min="1"
+                  :step="1000"
+                  controls-position="right"
+                />
+              </ElFormItem>
+              <ElFormItem label="输入价格"><ElInput v-model="row.inputPrice" :data-test="`model-tier-input-${String(index)}`" inputmode="decimal" /></ElFormItem>
+              <ElFormItem label="输出价格"><ElInput v-model="row.outputPrice" :data-test="`model-tier-output-${String(index)}`" inputmode="decimal" /></ElFormItem>
+              <ElFormItem label="缓存读取价格"><ElInput v-model="row.cacheReadPrice" :data-test="`model-tier-cache-read-${String(index)}`" inputmode="decimal" /></ElFormItem>
+              <ElFormItem label="缓存写入价格"><ElInput v-model="row.cacheWritePrice" :data-test="`model-tier-cache-write-${String(index)}`" inputmode="decimal" /></ElFormItem>
+            </div>
+          </div>
+        </section>
 
         <div class="switch-row">
           <label>
@@ -543,9 +684,42 @@ function submitForm(): void {
   font-size: 0.875rem;
 }
 
-.alias-section {
+.alias-section,
+.tier-section {
   padding-top: 1.25rem;
   border-top: 1px solid var(--gateway-border);
+}
+
+.tier-section {
+  margin: 0.5rem 0 1.5rem;
+}
+
+.tier-row {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #f8fafc;
+  border: 1px solid var(--gateway-border);
+  border-radius: 10px;
+}
+
+.tier-row__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.tier-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 1rem;
+}
+
+.tier-unbounded {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  color: var(--gateway-muted);
 }
 
 .alias-row {
@@ -588,6 +762,10 @@ function submitForm(): void {
 
 @media (max-width: 640px) {
   .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tier-grid {
     grid-template-columns: 1fr;
   }
 

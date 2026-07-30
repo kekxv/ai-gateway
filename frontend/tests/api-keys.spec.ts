@@ -67,7 +67,8 @@ const providers: ProviderResponse[] = [
     auto_load_models: false,
     model_sync_interval_seconds: 3600,
     last_model_sync_at: null,
-    price_multiplier: 1.0,
+    cost_multiplier: 1.0,
+    public_multiplier: 1.0,
     protocols: [],
   },
   {
@@ -78,7 +79,8 @@ const providers: ProviderResponse[] = [
     auto_load_models: false,
     model_sync_interval_seconds: 3600,
     last_model_sync_at: null,
-    price_multiplier: 1.0,
+    cost_multiplier: 1.0,
+    public_multiplier: 1.0,
     protocols: [],
   },
 ]

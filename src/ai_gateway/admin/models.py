@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated, NoReturn, cast
 
 from fastapi import APIRouter, Depends, Response, status
@@ -15,12 +16,16 @@ from ai_gateway.catalog.schemas import (
     ModelAliasInput,
     ModelAliasResponse,
     ModelCreate,
+    ModelPriceTierInput,
+    ModelPriceTierResponse,
     ModelResponse,
     ModelRouteCreate,
     ModelRouteResponse,
     ModelRouteUpdate,
     ModelUpdate,
+    PublicModelPriceTierResponse,
     RoutingStrategy,
+    UserModelResponse,
     alias_values,
 )
 from ai_gateway.core.enums import RouteSource
@@ -28,6 +33,7 @@ from ai_gateway.db.models import (
     ApiKeyModel,
     Model,
     ModelAlias,
+    ModelPriceTier,
     ModelRoute,
     Provider,
     ProviderProtocol,
@@ -65,7 +71,10 @@ async def create_model(payload: ModelCreate, session: Session, _: AdminUser) -> 
         routing_strategy=payload.routing_strategy,
         price_multiplier=payload.price_multiplier,
         aliases=[ModelAlias(alias=item.alias, enabled=item.enabled) for item in aliases],
+        price_tiers=[_new_price_tier(item) for item in payload.price_tiers],
     )
+    if payload.price_tiers:
+        _sync_legacy_prices(model, payload.price_tiers[0])
     session.add(model)
     try:
         await session.flush()
@@ -81,22 +90,49 @@ async def create_model(payload: ModelCreate, session: Session, _: AdminUser) -> 
 @models_router.get("", response_model=list[ModelResponse])
 async def list_models(session: Session, _: AdminUser) -> list[ModelResponse]:
     models = (
-        await session.scalars(select(Model).options(selectinload(Model.aliases)).order_by(Model.id))
+        await session.scalars(
+            select(Model)
+            .options(selectinload(Model.aliases), selectinload(Model.price_tiers))
+            .order_by(Model.id)
+        )
     ).all()
     return [_model_response(model) for model in models]
 
 
-@user_models_router.get("", response_model=list[ModelResponse])
-async def list_available_models(session: Session, _: CurrentUser) -> list[ModelResponse]:
+@user_models_router.get("", response_model=list[UserModelResponse])
+async def list_available_models(session: Session, _: CurrentUser) -> list[UserModelResponse]:
     models = (
         await session.scalars(
             select(Model)
             .where(Model.enabled.is_(True))
-            .options(selectinload(Model.aliases))
+            .options(selectinload(Model.aliases), selectinload(Model.price_tiers))
             .order_by(Model.id)
         )
     ).all()
-    return [_model_response(model, enabled_aliases_only=True) for model in models]
+    multiplier_rows = (
+        await session.execute(
+            select(ModelRoute.model_id, Provider.public_multiplier)
+            .join(Provider, Provider.id == ModelRoute.provider_id)
+            .join(ProviderProtocol, ProviderProtocol.provider_id == Provider.id)
+            .where(
+                ModelRoute.enabled.is_(True),
+                ModelRoute.weight > 0,
+                Provider.enabled.is_(True),
+                ProviderProtocol.enabled.is_(True),
+            )
+            .distinct()
+        )
+    ).all()
+    public_multipliers: dict[int, list[Decimal]] = {}
+    for model_id, multiplier in multiplier_rows:
+        public_multipliers.setdefault(model_id, []).append(multiplier)
+    return [
+        _user_model_response(
+            model,
+            provider_multipliers=public_multipliers.get(model.id, []),
+        )
+        for model in models
+    ]
 
 
 @models_router.get("/{model_id}", response_model=ModelResponse)
@@ -151,6 +187,10 @@ async def update_model(
             old_value=old_multiplier,
             new_value=payload.price_multiplier,
         )
+    if payload.price_tiers is not None:
+        model.price_tiers = [_new_price_tier(item) for item in payload.price_tiers]
+        if payload.price_tiers:
+            _sync_legacy_prices(model, payload.price_tiers[0])
     if aliases is not None:
         _replace_aliases(model, aliases)
     try:
@@ -286,7 +326,9 @@ async def delete_model_route(route_id: int, session: Session, _: AdminUser) -> R
 
 async def _get_model(session: AsyncSession, model_id: int) -> Model:
     model = await session.scalar(
-        select(Model).where(Model.id == model_id).options(selectinload(Model.aliases))
+        select(Model)
+        .where(Model.id == model_id)
+        .options(selectinload(Model.aliases), selectinload(Model.price_tiers))
     )
     if model is None:
         raise_auth_error(status.HTTP_404_NOT_FOUND, "model_not_found", "Model not found")
@@ -391,6 +433,112 @@ def _model_response(model: Model, *, enabled_aliases_only: bool = False) -> Mode
         created_at=model.created_at,
         updated_at=model.updated_at,
         price_multiplier=model.price_multiplier,
+        price_tiers=[
+            ModelPriceTierResponse(
+                id=tier.id,
+                max_input_tokens=tier.max_input_tokens,
+                input_price_per_million=tier.input_price_per_million,
+                output_price_per_million=tier.output_price_per_million,
+                cache_read_price_per_million=tier.cache_read_price_per_million,
+                cache_write_price_per_million=tier.cache_write_price_per_million,
+            )
+            for tier in _ordered_price_tiers(model.price_tiers)
+        ],
+    )
+
+
+def _user_model_response(
+    model: Model,
+    *,
+    provider_multipliers: list[Decimal],
+) -> UserModelResponse:
+    aliases = sorted((alias for alias in model.aliases if alias.enabled), key=lambda item: item.id)
+    configured_tiers: list[Model | ModelPriceTier] = (
+        list(_ordered_price_tiers(model.price_tiers)) if model.price_tiers else [model]
+    )
+    public_tiers: list[PublicModelPriceTierResponse] = []
+    for tier in configured_tiers:
+        if not provider_multipliers:
+            break
+        factor_values = [model.price_multiplier * value for value in provider_multipliers]
+
+        def price_range(value: Decimal) -> tuple[Decimal, Decimal]:
+            values = [
+                (value * factor).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
+                for factor in factor_values
+            ]
+            return min(values), max(values)
+
+        input_min, input_max = price_range(tier.input_price_per_million)
+        output_min, output_max = price_range(tier.output_price_per_million)
+        cache_read_min, cache_read_max = price_range(tier.cache_read_price_per_million)
+        cache_write_min, cache_write_max = price_range(tier.cache_write_price_per_million)
+        public_tiers.append(
+            PublicModelPriceTierResponse(
+                max_input_tokens=getattr(tier, "max_input_tokens", None),
+                input_price_per_million_min=input_min,
+                input_price_per_million_max=input_max,
+                output_price_per_million_min=output_min,
+                output_price_per_million_max=output_max,
+                cache_read_price_per_million_min=cache_read_min,
+                cache_read_price_per_million_max=cache_read_max,
+                cache_write_price_per_million_min=cache_write_min,
+                cache_write_price_per_million_max=cache_write_max,
+            )
+        )
+    return UserModelResponse(
+        id=model.id,
+        canonical_name=model.canonical_name,
+        display_name=model.display_name,
+        input_price_per_million=(
+            public_tiers[0].input_price_per_million_min if public_tiers else Decimal("0")
+        ),
+        output_price_per_million=(
+            public_tiers[0].output_price_per_million_min if public_tiers else Decimal("0")
+        ),
+        cache_read_price_per_million=(
+            public_tiers[0].cache_read_price_per_million_min if public_tiers else Decimal("0")
+        ),
+        cache_write_price_per_million=(
+            public_tiers[0].cache_write_price_per_million_min if public_tiers else Decimal("0")
+        ),
+        price_multiplier=Decimal("1"),
+        enabled=model.enabled,
+        aliases=[
+            ModelAliasResponse(id=alias.id, alias=alias.alias, enabled=alias.enabled)
+            for alias in aliases
+        ],
+        routing_strategy=cast(RoutingStrategy, model.routing_strategy),
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+        public_price_tiers=public_tiers,
+    )
+
+
+def _new_price_tier(payload: ModelPriceTierInput) -> ModelPriceTier:
+    return ModelPriceTier(
+        max_input_tokens=payload.max_input_tokens,
+        input_price_per_million=payload.input_price_per_million,
+        output_price_per_million=payload.output_price_per_million,
+        cache_read_price_per_million=payload.cache_read_price_per_million,
+        cache_write_price_per_million=payload.cache_write_price_per_million,
+    )
+
+
+def _sync_legacy_prices(model: Model, tier: ModelPriceTierInput) -> None:
+    model.input_price_per_million = tier.input_price_per_million
+    model.output_price_per_million = tier.output_price_per_million
+    model.cache_read_price_per_million = tier.cache_read_price_per_million
+    model.cache_write_price_per_million = tier.cache_write_price_per_million
+
+
+def _ordered_price_tiers(tiers: list[ModelPriceTier]) -> list[ModelPriceTier]:
+    return sorted(
+        tiers,
+        key=lambda tier: (
+            tier.max_input_tokens is None,
+            tier.max_input_tokens or 0,
+        ),
     )
 
 

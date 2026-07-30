@@ -29,7 +29,8 @@ def _make_provider(
     *,
     id: int = 1,
     name: str = "test-provider",
-    price_multiplier: Decimal = Decimal("1.00"),
+    public_multiplier: Decimal = Decimal("1.00"),
+    cost_multiplier: Decimal = Decimal("1.00"),
 ) -> Provider:
     """Build an in-memory Provider (no DB flush)."""
     return Provider(
@@ -37,7 +38,8 @@ def _make_provider(
         name=name,
         credential_encrypted=b"test-secret",
         enabled=True,
-        price_multiplier=price_multiplier,
+        public_multiplier=public_multiplier,
+        cost_multiplier=cost_multiplier,
     )
 
 
@@ -77,10 +79,10 @@ class TestBillingFlowWithMultipliers:
 
     def test_provider_multiplier_applied_to_billing(self) -> None:
         """Verify provider multiplier is applied during billing."""
-        provider = _make_provider(price_multiplier=Decimal("1.50"))
+        provider = _make_provider(public_multiplier=Decimal("1.50"))
         model = _make_model(price_multiplier=Decimal("1.00"))
 
-        model_mult, provider_mult = get_effective_multipliers(model, provider)
+        model_mult, provider_mult, _ = get_effective_multipliers(model, provider)
 
         cost = calculate_cost(
             model,
@@ -94,10 +96,10 @@ class TestBillingFlowWithMultipliers:
 
     def test_model_multiplier_applied_to_billing(self) -> None:
         """Verify model multiplier is applied during billing."""
-        provider = _make_provider(price_multiplier=Decimal("1.00"))
+        provider = _make_provider(public_multiplier=Decimal("1.00"))
         model = _make_model(price_multiplier=Decimal("2.00"))
 
-        model_mult, provider_mult = get_effective_multipliers(model, provider)
+        model_mult, provider_mult, _ = get_effective_multipliers(model, provider)
 
         cost = calculate_cost(
             model,
@@ -111,10 +113,10 @@ class TestBillingFlowWithMultipliers:
 
     def test_both_multipliers_applied_multiplicatively(self) -> None:
         """Verify both multipliers are applied multiplicatively."""
-        provider = _make_provider(price_multiplier=Decimal("1.50"))
+        provider = _make_provider(public_multiplier=Decimal("1.50"))
         model = _make_model(price_multiplier=Decimal("2.00"))
 
-        model_mult, provider_mult = get_effective_multipliers(model, provider)
+        model_mult, provider_mult, _ = get_effective_multipliers(model, provider)
 
         cost = calculate_cost(
             model,
@@ -128,10 +130,10 @@ class TestBillingFlowWithMultipliers:
 
     def test_default_multipliers_are_one(self) -> None:
         """Verify default multipliers are 1.00."""
-        provider = _make_provider(price_multiplier=Decimal("1.00"))
+        provider = _make_provider(public_multiplier=Decimal("1.00"))
         model = _make_model(price_multiplier=Decimal("1.00"))
 
-        model_mult, provider_mult = get_effective_multipliers(model, provider)
+        model_mult, provider_mult, _ = get_effective_multipliers(model, provider)
 
         cost = calculate_cost(
             model,
@@ -157,10 +159,10 @@ class TestBillingFlowWithMultipliers:
         model = _make_model()
 
         for model_mult, provider_mult, expected in test_cases:
-            provider.price_multiplier = provider_mult
+            provider.public_multiplier = provider_mult
             model.price_multiplier = model_mult
 
-            extracted_model_mult, extracted_provider_mult = get_effective_multipliers(
+            extracted_model_mult, extracted_provider_mult, _ = get_effective_multipliers(
                 model, provider
             )
 
@@ -180,7 +182,7 @@ class TestBillingFlowWithMultipliers:
         """Verify None provider defaults to 1.00 multiplier."""
         model = _make_model(price_multiplier=Decimal("1.50"))
 
-        model_mult, provider_mult = get_effective_multipliers(model, None)
+        model_mult, provider_mult, _ = get_effective_multipliers(model, None)
 
         cost = calculate_cost(
             model,
@@ -194,9 +196,9 @@ class TestBillingFlowWithMultipliers:
 
     def test_none_model_defaults_to_one(self) -> None:
         """Verify None model defaults to 1.00 multiplier."""
-        provider = _make_provider(price_multiplier=Decimal("2.00"))
+        provider = _make_provider(public_multiplier=Decimal("2.00"))
 
-        model_mult, provider_mult = get_effective_multipliers(None, provider)
+        model_mult, provider_mult, _ = get_effective_multipliers(None, provider)
 
         # When model is None, we can't call calculate_cost, but we verify the multiplier
         assert model_mult == Decimal("1.00")
@@ -204,10 +206,10 @@ class TestBillingFlowWithMultipliers:
 
     def test_sub_million_token_usage_with_multiplier(self) -> None:
         """Verify multipliers work with sub-million token counts."""
-        provider = _make_provider(price_multiplier=Decimal("1.50"))
+        provider = _make_provider(public_multiplier=Decimal("1.50"))
         model = _make_model(price_multiplier=Decimal("2.00"))
 
-        model_mult, provider_mult = get_effective_multipliers(model, provider)
+        model_mult, provider_mult, _ = get_effective_multipliers(model, provider)
 
         # 100k input + 50k output
         usage = CanonicalUsage(input_tokens=100_000, output_tokens=50_000)
@@ -230,11 +232,11 @@ class TestBillingFlowWithMultipliers:
         the ORM objects at billing time, so changing them between requests
         changes the resulting cost.
         """
-        provider = _make_provider(price_multiplier=Decimal("1.00"))
+        provider = _make_provider(public_multiplier=Decimal("1.00"))
         model = _make_model(price_multiplier=Decimal("1.00"))
 
         # First request: no markup
-        m1, p1 = get_effective_multipliers(model, provider)
+        m1, p1, _ = get_effective_multipliers(model, provider)
         cost1 = calculate_cost(
             model,
             ONE_MILLION_USAGE,
@@ -244,9 +246,9 @@ class TestBillingFlowWithMultipliers:
         assert cost1 == Decimal("30.00000000")
 
         # Admin raises the provider multiplier
-        provider.price_multiplier = Decimal("3.00")
+        provider.public_multiplier = Decimal("3.00")
         # Second request: provider markup applies
-        m2, p2 = get_effective_multipliers(model, provider)
+        m2, p2, _ = get_effective_multipliers(model, provider)
         cost2 = calculate_cost(
             model,
             ONE_MILLION_USAGE,
@@ -258,7 +260,7 @@ class TestBillingFlowWithMultipliers:
         # Admin also raises the model multiplier
         model.price_multiplier = Decimal("2.00")
         # Third request: both markups apply
-        m3, p3 = get_effective_multipliers(model, provider)
+        m3, p3, _ = get_effective_multipliers(model, provider)
         cost3 = calculate_cost(
             model,
             ONE_MILLION_USAGE,
