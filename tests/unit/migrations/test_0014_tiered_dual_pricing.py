@@ -11,6 +11,8 @@ class OperationRecorder:
         self.dropped_tables: list[str] = []
         self.created_indexes: list[tuple[str, str, tuple[str, ...]]] = []
         self.dropped_indexes: list[tuple[str, str | None]] = []
+        self.created_check_constraints: list[tuple[str, str, str]] = []
+        self.dropped_constraints: list[tuple[str, str, str]] = []
 
     def alter_column(self, table: str, column: str, **kwargs: object) -> None:
         self.altered_columns.append((table, column, kwargs))
@@ -32,6 +34,12 @@ class OperationRecorder:
 
     def drop_index(self, name: str, *, table_name: str | None = None) -> None:
         self.dropped_indexes.append((name, table_name))
+
+    def create_check_constraint(self, name: str, table: str, condition: str) -> None:
+        self.created_check_constraints.append((name, table, condition))
+
+    def drop_constraint(self, name: str, table: str, type_: str | None = None) -> None:
+        self.dropped_constraints.append((name, table, type_ or ""))
 
 
 def load_migration():
@@ -55,12 +63,21 @@ def test_upgrade_creates_tiers_and_separates_provider_and_request_costs(monkeypa
 
     migration.upgrade()
 
+    # Check constraint must be dropped before renaming column
+    assert recorder.dropped_constraints == [
+        ("ck_providers_price_multiplier_range", "providers", "check")
+    ]
     assert recorder.altered_columns[0][0:2] == ("providers", "price_multiplier")
     altered = recorder.altered_columns[0][2]
     assert altered["new_column_name"] == "cost_multiplier"
     assert altered["existing_nullable"] is False
     assert str(altered["existing_type"]) == "NUMERIC(4, 2)"
     assert str(altered["existing_server_default"]) == "1.00"
+    # New check constraints for cost_multiplier and public_multiplier
+    assert recorder.created_check_constraints == [
+        ("ck_providers_cost_multiplier_range", "providers", "cost_multiplier >= 0.10 AND cost_multiplier <= 10.00"),
+        ("ck_providers_public_multiplier_range", "providers", "public_multiplier >= 0.10 AND public_multiplier <= 10.00"),
+    ]
     assert [(table, getattr(column, "name")) for table, column in recorder.added_columns] == [
         ("providers", "public_multiplier"),
         ("request_logs", "cost_amount"),
@@ -95,9 +112,18 @@ def test_downgrade_removes_new_data_and_restores_price_multiplier(monkeypatch) -
         ("ix_model_price_tiers_model_max_input", "model_price_tiers")
     ]
     assert recorder.dropped_tables == ["model_price_tiers"]
+    # Drop check constraints before dropping/renaming columns
+    assert recorder.dropped_constraints == [
+        ("ck_providers_public_multiplier_range", "providers", "check"),
+        ("ck_providers_cost_multiplier_range", "providers", "check"),
+    ]
     assert recorder.dropped_columns == [
         ("request_logs", "cost_amount"),
         ("providers", "public_multiplier"),
     ]
     assert recorder.altered_columns[0][0:2] == ("providers", "cost_multiplier")
     assert recorder.altered_columns[0][2]["new_column_name"] == "price_multiplier"
+    # Recreate original check constraint
+    assert recorder.created_check_constraints == [
+        ("ck_providers_price_multiplier_range", "providers", "price_multiplier >= 0.10 AND price_multiplier <= 10.00")
+    ]
