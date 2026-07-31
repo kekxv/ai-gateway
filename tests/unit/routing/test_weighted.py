@@ -132,6 +132,33 @@ async def test_provider_route_projects_matching_inbound_protocol(
     assert selected.protocol is Protocol.CLAUDE
 
 
+async def test_conversion_fallback_prefers_openai_over_protocol_creation_order(
+    session: AsyncSession,
+) -> None:
+    model, route = await _add_route(
+        session,
+        suffix="fallback-order",
+        protocol=Protocol.CLAUDE,
+    )
+    openai_protocol = ProviderProtocol(
+        provider_id=route.provider_id,
+        protocol=Protocol.OPENAI,
+        base_url="https://openai.provider.invalid/v1",
+    )
+    session.add(openai_protocol)
+    await session.flush()
+
+    selected = await Router(session).select_route(
+        model,
+        principal(),
+        preferred_protocol=Protocol.GEMINI,
+    )
+
+    assert selected.route_id == route.id
+    assert selected.provider_protocol_id == openai_protocol.id
+    assert selected.protocol is Protocol.OPENAI
+
+
 async def test_native_protocol_routes_precede_conversion_then_fall_back_when_excluded(
     session: AsyncSession,
 ) -> None:

@@ -21,6 +21,11 @@ from ai_gateway.routing.sessions import MutationSessionFactory, mutation_session
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate
 
 Clock = Callable[[], datetime]
+_PROTOCOL_FALLBACK_ORDER = {
+    Protocol.OPENAI: 0,
+    Protocol.CLAUDE: 1,
+    Protocol.GEMINI: 2,
+}
 
 
 def _utcnow() -> datetime:
@@ -482,10 +487,19 @@ def _candidates_from_rows(
         selected = min(
             route_rows,
             key=lambda row: (
-                preferred_protocol is not None
-                and Protocol(row["protocol"]) is not preferred_protocol,
+                *_protocol_preference(Protocol(row["protocol"]), preferred_protocol),
                 cast(int, row["provider_protocol_id"]),
             ),
         )
         candidates.append(_candidate_from_row(selected))
     return candidates
+
+
+def _protocol_preference(
+    protocol: Protocol,
+    preferred_protocol: Protocol | None,
+) -> tuple[int, int]:
+    return (
+        0 if protocol is preferred_protocol else 1,
+        _PROTOCOL_FALLBACK_ORDER[protocol],
+    )

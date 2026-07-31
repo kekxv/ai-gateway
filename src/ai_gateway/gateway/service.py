@@ -133,9 +133,13 @@ class UpstreamError(GatewayError):
         *,
         route: RouteCandidate | None = None,
         attempts: tuple[dict[str, Any], ...] = (),
+        upstream_headers: Mapping[str, str] | None = None,
+        upstream_body: bytes | None = None,
     ) -> None:
         self.route = route
         self.attempts = attempts
+        self.upstream_headers = dict(upstream_headers or {})
+        self.upstream_body = upstream_body
         super().__init__(message)
 
 
@@ -185,6 +189,13 @@ class GatewayOutput:
 
 
 @dataclass(frozen=True, slots=True)
+class _ConvertedResponse:
+    output: GatewayOutput
+    payload: dict[str, Any]
+    canonical: CanonicalResponse | None
+
+
+@dataclass(frozen=True, slots=True)
 class GatewayStreamOutput:
     lifecycle: _StreamLifecycle
     status_code: int
@@ -216,6 +227,7 @@ class _AttemptResponse:
     response: httpx.Response
     attempts: tuple[dict[str, Any], ...]
     router: RouteSelector
+    converted: _ConvertedResponse | None = None
 
 
 class GatewayService:
@@ -485,13 +497,12 @@ class GatewayService:
                     content_type=upstream.headers.get("content-type", "text/event-stream"),
                 )
 
-            output, response_payload, canonical_response = _convert_response(
-                inbound_protocol=inbound_protocol,
-                endpoint_path=prepared.endpoint_path,
-                openai_operation=prepared.openai_operation,
-                route=route,
-                upstream=upstream,
-            )
+            converted = attempt_response.converted
+            if converted is None:
+                raise RuntimeError("non-streaming response was not converted")
+            output = converted.output
+            response_payload = converted.payload
+            canonical_response = converted.canonical
             usage_result = _resolve_response_usage(
                 route=route,
                 response_payload=response_payload,
@@ -937,6 +948,8 @@ class GatewayService:
                     cost=cleanup_cost,
                     cost_amount=cleanup_cost_amount,
                     latency_ms=_elapsed_ms(started_at),
+                    headers=getattr(exc, "upstream_headers", {}),
+                    body=getattr(exc, "upstream_body", None),
                     metadata={
                         "attempts": attempts,
                         "billing_recovery_pending": (
@@ -984,6 +997,14 @@ class GatewayService:
                         "The upstream provider timed out",
                         route=last_route,
                         attempts=tuple(attempts),
+                    ) from last_failure
+                if isinstance(last_failure, UpstreamError):
+                    raise UpstreamError(
+                        last_failure.message,
+                        route=last_route,
+                        attempts=tuple(attempts),
+                        upstream_headers=last_failure.upstream_headers,
+                        upstream_body=last_failure.upstream_body,
                     ) from last_failure
                 raise UpstreamError(
                     "No upstream provider completed the request",
@@ -1093,21 +1114,72 @@ class GatewayService:
             attempts.append(summary)
             if prepared.canonical.stream and upstream.status_code < 400:
                 return _AttemptResponse(route, upstream, tuple(attempts), router)
-            health_operation = (
-                router.record_failure(route.route_id, upstream.status_code)
-                if upstream.status_code >= 400
-                else router.record_success(route.route_id)
-            )
+            if upstream.status_code >= 400:
+                health_failure = await _record_health_auxiliary(
+                    "record_failure",
+                    router.record_failure(route.route_id, upstream.status_code),
+                    route,
+                    tuple(attempts),
+                )
+                if health_failure is not None:
+                    await _close_response_auxiliary(upstream, route, tuple(attempts))
+                    raise health_failure
+                return _AttemptResponse(route, upstream, tuple(attempts), router)
+
+            try:
+                output, response_payload, canonical_response = _convert_response(
+                    inbound_protocol=prepared.inbound_protocol,
+                    endpoint_path=prepared.endpoint_path,
+                    openai_operation=prepared.openai_operation,
+                    route=route,
+                    upstream=upstream,
+                )
+            except UpstreamError as exc:
+                summary["outcome"] = "failure"
+                summary["error_code"] = "invalid_response"
+                last_failure = UpstreamError(
+                    exc.message,
+                    route=route,
+                    attempts=tuple(attempts),
+                    upstream_headers=dict(upstream.headers),
+                    upstream_body=upstream.content,
+                )
+                health_failure = await _record_health_auxiliary(
+                    "record_failure",
+                    router.record_failure(
+                        route.route_id,
+                        RouteFailure(status_code=502, error_code="invalid_response"),
+                    ),
+                    route,
+                    tuple(attempts),
+                )
+                close_failure = await _close_response_auxiliary(
+                    upstream,
+                    route,
+                    tuple(attempts),
+                )
+                if health_failure is not None:
+                    raise health_failure
+                if close_failure is not None:
+                    raise close_failure
+                continue
+
             health_failure = await _record_health_auxiliary(
-                "record_failure" if upstream.status_code >= 400 else "record_success",
-                health_operation,
+                "record_success",
+                router.record_success(route.route_id),
                 route,
                 tuple(attempts),
             )
             if health_failure is not None:
                 await _close_response_auxiliary(upstream, route, tuple(attempts))
                 raise health_failure
-            return _AttemptResponse(route, upstream, tuple(attempts), router)
+            return _AttemptResponse(
+                route,
+                upstream,
+                tuple(attempts),
+                router,
+                _ConvertedResponse(output, response_payload, canonical_response),
+            )
 
     async def _settle_zero(
         self,

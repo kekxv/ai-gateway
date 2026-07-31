@@ -185,10 +185,13 @@ afterAll(() => {
   server.close()
 })
 
-function useCatalog(onRouteList?: (url: URL) => ModelRouteResponse[]): void {
+function useCatalog(
+  onRouteList?: (url: URL) => ModelRouteResponse[],
+  providerList: ProviderResponse[] = providers,
+): void {
   server.use(
     http.get('/admin/models', () => HttpResponse.json(models)),
-    http.get('/admin/providers', () => HttpResponse.json(providers)),
+    http.get('/admin/providers', () => HttpResponse.json(providerList)),
     http.get('/admin/model-routes', ({ request }) => {
       const url = new URL(request.url)
       if (onRouteList !== undefined) return HttpResponse.json(onRouteList(url))
@@ -203,8 +206,11 @@ function useCatalog(onRouteList?: (url: URL) => ModelRouteResponse[]): void {
   )
 }
 
-async function mountRoutes(onRouteList?: (url: URL) => ModelRouteResponse[]): Promise<VueWrapper> {
-  useCatalog(onRouteList)
+async function mountRoutes(
+  onRouteList?: (url: URL) => ModelRouteResponse[],
+  providerList: ProviderResponse[] = providers,
+): Promise<VueWrapper> {
+  useCatalog(onRouteList, providerList)
   const wrapper = mount(ModelsView, { attachTo: document.body })
   await flushPromises()
   return wrapper
@@ -383,6 +389,35 @@ describe('加权模型路由管理', () => {
     const secondCard = wrapper.get('[data-test="model-card-2"]')
     expect(secondCard.text()).toContain('不可用')
     expect(secondCard.text()).toContain('claude-opus-4-1')
+    wrapper.unmount()
+  })
+
+  it('供应商停用时不把所属路由计为有效启用或可用', async () => {
+    const disabledProviders = providers.map((provider) =>
+      provider.id === 12 ? { ...provider, enabled: false } : provider,
+    )
+    const activeRoute = {
+      ...closedRoute,
+      id: 204,
+      provider_id: 11,
+      upstream_model: 'active-openai-model',
+    }
+    const disabledProviderRoute = {
+      ...closedRoute,
+      id: 205,
+      provider_id: 12,
+      upstream_model: 'disabled-provider-model',
+    }
+    const wrapper = await mountRoutes(() => [activeRoute, disabledProviderRoute], disabledProviders)
+    const card = wrapper.get('[data-test="model-card-1"]')
+
+    expect(card.text()).toContain('1/2 有效启用')
+    expect(card.text()).toContain('1/2 可用')
+
+    await card.get('.routes-toggle').trigger('click')
+    expect(card.get('[data-test="route-status-205"]').text()).toContain('供应商停用')
+    expect(card.get('[data-test="route-runtime-205"]').text()).toContain('健康')
+    expect(card.get('[data-test="route-item-205"]').classes()).toContain('is-disabled')
     wrapper.unmount()
   })
 

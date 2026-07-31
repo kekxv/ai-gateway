@@ -60,6 +60,10 @@ const runtimeDetails: Readonly<
   open: { label: '不可用', type: 'danger' },
 }
 
+function routeProvider(route: ModelRouteResponse): ProviderResponse | undefined {
+  return props.providers.find((provider) => provider.id === route.provider_id)
+}
+
 function providerName(providerId: number): string {
   return (
     props.providers.find((provider) => provider.id === providerId)?.name ??
@@ -75,6 +79,28 @@ function providerProtocolNames(providerId: number): string {
   return protocols === undefined || protocols.length === 0
     ? '无启用协议'
     : protocols.join(' / ')
+}
+
+function routeIsEffectivelyEnabled(route: ModelRouteResponse): boolean {
+  const provider = routeProvider(route)
+  return (
+    route.enabled &&
+    provider?.enabled === true &&
+    provider.protocols.some((protocol) => protocol.enabled)
+  )
+}
+
+function routeIsAvailable(route: ModelRouteResponse): boolean {
+  return routeIsEffectivelyEnabled(route) && route.runtime_state === 'closed'
+}
+
+function routeStatusLabel(route: ModelRouteResponse): string {
+  if (!route.enabled) return '已停用'
+  const provider = routeProvider(route)
+  if (provider === undefined) return '供应商缺失'
+  if (!provider.enabled) return '供应商停用'
+  if (!provider.protocols.some((protocol) => protocol.enabled)) return '无启用协议'
+  return '已启用'
 }
 
 function formatDate(value: string | null): string {
@@ -103,9 +129,9 @@ function formatPriceRange(minimum: string, maximum: string): string {
 }
 
 const routeStats = computed(() => {
-  const enabled = props.routes.filter((r) => r.enabled).length
-  const healthy = props.routes.filter((r) => r.runtime_state === 'closed').length
-  return { enabled, healthy, total: props.routes.length }
+  const enabled = props.routes.filter(routeIsEffectivelyEnabled).length
+  const available = props.routes.filter(routeIsAvailable).length
+  return { enabled, available, total: props.routes.length }
 })
 
 async function copyToClipboard(text: string, field: string): Promise<void> {
@@ -299,10 +325,10 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
             <div class="section-title">
               模型路由
               <ElTag size="small" type="info" effect="plain">
-                {{ routeStats.enabled }}/<span :data-test="`route-count-${String(model.id)}`">{{ routeStats.total }}</span> 启用
+                {{ routeStats.enabled }}/<span :data-test="`route-count-${String(model.id)}`">{{ routeStats.total }}</span> 有效启用
               </ElTag>
               <ElTag size="small" type="success" effect="plain">
-                {{ routeStats.healthy }}/{{ routeStats.total }} 健康
+                {{ routeStats.available }}/{{ routeStats.total }} 可用
               </ElTag>
             </div>
             <span class="expand-indicator">{{ routesExpanded ? '收起' : '展开' }}</span>
@@ -330,10 +356,11 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
           <div
             v-for="route in routes"
             :key="route.id"
+            :data-test="`route-item-${String(route.id)}`"
             class="route-item"
             :class="{
-              'is-disabled': !route.enabled,
-              'is-unhealthy': route.runtime_state === 'open',
+              'is-disabled': !routeIsEffectivelyEnabled(route),
+              'is-unhealthy': routeIsEffectivelyEnabled(route) && route.runtime_state === 'open',
             }"
           >
             <div class="route-header">
@@ -393,9 +420,15 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
               <span class="stat">权重: {{ route.weight }}</span>
               <StatusTag
                 :data-test="`route-status-${String(route.id)}`"
-                :status="route.enabled ? 'enabled' : 'disabled'"
+                :status="routeIsEffectivelyEnabled(route) ? 'enabled' : 'disabled'"
+                :label="routeStatusLabel(route)"
               />
-              <ElTag :type="runtimeDetails[route.runtime_state].type" size="small" effect="light">
+              <ElTag
+                :data-test="`route-runtime-${String(route.id)}`"
+                :type="runtimeDetails[route.runtime_state].type"
+                size="small"
+                effect="light"
+              >
                 {{ runtimeDetails[route.runtime_state].label }}
               </ElTag>
               <ElTag :type="route.source === 'discovered' ? 'primary' : 'info'" size="small">
@@ -422,7 +455,7 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
             >
               <ElTag
                 size="small"
-                :type="route.enabled ? (route.runtime_state === 'closed' ? 'success' : route.runtime_state === 'open' ? 'danger' : 'warning') : 'info'"
+                :type="routeIsEffectivelyEnabled(route) ? (route.runtime_state === 'closed' ? 'success' : route.runtime_state === 'open' ? 'danger' : 'warning') : 'info'"
                 effect="light"
               >
                 {{ providerName(route.provider_id) }} · {{ route.upstream_model }}

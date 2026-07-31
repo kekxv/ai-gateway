@@ -911,6 +911,141 @@ async def test_network_failover_is_bounded_by_distinct_routes(session: AsyncSess
     assert [item["route_id"] for item in audit.failed.metadata["attempts"]] == [111, 112]
 
 
+async def test_cross_protocol_invalid_response_penalizes_route_and_fails_over(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    encrypted = encrypt_secret(
+        orjson.dumps({"api_key": "provider-secret"}).decode(),
+        settings=settings,
+    )
+    routes = [
+        RouteCandidate(
+            route_id=route_id,
+            model_id=model.id,
+            provider_id=route_id + 100,
+            provider_protocol_id=route_id + 200,
+            protocol=protocol,
+            base_url=f"https://provider-{route_id}.example",
+            websocket_url=None,
+            upstream_model=native_model,
+            weight=100,
+            provider_credential_encrypted=encrypted,
+        )
+        for route_id, protocol, native_model in (
+            (113, Protocol.CLAUDE, "invalid-claude"),
+            (114, Protocol.OPENAI, "valid-openai"),
+        )
+    ]
+    calls = 0
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(
+                200,
+                json={"secret": "malformed-provider-response"},
+            )
+        return httpx.Response(200, json=_response(Protocol.OPENAI, "valid-openai"))
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    audit = FakeAudit()
+    router = FakeRouter(routes)
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: router,
+    )
+    path, body = _request(Protocol.GEMINI, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200, response.text
+    assert get_adapter(Protocol.GEMINI).decode_response(response.json()).model == "valid-openai"
+    assert calls == 2
+    assert router.failures == [113]
+    assert router.successes == [114]
+    assert audit.completed is not None
+    attempts = audit.completed.metadata["attempts"]
+    assert [item["route_id"] for item in attempts] == [113, 114]
+    assert attempts[0]["outcome"] == "failure"
+    assert attempts[0]["error_code"] == "invalid_response"
+    assert "malformed-provider-response" not in str(attempts)
+
+
+async def test_final_cross_protocol_invalid_response_is_audited_without_health_success(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    route = RouteCandidate(
+        route_id=115,
+        model_id=model.id,
+        provider_id=215,
+        provider_protocol_id=315,
+        protocol=Protocol.CLAUDE,
+        base_url="https://provider.example",
+        websocket_url=None,
+        upstream_model="invalid-claude",
+        weight=100,
+        provider_credential_encrypted=encrypt_secret(
+            orjson.dumps({"api_key": "provider-secret"}).decode(),
+            settings=settings,
+        ),
+    )
+    malformed_body = orjson.dumps({"secret": "malformed-provider-response"})
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=malformed_body,
+            headers={"content-type": "application/json"},
+        )
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    audit = FakeAudit()
+    router = FakeRouter([route])
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: router,
+    )
+    path, body = _request(Protocol.GEMINI, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 502
+    assert "malformed-provider-response" not in response.text
+    assert router.failures == [115]
+    assert router.successes == []
+    assert audit.failed is not None
+    assert audit.failed.body == malformed_body
+    assert audit.failed.headers["content-type"] == "application/json"
+    attempts = audit.failed.metadata["attempts"]
+    assert len(attempts) == 1
+    assert attempts[0]["outcome"] == "failure"
+    assert attempts[0]["error_code"] == "invalid_response"
+    assert "malformed-provider-response" not in str(attempts)
+
+
 async def test_cross_protocol_upstream_400_is_not_retried_and_uses_native_error(
     session: AsyncSession,
 ) -> None:
