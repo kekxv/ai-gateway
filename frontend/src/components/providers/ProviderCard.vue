@@ -40,6 +40,12 @@ function formatInterval(seconds: number): string {
   if (seconds % 60 === 0) return `${String(seconds / 60)} 分钟`
   return `${String(seconds)} 秒`
 }
+
+function formatMultiplier(value: number | string): string {
+  const num = typeof value === 'string' ? parseFloat(value) : value
+  if (Number.isNaN(num)) return '0.00'
+  return num.toFixed(2)
+}
 </script>
 
 <template>
@@ -103,11 +109,11 @@ function formatInterval(seconds: number): string {
         </div>
         <div class="info-row">
           <span class="label">成本倍率：</span>
-          <ElTag type="info" size="small">{{ provider.cost_multiplier.toFixed(2) }}x</ElTag>
+          <ElTag type="info" size="small">{{ formatMultiplier(provider.cost_multiplier) }}x</ElTag>
         </div>
         <div class="info-row">
           <span class="label">公开倍率：</span>
-          <ElTag type="warning" size="small">{{ provider.public_multiplier.toFixed(2) }}x</ElTag>
+          <ElTag type="warning" size="small">{{ formatMultiplier(provider.public_multiplier) }}x</ElTag>
         </div>
       </div>
 

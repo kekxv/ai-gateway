@@ -195,7 +195,7 @@ onBeforeUnmount(() => {
           aria-label="打开导航菜单"
           @click="drawerOpen = true"
         >
-          <MenuIcon />
+          <ElIcon><MenuIcon /></ElIcon>
         </ElButton>
         <div class="header-actions">
           <ElText class="admin-email" truncated>{{ auth.user?.email }}</ElText>

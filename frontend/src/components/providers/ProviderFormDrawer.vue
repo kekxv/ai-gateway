@@ -121,8 +121,12 @@ function resetForm(): void {
   enabled.value = provider?.enabled ?? true
   autoLoadModels.value = provider?.auto_load_models ?? false
   syncInterval.value = provider?.model_sync_interval_seconds ?? 3600
-  costMultiplier.value = provider?.cost_multiplier ?? 1.0
-  publicMultiplier.value = provider?.public_multiplier ?? 1.0
+  costMultiplier.value = typeof provider?.cost_multiplier === 'string'
+    ? parseFloat(provider.cost_multiplier)
+    : (provider?.cost_multiplier ?? 1.0)
+  publicMultiplier.value = typeof provider?.public_multiplier === 'string'
+    ? parseFloat(provider.public_multiplier)
+    : (provider?.public_multiplier ?? 1.0)
   protocols.value =
     provider === null
       ? [newProtocolRow()]
@@ -409,10 +413,16 @@ function submitForm(): void {
     payload.model_sync_interval_seconds = interval
   }
   if (protocolsChanged()) payload.protocols = protocolPayload
-  if (costMultiplier.value !== provider.cost_multiplier) {
+  const providerCostMultiplier = typeof provider.cost_multiplier === 'string'
+    ? parseFloat(provider.cost_multiplier)
+    : provider.cost_multiplier
+  if (costMultiplier.value !== providerCostMultiplier) {
     payload.cost_multiplier = costMultiplier.value
   }
-  if (publicMultiplier.value !== provider.public_multiplier) {
+  const providerPublicMultiplier = typeof provider.public_multiplier === 'string'
+    ? parseFloat(provider.public_multiplier)
+    : provider.public_multiplier
+  if (publicMultiplier.value !== providerPublicMultiplier) {
     payload.public_multiplier = publicMultiplier.value
   }
   emit('submit', payload)
