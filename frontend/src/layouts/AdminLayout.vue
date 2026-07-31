@@ -218,6 +218,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .admin-shell {
+  position: fixed;
+  inset: 0;
   height: 100vh;
   overflow: hidden;
 }
@@ -272,6 +274,10 @@ onBeforeUnmount(() => {
 }
 
 .admin-menu:not(.el-menu--collapse) {
+  width: 100%;
+}
+
+.admin-menu.el-menu--collapse {
   width: 100%;
 }
 
