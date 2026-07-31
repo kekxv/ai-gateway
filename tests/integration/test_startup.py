@@ -136,6 +136,12 @@ async def test_non_production_startup_still_requires_current_migration_head(
 async def test_lifespan_starts_and_closes_shared_resources_exactly_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    tokenizer_warm_calls = 0
+
+    async def warm_tokenizer() -> None:
+        nonlocal tokenizer_warm_calls
+        tokenizer_warm_calls += 1
+
     class StubHttpClientFactory:
         def __init__(self, _: Settings) -> None:
             self.close_calls = 0
@@ -189,6 +195,7 @@ async def test_lifespan_starts_and_closes_shared_resources_exactly_once(
     monkeypatch.setattr(main_module, "HttpClientFactory", StubHttpClientFactory)
     monkeypatch.setattr(main_module, "ModelSyncScheduler", StubModelSyncScheduler)
     monkeypatch.setattr(main_module, "BillingRecoveryScheduler", StubBillingRecoveryScheduler)
+    monkeypatch.setattr(main_module, "warm_tokenizer", warm_tokenizer, raising=False)
     app = create_app(runtime_settings())
 
     async with app.router.lifespan_context(app):
@@ -200,6 +207,7 @@ async def test_lifespan_starts_and_closes_shared_resources_exactly_once(
     assert factories[0].close_calls == 1
     assert schedulers[0].run_calls == schedulers[0].stop_calls == 1
     assert recovery_schedulers[0].run_calls == recovery_schedulers[0].stop_calls == 1
+    assert tokenizer_warm_calls == 1
     assert engine.dispose_calls == 1
 
 

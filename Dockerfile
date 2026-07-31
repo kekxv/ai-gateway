@@ -38,14 +38,16 @@ FROM python:3.12-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.11.30 /uv /usr/local/bin/uv
 
 ENV UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    TIKTOKEN_CACHE_DIR=/app/tiktoken-cache
 
 WORKDIR /app
 
 # Dependency layer — only re-installed when pyproject.toml / uv.lock change.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project
+    uv sync --frozen --no-dev --no-install-project \
+    && /app/.venv/bin/python -c 'import tiktoken; tiktoken.get_encoding("cl100k_base")'
 
 
 # ---------- Stage 3: slim runtime image ----------
@@ -55,6 +57,7 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONPATH="/app/src" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    TIKTOKEN_CACHE_DIR=/app/tiktoken-cache \
     GATEWAY_ENVIRONMENT=production
 
 # Non-root runtime user.
@@ -67,6 +70,7 @@ WORKDIR /app
 
 # 1) Python virtualenv (invalidated only by pyproject.toml / uv.lock changes).
 COPY --from=builder --chown=gateway:gateway /app/.venv ./.venv
+COPY --from=builder --chown=gateway:gateway /app/tiktoken-cache ./tiktoken-cache
 
 # 2) Project metadata, DB migrations and helper scripts (rarely change).
 COPY --chown=gateway:gateway alembic.ini pyproject.toml ./

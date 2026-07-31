@@ -28,6 +28,7 @@ from ai_gateway.audit.service import AuditService, use_audit_service
 from ai_gateway.auth.router import router as auth_router
 from ai_gateway.billing.recovery import BillingRecoveryScheduler
 from ai_gateway.billing.service import BillingService
+from ai_gateway.billing.usage import warm_tokenizer
 from ai_gateway.catalog.scheduler import ModelSyncScheduler
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.errors import (
@@ -154,6 +155,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             validate_runtime_settings(active_settings)
             configure_logging(level=getattr(active_settings, "log_level", "INFO"))
+            await warm_tokenizer()
             await verify_database(engine, require_migration_head=True)
             session_factory = configured_session_factory or get_session_factory_for_engine(engine)
             http_client_factory = HttpClientFactory(active_settings)

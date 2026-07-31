@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
@@ -153,6 +154,14 @@ def estimate_request_tokens(request: CanonicalRequest) -> int:
     return sum(estimate_text_tokens(value) for value in values)
 
 
+async def estimate_request_tokens_async(request: CanonicalRequest) -> int:
+    return await asyncio.to_thread(estimate_request_tokens, request)
+
+
+async def warm_tokenizer() -> None:
+    await asyncio.to_thread(_encoding)
+
+
 def estimate_text_tokens(text: str) -> int:
     return len(_encoding().encode(text))
 
@@ -173,6 +182,22 @@ def resolve_usage(
             output_tokens=estimate_text_tokens(response_text),
         ),
         usage_source=UsageSource.ESTIMATED,
+    )
+
+
+async def resolve_usage_async(
+    *,
+    protocol: Protocol | str,
+    payload: Mapping[str, Any],
+    request: CanonicalRequest,
+    response_text: str,
+) -> UsageResult:
+    return await asyncio.to_thread(
+        resolve_usage,
+        protocol=protocol,
+        payload=payload,
+        request=request,
+        response_text=response_text,
     )
 
 

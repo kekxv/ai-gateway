@@ -41,8 +41,9 @@ from ai_gateway.billing.service import (
 from ai_gateway.billing.usage import (
     UsageResult,
     estimate_request_tokens,
+    estimate_request_tokens_async,
     extract_native_openai_usage,
-    resolve_usage,
+    resolve_usage_async,
 )
 from ai_gateway.catalog.repository import CatalogRepository
 from ai_gateway.core.config import Settings
@@ -263,7 +264,7 @@ class GatewayService:
         except (GatewayError, ValueError) as exc:
             raise InvalidRequestError(str(exc)) from exc
         return GatewayOutput(
-            orjson.dumps({"input_tokens": estimate_request_tokens(canonical)}),
+            orjson.dumps({"input_tokens": await estimate_request_tokens_async(canonical)}),
             status.HTTP_200_OK,
             "application/json",
         )
@@ -329,7 +330,7 @@ class GatewayService:
         await _release_read_session(self._session)
         request_id = uuid4()
         billing_key = _billing_key(principal, request_id)
-        estimated_input_tokens = estimate_request_tokens(canonical)
+        estimated_input_tokens = await estimate_request_tokens_async(canonical)
         reservation = await self._billing.reserve_balance(
             user_id=principal.user_id,
             model=priced_model,
@@ -503,7 +504,7 @@ class GatewayService:
             output = converted.output
             response_payload = converted.payload
             canonical_response = converted.canonical
-            usage_result = _resolve_response_usage(
+            usage_result = await _resolve_response_usage(
                 route=route,
                 response_payload=response_payload,
                 request=replace(canonical, model=route.upstream_model),
@@ -1714,7 +1715,7 @@ def _convert_response(
     )
 
 
-def _resolve_response_usage(
+async def _resolve_response_usage(
     *,
     route: RouteCandidate,
     response_payload: Mapping[str, Any],
@@ -1732,14 +1733,14 @@ def _resolve_response_usage(
     if not response_text:
         response_text = response_body.decode("utf-8", errors="replace")
     try:
-        return resolve_usage(
+        return await resolve_usage_async(
             protocol=route.protocol,
             payload=response_payload,
             request=request,
             response_text=response_text,
         )
     except (GatewayError, ValueError):
-        return resolve_usage(
+        return await resolve_usage_async(
             protocol=route.protocol,
             payload={},
             request=request,

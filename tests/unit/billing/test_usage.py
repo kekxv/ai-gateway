@@ -1,7 +1,10 @@
+import threading
+
 import orjson
 import pytest
 import tiktoken
 
+from ai_gateway.billing import usage as usage_module
 from ai_gateway.billing.usage import (
     estimate_request_tokens,
     extract_native_openai_usage,
@@ -116,6 +119,52 @@ def test_estimate_request_tokens_counts_text_and_tool_schema_json() -> None:
     )
 
     assert estimate_request_tokens(request) == expected
+
+
+async def test_async_request_estimation_runs_tokenizer_outside_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_loop_thread = threading.get_ident()
+    tokenizer_threads: set[int] = set()
+
+    class RecordingEncoding:
+        def encode(self, _: str) -> list[int]:
+            tokenizer_threads.add(threading.get_ident())
+            return [1]
+
+    monkeypatch.setattr(usage_module, "_encoding", RecordingEncoding)
+
+    result = await usage_module.estimate_request_tokens_async(_request())
+
+    assert result == 5
+    assert tokenizer_threads
+    assert event_loop_thread not in tokenizer_threads
+
+
+async def test_async_usage_resolution_runs_fallback_estimation_outside_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_loop_thread = threading.get_ident()
+    tokenizer_threads: set[int] = set()
+
+    class RecordingEncoding:
+        def encode(self, _: str) -> list[int]:
+            tokenizer_threads.add(threading.get_ident())
+            return [1]
+
+    monkeypatch.setattr(usage_module, "_encoding", RecordingEncoding)
+
+    result = await usage_module.resolve_usage_async(
+        protocol=Protocol.OPENAI,
+        payload={"id": "response-without-usage"},
+        request=_request(),
+        response_text="estimated response text",
+    )
+
+    assert result.usage == CanonicalUsage(5, 1)
+    assert result.usage_source is UsageSource.ESTIMATED
+    assert tokenizer_threads
+    assert event_loop_thread not in tokenizer_threads
 
 
 def test_missing_usage_estimates_request_and_response_and_marks_source() -> None:

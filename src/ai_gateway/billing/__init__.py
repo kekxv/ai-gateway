@@ -15,9 +15,12 @@ from ai_gateway.billing.service import (
 from ai_gateway.billing.usage import (
     UsageResult,
     estimate_request_tokens,
+    estimate_request_tokens_async,
     estimate_text_tokens,
     extract_provider_usage,
     resolve_usage,
+    resolve_usage_async,
+    warm_tokenizer,
 )
 
 __all__ = [
@@ -31,9 +34,12 @@ __all__ = [
     "SettlementResult",
     "calculate_cost",
     "estimate_request_tokens",
+    "estimate_request_tokens_async",
     "estimate_text_tokens",
     "extract_provider_usage",
     "resolve_usage",
+    "resolve_usage_async",
+    "warm_tokenizer",
     "reserve_balance",
     "settle_request",
 ]
