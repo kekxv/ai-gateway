@@ -161,7 +161,7 @@ describe('控制台概览', () => {
     expect(wrapper.text()).toContain('12,345')
     expect(wrapper.text()).toContain('用户总数')
     expect(wrapper.text()).toContain('98')
-    expect(wrapper.text()).toContain('活跃密钥')
+    expect(wrapper.text()).toContain('活跃接口密钥')
     expect(wrapper.text()).toContain('2/3')
     expect(wrapper.text()).toContain('7/8')
     expect(wrapper.text()).toContain('5/6')

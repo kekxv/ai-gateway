@@ -162,25 +162,25 @@ const resourceCards = computed<ResourceCard[]>(() => {
       icon: '👤',
     },
     {
-      label: '活跃密钥',
+      label: '活跃接口密钥',
       value: formatInteger(data.active_api_keys),
       note: '当前可用',
       icon: '🔑',
     },
     {
-      label: '供应商',
+      label: '启用提供商',
       value: `${formatInteger(data.providers.enabled)}/${formatInteger(data.providers.total)}`,
       note: '已启用',
       icon: '🔌',
     },
     {
-      label: '模型',
+      label: '启用模型',
       value: `${formatInteger(data.models.enabled)}/${formatInteger(data.models.total)}`,
       note: '已启用',
       icon: '🤖',
     },
     {
-      label: '路由',
+      label: '启用路由',
       value: `${formatInteger(data.routes.enabled)}/${formatInteger(data.routes.total)}`,
       note: data.routes.unavailable > 0 ? `${formatInteger(data.routes.unavailable)} 条熔断` : '正常',
       icon: '🔀',
@@ -201,9 +201,13 @@ const usageMetrics = computed<MetricItem[]>(() => {
   if (data === null) return []
   const metrics: MetricItem[] = [
     {
-      label: '请求总数',
+      label: '24 小时请求',
       value: formatInteger(data.requests_24h),
       hint: `失败 ${formatInteger(data.failed_requests_24h)}（${formatPercent(data.failed_requests_24h, data.requests_24h)}）`,
+    },
+    {
+      label: '失败率',
+      value: formatPercent(data.failed_requests_24h, data.requests_24h),
     },
     {
       label: '输入令牌',
@@ -844,8 +848,7 @@ onBeforeUnmount(() => {
 .resource-card__note {
   margin: 0.2rem 0 0;
   font-size: 0.72rem;
-  color: var(--gateway-muted);
-  opacity: 0.8;
+  color: #5a6577;
 }
 
 /* ─── Metrics grid ─────────────────────────────────────────────────── */
