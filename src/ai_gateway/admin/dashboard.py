@@ -205,9 +205,7 @@ async def get_dashboard_summary(
                     RequestLog.created_at <= now,
                     RequestLog.model_id.is_not(None),
                 )
-                .group_by(
-                    RequestLog.model_id, Model.canonical_name, Model.display_name
-                )
+                .group_by(RequestLog.model_id, Model.canonical_name, Model.display_name)
                 .order_by(func.count(RequestLog.id).desc())
                 .limit(5)
             )
