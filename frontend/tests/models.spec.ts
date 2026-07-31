@@ -11,6 +11,7 @@ import type {
   ModelRouteResponse,
   ProviderResponse,
 } from '@/api/types'
+import ModelCard from '@/components/models/ModelCard.vue'
 import ModelFormDrawer from '@/components/models/ModelFormDrawer.vue'
 import RouteFormDrawer from '@/components/models/RouteFormDrawer.vue'
 import { routes } from '@/router'
@@ -265,6 +266,137 @@ describe('模型与别名管理', () => {
     expect(wrapper.text()).toContain('缓存写入价格：')
     expect(wrapper.text()).toContain('¥0.50000000')
     expect(wrapper.text()).toContain('¥2.50000000')
+    wrapper.unmount()
+  })
+
+  it('将每个分段的长度范围与四类价格分组展示', () => {
+    const wrapper = mount(ModelCard, {
+      props: {
+        model: {
+          ...modelFixture,
+          price_tiers: [
+            {
+              id: 301,
+              max_input_tokens: 272000,
+              input_price_per_million: '3.00000000',
+              output_price_per_million: '15.00000000',
+              cache_read_price_per_million: '0.30000000',
+              cache_write_price_per_million: '3.75000000',
+            },
+            {
+              id: 302,
+              max_input_tokens: null,
+              input_price_per_million: '6.00000000',
+              output_price_per_million: '22.50000000',
+              cache_read_price_per_million: '0.60000000',
+              cache_write_price_per_million: '7.50000000',
+            },
+          ],
+        },
+        routes: [],
+        providers: [],
+      },
+    })
+
+    const tiers = wrapper.findAll('[data-test^="model-price-tier-"]')
+    expect(tiers).toHaveLength(2)
+    expect(tiers[0]?.get('.price-tier__header').text()).toContain('长度 ≤ 272,000')
+    expect(tiers[1]?.get('.price-tier__header').text()).toContain('不限长度')
+    expect(
+      tiers[0]?.findAll('.price-metric').map((metric) => [
+        metric.get('.price-metric__label').text(),
+        metric.get('.price-metric__value').text(),
+      ]),
+    ).toEqual([
+      ['输入', '¥3.00000000'],
+      ['输出', '¥15.00000000'],
+      ['缓存读取', '¥0.30000000'],
+      ['缓存写入', '¥3.75000000'],
+    ])
+    wrapper.unmount()
+  })
+
+  it('在紧凑分段编辑卡片中回填长度范围和四类价格', async () => {
+    const wrapper = mount(ModelFormDrawer, {
+      props: {
+        modelValue: true,
+        model: {
+          ...modelFixture,
+          price_tiers: [
+            {
+              id: 301,
+              max_input_tokens: 272000,
+              input_price_per_million: '3.00000000',
+              output_price_per_million: '15.00000000',
+              cache_read_price_per_million: '0.30000000',
+              cache_write_price_per_million: '3.75000000',
+            },
+            {
+              id: 302,
+              max_input_tokens: null,
+              input_price_per_million: '6.00000000',
+              output_price_per_million: '22.50000000',
+              cache_read_price_per_million: '0.60000000',
+              cache_write_price_per_million: '7.50000000',
+            },
+          ],
+        },
+        submitting: false,
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const rows = wrapper.findAll('.tier-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]?.get('.tier-limit-field').text()).toContain('长度上限')
+    expect(wrapper.get('[data-test="model-tier-limit-0"] input').element).toHaveProperty(
+      'value',
+      '272000',
+    )
+    expect(rows[1]?.get('.tier-limit-field').text()).toContain('不限长度（最终分段）')
+    expect(rows[1]?.find('[data-test="model-tier-limit-1"]').exists()).toBe(false)
+    expect(rows.every((row) => row.findAll('.tier-price-grid .el-form-item').length === 4)).toBe(
+      true,
+    )
+    expect(wrapper.get('[data-test="model-tier-input-0"]').element).toHaveProperty(
+      'value',
+      '3.00000000',
+    )
+    expect(wrapper.get('[data-test="model-tier-output-0"]').element).toHaveProperty(
+      'value',
+      '15.00000000',
+    )
+    expect(wrapper.get('[data-test="model-tier-cache-read-1"]').element).toHaveProperty(
+      'value',
+      '0.60000000',
+    )
+    expect(wrapper.get('[data-test="model-tier-cache-write-1"]').element).toHaveProperty(
+      'value',
+      '7.50000000',
+    )
+    wrapper.unmount()
+  })
+
+  it('增删分段后始终将最后一档标记为不限长度', async () => {
+    const wrapper = mount(ModelFormDrawer, {
+      props: { modelValue: true, model: null, submitting: false },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="add-model-price-tier"]').trigger('click')
+    expect(wrapper.get('.tier-limit-field').text()).toContain('不限长度（最终分段）')
+
+    await wrapper.get('[data-test="add-model-price-tier"]').trigger('click')
+    const rows = wrapper.findAll('.tier-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]?.find('[data-test="model-tier-limit-0"]').exists()).toBe(true)
+    expect(rows[1]?.get('.tier-limit-field').text()).toContain('不限长度（最终分段）')
+
+    await wrapper.get('[data-test="remove-model-price-tier-1"]').trigger('click')
+    expect(wrapper.findAll('.tier-row')).toHaveLength(1)
+    expect(wrapper.get('.tier-limit-field').text()).toContain('不限长度（最终分段）')
     wrapper.unmount()
   })
 

@@ -178,22 +178,64 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
       </div>
       <div v-if="readonly === true && (model.public_price_tiers?.length ?? 0) > 0" class="price-tiers">
         <div class="section-title">公开价格（每百万令牌）</div>
-        <div v-for="tier in model.public_price_tiers" :key="String(tier.max_input_tokens)" class="price-tier">
-          <ElTag size="small" type="primary" effect="plain">{{ tierLabel(tier.max_input_tokens) }}</ElTag>
-          <span>输入 {{ formatPriceRange(tier.input_price_per_million_min, tier.input_price_per_million_max) }}</span>
-          <span>输出 {{ formatPriceRange(tier.output_price_per_million_min, tier.output_price_per_million_max) }}</span>
-          <span>缓存读 {{ formatPriceRange(tier.cache_read_price_per_million_min, tier.cache_read_price_per_million_max) }}</span>
-          <span>缓存写 {{ formatPriceRange(tier.cache_write_price_per_million_min, tier.cache_write_price_per_million_max) }}</span>
+        <div
+          v-for="(tier, index) in model.public_price_tiers"
+          :key="String(tier.max_input_tokens)"
+          class="price-tier"
+          :data-test="`public-model-price-tier-${String(index)}`"
+        >
+          <div class="price-tier__header">
+            <ElTag size="small" type="primary" effect="plain">{{ tierLabel(tier.max_input_tokens) }}</ElTag>
+          </div>
+          <dl class="price-tier__prices">
+            <div class="price-metric">
+              <dt class="price-metric__label">输入</dt>
+              <dd class="price-metric__value">{{ formatPriceRange(tier.input_price_per_million_min, tier.input_price_per_million_max) }}</dd>
+            </div>
+            <div class="price-metric">
+              <dt class="price-metric__label">输出</dt>
+              <dd class="price-metric__value">{{ formatPriceRange(tier.output_price_per_million_min, tier.output_price_per_million_max) }}</dd>
+            </div>
+            <div class="price-metric">
+              <dt class="price-metric__label">缓存读取</dt>
+              <dd class="price-metric__value">{{ formatPriceRange(tier.cache_read_price_per_million_min, tier.cache_read_price_per_million_max) }}</dd>
+            </div>
+            <div class="price-metric">
+              <dt class="price-metric__label">缓存写入</dt>
+              <dd class="price-metric__value">{{ formatPriceRange(tier.cache_write_price_per_million_min, tier.cache_write_price_per_million_max) }}</dd>
+            </div>
+          </dl>
         </div>
       </div>
       <div v-else-if="(model.price_tiers?.length ?? 0) > 0" class="price-tiers">
         <div class="section-title">分段价格（每百万令牌）</div>
-        <div v-for="tier in model.price_tiers" :key="tier.id" class="price-tier">
-          <ElTag size="small" type="info" effect="plain">{{ tierLabel(tier.max_input_tokens) }}</ElTag>
-          <span>输入 {{ formatMoney(tier.input_price_per_million) }}</span>
-          <span>输出 {{ formatMoney(tier.output_price_per_million) }}</span>
-          <span>缓存读 {{ formatMoney(tier.cache_read_price_per_million) }}</span>
-          <span>缓存写 {{ formatMoney(tier.cache_write_price_per_million) }}</span>
+        <div
+          v-for="tier in model.price_tiers"
+          :key="tier.id"
+          class="price-tier"
+          :data-test="`model-price-tier-${String(tier.id)}`"
+        >
+          <div class="price-tier__header">
+            <ElTag size="small" type="info" effect="plain">{{ tierLabel(tier.max_input_tokens) }}</ElTag>
+          </div>
+          <dl class="price-tier__prices">
+            <div class="price-metric">
+              <dt class="price-metric__label">输入</dt>
+              <dd class="price-metric__value">{{ formatMoney(tier.input_price_per_million) }}</dd>
+            </div>
+            <div class="price-metric">
+              <dt class="price-metric__label">输出</dt>
+              <dd class="price-metric__value">{{ formatMoney(tier.output_price_per_million) }}</dd>
+            </div>
+            <div class="price-metric">
+              <dt class="price-metric__label">缓存读取</dt>
+              <dd class="price-metric__value">{{ formatMoney(tier.cache_read_price_per_million) }}</dd>
+            </div>
+            <div class="price-metric">
+              <dt class="price-metric__label">缓存写入</dt>
+              <dd class="price-metric__value">{{ formatMoney(tier.cache_write_price_per_million) }}</dd>
+            </div>
+          </dl>
         </div>
       </div>
       <div v-else class="basic-info">
@@ -476,20 +518,60 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
 .price-tiers {
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
-  padding: 0.875rem;
+  gap: 0.75rem;
+  padding: 0.75rem;
   background: #f8fafc;
   border: 1px solid var(--gateway-border);
   border-radius: 10px;
 }
 
+.price-tiers > .section-title {
+  margin-bottom: 0.125rem;
+}
+
 .price-tier {
-  display: grid;
-  grid-template-columns: minmax(8rem, auto) repeat(4, minmax(0, 1fr));
-  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.75rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.price-tier__header {
+  display: flex;
   align-items: center;
+  margin-bottom: 0.625rem;
+}
+
+.price-tier__prices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.price-metric {
+  min-width: 0;
+  padding: 0.5rem 0.625rem;
+  background: #f8fafc;
+  border-radius: 6px;
+}
+
+.price-metric__label {
   color: var(--gateway-muted);
-  font-size: 0.82rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.price-metric__value {
+  margin: 0.2rem 0 0;
+  color: var(--gateway-text);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .model-multiplier {
@@ -784,6 +866,10 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
   }
 
   .basic-info {
+    grid-template-columns: 1fr;
+  }
+
+  .price-tier__prices {
     grid-template-columns: 1fr;
   }
 

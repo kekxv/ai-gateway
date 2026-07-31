@@ -532,14 +532,12 @@ function submitForm(): void {
             :data-validation="`model-price-tier-${String(index)}`"
           >
             <div class="tier-row__header">
-              <strong>分段 {{ String(index + 1) }}</strong>
-              <ElButton text type="danger" :data-test="`remove-model-price-tier-${String(index)}`" @click="removePriceTier(index)">
-                <ElIcon><Delete /></ElIcon>移除
-              </ElButton>
-            </div>
-            <div class="tier-grid">
-              <ElFormItem label="输入长度上限" :error="row.error">
-                <span v-if="index === priceTiers.length - 1" class="tier-unbounded">不限（最终分段）</span>
+              <div class="tier-row__title">
+                <strong>分段 {{ String(index + 1) }}</strong>
+                <span>每百万令牌价格</span>
+              </div>
+              <ElFormItem class="tier-limit-field" label="长度上限" :error="row.error">
+                <span v-if="index === priceTiers.length - 1" class="tier-unbounded">不限长度（最终分段）</span>
                 <ElInputNumber
                   v-else
                   v-model="row.maxInputTokens"
@@ -549,10 +547,22 @@ function submitForm(): void {
                   controls-position="right"
                 />
               </ElFormItem>
-              <ElFormItem label="输入价格"><ElInput v-model="row.inputPrice" :data-test="`model-tier-input-${String(index)}`" inputmode="decimal" /></ElFormItem>
-              <ElFormItem label="输出价格"><ElInput v-model="row.outputPrice" :data-test="`model-tier-output-${String(index)}`" inputmode="decimal" /></ElFormItem>
-              <ElFormItem label="缓存读取价格"><ElInput v-model="row.cacheReadPrice" :data-test="`model-tier-cache-read-${String(index)}`" inputmode="decimal" /></ElFormItem>
-              <ElFormItem label="缓存写入价格"><ElInput v-model="row.cacheWritePrice" :data-test="`model-tier-cache-write-${String(index)}`" inputmode="decimal" /></ElFormItem>
+              <ElButton
+                class="tier-remove"
+                text
+                type="danger"
+                :aria-label="`移除分段 ${String(index + 1)}`"
+                :data-test="`remove-model-price-tier-${String(index)}`"
+                @click="removePriceTier(index)"
+              >
+                <ElIcon><Delete /></ElIcon>移除
+              </ElButton>
+            </div>
+            <div class="tier-price-grid">
+              <ElFormItem label="输入价格"><ElInput v-model="row.inputPrice" :data-test="`model-tier-input-${String(index)}`" inputmode="decimal" spellcheck="false" /></ElFormItem>
+              <ElFormItem label="输出价格"><ElInput v-model="row.outputPrice" :data-test="`model-tier-output-${String(index)}`" inputmode="decimal" spellcheck="false" /></ElFormItem>
+              <ElFormItem label="缓存读取价格"><ElInput v-model="row.cacheReadPrice" :data-test="`model-tier-cache-read-${String(index)}`" inputmode="decimal" spellcheck="false" /></ElFormItem>
+              <ElFormItem label="缓存写入价格"><ElInput v-model="row.cacheWritePrice" :data-test="`model-tier-cache-write-${String(index)}`" inputmode="decimal" spellcheck="false" /></ElFormItem>
             </div>
           </div>
         </section>
@@ -695,31 +705,70 @@ function submitForm(): void {
 }
 
 .tier-row {
-  margin-top: 1rem;
-  padding: 1rem;
+  margin-top: 0.75rem;
+  padding: 0.75rem;
   background: #f8fafc;
   border: 1px solid var(--gateway-border);
   border-radius: 10px;
 }
 
 .tier-row__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.75rem;
+  display: grid;
+  grid-template-columns: minmax(7rem, 1fr) minmax(12rem, 16rem) auto;
+  gap: 0.75rem;
+  align-items: start;
+  margin-bottom: 0.625rem;
 }
 
-.tier-grid {
+.tier-row__title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding-top: 0.2rem;
+}
+
+.tier-row__title span {
+  color: var(--gateway-muted);
+  font-size: 0.75rem;
+}
+
+.tier-limit-field,
+.tier-price-grid :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+
+.tier-limit-field :deep(.el-form-item__label),
+.tier-price-grid :deep(.el-form-item__label) {
+  height: auto;
+  margin-bottom: 0.25rem;
+  line-height: 1.25;
+}
+
+.tier-limit-field :deep(.el-input-number) {
+  width: 100%;
+}
+
+.tier-remove {
+  margin-top: 1.25rem;
+}
+
+.tier-price-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 1rem;
+  gap: 0.65rem 0.75rem;
 }
 
 .tier-unbounded {
   display: inline-flex;
   min-height: 32px;
   align-items: center;
-  color: var(--gateway-muted);
+  padding: 0 0.75rem;
+  color: #475569;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 6px;
 }
 
 .alias-row {
@@ -765,8 +814,23 @@ function submitForm(): void {
     grid-template-columns: 1fr;
   }
 
-  .tier-grid {
+  .tier-price-grid {
     grid-template-columns: 1fr;
+  }
+
+  .tier-row__header {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .tier-limit-field {
+    grid-row: 2;
+    grid-column: 1 / -1;
+  }
+
+  .tier-remove {
+    grid-row: 1;
+    grid-column: 2;
+    margin-top: 0;
   }
 
   .section-heading,
