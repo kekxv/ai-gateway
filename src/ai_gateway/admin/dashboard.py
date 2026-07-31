@@ -45,6 +45,17 @@ class DailyUsagePoint(BaseModel):
     gross_profit: Decimal
 
 
+class ModelUsageStat(BaseModel):
+    model_id: int
+    model_name: str
+    display_name: str
+    requests: int
+    prompt_tokens: int
+    completion_tokens: int
+    cost: Decimal
+    cost_amount: Decimal
+
+
 class DashboardSummary(BaseModel):
     users_total: int
     active_api_keys: int
@@ -55,11 +66,21 @@ class DashboardSummary(BaseModel):
     failed_requests_24h: int
     prompt_tokens_24h: int
     completion_tokens_24h: int
+    cache_read_tokens_24h: int
+    cache_write_tokens_24h: int
+    total_tokens_24h: int
     cost_24h: Decimal
     cost_amount_24h: Decimal
     gross_profit_24h: Decimal
     average_latency_ms_24h: int | None
+    total_requests: int
+    total_cost: Decimal
+    total_cost_amount: Decimal
+    total_gross_profit: Decimal
+    total_prompt_tokens: int
+    total_completion_tokens: int
     daily_usage: list[DailyUsagePoint]
+    top_models: list[ModelUsageStat]
 
 
 @router.get("/summary", response_model=DashboardSummary)
@@ -135,6 +156,8 @@ async def get_dashboard_summary(
                 ),
                 func.coalesce(func.sum(RequestLog.prompt_tokens), 0),
                 func.coalesce(func.sum(RequestLog.completion_tokens), 0),
+                func.coalesce(func.sum(RequestLog.cache_read_tokens), 0),
+                func.coalesce(func.sum(RequestLog.cache_write_tokens), 0),
                 func.coalesce(func.sum(RequestLog.cost), Decimal("0")),
                 func.coalesce(func.sum(RequestLog.cost_amount), Decimal("0")),
                 func.avg(RequestLog.latency_ms),
@@ -144,6 +167,67 @@ async def get_dashboard_summary(
             )
         )
     ).one()
+
+    # All-time totals
+    total_row = (
+        await session.execute(
+            select(
+                func.count(RequestLog.id),
+                func.coalesce(func.sum(RequestLog.prompt_tokens), 0),
+                func.coalesce(func.sum(RequestLog.completion_tokens), 0),
+                func.coalesce(func.sum(RequestLog.cost), Decimal("0")),
+                func.coalesce(func.sum(RequestLog.cost_amount), Decimal("0")),
+            )
+        )
+    ).one()
+
+    # Top models by request count (last 7 days)
+    model_stat_rows = (
+        (
+            await session.execute(
+                select(
+                    RequestLog.model_id,
+                    Model.canonical_name,
+                    Model.display_name,
+                    func.count(RequestLog.id).label("requests"),
+                    func.coalesce(func.sum(RequestLog.prompt_tokens), 0).label("prompt_tokens"),
+                    func.coalesce(func.sum(RequestLog.completion_tokens), 0).label(
+                        "completion_tokens"
+                    ),
+                    func.coalesce(func.sum(RequestLog.cost), Decimal("0")).label("cost"),
+                    func.coalesce(func.sum(RequestLog.cost_amount), Decimal("0")).label(
+                        "cost_amount"
+                    ),
+                )
+                .outerjoin(Model, Model.id == RequestLog.model_id)
+                .where(
+                    RequestLog.created_at >= first_daily_midnight,
+                    RequestLog.created_at <= now,
+                    RequestLog.model_id.is_not(None),
+                )
+                .group_by(
+                    RequestLog.model_id, Model.canonical_name, Model.display_name
+                )
+                .order_by(func.count(RequestLog.id).desc())
+                .limit(5)
+            )
+        )
+        .mappings()
+        .all()
+    )
+    top_models = [
+        ModelUsageStat(
+            model_id=row["model_id"],
+            model_name=row["canonical_name"] or "未知模型",
+            display_name=row["display_name"] or row["canonical_name"] or "未知模型",
+            requests=int(row["requests"]),
+            prompt_tokens=int(row["prompt_tokens"]),
+            completion_tokens=int(row["completion_tokens"]),
+            cost=row["cost"],
+            cost_amount=row["cost_amount"],
+        )
+        for row in model_stat_rows
+    ]
 
     daily_date = func.date(RequestLog.created_at).label("date")
     daily_rows = (
@@ -205,7 +289,15 @@ async def get_dashboard_summary(
             )
         )
 
-    average_latency = request_row[6]
+    average_latency = request_row[8]
+    prompt_24h = int(request_row[2])
+    completion_24h = int(request_row[3])
+    cache_read_24h = int(request_row[4])
+    cache_write_24h = int(request_row[5])
+    cost_24h = request_row[6]
+    cost_amount_24h = request_row[7]
+    total_cost_all = total_row[3]
+    total_cost_amount_all = total_row[4]
     return DashboardSummary(
         users_total=int(users_total or 0),
         active_api_keys=int(active_api_keys or 0),
@@ -218,13 +310,23 @@ async def get_dashboard_summary(
         ),
         requests_24h=int(request_row[0]),
         failed_requests_24h=int(request_row[1]),
-        prompt_tokens_24h=int(request_row[2]),
-        completion_tokens_24h=int(request_row[3]),
-        cost_24h=request_row[4],
-        cost_amount_24h=request_row[5],
-        gross_profit_24h=request_row[4] - request_row[5],
+        prompt_tokens_24h=prompt_24h,
+        completion_tokens_24h=completion_24h,
+        cache_read_tokens_24h=cache_read_24h,
+        cache_write_tokens_24h=cache_write_24h,
+        total_tokens_24h=prompt_24h + completion_24h + cache_read_24h + cache_write_24h,
+        cost_24h=cost_24h,
+        cost_amount_24h=cost_amount_24h,
+        gross_profit_24h=cost_24h - cost_amount_24h,
         average_latency_ms_24h=(
             int(round(average_latency)) if average_latency is not None else None
         ),
+        total_requests=int(total_row[0]),
+        total_cost=total_cost_all,
+        total_cost_amount=total_cost_amount_all,
+        total_gross_profit=total_cost_all - total_cost_amount_all,
+        total_prompt_tokens=int(total_row[1]),
+        total_completion_tokens=int(total_row[2]),
         daily_usage=daily_usage,
+        top_models=top_models,
     )

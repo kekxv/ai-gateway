@@ -43,8 +43,15 @@ class UserDashboardSummary(BaseModel):
     failed_requests_24h: int
     prompt_tokens_24h: int
     completion_tokens_24h: int
+    cache_read_tokens_24h: int
+    cache_write_tokens_24h: int
+    total_tokens_24h: int
     cost_24h: Decimal
     average_latency_ms_24h: int | None
+    total_requests: int
+    total_cost: Decimal
+    total_prompt_tokens: int
+    total_completion_tokens: int
     daily_usage: list[DailyUsagePoint]
 
 
@@ -88,6 +95,8 @@ async def get_user_dashboard_summary(
                 ),
                 func.coalesce(func.sum(RequestLog.prompt_tokens), 0),
                 func.coalesce(func.sum(RequestLog.completion_tokens), 0),
+                func.coalesce(func.sum(RequestLog.cache_read_tokens), 0),
+                func.coalesce(func.sum(RequestLog.cache_write_tokens), 0),
                 func.coalesce(func.sum(RequestLog.cost), Decimal("0")),
                 func.avg(RequestLog.latency_ms),
             ).where(
@@ -95,6 +104,18 @@ async def get_user_dashboard_summary(
                 RequestLog.created_at >= cutoff_24h,
                 RequestLog.created_at <= now,
             )
+        )
+    ).one()
+
+    # All-time totals for the user
+    total_row = (
+        await session.execute(
+            select(
+                func.count(RequestLog.id),
+                func.coalesce(func.sum(RequestLog.prompt_tokens), 0),
+                func.coalesce(func.sum(RequestLog.completion_tokens), 0),
+                func.coalesce(func.sum(RequestLog.cost), Decimal("0")),
+            ).where(RequestLog.user_id == user.id)
         )
     ).one()
 
@@ -152,18 +173,29 @@ async def get_user_dashboard_summary(
             )
         )
 
-    average_latency = request_row[5]
+    average_latency = request_row[7]
+    prompt_24h = int(request_row[2])
+    completion_24h = int(request_row[3])
+    cache_read_24h = int(request_row[4])
+    cache_write_24h = int(request_row[5])
     return UserDashboardSummary(
         balance=account.balance,
         total_spent=account.total_spent,
         active_api_keys=int(active_api_keys or 0),
         requests_24h=int(request_row[0]),
         failed_requests_24h=int(request_row[1]),
-        prompt_tokens_24h=int(request_row[2]),
-        completion_tokens_24h=int(request_row[3]),
-        cost_24h=request_row[4],
+        prompt_tokens_24h=prompt_24h,
+        completion_tokens_24h=completion_24h,
+        cache_read_tokens_24h=cache_read_24h,
+        cache_write_tokens_24h=cache_write_24h,
+        total_tokens_24h=prompt_24h + completion_24h + cache_read_24h + cache_write_24h,
+        cost_24h=request_row[6],
         average_latency_ms_24h=(
             int(round(average_latency)) if average_latency is not None else None
         ),
+        total_requests=int(total_row[0]),
+        total_cost=total_row[3],
+        total_prompt_tokens=int(total_row[1]),
+        total_completion_tokens=int(total_row[2]),
         daily_usage=daily_usage,
     )

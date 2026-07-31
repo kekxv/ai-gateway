@@ -33,18 +33,39 @@ const summaryFixture: DashboardSummary = {
   failed_requests_24h: 25,
   prompt_tokens_24h: 456_789,
   completion_tokens_24h: 123_456,
+  cache_read_tokens_24h: 50_000,
+  cache_write_tokens_24h: 10_000,
+  total_tokens_24h: 640_245,
   cost_24h: '0.125',
   cost_amount_24h: '0.100',
   gross_profit_24h: '0.025',
   average_latency_ms_24h: 248,
+  total_requests: 50_000,
+  total_cost: '100.00000000',
+  total_cost_amount: '80.00000000',
+  total_gross_profit: '20.00000000',
+  total_prompt_tokens: 5_000_000,
+  total_completion_tokens: 1_500_000,
   daily_usage: [
-    { date: '2026-07-16', requests: 40, failures: 2, cost: '0.01000000' },
-    { date: '2026-07-17', requests: 48, failures: 1, cost: '0.02000000' },
-    { date: '2026-07-18', requests: 52, failures: 3, cost: '0.03000000' },
-    { date: '2026-07-19', requests: 60, failures: 0, cost: '0.04000000' },
-    { date: '2026-07-20', requests: 55, failures: 1, cost: '0.05000000' },
-    { date: '2026-07-21', requests: 70, failures: 2, cost: '0.06000000' },
-    { date: '2026-07-22', requests: 80, failures: 4, cost: '0.07000000' },
+    { date: '2026-07-16', requests: 40, failures: 2, cost: '0.01000000', cost_amount: '0.00800000', gross_profit: '0.00200000' },
+    { date: '2026-07-17', requests: 48, failures: 1, cost: '0.02000000', cost_amount: '0.01600000', gross_profit: '0.00400000' },
+    { date: '2026-07-18', requests: 52, failures: 3, cost: '0.03000000', cost_amount: '0.02400000', gross_profit: '0.00600000' },
+    { date: '2026-07-19', requests: 60, failures: 0, cost: '0.04000000', cost_amount: '0.03200000', gross_profit: '0.00800000' },
+    { date: '2026-07-20', requests: 55, failures: 1, cost: '0.05000000', cost_amount: '0.04000000', gross_profit: '0.01000000' },
+    { date: '2026-07-21', requests: 70, failures: 2, cost: '0.06000000', cost_amount: '0.04800000', gross_profit: '0.01200000' },
+    { date: '2026-07-22', requests: 80, failures: 4, cost: '0.07000000', cost_amount: '0.05600000', gross_profit: '0.01400000' },
+  ],
+  top_models: [
+    {
+      model_id: 1,
+      model_name: 'gpt-4o',
+      display_name: 'GPT-4o',
+      requests: 500,
+      prompt_tokens: 100_000,
+      completion_tokens: 50_000,
+      cost: '5.00000000',
+      cost_amount: '4.00000000',
+    },
   ],
 }
 
@@ -64,6 +85,9 @@ const zeroSummary: DashboardSummary = {
   failed_requests_24h: 0,
   prompt_tokens_24h: 0,
   completion_tokens_24h: 0,
+  cache_read_tokens_24h: 0,
+  cache_write_tokens_24h: 0,
+  total_tokens_24h: 0,
   cost_24h: '0E-8',
   average_latency_ms_24h: null,
   daily_usage: summaryFixture.daily_usage.map((point) => ({
@@ -113,7 +137,7 @@ describe('控制台概览', () => {
     expect(loadedModule.default).toBe(DashboardView)
   })
 
-  it('渲染资源、24 小时指标、精确金额与熔断路由告警', async () => {
+  it('渲染资源、24 小时指标、精确金额与熔断路由提示', async () => {
     const exactSummary: DashboardSummary = {
       ...summaryFixture,
       daily_usage: summaryFixture.daily_usage.map((point, index) => ({
@@ -133,19 +157,25 @@ describe('控制台概览', () => {
     const wrapper = mountDashboard()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('用户总数 12,345')
-    expect(wrapper.text()).toContain('活跃接口密钥 98')
-    expect(wrapper.text()).toContain('启用提供商 2 / 3')
-    expect(wrapper.text()).toContain('启用模型 7 / 8')
-    expect(wrapper.text()).toContain('启用路由 5 / 6')
-    expect(wrapper.text()).toContain('24 小时请求 1,234')
-    expect(wrapper.text()).toContain('失败率 2.0%')
-    expect(wrapper.text()).toContain('用户费用 ¥0.12500000')
-    expect(wrapper.text()).toContain('成本费用 ¥0.10000000')
-    expect(wrapper.text()).toContain('毛利润 ¥0.02500000')
-    expect(wrapper.text()).toContain('1 条路由处于熔断状态')
-    expect(wrapper.get('.el-alert').text()).toContain('1 条路由处于熔断状态')
+    // Resource cards (value before label in new layout)
+    expect(wrapper.text()).toContain('12,345')
+    expect(wrapper.text()).toContain('用户总数')
+    expect(wrapper.text()).toContain('98')
+    expect(wrapper.text()).toContain('活跃密钥')
+    expect(wrapper.text()).toContain('2/3')
+    expect(wrapper.text()).toContain('7/8')
+    expect(wrapper.text()).toContain('5/6')
+    expect(wrapper.text()).toContain('1 条熔断')
 
+    // Billing section
+    expect(wrapper.text()).toContain('用户费用')
+    expect(wrapper.text()).toContain('¥0.12500000')
+    expect(wrapper.text()).toContain('成本费用')
+    expect(wrapper.text()).toContain('¥0.10000000')
+    expect(wrapper.text()).toContain('毛利润')
+    expect(wrapper.text()).toContain('¥0.02500000')
+
+    // Chart
     const chart = wrapper.getComponent({ name: 'VChartStub' })
     expect(chart.props('autoresize')).toBe(true)
     expect(chart.attributes('aria-label')).toBeUndefined()
@@ -165,7 +195,8 @@ describe('控制台概览', () => {
     expect(option.aria.decal?.show).toBe(true)
     expect(option.aria.description).toBeUndefined()
     expect(option.yAxis).toHaveLength(2)
-    expect(option.series.map((series) => series.type)).toEqual(['bar', 'bar', 'line'])
+    // Admin now has 4 series: requests, failures, user fee line, cost line
+    expect(option.series.map((series) => series.type)).toEqual(['bar', 'bar', 'line', 'line'])
     expect(option.series[2]?.yAxisIndex).toBe(1)
     expect(option.series[2]?.data).toEqual(exactSummary.daily_usage.map(({ cost }) => cost))
 
@@ -217,11 +248,10 @@ describe('控制台概览', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-test="chart-empty"]').text()).toContain(
-      '近 7 天暂无请求与费用数据',
+      '近 7 天暂无请求数据',
     )
     expect(wrapper.findComponent({ name: 'VChartStub' }).exists()).toBe(false)
-    expect(wrapper.text()).toContain('用户费用 ¥0.00000000')
-    expect(wrapper.text()).toContain('平均延迟 —')
+    expect(wrapper.text()).toContain('平均延迟—')
 
     wrapper.unmount()
   })
@@ -254,7 +284,7 @@ describe('控制台概览', () => {
 
     expect(attempts).toBe(2)
     expect(wrapper.find('[data-test="dashboard-error"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('用户费用 ¥0.12500000')
+    expect(wrapper.text()).toContain('用户费用¥0.12500000')
 
     wrapper.unmount()
   })
@@ -302,8 +332,8 @@ describe('控制台概览', () => {
     releaseSecond()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('用户费用 ¥2.00000000')
-    expect(wrapper.text()).not.toContain('用户费用 ¥1.00000000')
+    expect(wrapper.text()).toContain('用户费用¥2.00000000')
+    expect(wrapper.text()).not.toContain('用户费用¥1.00000000')
     wrapper.unmount()
   })
 

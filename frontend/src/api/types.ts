@@ -112,6 +112,17 @@ export interface DailyUsagePoint {
   gross_profit?: string
 }
 
+export interface ModelUsageStat {
+  model_id: number
+  model_name: string
+  display_name: string
+  requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  cost: string
+  cost_amount: string
+}
+
 export interface DashboardSummary {
   users_total: number
   active_api_keys: number
@@ -122,11 +133,21 @@ export interface DashboardSummary {
   failed_requests_24h: number
   prompt_tokens_24h: number
   completion_tokens_24h: number
+  cache_read_tokens_24h: number
+  cache_write_tokens_24h: number
+  total_tokens_24h: number
   cost_24h: string
   cost_amount_24h: string
   gross_profit_24h: string
   average_latency_ms_24h: number | null
+  total_requests: number
+  total_cost: string
+  total_cost_amount: string
+  total_gross_profit: string
+  total_prompt_tokens: number
+  total_completion_tokens: number
   daily_usage: DailyUsagePoint[]
+  top_models: ModelUsageStat[]
 }
 
 export interface UserDashboardSummary {
@@ -137,8 +158,15 @@ export interface UserDashboardSummary {
   failed_requests_24h: number
   prompt_tokens_24h: number
   completion_tokens_24h: number
+  cache_read_tokens_24h: number
+  cache_write_tokens_24h: number
+  total_tokens_24h: number
   cost_24h: string
   average_latency_ms_24h: number | null
+  total_requests: number
+  total_cost: string
+  total_prompt_tokens: number
+  total_completion_tokens: number
   daily_usage: DailyUsagePoint[]
 }
 

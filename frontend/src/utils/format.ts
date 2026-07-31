@@ -85,3 +85,19 @@ export function formatPercent(numerator: number, denominator: number): string {
   if (denominator === 0) return '0.0%'
   return `${((numerator / denominator) * 100).toFixed(1)}%`
 }
+
+export function formatCompactInteger(value: number): string {
+  if (value < 1000) return formatInteger(value)
+  if (value < 1_000_000) return `${(value / 1000).toFixed(1)}K`
+  if (value < 1_000_000_000) return `${(value / 1_000_000).toFixed(2)}M`
+  return `${(value / 1_000_000_000).toFixed(2)}B`
+}
+
+export function formatMoneyCompact(value: string): string {
+  const num = parseFloat(value)
+  if (Number.isNaN(num)) return `¥${value}`
+  if (num < 0.01 && num > 0) return `<¥0.01`
+  if (num < 1000) return `¥${num.toFixed(2)}`
+  if (num < 1_000_000) return `¥${(num / 1000).toFixed(2)}K`
+  return `¥${(num / 1_000_000).toFixed(2)}M`
+}

@@ -282,10 +282,18 @@ async def test_dashboard_summary_returns_counts_and_exact_seven_utc_days(
     assert payload["failed_requests_24h"] == 2
     assert payload["prompt_tokens_24h"] == 635
     assert payload["completion_tokens_24h"] == 68
+    assert payload["cache_read_tokens_24h"] == 0
+    assert payload["cache_write_tokens_24h"] == 0
+    assert payload["total_tokens_24h"] == 703
     assert payload["cost_24h"] == "0.16000000"
     assert payload["cost_amount_24h"] == "0.05000000"
     assert payload["gross_profit_24h"] == "0.11000000"
     assert payload["average_latency_ms_24h"] == 240
+
+    # All-time totals
+    assert payload["total_requests"] == 10
+    assert payload["total_prompt_tokens"] == 3175
+    assert payload["total_completion_tokens"] == 2572
 
     daily_usage = payload["daily_usage"]
     expected_dates = [
@@ -349,9 +357,21 @@ async def test_dashboard_summary_openapi_contract(
         "failed_requests_24h",
         "prompt_tokens_24h",
         "completion_tokens_24h",
+        "cache_read_tokens_24h",
+        "cache_write_tokens_24h",
+        "total_tokens_24h",
         "cost_24h",
+        "cost_amount_24h",
+        "gross_profit_24h",
         "average_latency_ms_24h",
+        "total_requests",
+        "total_cost",
+        "total_cost_amount",
+        "total_gross_profit",
+        "total_prompt_tokens",
+        "total_completion_tokens",
         "daily_usage",
+        "top_models",
     }
     assert required_fields <= set(summary_schema["properties"])
     assert required_fields <= set(summary_schema["required"])

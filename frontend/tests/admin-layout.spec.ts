@@ -20,11 +20,21 @@ vi.mock('@/api/dashboard', () => ({
     failed_requests_24h: 0,
     prompt_tokens_24h: 0,
     completion_tokens_24h: 0,
+    cache_read_tokens_24h: 0,
+    cache_write_tokens_24h: 0,
+    total_tokens_24h: 0,
     cost_24h: '0',
     cost_amount_24h: '0',
     gross_profit_24h: '0',
     average_latency_ms_24h: null,
+    total_requests: 0,
+    total_cost: '0',
+    total_cost_amount: '0',
+    total_gross_profit: '0',
+    total_prompt_tokens: 0,
+    total_completion_tokens: 0,
     daily_usage: [],
+    top_models: [],
   }),
   getUserDashboardSummary: () => Promise.resolve({
     balance: '0',
@@ -34,8 +44,15 @@ vi.mock('@/api/dashboard', () => ({
     failed_requests_24h: 0,
     prompt_tokens_24h: 0,
     completion_tokens_24h: 0,
+    cache_read_tokens_24h: 0,
+    cache_write_tokens_24h: 0,
+    total_tokens_24h: 0,
     cost_24h: '0',
     average_latency_ms_24h: null,
+    total_requests: 0,
+    total_cost: '0',
+    total_prompt_tokens: 0,
+    total_completion_tokens: 0,
     daily_usage: [],
   }),
 }))
@@ -221,7 +238,7 @@ describe('管理控制台外壳', () => {
     const main = wrapper.get('main#main-content')
     expect(main.attributes('tabindex')).toBe('0')
     expect(main.text()).toContain('控制台概览')
-    expect(main.text()).toContain('查看网关资源状态与近期请求趋势。')
+    expect(main.text()).toContain('查看网关运营数据、计费概览与请求趋势')
   })
 
   it('通过侧栏键盘导航后把焦点移动到新页面标题', async () => {
