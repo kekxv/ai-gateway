@@ -261,6 +261,7 @@ async def _validate_import_bundle(session: AsyncSession, bundle: CatalogBundle) 
                     "Each imported route must reference a provider with a protocol"
                 )
 
+
 async def _merge_catalog_bundle(
     session: AsyncSession,
     settings: Settings,

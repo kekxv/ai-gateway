@@ -267,9 +267,7 @@ async def test_model_list_deduplicates_shared_and_canonical_alias_selectors(
     assert gemini_response.status_code == 200
     gemini_models = gemini_response.json()["models"]
     assert [item["name"] for item in gemini_models].count("models/shared-selector") == 1
-    shared_gemini = next(
-        item for item in gemini_models if item["name"] == "models/shared-selector"
-    )
+    shared_gemini = next(item for item in gemini_models if item["name"] == "models/shared-selector")
     assert shared_gemini["displayName"] == "shared-selector"
     assert shared_gemini["gatewayMetadata"] == {}
 

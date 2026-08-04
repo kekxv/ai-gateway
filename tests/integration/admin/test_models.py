@@ -120,9 +120,7 @@ async def test_admin_model_update_may_promote_its_previous_alias_to_canonical_na
 
     assert updated.status_code == 200, updated.text
     assert updated.json()["canonical_name"] == "alias-promotion-target"
-    assert [alias["alias"] for alias in updated.json()["aliases"]] == [
-        "alias-promotion-target"
-    ]
+    assert [alias["alias"] for alias in updated.json()["aliases"]] == ["alias-promotion-target"]
 
 
 @pytest.mark.asyncio
