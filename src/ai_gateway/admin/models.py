@@ -58,7 +58,6 @@ async def create_model(payload: ModelCreate, session: Session, _: AdminUser) -> 
         session,
         model_id=None,
         canonical_name=payload.canonical_name,
-        aliases=aliases,
     )
     model = Model(
         canonical_name=payload.canonical_name,
@@ -154,11 +153,6 @@ async def update_model(
         session,
         model_id=model.id,
         canonical_name=payload.canonical_name or model.canonical_name,
-        aliases=(
-            aliases
-            if aliases is not None
-            else [ModelAliasInput(alias=item.alias, enabled=item.enabled) for item in model.aliases]
-        ),
     )
     old_multiplier = model.price_multiplier
     if payload.canonical_name is not None:
@@ -369,29 +363,15 @@ async def _validate_catalog_names(
     *,
     model_id: int | None,
     canonical_name: str,
-    aliases: list[ModelAliasInput],
 ) -> None:
-    alias_names = {item.alias for item in aliases}
-    if canonical_name in alias_names:
-        raise_auth_error(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "ambiguous_model_name",
-            "A canonical model name cannot also be an alias",
-        )
-    model_query = select(Model.id).where(
-        or_(Model.canonical_name == canonical_name, Model.canonical_name.in_(alias_names))
-    )
-    alias_query = select(ModelAlias.model_id).where(ModelAlias.alias == canonical_name)
+    model_query = select(Model.id).where(Model.canonical_name == canonical_name)
     if model_id is not None:
         model_query = model_query.where(Model.id != model_id)
-    if (
-        await session.scalar(model_query.limit(1)) is not None
-        or await session.scalar(alias_query.limit(1)) is not None
-    ):
+    if await session.scalar(model_query.limit(1)) is not None:
         raise_auth_error(
             status.HTTP_409_CONFLICT,
             "model_name_conflict",
-            "Canonical model names cannot conflict with aliases",
+            "Canonical model names must be unique",
         )
 
 

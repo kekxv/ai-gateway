@@ -33,10 +33,10 @@ async def test_admin_models_can_share_an_alias(admin_client: AsyncClient) -> Non
 
 
 @pytest.mark.asyncio
-async def test_admin_model_canonical_name_cannot_match_an_existing_alias(
+async def test_admin_model_canonical_name_may_match_an_existing_alias(
     admin_client: AsyncClient,
 ) -> None:
-    """Canonical model names remain exclusive when aliases are shared."""
+    """A canonical model joins the weighted selector already exposed by an alias."""
     alias_owner = await admin_client.post(
         "/admin/models",
         json={
@@ -45,24 +45,64 @@ async def test_admin_model_canonical_name_cannot_match_an_existing_alias(
             "aliases": [{"alias": "canonical-conflict", "enabled": True}],
         },
     )
-    conflicting_model = await admin_client.post(
+    matching_model = await admin_client.post(
         "/admin/models",
         json={
             "canonical_name": "canonical-conflict",
-            "display_name": "Conflicting Canonical Model",
+            "display_name": "Matching Canonical Model",
         },
     )
 
     assert alias_owner.status_code == 201, alias_owner.text
-    assert conflicting_model.status_code == 409, conflicting_model.text
-    assert conflicting_model.json()["detail"]["code"] == "model_name_conflict"
+    assert matching_model.status_code == 201, matching_model.text
 
 
 @pytest.mark.asyncio
-async def test_admin_model_update_cannot_promote_its_previous_alias_to_canonical_name(
+async def test_admin_model_alias_may_match_an_existing_canonical_name(
     admin_client: AsyncClient,
 ) -> None:
-    """A canonical name cannot reuse an alias already stored on that model."""
+    canonical_owner = await admin_client.post(
+        "/admin/models",
+        json={
+            "canonical_name": "existing-canonical-selector",
+            "display_name": "Existing Canonical Selector",
+        },
+    )
+    alias_target = await admin_client.post(
+        "/admin/models",
+        json={
+            "canonical_name": "canonical-alias-target",
+            "display_name": "Canonical Alias Target",
+            "aliases": [{"alias": "existing-canonical-selector", "enabled": True}],
+        },
+    )
+
+    assert canonical_owner.status_code == 201, canonical_owner.text
+    assert alias_target.status_code == 201, alias_target.text
+
+
+@pytest.mark.asyncio
+async def test_admin_model_may_use_its_canonical_name_as_an_alias(
+    admin_client: AsyncClient,
+) -> None:
+    created = await admin_client.post(
+        "/admin/models",
+        json={
+            "canonical_name": "self-alias-model",
+            "display_name": "Self Alias Model",
+            "aliases": [{"alias": "self-alias-model", "enabled": True}],
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    assert [alias["alias"] for alias in created.json()["aliases"]] == ["self-alias-model"]
+
+
+@pytest.mark.asyncio
+async def test_admin_model_update_may_promote_its_previous_alias_to_canonical_name(
+    admin_client: AsyncClient,
+) -> None:
+    """Renaming a model to one of its aliases preserves that alias."""
     created = await admin_client.post(
         "/admin/models",
         json={
@@ -75,14 +115,14 @@ async def test_admin_model_update_cannot_promote_its_previous_alias_to_canonical
 
     updated = await admin_client.patch(
         f"/admin/models/{created.json()['id']}",
-        json={
-            "canonical_name": "alias-promotion-target",
-            "aliases": [],
-        },
+        json={"canonical_name": "alias-promotion-target"},
     )
 
-    assert updated.status_code == 409, updated.text
-    assert updated.json()["detail"]["code"] == "model_name_conflict"
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["canonical_name"] == "alias-promotion-target"
+    assert [alias["alias"] for alias in updated.json()["aliases"]] == [
+        "alias-promotion-target"
+    ]
 
 
 @pytest.mark.asyncio

@@ -628,7 +628,7 @@ async def test_admin_import_rejects_invalid_bundle_and_dangling_route_references
     assert dangling_route.status_code == 422
 
 
-async def test_admin_import_rejects_alias_that_collides_with_existing_canonical_name(
+async def test_admin_import_allows_alias_that_matches_existing_canonical_name(
     admin_client: AsyncClient,
     session: AsyncSession,
 ) -> None:
@@ -646,13 +646,39 @@ async def test_admin_import_rejects_alias_that_collides_with_existing_canonical_
 
     response = await admin_client.post("/admin/configuration/import", json=bundle)
 
-    assert response.status_code == 409, response.text
-    assert response.json()["detail"]["code"] == "catalog_import_conflict"
-    assert await session.scalar(select(Provider).where(Provider.name == "import-provider")) is None
-    assert (
-        await session.scalar(select(Model).where(Model.canonical_name == "new-collision-model"))
-        is None
+    assert response.status_code == 200, response.text
+    imported = await session.scalar(
+        select(Model)
+        .where(Model.canonical_name == "new-collision-model")
+        .options(selectinload(Model.aliases))
     )
+    assert imported is not None
+    assert [alias.alias for alias in imported.aliases] == ["canonical-alias-collision"]
+
+
+async def test_admin_import_allows_aliases_matching_canonical_names_in_same_bundle(
+    admin_client: AsyncClient,
+) -> None:
+    bundle = _import_bundle()
+    bundle["models"] = [
+        {
+            "canonical_name": "bundle-shared-selector",
+            "display_name": "Bundle Canonical Target",
+            "aliases": [{"alias": "bundle-shared-selector", "enabled": True}],
+            "routes": [],
+        },
+        {
+            "canonical_name": "bundle-alias-target",
+            "display_name": "Bundle Alias Target",
+            "aliases": [{"alias": "bundle-shared-selector", "enabled": True}],
+            "routes": [],
+        },
+    ]
+
+    response = await admin_client.post("/admin/configuration/import", json=bundle)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["models_created"] == 2
 
 
 async def test_catalog_export_and_import_preserve_max_precision_prices(

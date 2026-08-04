@@ -228,18 +228,12 @@ async def _validate_import_bundle(session: AsyncSession, bundle: CatalogBundle) 
                 _raise_catalog_import_validation("Provider protocol references must be unique")
             protocol_keys.add(key)
 
-    aliases: set[str] = set()
     for model in bundle.models:
         model_aliases: set[str] = set()
         for alias in model.aliases:
             if alias.alias in model_aliases:
                 _raise_catalog_import_validation("Model aliases must be unique")
-            if alias.alias == model.canonical_name:
-                _raise_catalog_import_conflict()
-            if alias.alias in model_names and alias.alias != model.canonical_name:
-                _raise_catalog_import_conflict()
             model_aliases.add(alias.alias)
-            aliases.add(alias.alias)
 
     route_provider_names = {route.provider for model in bundle.models for route in model.routes}
     providers_with_protocols = set(
@@ -266,20 +260,6 @@ async def _validate_import_bundle(session: AsyncSession, bundle: CatalogBundle) 
                 _raise_catalog_import_validation(
                     "Each imported route must reference a provider with a protocol"
                 )
-
-    if not aliases and not model_names:
-        return
-    conflicting_canonical_names = set(
-        await session.scalars(select(Model.canonical_name).where(Model.canonical_name.in_(aliases)))
-    )
-    if conflicting_canonical_names:
-        _raise_catalog_import_conflict()
-    conflicting_alias = await session.scalar(
-        select(ModelAlias.id).where(ModelAlias.alias.in_(set(model_names))).limit(1)
-    )
-    if conflicting_alias is not None:
-        _raise_catalog_import_conflict()
-
 
 async def _merge_catalog_bundle(
     session: AsyncSession,
