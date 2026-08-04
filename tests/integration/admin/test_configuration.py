@@ -549,14 +549,14 @@ async def test_admin_import_claims_discovered_route_and_preserves_health_through
     assert route.last_error_at == last_error_at
 
 
-async def test_admin_import_conflict_rolls_back_all_bundle_changes(
+async def test_admin_import_allows_an_alias_shared_with_an_existing_model(
     admin_client: AsyncClient,
     admin_settings,
     session: AsyncSession,
 ) -> None:
     session.add(
         Model(
-            canonical_name="existing-model",
+            canonical_name="existing-shared-alias-model",
             display_name="Existing Model",
             aliases=[ModelAlias(alias="globally-taken-alias")],
         )
@@ -565,8 +565,8 @@ async def test_admin_import_conflict_rolls_back_all_bundle_changes(
     bundle = _import_bundle(credential={"api_key": "must-not-persist"})
     bundle["models"] = [
         {
-            "canonical_name": "new-conflicting-model",
-            "display_name": "New Conflicting Model",
+            "canonical_name": "new-shared-alias-model",
+            "display_name": "New Shared Alias Model",
             "aliases": [{"alias": "globally-taken-alias", "enabled": True}],
             "routes": [],
         }
@@ -574,15 +574,19 @@ async def test_admin_import_conflict_rolls_back_all_bundle_changes(
 
     response = await admin_client.post("/admin/configuration/import", json=bundle)
 
-    assert response.status_code == 409, response.text
-    assert response.json()["detail"]["code"] == "catalog_import_conflict"
-    assert await session.scalar(select(Provider).where(Provider.name == "import-provider")) is None
-    assert (
-        await session.scalar(select(Model).where(Model.canonical_name == "new-conflicting-model"))
-        is None
+    assert response.status_code == 200, response.text
+    assert response.json()["models_created"] == 1
+    existing = await session.scalar(
+        select(Model).where(Model.canonical_name == "existing-shared-alias-model")
     )
-    existing = await session.scalar(select(Model).where(Model.canonical_name == "existing-model"))
+    imported = await session.scalar(
+        select(Model)
+        .where(Model.canonical_name == "new-shared-alias-model")
+        .options(selectinload(Model.aliases))
+    )
     assert existing is not None
+    assert imported is not None
+    assert [alias.alias for alias in imported.aliases] == ["globally-taken-alias"]
 
 
 async def test_admin_import_rejects_invalid_bundle_and_dangling_route_references(

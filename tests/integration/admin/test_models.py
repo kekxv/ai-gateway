@@ -9,6 +9,56 @@ from httpx import AsyncClient
 
 
 @pytest.mark.asyncio
+async def test_admin_models_can_share_an_alias(admin_client: AsyncClient) -> None:
+    """A shared alias must be assignable to more than one model."""
+    model_a = await admin_client.post(
+        "/admin/models",
+        json={
+            "canonical_name": "shared-alias-model-a",
+            "display_name": "Shared Alias Model A",
+            "aliases": [{"alias": "shared-chat", "enabled": True}],
+        },
+    )
+    model_b = await admin_client.post(
+        "/admin/models",
+        json={
+            "canonical_name": "shared-alias-model-b",
+            "display_name": "Shared Alias Model B",
+            "aliases": [{"alias": "shared-chat", "enabled": True}],
+        },
+    )
+
+    assert model_a.status_code == 201, model_a.text
+    assert model_b.status_code == 201, model_b.text
+
+
+@pytest.mark.asyncio
+async def test_admin_model_canonical_name_cannot_match_an_existing_alias(
+    admin_client: AsyncClient,
+) -> None:
+    """Canonical model names remain exclusive when aliases are shared."""
+    alias_owner = await admin_client.post(
+        "/admin/models",
+        json={
+            "canonical_name": "canonical-conflict-owner",
+            "display_name": "Canonical Conflict Owner",
+            "aliases": [{"alias": "canonical-conflict", "enabled": True}],
+        },
+    )
+    conflicting_model = await admin_client.post(
+        "/admin/models",
+        json={
+            "canonical_name": "canonical-conflict",
+            "display_name": "Conflicting Canonical Model",
+        },
+    )
+
+    assert alias_owner.status_code == 201, alias_owner.text
+    assert conflicting_model.status_code == 409, conflicting_model.text
+    assert conflicting_model.json()["detail"]["code"] == "model_name_conflict"
+
+
+@pytest.mark.asyncio
 async def test_model_price_multiplier_comprehensive_flow(
     admin_client: AsyncClient,
 ) -> None:

@@ -181,10 +181,11 @@ class ModelPriceTier(Base):
 
 class ModelAlias(Base):
     __tablename__ = "model_aliases"
+    __table_args__ = (Index("ix_model_aliases_alias", "alias"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     model_id: Mapped[int] = mapped_column(ForeignKey("models.id"))
-    alias: Mapped[str] = mapped_column(String(255), unique=True)
+    alias: Mapped[str] = mapped_column(String(255))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
 
     model: Mapped[Model] = relationship(back_populates="aliases")

@@ -381,9 +381,7 @@ async def _validate_catalog_names(
     model_query = select(Model.id).where(
         or_(Model.canonical_name == canonical_name, Model.canonical_name.in_(alias_names))
     )
-    alias_query = select(ModelAlias.model_id).where(
-        or_(ModelAlias.alias == canonical_name, ModelAlias.alias.in_(alias_names))
-    )
+    alias_query = select(ModelAlias.model_id).where(ModelAlias.alias == canonical_name)
     if model_id is not None:
         model_query = model_query.where(Model.id != model_id)
         alias_query = alias_query.where(ModelAlias.model_id != model_id)
@@ -394,7 +392,7 @@ async def _validate_catalog_names(
         raise_auth_error(
             status.HTTP_409_CONFLICT,
             "model_name_conflict",
-            "Canonical model names and aliases must be unique",
+            "Canonical model names cannot conflict with aliases",
         )
 
 

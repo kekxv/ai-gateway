@@ -228,17 +228,18 @@ async def _validate_import_bundle(session: AsyncSession, bundle: CatalogBundle) 
                 _raise_catalog_import_validation("Provider protocol references must be unique")
             protocol_keys.add(key)
 
-    aliases: dict[str, str] = {}
+    aliases: set[str] = set()
     for model in bundle.models:
+        model_aliases: set[str] = set()
         for alias in model.aliases:
-            existing_owner = aliases.get(alias.alias)
-            if existing_owner == model.canonical_name:
+            if alias.alias in model_aliases:
                 _raise_catalog_import_validation("Model aliases must be unique")
-            if existing_owner is not None or alias.alias == model.canonical_name:
+            if alias.alias == model.canonical_name:
                 _raise_catalog_import_conflict()
             if alias.alias in model_names and alias.alias != model.canonical_name:
                 _raise_catalog_import_conflict()
-            aliases[alias.alias] = model.canonical_name
+            model_aliases.add(alias.alias)
+            aliases.add(alias.alias)
 
     route_provider_names = {route.provider for model in bundle.models for route in model.routes}
     providers_with_protocols = set(
@@ -268,28 +269,18 @@ async def _validate_import_bundle(session: AsyncSession, bundle: CatalogBundle) 
 
     if not aliases and not model_names:
         return
-    existing_models = {
-        model.canonical_name: model.id
-        for model in (
-            await session.scalars(select(Model).where(Model.canonical_name.in_(set(model_names))))
-        ).all()
-    }
     conflicting_canonical_names = set(
         await session.scalars(
-            select(Model.canonical_name).where(Model.canonical_name.in_(set(aliases)))
+            select(Model.canonical_name).where(Model.canonical_name.in_(aliases))
         )
     )
     if conflicting_canonical_names:
         _raise_catalog_import_conflict()
-    conflicting_aliases = (
-        await session.scalars(
-            select(ModelAlias).where(ModelAlias.alias.in_(set(aliases) | set(model_names)))
-        )
-    ).all()
-    for stored_alias in conflicting_aliases:
-        target_model = aliases.get(stored_alias.alias)
-        if target_model is None or existing_models.get(target_model) != stored_alias.model_id:
-            _raise_catalog_import_conflict()
+    conflicting_alias = await session.scalar(
+        select(ModelAlias.id).where(ModelAlias.alias.in_(set(model_names))).limit(1)
+    )
+    if conflicting_alias is not None:
+        _raise_catalog_import_conflict()
 
 
 async def _merge_catalog_bundle(
