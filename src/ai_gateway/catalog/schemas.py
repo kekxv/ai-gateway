@@ -43,7 +43,12 @@ RoutingStrategy = Literal["weighted_random"]
 class ResolvedModel:
     model_id: int
     requested_name: str
-    canonical_name: str
+    canonical_name: str | None
+    model_ids: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.model_ids:
+            object.__setattr__(self, "model_ids", (self.model_id,))
 
 
 class ProviderProtocolInput(BaseModel):

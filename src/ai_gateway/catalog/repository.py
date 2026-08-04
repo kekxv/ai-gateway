@@ -26,8 +26,15 @@ class CatalogRepository:
         model = await self._session.scalar(
             select(Model).where(Model.canonical_name == name, Model.enabled.is_(True))
         )
-        if model is None:
-            model = await self._session.scalar(
+        if model is not None:
+            return ResolvedModel(
+                model_id=model.id,
+                requested_name=name,
+                canonical_name=model.canonical_name,
+            )
+
+        models = (
+            await self._session.scalars(
                 select(Model)
                 .join(ModelAlias)
                 .where(
@@ -35,13 +42,17 @@ class CatalogRepository:
                     ModelAlias.enabled.is_(True),
                     Model.enabled.is_(True),
                 )
+                .distinct()
+                .order_by(Model.id)
             )
-        if model is None:
+        ).all()
+        if not models:
             raise ModelNotFound(name)
         return ResolvedModel(
-            model_id=model.id,
+            model_id=models[0].id,
             requested_name=name,
-            canonical_name=model.canonical_name,
+            canonical_name=models[0].canonical_name if len(models) == 1 else None,
+            model_ids=tuple(model.id for model in models),
         )
 
 

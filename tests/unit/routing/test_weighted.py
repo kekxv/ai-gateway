@@ -9,9 +9,10 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.auth.api_key import ApiKeyPrincipal
+from ai_gateway.catalog.repository import CatalogRepository
 from ai_gateway.catalog.schemas import ResolvedModel
 from ai_gateway.core.enums import ApiKeyScope, Protocol, RouteRuntimeState
-from ai_gateway.db.models import Model, ModelRoute, Provider, ProviderProtocol
+from ai_gateway.db.models import Model, ModelAlias, ModelRoute, Provider, ProviderProtocol
 from ai_gateway.routing.service import Router, choose_weighted_route
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate
 
@@ -103,6 +104,96 @@ async def _add_route(
         ),
         route,
     )
+
+
+async def _add_shared_alias_routes(
+    session: AsyncSession,
+) -> tuple[ResolvedModel, ModelRoute, ModelRoute]:
+    model_a = Model(
+        canonical_name="shared-weighted-a",
+        display_name="Shared Weighted A",
+        aliases=[ModelAlias(alias="shared-chat", enabled=True)],
+    )
+    model_b = Model(
+        canonical_name="shared-weighted-b",
+        display_name="Shared Weighted B",
+        aliases=[ModelAlias(alias="shared-chat", enabled=True)],
+    )
+    provider_a = Provider(name="shared-provider-a", credential_encrypted=b"secret-a")
+    provider_b = Provider(name="shared-provider-b", credential_encrypted=b"secret-b")
+    route_a = ModelRoute(
+        model=model_a,
+        provider=provider_a,
+        upstream_model="shared-upstream-a",
+        weight=1,
+    )
+    route_b = ModelRoute(
+        model=model_b,
+        provider=provider_b,
+        upstream_model="shared-upstream-b",
+        weight=3,
+    )
+    session.add_all(
+        [
+            ProviderProtocol(
+                provider=provider_a,
+                protocol=Protocol.OPENAI,
+                base_url="https://shared-a.invalid/v1",
+            ),
+            route_a,
+            ProviderProtocol(
+                provider=provider_b,
+                protocol=Protocol.OPENAI,
+                base_url="https://shared-b.invalid/v1",
+            ),
+            route_b,
+        ]
+    )
+    await session.flush()
+    resolved = await CatalogRepository(session).resolve_model("shared-chat")
+    return resolved, route_a, route_b
+
+
+async def test_shared_alias_weights_routes_across_all_target_models(
+    session: AsyncSession,
+) -> None:
+    resolved, _, route_b = await _add_shared_alias_routes(session)
+    router = Router(session, rng=random.Random(20260721))
+
+    model_b_count = 0
+    for _ in range(400):
+        selected = await router.select_route(
+            resolved,
+            principal(),
+            required_protocol=Protocol.OPENAI,
+        )
+        model_b_count += selected.model_id == route_b.model_id
+
+    assert 0.70 <= model_b_count / 400 <= 0.80
+
+
+async def test_shared_alias_honors_model_scope_across_candidates_and_diagnostics(
+    session: AsyncSession,
+) -> None:
+    resolved, route_a, route_b = await _add_shared_alias_routes(session)
+    router = Router(session, rng=random.Random(7))
+    model_b_principal = principal(
+        ApiKeyScope.MODELS,
+        model_ids=frozenset({route_b.model_id}),
+    )
+
+    assert await router.has_eligible_route(resolved, model_b_principal) is True
+    selected = await router.select_route(resolved, model_b_principal)
+
+    assert selected.route_id == route_b.id
+
+    route_a.enabled = False
+    await session.flush()
+    with pytest.raises(NoRouteAvailable) as error:
+        await router.select_route(resolved, principal(ApiKeyScope.MODELS))
+
+    assert error.value.requested_model == "shared-chat"
+    assert error.value.removed_by_scope is True
 
 
 async def test_provider_route_projects_matching_inbound_protocol(

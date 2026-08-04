@@ -90,7 +90,7 @@ class Router:
         excluded_route_ids: frozenset[int] | set[int] = frozenset(),
         require_websocket: bool = False,
     ) -> RouteCandidate:
-        model_id, requested_name = _model_identity(model, requested_model)
+        model_ids, requested_name = _model_identity(model, requested_model)
         protocol = Protocol(required_protocol) if required_protocol is not None else None
         preferred = Protocol(preferred_protocol) if preferred_protocol is not None else protocol
         now = self._clock()
@@ -99,7 +99,7 @@ class Router:
                 (
                     await self._session.execute(
                         _candidate_query(
-                            model_id=model_id,
+                            model_ids=model_ids,
                             principal=principal,
                             required_protocol=protocol,
                             require_websocket=require_websocket,
@@ -154,16 +154,17 @@ class Router:
 
     async def has_eligible_route(
         self,
-        model_id: int,
+        model: ResolvedModel | int,
         principal: ApiKeyPrincipal,
         required_protocol: Protocol | str | None = None,
     ) -> bool:
+        model_ids, _ = _model_identity(model, None)
         protocol = Protocol(required_protocol) if required_protocol is not None else None
         rows = (
             (
                 await self._session.execute(
                     _candidate_query(
-                        model_id=model_id,
+                        model_ids=model_ids,
                         principal=principal,
                         required_protocol=protocol,
                         require_websocket=False,
@@ -191,7 +192,7 @@ class Router:
             (
                 await self._session.execute(
                     _candidate_query(
-                        model_id=model_id,
+                        model_ids=(model_id,),
                         principal=principal,
                         required_protocol=protocol,
                         require_websocket=require_websocket,
@@ -287,10 +288,13 @@ async def select_route(
     )
 
 
-def _model_identity(model: ResolvedModel | int, requested_model: str | None) -> tuple[int, str]:
+def _model_identity(
+    model: ResolvedModel | int,
+    requested_model: str | None,
+) -> tuple[tuple[int, ...], str]:
     if isinstance(model, ResolvedModel):
-        return model.model_id, model.requested_name
-    return model, requested_model if requested_model is not None else str(model)
+        return model.model_ids, model.requested_name
+    return (model,), requested_model if requested_model is not None else str(model)
 
 
 def _scope_condition(
@@ -334,9 +338,15 @@ def _transport_condition(
     return and_(*conditions) if conditions else true()
 
 
-def _base_conditions(route: Any, model: Any, provider: Any, protocol: Any, model_id: int) -> Any:
+def _base_conditions(
+    route: Any,
+    model: Any,
+    provider: Any,
+    protocol: Any,
+    model_ids: tuple[int, ...],
+) -> Any:
     return and_(
-        route.model_id == model_id,
+        route.model_id.in_(model_ids),
         route.weight > 0,
         route.enabled.is_(True),
         model.enabled.is_(True),
@@ -347,7 +357,7 @@ def _base_conditions(route: Any, model: Any, provider: Any, protocol: Any, model
 
 def _route_exists(
     *,
-    model_id: int,
+    model_ids: tuple[int, ...],
     principal: ApiKeyPrincipal,
     required_protocol: Protocol | None,
     require_websocket: bool,
@@ -364,7 +374,7 @@ def _route_exists(
         "health": _health_condition(route, now),
     }
     conditions = [
-        _base_conditions(route, model, provider, protocol, model_id),
+        _base_conditions(route, model, provider, protocol, model_ids),
         not_(filters[removed_filter]),
     ]
     return exists(
@@ -379,7 +389,7 @@ def _route_exists(
 
 def _candidate_query(
     *,
-    model_id: int,
+    model_ids: tuple[int, ...],
     principal: ApiKeyPrincipal,
     required_protocol: Protocol | None,
     require_websocket: bool,
@@ -409,7 +419,7 @@ def _candidate_query(
         .join(Provider, Provider.id == ModelRoute.provider_id)
         .join(ProviderProtocol, ProviderProtocol.provider_id == ModelRoute.provider_id)
         .where(
-            _base_conditions(ModelRoute, Model, Provider, ProviderProtocol, model_id),
+            _base_conditions(ModelRoute, Model, Provider, ProviderProtocol, model_ids),
             _scope_condition(ModelRoute, principal),
             _transport_condition(ProviderProtocol, required_protocol, require_websocket),
             _health_condition(ModelRoute, now),
@@ -419,7 +429,7 @@ def _candidate_query(
     )
     anchor = select(literal(1).label("anchor")).subquery("routing_anchor")
     removed_by_scope = _route_exists(
-        model_id=model_id,
+        model_ids=model_ids,
         principal=principal,
         required_protocol=required_protocol,
         require_websocket=require_websocket,
@@ -427,7 +437,7 @@ def _candidate_query(
         removed_filter="scope",
     )
     removed_by_transport = _route_exists(
-        model_id=model_id,
+        model_ids=model_ids,
         principal=principal,
         required_protocol=required_protocol,
         require_websocket=require_websocket,
@@ -435,7 +445,7 @@ def _candidate_query(
         removed_filter="transport",
     )
     removed_by_health = _route_exists(
-        model_id=model_id,
+        model_ids=model_ids,
         principal=principal,
         required_protocol=required_protocol,
         require_websocket=require_websocket,

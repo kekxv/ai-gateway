@@ -54,3 +54,73 @@ async def test_disabled_models_and_aliases_do_not_resolve(
         with pytest.raises(ModelNotFound) as error:
             await catalog.resolve_model(name)
         assert error.value.requested_name == name
+
+
+async def test_shared_alias_resolves_every_enabled_target_in_model_id_order(
+    session: AsyncSession,
+) -> None:
+    models = [
+        Model(
+            id=44,
+            canonical_name="shared-disabled-model",
+            display_name="Shared Disabled Model",
+            enabled=False,
+            aliases=[ModelAlias(alias="shared-chat", enabled=True)],
+        ),
+        Model(
+            id=43,
+            canonical_name="shared-model-b",
+            display_name="Shared Model B",
+            enabled=True,
+            aliases=[ModelAlias(alias="shared-chat", enabled=True)],
+        ),
+        Model(
+            id=42,
+            canonical_name="shared-model-a",
+            display_name="Shared Model A",
+            enabled=True,
+            aliases=[ModelAlias(alias="shared-chat", enabled=True)],
+        ),
+        Model(
+            id=45,
+            canonical_name="shared-disabled-alias",
+            display_name="Shared Disabled Alias",
+            enabled=True,
+            aliases=[ModelAlias(alias="shared-chat", enabled=False)],
+        ),
+    ]
+    session.add_all(models)
+    await session.flush()
+
+    resolved = await CatalogRepository(session).resolve_model("shared-chat")
+
+    assert resolved.model_id == 42
+    assert resolved.model_ids == (42, 43)
+    assert resolved.requested_name == "shared-chat"
+    assert resolved.canonical_name is None
+
+
+async def test_canonical_name_takes_precedence_over_matching_aliases(
+    session: AsyncSession,
+) -> None:
+    canonical = Model(
+        id=46,
+        canonical_name="canonical-first",
+        display_name="Canonical First",
+        enabled=True,
+    )
+    alias_target = Model(
+        id=47,
+        canonical_name="alias-target",
+        display_name="Alias Target",
+        enabled=True,
+        aliases=[ModelAlias(alias="canonical-first", enabled=True)],
+    )
+    session.add_all([canonical, alias_target])
+    await session.flush()
+
+    resolved = await CatalogRepository(session).resolve_model("canonical-first")
+
+    assert resolved.model_id == canonical.id
+    assert resolved.model_ids == (canonical.id,)
+    assert resolved.canonical_name == canonical.canonical_name
