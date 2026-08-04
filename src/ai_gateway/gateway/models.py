@@ -24,12 +24,12 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 @dataclass(frozen=True, slots=True)
 class SelectableModel:
     selectable_id: str
-    canonical_name: str
+    canonical_name: str | None
     display_name: str
 
     @property
     def metadata(self) -> dict[str, str]:
-        if self.selectable_id == self.canonical_name:
+        if self.canonical_name is None or self.selectable_id == self.canonical_name:
             return {}
         return {"canonical_model": self.canonical_name}
 
@@ -135,24 +135,30 @@ async def _list_selectable_models(
         .distinct()
     )
     models = (await session.scalars(query)).all()
-    selectable = [
-        SelectableModel(
-            selectable_id=model.canonical_name,
-            canonical_name=model.canonical_name,
-            display_name=model.display_name,
+    targets_by_name: dict[str, dict[int, Model]] = {}
+    for model in models:
+        targets_by_name.setdefault(model.canonical_name, {})[model.id] = model
+        for alias in model.aliases:
+            if alias.enabled:
+                targets_by_name.setdefault(alias.alias, {})[model.id] = model
+
+    selectable: list[SelectableModel] = []
+    for name, targets_by_id in targets_by_name.items():
+        targets = list(targets_by_id.values())
+        if len(targets) == 1:
+            target = targets[0]
+            canonical_name = target.canonical_name
+            display_name = target.display_name
+        else:
+            canonical_name = None
+            display_name = name
+        selectable.append(
+            SelectableModel(
+                selectable_id=name,
+                canonical_name=canonical_name,
+                display_name=display_name,
+            )
         )
-        for model in models
-    ]
-    selectable.extend(
-        SelectableModel(
-            selectable_id=alias.alias,
-            canonical_name=model.canonical_name,
-            display_name=model.display_name,
-        )
-        for model in models
-        for alias in model.aliases
-        if alias.enabled
-    )
     return sorted(selectable, key=lambda item: item.selectable_id)
 
 

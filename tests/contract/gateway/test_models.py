@@ -233,6 +233,47 @@ async def test_openai_and_gemini_list_selectable_aliases_in_native_shapes(
     }
 
 
+async def test_model_list_deduplicates_shared_and_canonical_alias_selectors(
+    session: AsyncSession,
+) -> None:
+    provider = _provider("deduplicated-selectors", Protocol.OPENAI, Protocol.GEMINI)
+    canonical_target = _model("shared-selector")
+    canonical_target.aliases.append(ModelAlias(alias="shared-selector"))
+    alias_target_a = _model("shared-alias-target-a")
+    alias_target_a.aliases.append(ModelAlias(alias="shared-selector"))
+    alias_target_b = _model("shared-alias-target-b")
+    alias_target_b.aliases.append(ModelAlias(alias="shared-selector"))
+    session.add_all(
+        [
+            _route(canonical_target, provider, Protocol.OPENAI),
+            _route(alias_target_a, provider, Protocol.OPENAI),
+            _route(alias_target_b, provider, Protocol.OPENAI),
+        ]
+    )
+    user, _, raw_key = _api_key(ApiKeyScope.ALL)
+    session.add(user)
+    await session.flush()
+
+    async with _client(session, raw_key) as client:
+        openai_response = await client.get("/v1/models")
+        gemini_response = await client.get("/v1beta/models")
+
+    assert openai_response.status_code == 200
+    openai_models = openai_response.json()["data"]
+    assert [item["id"] for item in openai_models].count("shared-selector") == 1
+    shared_openai = next(item for item in openai_models if item["id"] == "shared-selector")
+    assert shared_openai["metadata"] == {}
+
+    assert gemini_response.status_code == 200
+    gemini_models = gemini_response.json()["models"]
+    assert [item["name"] for item in gemini_models].count("models/shared-selector") == 1
+    shared_gemini = next(
+        item for item in gemini_models if item["name"] == "models/shared-selector"
+    )
+    assert shared_gemini["displayName"] == "shared-selector"
+    assert shared_gemini["gatewayMetadata"] == {}
+
+
 async def test_openai_detail_preserves_alias_identity_and_scope(
     session: AsyncSession,
 ) -> None:
