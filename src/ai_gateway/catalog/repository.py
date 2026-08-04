@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.core.errors import GatewayError
@@ -23,24 +23,19 @@ class CatalogRepository:
         self._session = session
 
     async def resolve_model(self, name: str) -> ResolvedModel:
-        model = await self._session.scalar(
-            select(Model).where(Model.canonical_name == name, Model.enabled.is_(True))
-        )
-        if model is not None:
-            return ResolvedModel(
-                model_id=model.id,
-                requested_name=name,
-                canonical_name=model.canonical_name,
-            )
-
         models = (
             await self._session.scalars(
                 select(Model)
-                .join(ModelAlias)
+                .outerjoin(ModelAlias)
                 .where(
-                    ModelAlias.alias == name,
-                    ModelAlias.enabled.is_(True),
                     Model.enabled.is_(True),
+                    or_(
+                        Model.canonical_name == name,
+                        and_(
+                            ModelAlias.alias == name,
+                            ModelAlias.enabled.is_(True),
+                        ),
+                    ),
                 )
                 .distinct()
                 .order_by(Model.id)

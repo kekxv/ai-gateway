@@ -100,7 +100,7 @@ async def test_shared_alias_resolves_every_enabled_target_in_model_id_order(
     assert resolved.canonical_name is None
 
 
-async def test_canonical_name_takes_precedence_over_matching_aliases(
+async def test_canonical_name_and_matching_aliases_resolve_to_one_weighted_pool(
     session: AsyncSession,
 ) -> None:
     canonical = Model(
@@ -122,5 +122,5 @@ async def test_canonical_name_takes_precedence_over_matching_aliases(
     resolved = await CatalogRepository(session).resolve_model("canonical-first")
 
     assert resolved.model_id == canonical.id
-    assert resolved.model_ids == (canonical.id,)
-    assert resolved.canonical_name == canonical.canonical_name
+    assert resolved.model_ids == (canonical.id, alias_target.id)
+    assert resolved.canonical_name is None
