@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import random
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -21,6 +23,7 @@ from ai_gateway.routing.sessions import MutationSessionFactory, mutation_session
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate
 
 Clock = Callable[[], datetime]
+logger = logging.getLogger(__name__)
 _PROTOCOL_FALLBACK_ORDER = {
     Protocol.OPENAI: 0,
     Protocol.CLAUDE: 1,
@@ -137,7 +140,7 @@ class Router:
                 pool.remove(candidate)
                 if candidate.runtime_state is RouteRuntimeState.CLOSED:
                     return candidate
-                if await self._claim_half_open(candidate.route_id, now):
+                if await self._claim_half_open_cancellation_safe(candidate.route_id, now):
                     return replace(
                         candidate,
                         runtime_state=RouteRuntimeState.HALF_OPEN,
@@ -151,6 +154,36 @@ class Router:
             removed_by_transport=removed_by_transport,
             removed_by_health=removed_by_health,
         )
+
+    async def _claim_half_open_cancellation_safe(
+        self,
+        route_id: int,
+        now: datetime,
+    ) -> bool:
+        claim_task = asyncio.create_task(self._claim_half_open(route_id, now))
+        try:
+            return await asyncio.shield(claim_task)
+        except asyncio.CancelledError as cancellation:
+            try:
+                claimed = await _await_bool_task_shielded(claim_task)
+            except BaseException as exc:
+                logger.error(
+                    "Half-open claim completion failed route_id=%s exception_type=%s",
+                    route_id,
+                    type(exc).__name__,
+                )
+                raise cancellation from None
+            if claimed:
+                release_task = asyncio.create_task(self.release_half_open(route_id))
+                try:
+                    await _await_bool_task_shielded(release_task)
+                except BaseException as exc:
+                    logger.error(
+                        "Half-open claim release failed route_id=%s exception_type=%s",
+                        route_id,
+                        type(exc).__name__,
+                    )
+            raise
 
     async def has_eligible_route(
         self,
@@ -267,6 +300,15 @@ class Router:
 
 
 RoutingService = Router
+
+
+async def _await_bool_task_shielded(task: asyncio.Task[bool]) -> bool:
+    while True:
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.done():
+                return task.result()
 
 
 def router_for_settings(session: AsyncSession, settings: Settings) -> Router:

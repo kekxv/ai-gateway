@@ -390,6 +390,82 @@ async def test_released_half_open_probe_is_immediately_claimable(
     assert selected.runtime_state is RouteRuntimeState.HALF_OPEN
 
 
+async def test_cancelled_selection_releases_committed_half_open_claim(
+    test_engine: AsyncEngine,
+    committed_route: tuple[ResolvedModel, int],
+    all_scope_principal: ApiKeyPrincipal,
+) -> None:
+    model, route_id = committed_route
+    now = utcnow()
+    sessions = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with sessions() as setup:
+        standby_route_ids = frozenset(
+            await setup.scalars(
+                select(ModelRoute.id).where(
+                    ModelRoute.model_id == model.model_id,
+                    ModelRoute.id != route_id,
+                )
+            )
+        )
+        route = await _load_route(setup, route_id)
+        route.runtime_state = RouteRuntimeState.OPEN
+        route.disabled_until = now - timedelta(seconds=1)
+        route.consecutive_failures = 3
+        route.last_error_code = "connect_timeout"
+        await setup.commit()
+
+    claim_committed = asyncio.Event()
+    allow_claim_return = asyncio.Event()
+
+    class PausingClaimRouter(Router):
+        async def _claim_half_open(self, claimed_route_id: int, claimed_at: datetime) -> bool:
+            claimed = await super()._claim_half_open(claimed_route_id, claimed_at)
+            assert claimed is True
+            claim_committed.set()
+            await allow_claim_return.wait()
+            return claimed
+
+    async with sessions() as caller:
+        selection = asyncio.create_task(
+            PausingClaimRouter(
+                caller,
+                clock=lambda: now,
+                mutation_session_factory=sessions,
+            ).select_route(
+                model,
+                all_scope_principal,
+                excluded_route_ids=standby_route_ids,
+            )
+        )
+        await claim_committed.wait()
+        selection.cancel("cancel after half-open claim")
+        allow_claim_return.set()
+        with pytest.raises(asyncio.CancelledError, match="cancel after half-open claim"):
+            await selection
+
+    async with sessions() as observer:
+        route = await _load_route(observer, route_id)
+        assert route.runtime_state is RouteRuntimeState.OPEN
+        assert route.disabled_until is not None
+        assert route.disabled_until <= now
+        assert route.consecutive_failures == 3
+        assert route.last_error_code == "connect_timeout"
+
+    async with sessions() as selector:
+        selected = await Router(
+            selector,
+            clock=lambda: now,
+            mutation_session_factory=sessions,
+        ).select_route(
+            model,
+            all_scope_principal,
+            excluded_route_ids=standby_route_ids,
+        )
+
+    assert selected.route_id == route_id
+    assert selected.runtime_state is RouteRuntimeState.HALF_OPEN
+
+
 async def _provider_count(session: AsyncSession, name: str) -> int:
     return await session.scalar(
         select(func.count()).select_from(Provider).where(Provider.name == name)
