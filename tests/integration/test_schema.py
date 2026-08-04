@@ -277,9 +277,15 @@ def test_required_unique_constraints_and_indexes_are_declared() -> None:
     assert ("name",) in unique_column_sets("providers")
     assert ("provider_id", "protocol", "base_url") in unique_column_sets("provider_protocols")
     assert ("canonical_name",) in unique_column_sets("models")
-    assert ("alias",) in unique_column_sets("model_aliases")
+    assert ("alias",) not in unique_column_sets("model_aliases")
     assert ("model_id", "provider_id") in unique_column_sets("model_routes")
     assert ("idempotency_key",) in unique_column_sets("ledger_entries")
+
+    model_alias_indexes = {
+        (index.name, tuple(column.name for column in index.columns))
+        for index in Base.metadata.tables["model_aliases"].indexes
+    }
+    assert ("ix_model_aliases_alias", ("alias",)) in model_alias_indexes
 
     route_indexes = {
         tuple(column.name for column in index.columns)

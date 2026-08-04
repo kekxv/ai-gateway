@@ -384,7 +384,6 @@ async def _validate_catalog_names(
     alias_query = select(ModelAlias.model_id).where(ModelAlias.alias == canonical_name)
     if model_id is not None:
         model_query = model_query.where(Model.id != model_id)
-        alias_query = alias_query.where(ModelAlias.model_id != model_id)
     if (
         await session.scalar(model_query.limit(1)) is not None
         or await session.scalar(alias_query.limit(1)) is not None

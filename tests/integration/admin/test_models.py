@@ -59,6 +59,33 @@ async def test_admin_model_canonical_name_cannot_match_an_existing_alias(
 
 
 @pytest.mark.asyncio
+async def test_admin_model_update_cannot_promote_its_previous_alias_to_canonical_name(
+    admin_client: AsyncClient,
+) -> None:
+    """A canonical name cannot reuse an alias already stored on that model."""
+    created = await admin_client.post(
+        "/admin/models",
+        json={
+            "canonical_name": "alias-promotion-owner",
+            "display_name": "Alias Promotion Owner",
+            "aliases": [{"alias": "alias-promotion-target", "enabled": True}],
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    updated = await admin_client.patch(
+        f"/admin/models/{created.json()['id']}",
+        json={
+            "canonical_name": "alias-promotion-target",
+            "aliases": [],
+        },
+    )
+
+    assert updated.status_code == 409, updated.text
+    assert updated.json()["detail"]["code"] == "model_name_conflict"
+
+
+@pytest.mark.asyncio
 async def test_model_price_multiplier_comprehensive_flow(
     admin_client: AsyncClient,
 ) -> None:
