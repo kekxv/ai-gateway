@@ -46,6 +46,7 @@ from ai_gateway.billing.usage import (
     resolve_usage_async,
 )
 from ai_gateway.catalog.repository import CatalogRepository
+from ai_gateway.catalog.schemas import ResolvedModel
 from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import Protocol, UsageSource
 from ai_gateway.core.errors import GatewayError
@@ -89,7 +90,7 @@ class HttpClientProvider(TypingProtocol):
 class RouteSelector(TypingProtocol):
     async def select_route(
         self,
-        model: int,
+        model: ResolvedModel | int,
         principal: ApiKeyPrincipal,
         required_protocol: Protocol | str | None = None,
         *,
@@ -104,7 +105,7 @@ class RouteSelector(TypingProtocol):
 
     async def has_eligible_route(
         self,
-        model_id: int,
+        model: ResolvedModel | int,
         principal: ApiKeyPrincipal,
         required_protocol: Protocol | str | None = None,
     ) -> bool: ...
@@ -257,7 +258,7 @@ class GatewayService:
         payload, requested_model = _request_payload(raw_body, Protocol.CLAUDE, None)
         resolved = await CatalogRepository(self._session).resolve_model(requested_model)
         router = self._router_factory(self._session)
-        if not await router.has_eligible_route(resolved.model_id, principal):
+        if not await router.has_eligible_route(resolved, principal):
             raise NoRouteAvailable(requested_model)
         try:
             canonical = get_adapter(Protocol.CLAUDE).decode_request(payload)
@@ -302,25 +303,34 @@ class GatewayService:
             required_protocol,
         )
 
+        route_router = self._router_factory(self._session)
+        initial_route = await route_router.select_route(
+            resolved,
+            principal,
+            required_protocol=required_protocol,
+            preferred_protocol=inbound_protocol,
+            requested_model=requested_model,
+        )
+        selected_model_id = initial_route.model_id
+
         if isinstance(self._session, AsyncSession):
             priced_model = await self._session.scalar(
                 select(Model)
-                .where(Model.id == resolved.model_id)
+                .where(Model.id == selected_model_id)
                 .options(selectinload(Model.price_tiers))
             )
         else:
-            priced_model = await self._session.get(Model, resolved.model_id)
+            priced_model = await self._session.get(Model, selected_model_id)
         if priced_model is None:
             raise RuntimeError("resolved catalog model disappeared")
-        pricing_router = self._router_factory(self._session)
         maximum_public_multiplier = getattr(
-            pricing_router,
+            route_router,
             "maximum_eligible_public_multiplier",
             None,
         )
         reservation_public_multiplier = (
             await maximum_public_multiplier(
-                resolved.model_id,
+                selected_model_id,
                 principal,
                 required_protocol,
             )
@@ -365,7 +375,7 @@ class GatewayService:
             correlation_id = _audit_correlation_id(request)
             audit_metadata = {
                 "requested_model": requested_model,
-                "canonical_model": resolved.canonical_name,
+                "canonical_model": priced_model.canonical_name,
             }
             if correlation_id is not None:
                 audit_metadata["client_request_id"] = correlation_id
@@ -373,7 +383,7 @@ class GatewayService:
                 RequestContext(
                     user_id=principal.user_id,
                     api_key_id=principal.api_key_id,
-                    model_id=resolved.model_id,
+                    model_id=selected_model_id,
                     inbound_protocol=inbound_protocol,
                     transport="http",
                     stream=canonical.stream,
@@ -396,7 +406,9 @@ class GatewayService:
                     request=request,
                     prepared=prepared,
                     principal=principal,
-                    model_id=resolved.model_id,
+                    model_id=selected_model_id,
+                    router=route_router,
+                    initial_route=initial_route,
                     inbound_protocol=inbound_protocol,
                     estimated_input_tokens=estimated_input_tokens,
                     started_at=started_at,
@@ -432,7 +444,9 @@ class GatewayService:
                     request=request,
                     prepared=prepared,
                     principal=principal,
-                    model_id=resolved.model_id,
+                    model_id=selected_model_id,
+                    router=route_router,
+                    initial_route=initial_route,
                 )
             route = attempt_response.route
             upstream = attempt_response.response
@@ -609,6 +623,8 @@ class GatewayService:
         prepared: _PreparedRequest,
         principal: ApiKeyPrincipal,
         model_id: int,
+        router: RouteSelector,
+        initial_route: RouteCandidate | None,
         inbound_protocol: Protocol,
         estimated_input_tokens: int,
         started_at: float,
@@ -618,12 +634,13 @@ class GatewayService:
         AsyncIterator[bytes] | None,
         bytes | None,
     ]:
-        router = self._router_factory(self._session)
         attempted_route_ids: set[int] = set()
         attempts: list[dict[str, Any]] = []
         last_attempt: _AttemptResponse | None = None
         last_prefetch_failure: BaseException | None = None
         while True:
+            selected_route = initial_route
+            initial_route = None
             try:
                 attempt = await self._send_with_failover(
                     request=request,
@@ -631,6 +648,7 @@ class GatewayService:
                     principal=principal,
                     model_id=model_id,
                     router=router,
+                    initial_route=selected_route,
                     attempted_route_ids=attempted_route_ids,
                     attempts=attempts,
                 )
@@ -970,6 +988,7 @@ class GatewayService:
         principal: ApiKeyPrincipal,
         model_id: int,
         router: RouteSelector | None = None,
+        initial_route: RouteCandidate | None = None,
         attempted_route_ids: set[int] | None = None,
         attempts: list[dict[str, Any]] | None = None,
     ) -> _AttemptResponse:
@@ -980,38 +999,42 @@ class GatewayService:
         last_route: RouteCandidate | None = None
 
         while True:
-            try:
-                route = await router.select_route(
-                    model_id,
-                    principal,
-                    required_protocol=prepared.required_protocol,
-                    preferred_protocol=prepared.inbound_protocol,
-                    requested_model=prepared.requested_model,
-                    excluded_route_ids=attempted_route_ids,
-                )
-            except NoRouteAvailable:
-                await _release_read_session(self._session)
-                if not attempts:
-                    raise
-                if isinstance(last_failure, httpx.TimeoutException):
-                    raise UpstreamTimeout(
-                        "The upstream provider timed out",
-                        route=last_route,
-                        attempts=tuple(attempts),
-                    ) from last_failure
-                if isinstance(last_failure, UpstreamError):
+            if initial_route is not None:
+                route = initial_route
+                initial_route = None
+            else:
+                try:
+                    route = await router.select_route(
+                        model_id,
+                        principal,
+                        required_protocol=prepared.required_protocol,
+                        preferred_protocol=prepared.inbound_protocol,
+                        requested_model=prepared.requested_model,
+                        excluded_route_ids=attempted_route_ids,
+                    )
+                except NoRouteAvailable:
+                    await _release_read_session(self._session)
+                    if not attempts:
+                        raise
+                    if isinstance(last_failure, httpx.TimeoutException):
+                        raise UpstreamTimeout(
+                            "The upstream provider timed out",
+                            route=last_route,
+                            attempts=tuple(attempts),
+                        ) from last_failure
+                    if isinstance(last_failure, UpstreamError):
+                        raise UpstreamError(
+                            last_failure.message,
+                            route=last_route,
+                            attempts=tuple(attempts),
+                            upstream_headers=last_failure.upstream_headers,
+                            upstream_body=last_failure.upstream_body,
+                        ) from last_failure
                     raise UpstreamError(
-                        last_failure.message,
+                        "No upstream provider completed the request",
                         route=last_route,
                         attempts=tuple(attempts),
-                        upstream_headers=last_failure.upstream_headers,
-                        upstream_body=last_failure.upstream_body,
-                    ) from last_failure
-                raise UpstreamError(
-                    "No upstream provider completed the request",
-                    route=last_route,
-                    attempts=tuple(attempts),
-                )
+                    )
 
             await _release_read_session(self._session)
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, cast
@@ -170,14 +170,16 @@ class FakeGatewayWebSocket(FakeClientWebSocket):
 class FakeAudit:
     failed: RequestFailure | None = None
     completed: RequestResult | None = None
+    started: RequestContext | None = None
 
     async def start_request(
         self,
-        _: RequestContext,
+        context: RequestContext,
         __: bytes,
         *,
         request_id: Any = None,
     ) -> Any:
+        self.started = context
         return request_id
 
     async def fail_request(self, _: Any, failure: RequestFailure) -> None:
@@ -188,11 +190,22 @@ class FakeAudit:
 
 
 class FakeSession:
-    async def get(self, _: object, __: int) -> Any:
-        return SimpleNamespace(
-            canonical_name="canonical-model",
-            input_price_per_million=Decimal("1"),
-            output_price_per_million=Decimal("2"),
+    def __init__(self, models: dict[int, Any] | None = None) -> None:
+        self.models = models or {
+            2: SimpleNamespace(
+                canonical_name="canonical-model",
+                input_price_per_million=Decimal("1"),
+                output_price_per_million=Decimal("2"),
+            )
+        }
+
+    async def get(self, _: object, object_id: int) -> Any:
+        return self.models.get(
+            object_id,
+            SimpleNamespace(
+                public_multiplier=Decimal("1"),
+                cost_multiplier=Decimal("1"),
+            ),
         )
 
 
@@ -200,16 +213,20 @@ class FakeSession:
 class FakeBilling:
     fail_reserve: bool = False
     reserve_calls: int = 0
+    reserved_models: list[Any] = field(default_factory=list)
+    settlement_costs: list[Decimal] = field(default_factory=list)
 
     default_max_output_tokens: int = 8
 
-    async def reserve_balance(self, **_: Any) -> BalanceReservation:
+    async def reserve_balance(self, **kwargs: Any) -> BalanceReservation:
         self.reserve_calls += 1
+        self.reserved_models.append(kwargs["model"])
         if self.fail_reserve:
             raise InsufficientBalance(required=Decimal("1"), available=Decimal("0"))
         return BalanceReservation(1, 1, 7, "request", "key", Decimal("1"), Decimal("9"))
 
-    async def settle_request(self, **_: Any) -> SettlementResult:
+    async def settle_request(self, **kwargs: Any) -> SettlementResult:
+        self.settlement_costs.append(kwargs["cost"])
         return SettlementResult(
             1,
             "request",
@@ -263,16 +280,23 @@ def _settings() -> Settings:
     )
 
 
-def _route(url: str, settings: Settings, protocol: Protocol = Protocol.OPENAI) -> RouteCandidate:
+def _route(
+    url: str,
+    settings: Settings,
+    protocol: Protocol = Protocol.OPENAI,
+    *,
+    model_id: int = 2,
+    upstream_model: str = "native-realtime-model",
+) -> RouteCandidate:
     return RouteCandidate(
         route_id=1,
-        model_id=2,
+        model_id=model_id,
         provider_id=3,
         provider_protocol_id=4,
         protocol=protocol,
         base_url="https://provider.example/v1",
         websocket_url=url,
-        upstream_model="native-realtime-model",
+        upstream_model=upstream_model,
         weight=100,
         provider_credential_encrypted=encrypt_secret(
             orjson.dumps({"api_key": "provider-secret"}).decode(),
@@ -792,6 +816,90 @@ async def test_claude_only_route_closes_unsupported_transport_before_reservation
     assert route_router.selection["protocol"] is Protocol.OPENAI
     assert route_router.selection["require_websocket"] is True
     assert billing.reserve_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_shared_alias_selected_model_controls_websocket_billing_and_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_gateway.gateway.websocket as gateway_module
+
+    alias = "friendly-shared-alias"
+    resolved_model = ResolvedModel(2, alias, None, (2, 5))
+    model_a = SimpleNamespace(
+        canonical_name="canonical-a",
+        input_price_per_million=Decimal("1"),
+        output_price_per_million=Decimal("2"),
+    )
+    model_b = SimpleNamespace(
+        canonical_name="canonical-b",
+        input_price_per_million=Decimal("10"),
+        output_price_per_million=Decimal("20"),
+    )
+    route_b = _route(
+        "ws://provider.example/realtime",
+        _settings(),
+        model_id=5,
+        upstream_model="native-b",
+    )
+    relayed_routes: list[RouteCandidate] = []
+
+    async def authenticated(*_: Any, **__: Any) -> ApiKeyPrincipal:
+        return ApiKeyPrincipal(1, 7, ApiKeyScope.ALL)
+
+    async def resolved(*_: Any, **__: Any) -> ResolvedModel:
+        return resolved_model
+
+    async def succeeded(_: Any, route: RouteCandidate, *args: Any, **kwargs: Any) -> RelayResult:
+        del args
+        relayed_routes.append(route)
+        await kwargs["observe_frame"](
+            "upstream",
+            orjson.dumps(
+                {
+                    "response": {
+                        "id": "response-b",
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                    }
+                }
+            ),
+        )
+        return RelayResult(
+            close_code=1000,
+            health_outcome=RelayHealthOutcome.SUCCESS,
+            provider_observed=True,
+        )
+
+    monkeypatch.setattr(gateway_module, "authenticate_api_key", authenticated)
+    monkeypatch.setattr(gateway_module.CatalogRepository, "resolve_model", resolved)
+    monkeypatch.setattr(gateway_module, "relay_websocket", succeeded)
+    route_router = FakeRouter(route_b)
+    billing = FakeBilling()
+    audit = FakeAudit()
+    service = WebSocketGatewayService(
+        session=FakeSession({2: model_a, 5: model_b}),  # type: ignore[arg-type]
+        settings=_settings(),
+        billing_service=billing,  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        router_factory=lambda _: route_router,  # type: ignore[arg-type]
+    )
+
+    await service.handle(
+        FakeGatewayWebSocket(model=alias),  # type: ignore[arg-type]
+        Protocol.OPENAI,
+    )
+
+    assert relayed_routes == [route_b]
+    assert route_router.selection is not None
+    assert route_router.selection["model"] is resolved_model
+    assert billing.reserved_models == [model_b]
+    assert billing.settlement_costs == [Decimal("0.00003000")]
+    assert audit.started is not None
+    assert audit.started.model_id == route_b.model_id
+    assert audit.started.metadata == {
+        "requested_model": alias,
+        "canonical_model": model_b.canonical_name,
+    }
 
 
 @pytest.mark.asyncio

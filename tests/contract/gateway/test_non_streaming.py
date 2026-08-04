@@ -24,6 +24,7 @@ from ai_gateway.billing.service import (
     SettlementResult,
 )
 from ai_gateway.catalog.repository import ModelNotFound
+from ai_gateway.catalog.schemas import ResolvedModel
 from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import ApiKeyScope, Protocol
 from ai_gateway.core.security import encrypt_secret
@@ -62,10 +63,13 @@ class FakeBilling:
     reservation_keys: list[str] = field(default_factory=list)
     reservation_recoveries: list[ReservationRecovery] = field(default_factory=list)
     recovery_updates: list[ReservationRecovery] = field(default_factory=list)
+    reserved_models: list[Model] = field(default_factory=list)
+    settled_models: list[Model] = field(default_factory=list)
 
     async def reserve_balance(self, **kwargs: Any) -> BalanceReservation:
         self.reservation_keys.append(kwargs["idempotency_key"])
         self.reservation_recoveries.append(kwargs["recovery"])
+        self.reserved_models.append(kwargs["model"])
         return self.reservation
 
     async def update_reservation_recovery(self, **kwargs: Any) -> bool:
@@ -74,6 +78,8 @@ class FakeBilling:
 
     async def settle_request(self, **kwargs: Any) -> SettlementResult:
         self.settlements += 1
+        if "model" in kwargs:
+            self.settled_models.append(kwargs["model"])
         cost = kwargs.get("cost", Decimal("0"))
         return SettlementResult(
             account_id=1,
@@ -91,14 +97,16 @@ class FakeBilling:
 class FakeAudit:
     completed: RequestResult | None = None
     failed: RequestFailure | None = None
+    started: RequestContext | None = None
 
     async def start_request(
         self,
-        _: RequestContext,
+        context: RequestContext,
         __: bytes,
         *,
         request_id: UUID | None = None,
     ) -> UUID:
+        self.started = context
         return request_id or uuid4()
 
     async def complete_request(self, _: UUID, result: RequestResult) -> None:
@@ -113,10 +121,13 @@ class FakeRouter:
         self.routes = routes
         self.successes: list[int] = []
         self.failures: list[int] = []
+        self.selections: list[ResolvedModel | int] = []
+        self.eligibility_checks: list[ResolvedModel | int] = []
+        self.multiplier_model_ids: list[int] = []
 
     async def select_route(
         self,
-        _: int,
+        model: ResolvedModel | int,
         __: Any,
         required_protocol: Protocol | str | None = None,
         *,
@@ -124,11 +135,16 @@ class FakeRouter:
         requested_model: str | None = None,
         excluded_route_ids: frozenset[int] | set[int] = frozenset(),
     ) -> RouteCandidate:
-        del required_protocol, preferred_protocol, requested_model
+        del required_protocol, preferred_protocol
+        self.selections.append(model)
+        model_ids = model.model_ids if isinstance(model, ResolvedModel) else (model,)
         for route in self.routes:
-            if route.route_id not in excluded_route_ids:
+            if route.model_id in model_ids and route.route_id not in excluded_route_ids:
                 return route
-        raise NoRouteAvailable("gateway-alias")
+        requested_name = (
+            model.requested_name if isinstance(model, ResolvedModel) else requested_model
+        )
+        raise NoRouteAvailable(requested_name or str(model))
 
     async def record_success(self, route_id: int) -> bool:
         self.successes.append(route_id)
@@ -140,12 +156,25 @@ class FakeRouter:
 
     async def has_eligible_route(
         self,
-        _: int,
+        model: ResolvedModel | int,
         __: Any,
         required_protocol: Protocol | str | None = None,
     ) -> bool:
         del required_protocol
-        return bool(self.routes)
+        self.eligibility_checks.append(model)
+        model_ids = model.model_ids if isinstance(model, ResolvedModel) else (model,)
+        return any(route.model_id in model_ids for route in self.routes)
+
+    async def maximum_eligible_public_multiplier(
+        self,
+        model_id: int,
+        _: Any,
+        required_protocol: Protocol | str | None = None,
+        *,
+        require_websocket: bool = False,
+    ) -> None:
+        del required_protocol, require_websocket
+        self.multiplier_model_ids.append(model_id)
 
 
 class FakeHttpClients:
@@ -185,6 +214,21 @@ async def _catalog(session: AsyncSession) -> Model:
     session.add_all((user, model))
     await session.flush()
     return model
+
+
+async def _shared_catalog(session: AsyncSession) -> tuple[str, Model, Model]:
+    model_a = await _catalog(session)
+    alias = model_a.aliases[0].alias
+    model_b = Model(
+        canonical_name=f"canonical-b-{uuid4()}",
+        display_name="Gateway Contract B",
+        input_price_per_million=Decimal("9.1"),
+        output_price_per_million=Decimal("9.2"),
+    )
+    model_b.aliases.append(ModelAlias(alias=alias))
+    session.add(model_b)
+    await session.flush()
+    return alias, model_a, model_b
 
 
 def _request(protocol: Protocol, model: str) -> tuple[str, dict[str, Any]]:
@@ -283,11 +327,10 @@ async def test_claude_count_tokens_authenticates_and_counts_locally_without_bill
     path: str,
 ) -> None:
     settings = _settings()
-    model = await _catalog(session)
-    alias = model.aliases[0].alias
+    alias, _, model_b = await _shared_catalog(session)
     route = RouteCandidate(
         route_id=141,
-        model_id=model.id,
+        model_id=model_b.id,
         provider_id=142,
         provider_protocol_id=143,
         protocol=Protocol.CLAUDE,
@@ -306,13 +349,14 @@ async def test_claude_count_tokens_authenticates_and_counts_locally_without_bill
     upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     billing = FakeBilling()
     audit = FakeAudit()
+    route_router = FakeRouter([route])
     service = GatewayService(
         session=session,
         settings=settings,
         billing_service=billing,  # type: ignore[arg-type]
         audit_service=audit,  # type: ignore[arg-type]
         http_client_factory=FakeHttpClients(upstream_client),
-        router_factory=lambda _: FakeRouter([route]),
+        router_factory=lambda _: route_router,
     )
     async with AsyncClient(
         transport=ASGITransport(app=_app(service)),
@@ -349,6 +393,10 @@ async def test_claude_count_tokens_authenticates_and_counts_locally_without_bill
     assert audit.completed is None
     assert audit.failed is None
     assert upstream_calls == 0
+    assert len(route_router.eligibility_checks) == 1
+    eligibility_model = route_router.eligibility_checks[0]
+    assert isinstance(eligibility_model, ResolvedModel)
+    assert model_b.id in eligibility_model.model_ids
 
 
 async def test_claude_count_tokens_authenticates_before_parsing(session: AsyncSession) -> None:
@@ -457,6 +505,101 @@ async def test_all_protocol_pairs_bind_alias_to_selected_upstream_model(
     assert audit.completed.cache_read_tokens == 1
     assert audit.completed.cache_write_tokens == (0 if outbound is Protocol.GEMINI else 1)
     assert billing.settlements == 1
+
+
+async def test_shared_alias_selected_model_controls_http_lifecycle_and_retries(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    alias, model_a, model_b = await _shared_catalog(session)
+    route_b_first = RouteCandidate(
+        route_id=151,
+        model_id=model_b.id,
+        provider_id=251,
+        provider_protocol_id=351,
+        protocol=Protocol.OPENAI,
+        base_url="https://selected-b-first.example/v1",
+        websocket_url=None,
+        upstream_model="native-b-first",
+        weight=100,
+        provider_credential_encrypted=encrypt_secret("{}", settings=settings),
+    )
+    route_a = RouteCandidate(
+        route_id=152,
+        model_id=model_a.id,
+        provider_id=252,
+        provider_protocol_id=352,
+        protocol=Protocol.OPENAI,
+        base_url="https://unselected-a.example/v1",
+        websocket_url=None,
+        upstream_model="native-a",
+        weight=100,
+        provider_credential_encrypted=encrypt_secret("{}", settings=settings),
+    )
+    route_b_retry = RouteCandidate(
+        route_id=153,
+        model_id=model_b.id,
+        provider_id=253,
+        provider_protocol_id=353,
+        protocol=Protocol.OPENAI,
+        base_url="https://selected-b-retry.example/v1",
+        websocket_url=None,
+        upstream_model="native-b-retry",
+        weight=100,
+        provider_credential_encrypted=encrypt_secret("{}", settings=settings),
+    )
+    seen: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.host == "selected-b-first.example":
+            return httpx.Response(503)
+        upstream_model = {
+            "unselected-a.example": "native-a",
+            "selected-b-retry.example": "native-b-retry",
+        }[request.url.host]
+        return httpx.Response(200, json=_response(Protocol.OPENAI, upstream_model))
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    billing = FakeBilling()
+    audit = FakeAudit()
+    route_router = FakeRouter([route_b_first, route_a, route_b_retry])
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=billing,  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: route_router,
+    )
+    path, body = _request(Protocol.OPENAI, alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200, response.text
+    assert [request.url.host for request in seen] == [
+        "selected-b-first.example",
+        "selected-b-retry.example",
+    ]
+    assert [model.id for model in billing.reserved_models] == [model_b.id]
+    assert [model.id for model in billing.settled_models] == [model_b.id]
+    assert route_router.multiplier_model_ids == [model_b.id]
+    assert route_router.failures == [route_b_first.route_id]
+    assert route_router.successes == [route_b_retry.route_id]
+    assert len(route_router.selections) == 2
+    assert isinstance(route_router.selections[0], ResolvedModel)
+    assert route_router.selections[1] == model_b.id
+    assert audit.started is not None
+    assert audit.started.model_id == model_b.id
+    assert audit.started.metadata == {
+        "requested_model": alias,
+        "canonical_model": model_b.canonical_name,
+    }
 
 
 async def test_openai_compatible_credentialless_route_sends_normal_upstream_request(

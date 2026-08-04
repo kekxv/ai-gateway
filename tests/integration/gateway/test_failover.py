@@ -254,11 +254,13 @@ class StageRouter:
         self.route = route
         self.stage = stage
         self.entered = asyncio.Event()
+        self.selection_calls = 0
 
     async def select_route(self, *_: Any, **__: Any) -> RouteCandidate:
-        if self.stage == "route_selection":
+        self.selection_calls += 1
+        if self.selection_calls > 1 and self.stage == "route_selection":
             raise asyncio.CancelledError
-        if self.stage == "task_cancel_route_selection":
+        if self.selection_calls > 1 and self.stage == "task_cancel_route_selection":
             self.entered.set()
             await asyncio.Future()
         return self.route
@@ -446,6 +448,8 @@ async def test_cancellation_after_reservation_is_shielded_and_terminal(
     async def handler(request: httpx.Request) -> httpx.Response:
         if stage == "upstream_send":
             raise asyncio.CancelledError
+        if stage in {"route_selection", "task_cancel_route_selection"}:
+            return httpx.Response(503)
         return httpx.Response(
             200,
             json={

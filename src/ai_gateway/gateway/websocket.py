@@ -621,11 +621,11 @@ class WebSocketGatewayService:
             if isinstance(self._session, AsyncSession):
                 priced_model = await self._session.scalar(
                     select(Model)
-                    .where(Model.id == resolved.model_id)
+                    .where(Model.id == route.model_id)
                     .options(selectinload(Model.price_tiers))
                 )
             else:
-                priced_model = await self._session.get(Model, resolved.model_id)
+                priced_model = await self._session.get(Model, route.model_id)
             if priced_model is None:
                 raise RuntimeError("resolved catalog model disappeared")
 
@@ -639,14 +639,14 @@ class WebSocketGatewayService:
                 RequestContext(
                     user_id=principal.user_id,
                     api_key_id=principal.api_key_id,
-                    model_id=resolved.model_id,
+                    model_id=route.model_id,
                     inbound_protocol=protocol,
                     transport="websocket",
                     stream=True,
                     headers=dict(websocket.headers),
                     metadata={
                         "requested_model": requested_model,
-                        "canonical_model": resolved.canonical_name,
+                        "canonical_model": priced_model.canonical_name,
                     },
                 ),
                 _frame_bytes(initial_request),
