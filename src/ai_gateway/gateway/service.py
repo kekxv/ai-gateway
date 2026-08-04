@@ -1048,7 +1048,11 @@ class GatewayService:
                         attempts=tuple(attempts),
                     )
 
-            await _release_read_session(self._session)
+            try:
+                await _release_read_session(self._session)
+            except asyncio.CancelledError as exc:
+                _annotate_failure(exc, route, tuple(attempts))
+                raise
 
             attempted_route_ids.add(route.route_id)
             last_route = route

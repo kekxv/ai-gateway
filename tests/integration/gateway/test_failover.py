@@ -486,7 +486,10 @@ async def test_pre_reservation_failure_releases_selected_half_open_probe(
         assert route.last_error_code == "connect_timeout"
 
 
-@pytest.mark.parametrize("cancellation_stage", ["send", "stream_prefetch"])
+@pytest.mark.parametrize(
+    "cancellation_stage",
+    ["send", "stream_prefetch", "session_release"],
+)
 async def test_retry_selected_half_open_probe_is_released_when_cancelled(
     test_engine: AsyncEngine,
     monkeypatch: pytest.MonkeyPatch,
@@ -639,6 +642,22 @@ async def test_retry_selected_half_open_probe_is_released_when_cancelled(
     upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(cancel_retry_send))
     async with sessions() as gateway_session:
         route_router = RetrySelectingRouter(gateway_session)
+        if cancellation_stage == "session_release":
+            original_release_read_session = gateway_module._release_read_session
+            release_cancelled = False
+
+            async def cancel_retry_session_release(session: object) -> None:
+                nonlocal release_cancelled
+                if route_router.retry_candidate is not None and not release_cancelled:
+                    release_cancelled = True
+                    raise cancellation
+                await original_release_read_session(session)
+
+            monkeypatch.setattr(
+                gateway_module,
+                "_release_read_session",
+                cancel_retry_session_release,
+            )
         service = GatewayService(
             session=gateway_session,
             settings=settings,
@@ -659,7 +678,8 @@ async def test_retry_selected_half_open_probe_is_released_when_cancelled(
     await upstream_client.aclose()
 
     assert captured.value is cancellation
-    assert upstream_calls == 2
+    assert upstream_calls == (1 if cancellation_stage == "session_release" else 2)
+    assert route_router.selection_calls == 2
     assert route_router.retry_candidate is not None
     assert route_router.retry_candidate.route_id == retry_route_id
     assert route_router.retry_candidate.runtime_state is RouteRuntimeState.HALF_OPEN
