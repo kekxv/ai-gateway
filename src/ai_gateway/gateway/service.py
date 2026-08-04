@@ -621,9 +621,7 @@ class GatewayService:
                 )
             )
             if final_route is not None:
-                await _run_cleanup_shielded(
-                    _release_unstarted_half_open(route_router, final_route)
-                )
+                await _run_cleanup_shielded(_release_unstarted_half_open(route_router, final_route))
             await _run_cleanup_shielded(_release_unstarted_half_open(route_router, initial_route))
             raise
 

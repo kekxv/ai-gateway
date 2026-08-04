@@ -270,9 +270,7 @@ async def _validate_import_bundle(session: AsyncSession, bundle: CatalogBundle) 
     if not aliases and not model_names:
         return
     conflicting_canonical_names = set(
-        await session.scalars(
-            select(Model.canonical_name).where(Model.canonical_name.in_(aliases))
-        )
+        await session.scalars(select(Model.canonical_name).where(Model.canonical_name.in_(aliases)))
     )
     if conflicting_canonical_names:
         _raise_catalog_import_conflict()

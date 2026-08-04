@@ -688,9 +688,9 @@ async def test_retry_selected_half_open_probe_is_released_when_cancelled(
         assert released_route is not None
         assert released_route.runtime_state is RouteRuntimeState.OPEN
         assert released_route.disabled_until is not None
-        assert released_route.disabled_until <= datetime.now(
-            timezone(timedelta(hours=8))
-        ).replace(tzinfo=None)
+        assert released_route.disabled_until <= datetime.now(timezone(timedelta(hours=8))).replace(
+            tzinfo=None
+        )
         assert released_route.consecutive_failures == 3
         assert released_route.last_error_code == "connect_timeout"
 
