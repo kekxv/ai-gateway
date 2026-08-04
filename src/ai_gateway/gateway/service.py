@@ -620,6 +620,10 @@ class GatewayService:
                     started_at=started_at,
                 )
             )
+            if final_route is not None:
+                await _run_cleanup_shielded(
+                    _release_unstarted_half_open(route_router, final_route)
+                )
             await _run_cleanup_shielded(_release_unstarted_half_open(route_router, initial_route))
             raise
 
@@ -687,7 +691,8 @@ class GatewayService:
             iterator = stream_gateway_response(context, attempt.response)
             try:
                 first_frame = await anext(iterator)
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as exc:
+                _annotate_failure(exc, attempt.route, attempt.attempts)
                 await _close_stream_iterator(iterator)
                 raise
             except StopAsyncIteration:
@@ -1916,7 +1921,7 @@ async def _run_cleanup_shielded(cleanup: Coroutine[Any, Any, None]) -> None:
 
 
 async def _release_unstarted_half_open(
-    router: RouteSelector,
+    router: object,
     route: RouteCandidate,
 ) -> None:
     if route.runtime_state is not RouteRuntimeState.HALF_OPEN:

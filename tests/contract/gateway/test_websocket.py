@@ -26,7 +26,7 @@ from ai_gateway.billing.service import (
 )
 from ai_gateway.catalog.schemas import ResolvedModel
 from ai_gateway.core.config import Settings
-from ai_gateway.core.enums import ApiKeyScope, Protocol
+from ai_gateway.core.enums import ApiKeyScope, Protocol, RouteRuntimeState
 from ai_gateway.core.security import encrypt_secret
 from ai_gateway.gateway.websocket import WebSocketGatewayService
 from ai_gateway.routing.types import RouteCandidate, RouteFailure
@@ -252,6 +252,7 @@ class FakeRouter:
         self.selection: dict[str, Any] | None = None
         self.successes: list[int] = []
         self.failures: list[tuple[int, object]] = []
+        self.releases: list[int] = []
 
     async def select_route(self, model: Any, principal: Any, protocol: Any, **kwargs: Any) -> Any:
         self.selection = {"model": model, "principal": principal, "protocol": protocol, **kwargs}
@@ -267,6 +268,10 @@ class FakeRouter:
 
     async def record_failure(self, route_id: int, failure: object) -> bool:
         self.failures.append((route_id, failure))
+        return True
+
+    async def release_half_open(self, route_id: int) -> bool:
+        self.releases.append(route_id)
         return True
 
 
@@ -287,6 +292,7 @@ def _route(
     *,
     model_id: int = 2,
     upstream_model: str = "native-realtime-model",
+    runtime_state: RouteRuntimeState = RouteRuntimeState.CLOSED,
 ) -> RouteCandidate:
     return RouteCandidate(
         route_id=1,
@@ -298,6 +304,7 @@ def _route(
         websocket_url=url,
         upstream_model=upstream_model,
         weight=100,
+        runtime_state=runtime_state,
         provider_credential_encrypted=encrypt_secret(
             orjson.dumps({"api_key": "provider-secret"}).decode(),
             settings=settings,
@@ -920,7 +927,12 @@ async def test_insufficient_balance_closes_4402_before_upstream_connect(
     monkeypatch.setattr(gateway_module, "authenticate_api_key", authenticated)
     monkeypatch.setattr(gateway_module.CatalogRepository, "resolve_model", resolved)
     monkeypatch.setattr(gateway_module, "relay_websocket", unexpected_relay)
-    route_router = FakeRouter(_route("ws://provider.example/realtime", _settings()))
+    selected_route = _route(
+        "ws://provider.example/realtime",
+        _settings(),
+        runtime_state=RouteRuntimeState.HALF_OPEN,
+    )
+    route_router = FakeRouter(selected_route)
     billing = FakeBilling(fail_reserve=True)
     websocket = FakeGatewayWebSocket()
     service = WebSocketGatewayService(
@@ -935,6 +947,9 @@ async def test_insufficient_balance_closes_4402_before_upstream_connect(
 
     assert websocket.close_calls == [(4402, '{"code":"insufficient_balance"}')]
     assert billing.reserve_calls == 1
+    assert route_router.releases == [selected_route.route_id]
+    assert route_router.successes == []
+    assert route_router.failures == []
 
 
 @pytest.mark.asyncio

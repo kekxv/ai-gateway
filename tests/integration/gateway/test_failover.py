@@ -332,14 +332,15 @@ class StageBilling:
         return result
 
 
-def gateway_request(raw_key: str, model: str) -> FastAPIRequest:
-    body = orjson.dumps(
-        {
-            "model": model,
-            "messages": [{"role": "user", "content": "cancel me"}],
-            "max_tokens": 8,
-        }
-    )
+def gateway_request(raw_key: str, model: str, *, stream: bool = False) -> FastAPIRequest:
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "cancel me"}],
+        "max_tokens": 8,
+    }
+    if stream:
+        payload["stream"] = True
+    body = orjson.dumps(payload)
     sent = False
 
     async def receive() -> dict[str, Any]:
@@ -483,6 +484,195 @@ async def test_pre_reservation_failure_releases_selected_half_open_probe(
         )
         assert route.consecutive_failures == 3
         assert route.last_error_code == "connect_timeout"
+
+
+@pytest.mark.parametrize("cancellation_stage", ["send", "stream_prefetch"])
+async def test_retry_selected_half_open_probe_is_released_when_cancelled(
+    test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    cancellation_stage: str,
+) -> None:
+    import ai_gateway.gateway.service as gateway_module
+
+    suffix = uuid4().hex
+    raw_key = f"sk-gw-retry-half-open-{suffix}"
+    now = datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        database_url=test_engine.url.render_as_string(hide_password=False),
+        jwt_secret="gateway-retry-half-open-jwt-secret",
+        encryption_key=Fernet.generate_key().decode(),
+    )
+    sessions = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with sessions() as setup:
+        user = User(email=f"retry-half-open-{suffix}@example.com", password_hash="unused")
+        user.api_keys.append(
+            ApiKey(
+                name="retry-half-open",
+                key_prefix=raw_key[:12],
+                key_hash=sha256(raw_key.encode()).digest(),
+                scope=ApiKeyScope.ALL,
+            )
+        )
+        model = Model(
+            canonical_name=f"retry-half-open-model-{suffix}",
+            display_name="Retry Half Open Model",
+            input_price_per_million=Decimal("1"),
+            output_price_per_million=Decimal("2"),
+        )
+        alias = ModelAlias(alias=f"retry-half-open-alias-{suffix}")
+        model.aliases.append(alias)
+        first_provider = Provider(
+            name=f"retry-half-open-first-{suffix}",
+            credential_encrypted=encrypt_secret("{}", settings=settings),
+        )
+        first_protocol = ProviderProtocol(
+            provider=first_provider,
+            protocol=Protocol.OPENAI,
+            base_url="https://retry-first.example/v1",
+        )
+        first_route = ModelRoute(
+            model=model,
+            provider=first_provider,
+            upstream_model="retry-first-native",
+            weight=100,
+        )
+        retry_provider = Provider(
+            name=f"retry-half-open-second-{suffix}",
+            credential_encrypted=encrypt_secret("{}", settings=settings),
+        )
+        retry_protocol = ProviderProtocol(
+            provider=retry_provider,
+            protocol=Protocol.OPENAI,
+            base_url="https://retry-second.example/v1",
+        )
+        retry_route = ModelRoute(
+            model=model,
+            provider=retry_provider,
+            upstream_model="retry-second-native",
+            weight=100,
+            runtime_state=RouteRuntimeState.OPEN,
+            disabled_until=now - timedelta(seconds=1),
+            consecutive_failures=3,
+            last_error_code="connect_timeout",
+        )
+        setup.add_all(
+            [
+                user,
+                first_protocol,
+                first_route,
+                retry_protocol,
+                retry_route,
+            ]
+        )
+        await setup.commit()
+        retry_route_id = retry_route.id
+        alias_name = alias.alias
+        initial_candidate = RouteCandidate(
+            route_id=first_route.id,
+            model_id=model.id,
+            provider_id=first_provider.id,
+            provider_protocol_id=first_protocol.id,
+            protocol=Protocol.OPENAI,
+            base_url=first_protocol.base_url,
+            websocket_url=None,
+            upstream_model=first_route.upstream_model,
+            weight=first_route.weight,
+            provider_credential_encrypted=first_provider.credential_encrypted,
+        )
+
+    class RetrySelectingRouter:
+        def __init__(self, session: Any) -> None:
+            self.delegate = Router(session)
+            self.selection_calls = 0
+            self.retry_candidate: RouteCandidate | None = None
+
+        async def select_route(self, *args: Any, **kwargs: Any) -> RouteCandidate:
+            self.selection_calls += 1
+            if self.selection_calls == 1:
+                return initial_candidate
+            selected = await self.delegate.select_route(*args, **kwargs)
+            self.retry_candidate = selected
+            return selected
+
+        async def record_success(self, route_id: int) -> bool:
+            return await self.delegate.record_success(route_id)
+
+        async def record_failure(self, route_id: int, failure: object) -> bool:
+            return await self.delegate.record_failure(route_id, failure)
+
+        async def release_half_open(self, route_id: int) -> bool:
+            return await self.delegate.release_half_open(route_id)
+
+        async def maximum_eligible_public_multiplier(
+            self,
+            *args: Any,
+            **kwargs: Any,
+        ) -> Decimal | None:
+            return await self.delegate.maximum_eligible_public_multiplier(*args, **kwargs)
+
+    cancellation = asyncio.CancelledError(f"cancel retry-selected {cancellation_stage}")
+    upstream_calls = 0
+
+    async def cancel_retry_send(_: httpx.Request) -> httpx.Response:
+        nonlocal upstream_calls
+        upstream_calls += 1
+        if upstream_calls == 1:
+            return httpx.Response(503)
+        if cancellation_stage == "send":
+            raise cancellation
+        return httpx.Response(200)
+
+    if cancellation_stage == "stream_prefetch":
+
+        async def cancelled_stream() -> Any:
+            raise cancellation
+            yield b"unreachable"
+
+        monkeypatch.setattr(
+            gateway_module,
+            "stream_gateway_response",
+            lambda *_: cancelled_stream(),
+        )
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(cancel_retry_send))
+    async with sessions() as gateway_session:
+        route_router = RetrySelectingRouter(gateway_session)
+        service = GatewayService(
+            session=gateway_session,
+            settings=settings,
+            billing_service=FakeBilling(),  # type: ignore[arg-type]
+            audit_service=FakeAudit(),  # type: ignore[arg-type]
+            http_client_factory=FakeHttpClients(upstream_client),
+            router_factory=lambda _: route_router,  # type: ignore[arg-type]
+        )
+        with pytest.raises(asyncio.CancelledError) as captured:
+            await service.handle(
+                gateway_request(
+                    raw_key,
+                    alias_name,
+                    stream=cancellation_stage == "stream_prefetch",
+                ),
+                Protocol.OPENAI,
+            )
+    await upstream_client.aclose()
+
+    assert captured.value is cancellation
+    assert upstream_calls == 2
+    assert route_router.retry_candidate is not None
+    assert route_router.retry_candidate.route_id == retry_route_id
+    assert route_router.retry_candidate.runtime_state is RouteRuntimeState.HALF_OPEN
+    async with sessions() as verify:
+        released_route = await verify.get(ModelRoute, retry_route_id)
+        assert released_route is not None
+        assert released_route.runtime_state is RouteRuntimeState.OPEN
+        assert released_route.disabled_until is not None
+        assert released_route.disabled_until <= datetime.now(
+            timezone(timedelta(hours=8))
+        ).replace(tzinfo=None)
+        assert released_route.consecutive_failures == 3
+        assert released_route.last_error_code == "connect_timeout"
 
 
 @pytest.mark.parametrize(

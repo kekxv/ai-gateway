@@ -43,7 +43,7 @@ from ai_gateway.core.enums import Protocol, UsageSource
 from ai_gateway.core.errors import GatewayError
 from ai_gateway.db.models import Model, Provider
 from ai_gateway.db.session import get_session
-from ai_gateway.gateway.service import _release_read_session
+from ai_gateway.gateway.service import _release_read_session, _release_unstarted_half_open
 from ai_gateway.protocols.types import CanonicalUsage
 from ai_gateway.routing.service import router_for_settings
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFailure
@@ -123,6 +123,8 @@ class RouteSelector(TypingProtocol):
     async def record_success(self, route_id: int) -> bool: ...
 
     async def record_failure(self, route_id: int, failure: object) -> bool: ...
+
+    async def release_half_open(self, route_id: int) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -589,6 +591,7 @@ class WebSocketGatewayService:
         billing_cycle: WebSocketBillingCycle | None = None
         usage = WebSocketUsage(protocol)
         result: RelayResult | None = None
+        relay_started = False
         try:
             principal = await authenticate_api_key(
                 extract_api_key(cast(Any, websocket)),
@@ -688,6 +691,7 @@ class WebSocketGatewayService:
                 except InsufficientBalance:
                     raise RelayAbort(4402, _close_reason("insufficient_balance")) from None
 
+            relay_started = True
             result = await relay_websocket(
                 cast(Any, websocket),
                 route,
@@ -745,6 +749,9 @@ class WebSocketGatewayService:
             )
         finally:
             cleanup_error: BaseException | None = None
+            with anyio.CancelScope(shield=True):
+                if not relay_started and route is not None and route_router is not None:
+                    await _release_unstarted_half_open(route_router, route)
             with anyio.CancelScope(shield=True):
                 if billing_cycle is not None:
                     try:
