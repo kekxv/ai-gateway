@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     database_pool_recycle_seconds: int = Field(default=1800, ge=1)
     jwt_secret: SecretStr
     jwt_issuer: str = "ai-gateway"
-    jwt_access_minutes: int = 15
+    jwt_access_minutes: int = 60
     jwt_refresh_days: int = 30
     encryption_key: SecretStr
     http_proxy: str | None = Field(default=None, repr=False)

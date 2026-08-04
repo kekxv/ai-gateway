@@ -35,6 +35,7 @@ vi.mock('@/api/dashboard', () => ({
     total_completion_tokens: 0,
     daily_usage: [],
     top_models: [],
+    provider_stats: [],
   }),
   getUserDashboardSummary: () => Promise.resolve({
     balance: '0',

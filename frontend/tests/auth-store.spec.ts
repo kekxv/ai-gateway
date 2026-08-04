@@ -53,14 +53,14 @@ afterAll(() => {
 })
 
 beforeEach(() => {
-  sessionStorage.clear()
+  localStorage.clear()
   setActivePinia(createPinia())
 })
 
 describe('authentication store', () => {
   it('restores a valid admin session', async () => {
-    sessionStorage.setItem('gateway.access_token', 'access')
-    sessionStorage.setItem('gateway.refresh_token', 'refresh')
+    localStorage.setItem('gateway.access_token', 'access')
+    localStorage.setItem('gateway.refresh_token', 'refresh')
     server.use(http.get('/auth/me', () => HttpResponse.json(adminUser)))
 
     const store = useAuthStore()
@@ -73,8 +73,8 @@ describe('authentication store', () => {
   })
 
   it('restores a valid regular-user session', async () => {
-    sessionStorage.setItem('gateway.access_token', 'access')
-    sessionStorage.setItem('gateway.refresh_token', 'refresh')
+    localStorage.setItem('gateway.access_token', 'access')
+    localStorage.setItem('gateway.refresh_token', 'refresh')
     server.use(http.get('/auth/me', () => HttpResponse.json(regularUser)))
 
     const store = useAuthStore()
@@ -86,8 +86,8 @@ describe('authentication store', () => {
   })
 
   it('clears storage when refresh fails', async () => {
-    sessionStorage.setItem('gateway.access_token', 'expired')
-    sessionStorage.setItem('gateway.refresh_token', 'refresh')
+    localStorage.setItem('gateway.access_token', 'expired')
+    localStorage.setItem('gateway.refresh_token', 'refresh')
     server.use(
       http.get('/auth/me', () => new HttpResponse(null, { status: 401 })),
       http.post('/auth/refresh', () => new HttpResponse(null, { status: 401 })),
@@ -95,7 +95,7 @@ describe('authentication store', () => {
 
     await expect(useAuthStore().restore()).resolves.toBeUndefined()
 
-    expect(sessionStorage.length).toBe(0)
+    expect(localStorage.length).toBe(0)
     expect(useAuthStore().ready).toBe(true)
   })
 
@@ -115,8 +115,8 @@ describe('authentication store', () => {
     await store.login({ email: adminUser.email, password: 'secret' })
 
     expect(store.user).toEqual(adminUser)
-    expect(sessionStorage.getItem('gateway.access_token')).toBe('access')
-    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('refresh')
+    expect(localStorage.getItem('gateway.access_token')).toBe('access')
+    expect(localStorage.getItem('gateway.refresh_token')).toBe('refresh')
   })
 
   it('does not let a login response restore the session after logout', async () => {
@@ -144,7 +144,7 @@ describe('authentication store', () => {
     releaseLogin.resolve()
 
     expect(await outcome).toEqual(expect.objectContaining({ code: 'session_changed' }))
-    expect(sessionStorage.length).toBe(0)
+    expect(localStorage.length).toBe(0)
     expect(store.user).toBeNull()
     expect(store.ready).toBe(true)
   })
@@ -181,8 +181,8 @@ describe('authentication store', () => {
     releaseOldUser.resolve()
 
     expect(await oldOutcome).toEqual(expect.objectContaining({ code: 'session_changed' }))
-    expect(sessionStorage.getItem('gateway.access_token')).toBe('new-access')
-    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('new-refresh')
+    expect(localStorage.getItem('gateway.access_token')).toBe('new-access')
+    expect(localStorage.getItem('gateway.refresh_token')).toBe('new-refresh')
     expect(store.user).toEqual(replacementAdmin)
     expect(store.ready).toBe(true)
   })
@@ -219,15 +219,15 @@ describe('authentication store', () => {
     releaseOldLogin.resolve()
 
     expect(await oldOutcome).toEqual(expect.objectContaining({ code: 'session_changed' }))
-    expect(sessionStorage.getItem('gateway.access_token')).toBe('new-access')
-    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('new-refresh')
+    expect(localStorage.getItem('gateway.access_token')).toBe('new-access')
+    expect(localStorage.getItem('gateway.refresh_token')).toBe('new-refresh')
     expect(store.user).toEqual(replacementAdmin)
     expect(store.ready).toBe(true)
   })
 
   it('does not let restore complete after logout', async () => {
-    sessionStorage.setItem('gateway.access_token', 'old-access')
-    sessionStorage.setItem('gateway.refresh_token', 'old-refresh')
+    localStorage.setItem('gateway.access_token', 'old-access')
+    localStorage.setItem('gateway.refresh_token', 'old-refresh')
     const restoreStarted = createDeferred()
     const releaseRestore = createDeferred()
     server.use(
@@ -245,7 +245,7 @@ describe('authentication store', () => {
     releaseRestore.resolve()
 
     expect(await outcome).toEqual(expect.objectContaining({ code: 'session_changed' }))
-    expect(sessionStorage.length).toBe(0)
+    expect(localStorage.length).toBe(0)
     expect(store.user).toBeNull()
     expect(store.ready).toBe(true)
   })
@@ -276,7 +276,7 @@ describe('authentication store', () => {
         requestId: 'request-1',
       }),
     )
-    expect(sessionStorage.length).toBe(0)
+    expect(localStorage.length).toBe(0)
     expect(useAuthStore().user).toBeNull()
   })
 
@@ -296,8 +296,8 @@ describe('authentication store', () => {
 
     await store.login({ email: regularUser.email, password: 'secret' })
 
-    expect(sessionStorage.getItem('gateway.access_token')).toBe('access')
-    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('refresh')
+    expect(localStorage.getItem('gateway.access_token')).toBe('access')
+    expect(localStorage.getItem('gateway.refresh_token')).toBe('refresh')
     expect(store.user).toEqual(regularUser)
     expect(store.isAdmin).toBe(false)
   })
@@ -325,8 +325,8 @@ describe('authentication store', () => {
     expect(requests).toEqual([
       { email: regularUser.email, password: 'registration-password' },
     ])
-    expect(sessionStorage.getItem('gateway.access_token')).toBe('registered-access')
-    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('registered-refresh')
+    expect(localStorage.getItem('gateway.access_token')).toBe('registered-access')
+    expect(localStorage.getItem('gateway.refresh_token')).toBe('registered-refresh')
     expect(store.user).toEqual(regularUser)
   })
 
@@ -358,13 +358,13 @@ describe('authentication store', () => {
     releaseRegistration.resolve()
 
     expect(await outcome).toEqual(expect.objectContaining({ code: 'session_changed' }))
-    expect(sessionStorage.length).toBe(0)
+    expect(localStorage.length).toBe(0)
     expect(store.user).toBeNull()
   })
 
   it('serializes concurrent access-token refreshes', async () => {
-    sessionStorage.setItem('gateway.access_token', 'expired')
-    sessionStorage.setItem('gateway.refresh_token', 'refresh')
+    localStorage.setItem('gateway.access_token', 'expired')
+    localStorage.setItem('gateway.refresh_token', 'refresh')
     let refreshCalls = 0
     server.use(
       http.get('/admin/first', ({ request }) => {
@@ -393,13 +393,13 @@ describe('authentication store', () => {
     await Promise.all([apiClient.get('/admin/first'), apiClient.get('/admin/second')])
 
     expect(refreshCalls).toBe(1)
-    expect(sessionStorage.getItem('gateway.access_token')).toBe('renewed')
-    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('renewed-refresh')
+    expect(localStorage.getItem('gateway.access_token')).toBe('renewed')
+    expect(localStorage.getItem('gateway.refresh_token')).toBe('renewed-refresh')
   })
 
   it('does not restore stale tokens when logout happens during refresh', async () => {
-    sessionStorage.setItem('gateway.access_token', 'old-access')
-    sessionStorage.setItem('gateway.refresh_token', 'old-refresh')
+    localStorage.setItem('gateway.access_token', 'old-access')
+    localStorage.setItem('gateway.refresh_token', 'old-refresh')
     server.use(http.get('/auth/me', () => HttpResponse.json(adminUser)))
     const store = useAuthStore()
     await store.restore()
@@ -432,13 +432,13 @@ describe('authentication store', () => {
     await expect(pendingRequest).rejects.toEqual(
       expect.objectContaining({ code: 'session_changed' }),
     )
-    expect(sessionStorage.length).toBe(0)
+    expect(localStorage.length).toBe(0)
     expect(store.user).toBeNull()
   })
 
   it('does not let an old refresh overwrite a newly logged-in session', async () => {
-    sessionStorage.setItem('gateway.access_token', 'old-access')
-    sessionStorage.setItem('gateway.refresh_token', 'old-refresh')
+    localStorage.setItem('gateway.access_token', 'old-access')
+    localStorage.setItem('gateway.refresh_token', 'old-refresh')
     server.use(http.get('/auth/me', () => HttpResponse.json(adminUser)))
     const store = useAuthStore()
     await store.restore()
@@ -522,14 +522,14 @@ describe('authentication store', () => {
 
     expect(oldRefreshCalls).toBe(1)
     expect(newRefreshCalls).toBe(1)
-    expect(sessionStorage.getItem('gateway.access_token')).toBe('renewed-new-access')
-    expect(sessionStorage.getItem('gateway.refresh_token')).toBe('renewed-new-refresh')
+    expect(localStorage.getItem('gateway.access_token')).toBe('renewed-new-access')
+    expect(localStorage.getItem('gateway.refresh_token')).toBe('renewed-new-refresh')
     expect(store.user).toEqual(replacementAdmin)
   })
 
   it('clears an established Pinia session when background refresh fails', async () => {
-    sessionStorage.setItem('gateway.access_token', 'access')
-    sessionStorage.setItem('gateway.refresh_token', 'refresh')
+    localStorage.setItem('gateway.access_token', 'access')
+    localStorage.setItem('gateway.refresh_token', 'refresh')
     server.use(http.get('/auth/me', () => HttpResponse.json(adminUser)))
     const store = useAuthStore()
     await store.restore()
@@ -541,7 +541,7 @@ describe('authentication store', () => {
 
     await expect(apiClient.get('/admin/background')).rejects.toBeInstanceOf(ApiError)
 
-    expect(sessionStorage.length).toBe(0)
+    expect(localStorage.length).toBe(0)
     expect(store.user).toBeNull()
     expect(store.authenticated).toBe(false)
   })

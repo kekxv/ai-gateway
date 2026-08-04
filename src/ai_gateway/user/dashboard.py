@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +60,7 @@ async def get_user_dashboard_summary(
     session: Session,
     user: CurrentUser,
     now: DashboardNow,
+    days: int = Query(default=7, ge=1, le=30),
 ) -> UserDashboardSummary:
     account = await session.scalar(select(Account).where(Account.user_id == user.id))
     if account is None:
@@ -70,7 +71,7 @@ async def get_user_dashboard_summary(
         )
 
     cutoff_24h = now - timedelta(hours=24)
-    first_daily_date = now.date() - timedelta(days=6)
+    first_daily_date = now.date() - timedelta(days=days - 1)
     first_daily_midnight = datetime.combine(first_daily_date, time.min)
 
     active_api_keys = await session.scalar(
@@ -159,7 +160,7 @@ async def get_user_dashboard_summary(
         for row in daily_rows
     }
     daily_usage: list[DailyUsagePoint] = []
-    for offset in range(7):
+    for offset in range(days):
         current_date = first_daily_date + timedelta(days=offset)
         daily_usage.append(
             daily_by_date.get(

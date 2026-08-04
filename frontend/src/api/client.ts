@@ -11,6 +11,7 @@ export const REFRESH_TOKEN_KEY = 'gateway.refresh_token'
 
 interface RetriableRequestConfig extends InternalAxiosRequestConfig {
   _retried?: boolean
+  _syncRetried?: boolean
   _sessionGeneration?: number
 }
 
@@ -47,7 +48,50 @@ export const apiClient = axios.create()
 
 let sessionGeneration = 0
 let refreshState: RefreshState | null = null
+let lastAttemptedRefreshToken: string | null = null
 const sessionInvalidatedListeners = new Set<SessionInvalidatedListener>()
+
+// Proactive refresh timer state
+let proactiveRefreshTimer: ReturnType<typeof setInterval> | null = null
+const PROACTIVE_REFRESH_INTERVAL_MS = 10 * 60 * 1000 // 10 minutes
+
+// Cross-tab sync via BroadcastChannel
+let broadcastChannel: BroadcastChannel | null = null
+try {
+  broadcastChannel = new BroadcastChannel('gateway-auth')
+  broadcastChannel.addEventListener('message', (event: MessageEvent) => {
+    const data = event.data as { type?: string; access_token?: string; refresh_token?: string } | null
+    if (data?.type === 'tokens-updated' && data.access_token && data.refresh_token) {
+      const currentRefresh = localStorage.getItem(REFRESH_TOKEN_KEY)
+      if (currentRefresh !== data.refresh_token) {
+        advanceSessionGeneration()
+        localStorage.setItem(ACCESS_TOKEN_KEY, data.access_token)
+        localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
+      }
+    }
+  })
+} catch {
+  // BroadcastChannel not available in this environment
+}
+
+// Listen for storage events from other tabs
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event: StorageEvent) => {
+    if (event.key === REFRESH_TOKEN_KEY && event.newValue !== null) {
+      const currentRefresh = localStorage.getItem(REFRESH_TOKEN_KEY)
+      if (currentRefresh !== event.newValue) {
+        advanceSessionGeneration()
+      }
+    } else if (
+      event.key === REFRESH_TOKEN_KEY &&
+      event.newValue === null &&
+      localStorage.getItem(ACCESS_TOKEN_KEY) === null
+    ) {
+      // Another tab cleared tokens
+      for (const listener of sessionInvalidatedListeners) listener()
+    }
+  })
+}
 
 function advanceSessionGeneration(): void {
   sessionGeneration += 1
@@ -56,15 +100,21 @@ function advanceSessionGeneration(): void {
 
 export function clearSessionTokens(): void {
   advanceSessionGeneration()
-  sessionStorage.removeItem(ACCESS_TOKEN_KEY)
-  sessionStorage.removeItem(REFRESH_TOKEN_KEY)
+  lastAttemptedRefreshToken = null
+  localStorage.removeItem(ACCESS_TOKEN_KEY)
+  localStorage.removeItem(REFRESH_TOKEN_KEY)
+  if (broadcastChannel) {
+    broadcastChannel.postMessage({ type: 'tokens-cleared' })
+  }
   for (const listener of sessionInvalidatedListeners) listener()
 }
 
 export function replaceSessionTokens(accessToken: string, refreshToken: string): void {
   advanceSessionGeneration()
-  sessionStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
-  sessionStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+  lastAttemptedRefreshToken = null
+  localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
+  localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+  broadcastTokens(accessToken, refreshToken)
 }
 
 /**
@@ -72,8 +122,33 @@ export function replaceSessionTokens(accessToken: string, refreshToken: string):
  * Does NOT advance the session generation — stale-refresh detection still works.
  */
 function rotateSessionTokens(accessToken: string, refreshToken: string): void {
-  sessionStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
-  sessionStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+  localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
+  localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+  broadcastTokens(accessToken, refreshToken)
+}
+
+function broadcastTokens(accessToken: string, refreshToken: string): void {
+  if (broadcastChannel) {
+    broadcastChannel.postMessage({
+      type: 'tokens-updated',
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    })
+  }
+}
+
+/**
+ * Check if another tab has already refreshed the tokens.
+ * Returns true if the stored refresh token differs from the one we last tried
+ * (meaning another tab updated it), so the caller can retry with the new tokens.
+ */
+function syncFromStorage(): boolean {
+  const storedRefresh = localStorage.getItem(REFRESH_TOKEN_KEY)
+  if (!storedRefresh) return false
+  if (!localStorage.getItem(ACCESS_TOKEN_KEY)) return false
+  // Only consider it a cross-tab sync if the stored token is DIFFERENT
+  // from the one we just tried. If it's the same, no other tab refreshed.
+  return storedRefresh !== lastAttemptedRefreshToken
 }
 
 export function onSessionInvalidated(listener: SessionInvalidatedListener): () => void {
@@ -220,7 +295,7 @@ export function normalizeApiError(error: unknown): ApiError {
 function sessionMatches(generation: number, refreshToken: string): boolean {
   return (
     sessionGeneration === generation &&
-    sessionStorage.getItem(REFRESH_TOKEN_KEY) === refreshToken
+    localStorage.getItem(REFRESH_TOKEN_KEY) === refreshToken
   )
 }
 
@@ -229,7 +304,7 @@ function sessionChangedError(): ApiError {
 }
 
 async function refreshAccessToken(): Promise<RefreshedSession> {
-  const refreshToken = sessionStorage.getItem(REFRESH_TOKEN_KEY)
+  const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY)
   if (refreshToken === null) {
     throw new ApiError(401, 'authentication_required', '登录状态已失效')
   }
@@ -246,9 +321,12 @@ async function refreshAccessToken(): Promise<RefreshedSession> {
   const state: RefreshState = {
     generation,
     refreshToken,
-    promise: rawClient
-      .post<TokenPair>('/auth/refresh', { refresh_token: refreshToken })
-      .then(({ data }) => {
+    promise: (async () => {
+      lastAttemptedRefreshToken = refreshToken
+      try {
+        const { data } = await rawClient.post<TokenPair>('/auth/refresh', {
+          refresh_token: refreshToken,
+        })
         // Only update tokens when the refresh matches the current session.
         // If a new login happened while this refresh was in flight, the stored
         // refresh token (and generation) will have changed — leave them alone
@@ -256,12 +334,12 @@ async function refreshAccessToken(): Promise<RefreshedSession> {
         if (!sessionMatches(generation, refreshToken)) throw sessionChangedError()
         rotateSessionTokens(data.access_token, data.refresh_token)
         return { accessToken: data.access_token, generation }
-      })
-      .catch((error: unknown) => {
+      } catch (error: unknown) {
         if (!sessionMatches(generation, refreshToken)) throw sessionChangedError()
         clearSessionTokens()
         throw normalizeApiError(error)
-      }),
+      }
+    })(),
   }
   state.promise = state.promise.finally(() => {
     if (refreshState === state) refreshState = null
@@ -272,7 +350,7 @@ async function refreshAccessToken(): Promise<RefreshedSession> {
 
 apiClient.interceptors.request.use((config: RetriableRequestConfig) => {
   config._sessionGeneration = sessionGeneration
-  const accessToken = sessionStorage.getItem(ACCESS_TOKEN_KEY)
+  const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY)
   if (accessToken !== null) {
     config.headers.set('Authorization', `Bearer ${accessToken}`)
   }
@@ -293,17 +371,84 @@ apiClient.interceptors.response.use(
       config !== undefined &&
       config._retried !== true &&
       belongsToCurrentSession &&
-      sessionStorage.getItem(REFRESH_TOKEN_KEY) !== null
+      localStorage.getItem(REFRESH_TOKEN_KEY) !== null
 
-    if (!canRefresh) throw normalizeApiError(error)
-
-    config._retried = true
-    const refreshedSession = await refreshAccessToken()
-    if (config._sessionGeneration !== refreshedSession.generation) {
-      throw sessionChangedError()
+    if (canRefresh) {
+      config._retried = true
+      try {
+        const refreshedSession = await refreshAccessToken()
+        if (config._sessionGeneration !== refreshedSession.generation) {
+          throw sessionChangedError()
+        }
+        config.headers = AxiosHeaders.from(config.headers)
+        config.headers.set('Authorization', `Bearer ${refreshedSession.accessToken}`)
+        return await apiClient.request(config)
+      } catch (refreshError: unknown) {
+        // Before giving up, check if another tab already refreshed the tokens.
+        // If so, pick up the new tokens and retry the original request.
+        if (
+          config._syncRetried !== true &&
+          refreshError instanceof ApiError &&
+          (refreshError.code === 'invalid_token' ||
+            refreshError.code === 'authentication_required' ||
+            refreshError.code === 'session_changed')
+        ) {
+          if (syncFromStorage()) {
+            config._syncRetried = true
+            const freshAccess = localStorage.getItem(ACCESS_TOKEN_KEY)
+            if (freshAccess) {
+              config.headers = AxiosHeaders.from(config.headers)
+              config.headers.set('Authorization', `Bearer ${freshAccess}`)
+              return apiClient.request(config)
+            }
+          }
+        }
+        throw refreshError
+      }
     }
-    config.headers = AxiosHeaders.from(config.headers)
-    config.headers.set('Authorization', `Bearer ${refreshedSession.accessToken}`)
-    return apiClient.request(config)
+
+    throw normalizeApiError(error)
   },
 )
+
+// Proactive refresh timer
+
+function handleVisibilityChange(): void {
+  if (typeof document === 'undefined') return
+  if (document.visibilityState === 'visible' && proactiveRefreshTimer !== null) {
+    // Refresh immediately on becoming visible, then restart the timer
+    refreshAccessToken().catch(() => {
+      // Silently ignore — the 401 interceptor will handle it
+    })
+  }
+}
+
+export function startProactiveRefresh(): void {
+  if (proactiveRefreshTimer !== null) return // Already running
+  proactiveRefreshTimer = setInterval(() => {
+    const hasTokens =
+      localStorage.getItem(ACCESS_TOKEN_KEY) !== null &&
+      localStorage.getItem(REFRESH_TOKEN_KEY) !== null
+    if (!hasTokens) {
+      stopProactiveRefresh()
+      return
+    }
+    refreshAccessToken().catch(() => {
+      // Silently ignore — the 401 interceptor will handle it
+    })
+  }, PROACTIVE_REFRESH_INTERVAL_MS)
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+  }
+}
+
+export function stopProactiveRefresh(): void {
+  if (proactiveRefreshTimer !== null) {
+    clearInterval(proactiveRefreshTimer)
+    proactiveRefreshTimer = null
+  }
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }
+}

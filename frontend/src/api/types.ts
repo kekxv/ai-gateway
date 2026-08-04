@@ -123,6 +123,18 @@ export interface ModelUsageStat {
   cost_amount: string
 }
 
+export interface ProviderUsageStat {
+  provider_id: number
+  provider_name: string
+  requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  cost: string
+  cost_amount: string
+}
+
+export type DashboardDays = 3 | 7 | 30
+
 export interface DashboardSummary {
   users_total: number
   active_api_keys: number
@@ -148,6 +160,7 @@ export interface DashboardSummary {
   total_completion_tokens: number
   daily_usage: DailyUsagePoint[]
   top_models: ModelUsageStat[]
+  provider_stats: ProviderUsageStat[]
 }
 
 export interface UserDashboardSummary {

@@ -1241,7 +1241,7 @@ describe('供应商与协议管理', () => {
     let receivedBody = ''
     let receivedAuthorization: string | null = null
     let receivedContentType: string | null = null
-    sessionStorage.setItem('gateway.access_token', 'catalog-access-token')
+    localStorage.setItem('gateway.access_token', 'catalog-access-token')
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
       value: '',
       action: 'confirm',

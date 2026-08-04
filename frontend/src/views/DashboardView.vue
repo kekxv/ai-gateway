@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { BarChart, type BarSeriesOption, LineChart, type LineSeriesOption } from 'echarts/charts'
 import {
   AriaComponent,
@@ -15,6 +15,8 @@ import { type ComposeOption, use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import {
   ElButton,
+  ElRadioButton,
+  ElRadioGroup,
   ElResult,
   ElSkeleton,
   ElSkeletonItem,
@@ -22,6 +24,7 @@ import {
   ElTableColumn,
 } from 'element-plus'
 import 'element-plus/theme-chalk/el-button.css'
+import 'element-plus/theme-chalk/el-radio.css'
 import 'element-plus/theme-chalk/el-result.css'
 import 'element-plus/theme-chalk/el-skeleton.css'
 import 'element-plus/theme-chalk/el-skeleton-item.css'
@@ -29,7 +32,7 @@ import 'element-plus/theme-chalk/el-table.css'
 import VChart from 'vue-echarts'
 
 import { getDashboardSummary, getUserDashboardSummary } from '@/api/dashboard'
-import type { DashboardSummary, UserDashboardSummary } from '@/api/types'
+import type { DashboardDays, DashboardSummary, UserDashboardSummary } from '@/api/types'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { useAuthStore } from '@/stores/auth'
 import {
@@ -62,6 +65,7 @@ type DashboardChartOption = ComposeOption<
 
 const auth = useAuthStore()
 
+const selectedDays = ref<DashboardDays>(7)
 const adminSummary = ref<DashboardSummary | null>(null)
 const userSummary = ref<UserDashboardSummary | null>(null)
 const initialLoading = ref(true)
@@ -394,11 +398,11 @@ async function loadSummary(): Promise<void> {
 
   try {
     if (auth.isAdmin) {
-      const data = await getDashboardSummary(controller.signal)
+      const data = await getDashboardSummary(controller.signal, selectedDays.value)
       if (sequence !== requestSequence) return
       adminSummary.value = data
     } else {
-      const data = await getUserDashboardSummary(controller.signal)
+      const data = await getUserDashboardSummary(controller.signal, selectedDays.value)
       if (sequence !== requestSequence) return
       userSummary.value = data
     }
@@ -415,6 +419,12 @@ async function loadSummary(): Promise<void> {
 }
 
 const hasData = computed(() => (auth.isAdmin ? adminSummary.value !== null : userSummary.value !== null))
+
+const rangeLabel = computed(() => `近 ${String(selectedDays.value)} 天`)
+
+watch(selectedDays, () => {
+  void loadSummary()
+})
 
 onMounted(() => {
   void loadSummary()
@@ -578,16 +588,21 @@ onBeforeUnmount(() => {
 
       <!-- Trend chart -->
       <section class="dashboard-section" aria-labelledby="chart-heading">
-        <div class="section-header">
+        <div class="section-header section-header--with-controls">
           <div>
-            <p class="section-eyebrow">近 7 天</p>
+            <p class="section-eyebrow">{{ rangeLabel }}</p>
             <h2 id="chart-heading">请求与费用趋势</h2>
           </div>
+          <ElRadioGroup v-model="selectedDays" size="small" data-test="days-selector">
+            <ElRadioButton :value="3">3 天</ElRadioButton>
+            <ElRadioButton :value="7">7 天</ElRadioButton>
+            <ElRadioButton :value="30">30 天</ElRadioButton>
+          </ElRadioGroup>
         </div>
         <div class="chart-card page-card">
           <div v-if="chartEmpty" class="chart-empty" data-test="chart-empty">
             <span class="chart-empty__icon" aria-hidden="true">○</span>
-            <p>近 7 天暂无请求数据</p>
+            <p>{{ rangeLabel }}暂无请求数据</p>
             <small>产生网关流量后，这里会展示每日趋势。</small>
           </div>
           <VChart
@@ -599,7 +614,7 @@ onBeforeUnmount(() => {
           />
         </div>
         <table class="visually-hidden" data-test="daily-usage-table">
-          <caption>近 7 天每日请求、失败与费用明细</caption>
+          <caption>{{ rangeLabel }}每日请求、失败与费用明细</caption>
           <thead>
             <tr>
               <th scope="col">日期</th>
@@ -627,7 +642,7 @@ onBeforeUnmount(() => {
       >
         <div class="section-header">
           <div>
-            <p class="section-eyebrow">近 7 天</p>
+            <p class="section-eyebrow">{{ rangeLabel }}</p>
             <h2 id="models-heading">热门模型</h2>
           </div>
         </div>
@@ -638,6 +653,46 @@ onBeforeUnmount(() => {
                 <span class="model-name">{{ row.display_name }}</span>
                 <br />
                 <span class="model-canonical">{{ row.model_name }}</span>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="请求数" width="110" align="right">
+              <template #default="{ row }">{{ formatInteger(row.requests) }}</template>
+            </ElTableColumn>
+            <ElTableColumn label="输入令牌" width="120" align="right">
+              <template #default="{ row }">{{ formatCompactInteger(row.prompt_tokens) }}</template>
+            </ElTableColumn>
+            <ElTableColumn label="输出令牌" width="120" align="right">
+              <template #default="{ row }">{{
+                formatCompactInteger(row.completion_tokens)
+              }}</template>
+            </ElTableColumn>
+            <ElTableColumn label="用户费用" width="130" align="right">
+              <template #default="{ row }">{{ formatMoney(row.cost) }}</template>
+            </ElTableColumn>
+            <ElTableColumn label="成本" width="130" align="right">
+              <template #default="{ row }">{{ formatMoney(row.cost_amount) }}</template>
+            </ElTableColumn>
+          </ElTable>
+        </div>
+      </section>
+
+      <!-- Admin: Provider stats -->
+      <section
+        v-if="auth.isAdmin && adminSummary && adminSummary.provider_stats.length > 0"
+        class="dashboard-section"
+        aria-labelledby="providers-heading"
+      >
+        <div class="section-header">
+          <div>
+            <p class="section-eyebrow">{{ rangeLabel }}</p>
+            <h2 id="providers-heading">提供商消费</h2>
+          </div>
+        </div>
+        <div class="page-card models-table-card">
+          <ElTable :data="adminSummary.provider_stats" stripe style="width: 100%">
+            <ElTableColumn prop="provider_name" label="提供商" min-width="160">
+              <template #default="{ row }">
+                <span class="model-name">{{ row.provider_name }}</span>
               </template>
             </ElTableColumn>
             <ElTableColumn label="请求数" width="110" align="right">
@@ -747,6 +802,13 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: 1.1rem;
   font-weight: 650;
+}
+
+.section-header--with-controls {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
 /* ─── Billing cards ─────────────────────────────────────────────────── */

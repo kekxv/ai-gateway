@@ -13,6 +13,8 @@ import {
   onSessionInvalidated,
   replaceSessionTokens,
   REFRESH_TOKEN_KEY,
+  startProactiveRefresh,
+  stopProactiveRefresh,
 } from '@/api/client'
 import type { CurrentUser, LoginRequest, RegisterRequest, TokenPair } from '@/api/types'
 
@@ -109,6 +111,7 @@ export const useAuthStore = defineStore('auth', () => {
       const currentUser = await getCurrentUser(operation.controller.signal)
       requireCurrentAuthOperation(operation)
       user.value = currentUser
+      startProactiveRefresh()
     } catch (error: unknown) {
       requireCurrentAuthOperation(operation)
       clearSession()
@@ -130,8 +133,8 @@ export const useAuthStore = defineStore('auth', () => {
     const operation = beginAuthOperation()
     ready.value = false
     user.value = null
-    const hasAccessToken = sessionStorage.getItem(ACCESS_TOKEN_KEY) !== null
-    const hasRefreshToken = sessionStorage.getItem(REFRESH_TOKEN_KEY) !== null
+    const hasAccessToken = localStorage.getItem(ACCESS_TOKEN_KEY) !== null
+    const hasRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY) !== null
     if (!hasAccessToken && !hasRefreshToken) {
       finishAuthOperation(operation)
       return
@@ -141,6 +144,7 @@ export const useAuthStore = defineStore('auth', () => {
       const currentUser = await getCurrentUser(operation.controller.signal)
       requireCurrentAuthOperation(operation)
       user.value = currentUser
+      startProactiveRefresh()
     } catch (error: unknown) {
       if (isOwnAuthenticationFailure(operation, error)) return
       requireCurrentAuthOperation(operation)
@@ -168,6 +172,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function logout(): void {
+    stopProactiveRefresh()
     clearSession()
     ready.value = true
   }

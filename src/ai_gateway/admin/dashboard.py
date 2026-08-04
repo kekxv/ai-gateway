@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,6 +56,16 @@ class ModelUsageStat(BaseModel):
     cost_amount: Decimal
 
 
+class ProviderUsageStat(BaseModel):
+    provider_id: int
+    provider_name: str
+    requests: int
+    prompt_tokens: int
+    completion_tokens: int
+    cost: Decimal
+    cost_amount: Decimal
+
+
 class DashboardSummary(BaseModel):
     users_total: int
     active_api_keys: int
@@ -81,6 +91,7 @@ class DashboardSummary(BaseModel):
     total_completion_tokens: int
     daily_usage: list[DailyUsagePoint]
     top_models: list[ModelUsageStat]
+    provider_stats: list[ProviderUsageStat]
 
 
 @router.get("/summary", response_model=DashboardSummary)
@@ -88,9 +99,10 @@ async def get_dashboard_summary(
     session: Session,
     _: AdminUser,
     now: DashboardNow,
+    days: int = Query(default=7, ge=1, le=30),
 ) -> DashboardSummary:
     cutoff_24h = now - timedelta(hours=24)
-    first_daily_date = now.date() - timedelta(days=6)
+    first_daily_date = now.date() - timedelta(days=days - 1)
     first_daily_midnight = datetime.combine(first_daily_date, time.min)
 
     users_total = await session.scalar(select(func.count(User.id)))
@@ -227,6 +239,49 @@ async def get_dashboard_summary(
         for row in model_stat_rows
     ]
 
+    # Provider stats (last N days)
+    provider_stat_rows = (
+        (
+            await session.execute(
+                select(
+                    RequestLog.provider_id,
+                    Provider.name,
+                    func.count(RequestLog.id).label("requests"),
+                    func.coalesce(func.sum(RequestLog.prompt_tokens), 0).label("prompt_tokens"),
+                    func.coalesce(func.sum(RequestLog.completion_tokens), 0).label(
+                        "completion_tokens"
+                    ),
+                    func.coalesce(func.sum(RequestLog.cost), Decimal("0")).label("cost"),
+                    func.coalesce(func.sum(RequestLog.cost_amount), Decimal("0")).label(
+                        "cost_amount"
+                    ),
+                )
+                .outerjoin(Provider, Provider.id == RequestLog.provider_id)
+                .where(
+                    RequestLog.created_at >= first_daily_midnight,
+                    RequestLog.created_at <= now,
+                    RequestLog.provider_id.is_not(None),
+                )
+                .group_by(RequestLog.provider_id, Provider.name)
+                .order_by(func.count(RequestLog.id).desc())
+            )
+        )
+        .mappings()
+        .all()
+    )
+    provider_stats = [
+        ProviderUsageStat(
+            provider_id=row["provider_id"],
+            provider_name=row["name"] or "未知提供商",
+            requests=int(row["requests"]),
+            prompt_tokens=int(row["prompt_tokens"]),
+            completion_tokens=int(row["completion_tokens"]),
+            cost=row["cost"],
+            cost_amount=row["cost_amount"],
+        )
+        for row in provider_stat_rows
+    ]
+
     daily_date = func.date(RequestLog.created_at).label("date")
     daily_rows = (
         (
@@ -271,7 +326,7 @@ async def get_dashboard_summary(
         for row in daily_rows
     }
     daily_usage: list[DailyUsagePoint] = []
-    for offset in range(7):
+    for offset in range(days):
         current_date = first_daily_date + timedelta(days=offset)
         daily_usage.append(
             daily_by_date.get(
@@ -327,4 +382,5 @@ async def get_dashboard_summary(
         total_completion_tokens=int(total_row[2]),
         daily_usage=daily_usage,
         top_models=top_models,
+        provider_stats=provider_stats,
     )

@@ -41,7 +41,7 @@ afterAll(() => {
 })
 
 beforeEach(() => {
-  sessionStorage.clear()
+  localStorage.clear()
   setActivePinia(createPinia())
   server.use(http.get('/auth/registration', () => HttpResponse.json({ enabled: true })))
 })

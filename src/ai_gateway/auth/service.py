@@ -320,10 +320,6 @@ async def refresh_access_token(
                 authenticate=True,
             )
 
-    # Rotate: invalidate all previously-issued tokens, then issue a fresh pair
-    user.tokens_invalidated_before = datetime.now(UTC).replace(tzinfo=None)
-    await session.commit()
-
     return (
         issue_access_token(user_id=user.id, settings=settings),
         issue_refresh_token(user_id=user.id, settings=settings),

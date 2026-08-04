@@ -67,6 +67,17 @@ const summaryFixture: DashboardSummary = {
       cost_amount: '4.00000000',
     },
   ],
+  provider_stats: [
+    {
+      provider_id: 1,
+      provider_name: 'OpenAI',
+      requests: 300,
+      prompt_tokens: 80_000,
+      completion_tokens: 40_000,
+      cost: '3.00000000',
+      cost_amount: '2.50000000',
+    },
+  ],
 }
 
 const adminUser: CurrentUser = {

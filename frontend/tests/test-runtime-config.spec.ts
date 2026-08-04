@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest'
 
 import viteConfig from '../vite.config'
 
-Object.defineProperty(globalThis, 'sessionStorage', {
+Object.defineProperty(globalThis, 'localStorage', {
   configurable: true,
-  value: { clear: () => undefined },
+  value: { clear: () => undefined, getItem: () => null, setItem: () => undefined, removeItem: () => undefined },
 })
 
 describe('frontend test runtime policy', () => {
