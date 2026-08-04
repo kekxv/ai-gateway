@@ -48,7 +48,7 @@ from ai_gateway.billing.usage import (
 from ai_gateway.catalog.repository import CatalogRepository
 from ai_gateway.catalog.schemas import ResolvedModel
 from ai_gateway.core.config import Settings
-from ai_gateway.core.enums import Protocol, UsageSource
+from ai_gateway.core.enums import Protocol, RouteRuntimeState, UsageSource
 from ai_gateway.core.errors import GatewayError
 from ai_gateway.core.logging import current_request_id
 from ai_gateway.db.models import Model, Provider
@@ -102,6 +102,8 @@ class RouteSelector(TypingProtocol):
     async def record_success(self, route_id: int) -> bool: ...
 
     async def record_failure(self, route_id: int, failure: object) -> bool: ...
+
+    async def release_half_open(self, route_id: int) -> bool: ...
 
     async def has_eligible_route(
         self,
@@ -313,54 +315,58 @@ class GatewayService:
         )
         selected_model_id = initial_route.model_id
 
-        if isinstance(self._session, AsyncSession):
-            priced_model = await self._session.scalar(
-                select(Model)
-                .where(Model.id == selected_model_id)
-                .options(selectinload(Model.price_tiers))
+        try:
+            if isinstance(self._session, AsyncSession):
+                priced_model = await self._session.scalar(
+                    select(Model)
+                    .where(Model.id == selected_model_id)
+                    .options(selectinload(Model.price_tiers))
+                )
+            else:
+                priced_model = await self._session.get(Model, selected_model_id)
+            if priced_model is None:
+                raise RuntimeError("resolved catalog model disappeared")
+            maximum_public_multiplier = getattr(
+                route_router,
+                "maximum_eligible_public_multiplier",
+                None,
             )
-        else:
-            priced_model = await self._session.get(Model, selected_model_id)
-        if priced_model is None:
-            raise RuntimeError("resolved catalog model disappeared")
-        maximum_public_multiplier = getattr(
-            route_router,
-            "maximum_eligible_public_multiplier",
-            None,
-        )
-        reservation_public_multiplier = (
-            await maximum_public_multiplier(
-                selected_model_id,
-                principal,
-                required_protocol,
+            maximum_retry_public_multiplier = (
+                await maximum_public_multiplier(
+                    selected_model_id,
+                    principal,
+                    required_protocol,
+                )
+                if maximum_public_multiplier is not None
+                else None
             )
-            if maximum_public_multiplier is not None
-            else None
-        )
-        await _release_read_session(self._session)
-        request_id = uuid4()
-        billing_key = _billing_key(principal, request_id)
-        estimated_input_tokens = await estimate_request_tokens_async(canonical)
-        reservation = await self._billing.reserve_balance(
-            user_id=principal.user_id,
-            model=priced_model,
-            estimated_input_tokens=estimated_input_tokens,
-            max_output_tokens=canonical.max_output_tokens,
-            idempotency_key=billing_key,
-            request_id=request_id,
-            recovery=self._recovery_snapshot(
-                billing_key,
-                CanonicalUsage(0, 0),
-                UsageSource.ESTIMATED,
-                cost=Decimal("0"),
-                cost_amount=Decimal("0"),
-            ),
-            **(
-                {"provider_public_multiplier": reservation_public_multiplier}
-                if reservation_public_multiplier is not None
-                else {}
-            ),
-        )
+            reservation_public_multiplier = max(
+                initial_route.provider_public_multiplier,
+                maximum_retry_public_multiplier or Decimal("0"),
+            )
+            await _release_read_session(self._session)
+            request_id = uuid4()
+            billing_key = _billing_key(principal, request_id)
+            estimated_input_tokens = await estimate_request_tokens_async(canonical)
+            reservation = await self._billing.reserve_balance(
+                user_id=principal.user_id,
+                model=priced_model,
+                estimated_input_tokens=estimated_input_tokens,
+                max_output_tokens=canonical.max_output_tokens,
+                idempotency_key=billing_key,
+                request_id=request_id,
+                recovery=self._recovery_snapshot(
+                    billing_key,
+                    CanonicalUsage(0, 0),
+                    UsageSource.ESTIMATED,
+                    cost=Decimal("0"),
+                    cost_amount=Decimal("0"),
+                ),
+                provider_public_multiplier=reservation_public_multiplier,
+            )
+        except BaseException:
+            await _run_cleanup_shielded(_release_unstarted_half_open(route_router, initial_route))
+            raise
 
         audit_id = uuid4()
         attempt_response: _AttemptResponse | None = None
@@ -614,6 +620,7 @@ class GatewayService:
                     started_at=started_at,
                 )
             )
+            await _run_cleanup_shielded(_release_unstarted_half_open(route_router, initial_route))
             raise
 
     async def _open_stream_with_prefetch(
@@ -1906,6 +1913,21 @@ async def _run_cleanup_shielded(cleanup: Coroutine[Any, Any, None]) -> None:
         except asyncio.CancelledError:
             if cleanup_task.done():
                 return
+
+
+async def _release_unstarted_half_open(
+    router: RouteSelector,
+    route: RouteCandidate,
+) -> None:
+    if route.runtime_state is not RouteRuntimeState.HALF_OPEN:
+        return
+    release = getattr(router, "release_half_open", None)
+    if release is None:
+        return
+    try:
+        await release(route.route_id)
+    except BaseException as exc:
+        _log_cleanup_failure("half_open_release", exc)
 
 
 async def _record_health_auxiliary(

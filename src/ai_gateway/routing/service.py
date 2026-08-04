@@ -226,6 +226,25 @@ class Router:
                 claimed = cast(CursorResult[Any], result).rowcount == 1
         return claimed
 
+    async def release_half_open(self, route_id: int) -> bool:
+        """Release an unstarted probe without recording a provider outcome."""
+
+        async with self._mutation_session_factory() as mutation_session:
+            async with mutation_session.begin():
+                result = await mutation_session.execute(
+                    update(ModelRoute)
+                    .where(
+                        ModelRoute.id == route_id,
+                        ModelRoute.runtime_state == RouteRuntimeState.HALF_OPEN,
+                    )
+                    .values(
+                        runtime_state=RouteRuntimeState.OPEN,
+                        disabled_until=self._clock() - timedelta(seconds=1),
+                    )
+                )
+                released = cast(CursorResult[Any], result).rowcount == 1
+        return released
+
     async def record_success(self, route_id: int) -> bool:
         from ai_gateway.routing.health import RouteHealth
 
@@ -476,6 +495,7 @@ def _candidate_from_row(row: Any) -> RouteCandidate:
         supports_responses=bool(row["supports_responses"]),
         upstream_model=cast(str, row["upstream_model"]),
         weight=cast(int, row["weight"]),
+        provider_public_multiplier=Decimal(str(row["provider_public_multiplier"])),
         runtime_state=RouteRuntimeState(row["runtime_state"]),
         disabled_until=cast(datetime | None, row["disabled_until"]),
         provider_credential_encrypted=cast(bytes, row["provider_credential_encrypted"]),

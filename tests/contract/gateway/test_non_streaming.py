@@ -26,7 +26,7 @@ from ai_gateway.billing.service import (
 from ai_gateway.catalog.repository import ModelNotFound
 from ai_gateway.catalog.schemas import ResolvedModel
 from ai_gateway.core.config import Settings
-from ai_gateway.core.enums import ApiKeyScope, Protocol
+from ai_gateway.core.enums import ApiKeyScope, Protocol, RouteRuntimeState
 from ai_gateway.core.security import encrypt_secret
 from ai_gateway.db.models import ApiKey, Model, ModelAlias, User
 from ai_gateway.gateway.claude import router as claude_router
@@ -65,11 +65,13 @@ class FakeBilling:
     recovery_updates: list[ReservationRecovery] = field(default_factory=list)
     reserved_models: list[Model] = field(default_factory=list)
     settled_models: list[Model] = field(default_factory=list)
+    reservation_public_multipliers: list[Decimal | None] = field(default_factory=list)
 
     async def reserve_balance(self, **kwargs: Any) -> BalanceReservation:
         self.reservation_keys.append(kwargs["idempotency_key"])
         self.reservation_recoveries.append(kwargs["recovery"])
         self.reserved_models.append(kwargs["model"])
+        self.reservation_public_multipliers.append(kwargs.get("provider_public_multiplier"))
         return self.reservation
 
     async def update_reservation_recovery(self, **kwargs: Any) -> bool:
@@ -522,6 +524,8 @@ async def test_shared_alias_selected_model_controls_http_lifecycle_and_retries(
         websocket_url=None,
         upstream_model="native-b-first",
         weight=100,
+        provider_public_multiplier=Decimal("2.75"),
+        runtime_state=RouteRuntimeState.HALF_OPEN,
         provider_credential_encrypted=encrypt_secret("{}", settings=settings),
     )
     route_a = RouteCandidate(
@@ -588,6 +592,7 @@ async def test_shared_alias_selected_model_controls_http_lifecycle_and_retries(
     ]
     assert [model.id for model in billing.reserved_models] == [model_b.id]
     assert [model.id for model in billing.settled_models] == [model_b.id]
+    assert billing.reservation_public_multipliers == [Decimal("2.75")]
     assert route_router.multiplier_model_ids == [model_b.id]
     assert route_router.failures == [route_b_first.route_id]
     assert route_router.successes == [route_b_retry.route_id]

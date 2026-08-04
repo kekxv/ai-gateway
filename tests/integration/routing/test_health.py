@@ -335,6 +335,61 @@ async def test_half_open_failure_reopens_and_success_closes(
     assert route.disabled_until is None
 
 
+async def test_released_half_open_probe_is_immediately_claimable(
+    test_engine: AsyncEngine,
+    committed_route: tuple[ResolvedModel, int],
+    all_scope_principal: ApiKeyPrincipal,
+) -> None:
+    model, route_id = committed_route
+    now = utcnow()
+    sessions = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with sessions() as setup:
+        standby_route_ids = frozenset(
+            await setup.scalars(
+                select(ModelRoute.id).where(
+                    ModelRoute.model_id == model.model_id,
+                    ModelRoute.id != route_id,
+                )
+            )
+        )
+        route = await _load_route(setup, route_id)
+        route.runtime_state = RouteRuntimeState.HALF_OPEN
+        route.consecutive_failures = 3
+        route.last_error_code = "connect_timeout"
+        route.disabled_until = None
+        await setup.commit()
+
+    async with sessions() as caller:
+        released = await Router(
+            caller,
+            clock=lambda: now,
+            mutation_session_factory=sessions,
+        ).release_half_open(route_id)
+
+    async with sessions() as observer:
+        route = await _load_route(observer, route_id)
+        assert released is True
+        assert route.runtime_state is RouteRuntimeState.OPEN
+        assert route.disabled_until is not None
+        assert route.disabled_until <= now
+        assert route.consecutive_failures == 3
+        assert route.last_error_code == "connect_timeout"
+
+    async with sessions() as selector:
+        selected = await Router(
+            selector,
+            clock=lambda: now,
+            mutation_session_factory=sessions,
+        ).select_route(
+            model,
+            all_scope_principal,
+            excluded_route_ids=standby_route_ids,
+        )
+
+    assert selected.route_id == route_id
+    assert selected.runtime_state is RouteRuntimeState.HALF_OPEN
+
+
 async def _provider_count(session: AsyncSession, name: str) -> int:
     return await session.scalar(
         select(func.count()).select_from(Provider).where(Provider.name == name)

@@ -361,6 +361,18 @@ async def test_maximum_eligible_public_multiplier_uses_scoped_enabled_routes(
     assert multiplier == Decimal("1.25")
 
 
+async def test_selected_route_exposes_its_provider_public_multiplier(
+    session: AsyncSession,
+) -> None:
+    model, route = await _add_route(session, suffix="selected-public-multiplier")
+    route.provider.public_multiplier = Decimal("2.75")
+    await session.flush()
+
+    selected = await Router(session).select_route(model, principal())
+
+    assert selected.provider_public_multiplier == Decimal("2.75")
+
+
 @pytest.mark.parametrize(
     "disabled_field",
     ["model", "provider", "protocol", "route"],

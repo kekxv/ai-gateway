@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import random
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from hashlib import sha256
 from typing import Any
@@ -19,9 +20,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from ai_gateway.audit.service import AuditService, RequestContext, RequestFailure, RequestResult
-from ai_gateway.billing.service import BalanceReservation, BillingService, SettlementResult
+from ai_gateway.billing.service import (
+    BalanceReservation,
+    BillingService,
+    InsufficientBalance,
+    SettlementResult,
+)
 from ai_gateway.core.config import Settings
-from ai_gateway.core.enums import ApiKeyScope, LedgerKind, Protocol, RequestStatus
+from ai_gateway.core.enums import (
+    ApiKeyScope,
+    LedgerKind,
+    Protocol,
+    RequestStatus,
+    RouteRuntimeState,
+)
 from ai_gateway.core.security import encrypt_secret
 from ai_gateway.db.models import (
     Account,
@@ -356,6 +368,121 @@ def gateway_request(raw_key: str, model: str) -> FastAPIRequest:
         },
         receive,
     )
+
+
+@pytest.mark.parametrize("failure_stage", ["token_estimate_cancellation", "insufficient_balance"])
+async def test_pre_reservation_failure_releases_selected_half_open_probe(
+    test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    import ai_gateway.gateway.service as gateway_module
+
+    suffix = uuid4().hex
+    raw_key = f"sk-gw-setup-failure-{suffix}"
+    now = datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        database_url=test_engine.url.render_as_string(hide_password=False),
+        jwt_secret="gateway-setup-failure-jwt-secret",
+        encryption_key=Fernet.generate_key().decode(),
+    )
+    sessions = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with sessions() as setup:
+        user = User(email=f"setup-failure-{suffix}@example.com", password_hash="unused")
+        user.api_keys.append(
+            ApiKey(
+                name="setup-failure",
+                key_prefix=raw_key[:12],
+                key_hash=sha256(raw_key.encode()).digest(),
+                scope=ApiKeyScope.ALL,
+            )
+        )
+        model = Model(
+            canonical_name=f"setup-failure-model-{suffix}",
+            display_name="Setup Failure Model",
+            input_price_per_million=Decimal("1"),
+            output_price_per_million=Decimal("2"),
+        )
+        alias = ModelAlias(alias=f"setup-failure-alias-{suffix}")
+        model.aliases.append(alias)
+        provider = Provider(
+            name=f"setup-failure-provider-{suffix}",
+            credential_encrypted=encrypt_secret("{}", settings=settings),
+            public_multiplier=Decimal("2.75"),
+        )
+        protocol = ProviderProtocol(
+            provider=provider,
+            protocol=Protocol.OPENAI,
+            base_url="https://setup-failure.example/v1",
+        )
+        route = ModelRoute(
+            model=model,
+            provider=provider,
+            upstream_model="setup-failure-native",
+            weight=100,
+            runtime_state=RouteRuntimeState.OPEN,
+            disabled_until=now - timedelta(seconds=1),
+            consecutive_failures=3,
+            last_error_code="connect_timeout",
+        )
+        setup.add_all([user, protocol, route])
+        await setup.commit()
+        route_id = route.id
+        alias_name = alias.alias
+
+    setup_failure: BaseException
+    if failure_stage == "token_estimate_cancellation":
+        setup_failure = asyncio.CancelledError("cancel during token estimation")
+
+        async def fail_estimate(*_: Any, **__: Any) -> int:
+            raise setup_failure
+
+        monkeypatch.setattr(gateway_module, "estimate_request_tokens_async", fail_estimate)
+    else:
+        setup_failure = InsufficientBalance(required=Decimal("1"), available=Decimal("0"))
+
+    class SetupFailureBilling(FakeBilling):
+        async def reserve_balance(self, **kwargs: Any) -> BalanceReservation:
+            if failure_stage == "token_estimate_cancellation":
+                pytest.fail("token-estimation cancellation must precede reservation")
+            assert kwargs["provider_public_multiplier"] == Decimal("2.75")
+            raise setup_failure
+
+    upstream_calls = 0
+
+    async def unexpected_upstream(_: httpx.Request) -> httpx.Response:
+        nonlocal upstream_calls
+        upstream_calls += 1
+        return httpx.Response(500)
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(unexpected_upstream))
+    async with sessions() as gateway_session:
+        service = GatewayService(
+            session=gateway_session,
+            settings=settings,
+            billing_service=SetupFailureBilling(),  # type: ignore[arg-type]
+            audit_service=FakeAudit(),  # type: ignore[arg-type]
+            http_client_factory=FakeHttpClients(upstream_client),
+            router_factory=lambda session: Router(session),
+        )
+        with pytest.raises(type(setup_failure)) as captured:
+            await service.handle(gateway_request(raw_key, alias_name), Protocol.OPENAI)
+    await upstream_client.aclose()
+
+    assert captured.value is setup_failure
+    assert upstream_calls == 0
+    async with sessions() as verify:
+        route = await verify.get(ModelRoute, route_id)
+        assert route is not None
+        assert route.runtime_state is RouteRuntimeState.OPEN
+        assert route.disabled_until is not None
+        assert route.disabled_until <= datetime.now(timezone(timedelta(hours=8))).replace(
+            tzinfo=None
+        )
+        assert route.consecutive_failures == 3
+        assert route.last_error_code == "connect_timeout"
 
 
 @pytest.mark.parametrize(
