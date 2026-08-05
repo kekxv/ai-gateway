@@ -542,7 +542,32 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
-  it('拒绝重复别名和与规范名称相同的别名，并聚焦第一条错误', async () => {
+  it('允许别名与本模型规范名称相同', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ModelFormDrawer, {
+      props: { modelValue: true, model: null, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="model-canonical-name"]').setValue('gpt-4.1')
+    await wrapper.get('[data-test="model-display-name"]').setValue('GPT 4.1')
+    await wrapper.get('[data-test="model-input-price"]').setValue('0')
+    await wrapper.get('[data-test="model-output-price"]').setValue('0')
+    await wrapper.get('[data-test="add-model-alias"]').trigger('click')
+    await wrapper.get('[data-test="model-alias-0"]').setValue('gpt-4.1')
+    await wrapper.get('[data-test="model-submit"]').trigger('click')
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canonical_name: 'gpt-4.1',
+        aliases: [{ alias: 'gpt-4.1', enabled: true }],
+      }),
+    )
+    wrapper.unmount()
+  })
+
+  it('拒绝重复别名，并聚焦第一条错误', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(ModelFormDrawer, {
       props: { modelValue: true, model: null, submitting: false, onSubmit },
@@ -557,18 +582,15 @@ describe('模型与别名管理', () => {
     await wrapper.get('[data-test="add-model-alias"]').trigger('click')
     await wrapper.get('[data-test="add-model-alias"]').trigger('click')
     const firstAlias = wrapper.get('[data-test="model-alias-0"]')
-    await firstAlias.setValue('gpt-4.1')
-    await wrapper.get('[data-test="model-alias-1"]').setValue('gpt-4.1')
+    await firstAlias.setValue('shared-alias')
+    await wrapper.get('[data-test="model-alias-1"]').setValue('shared-alias')
     await wrapper.get('[data-test="model-submit"]').trigger('click')
     await waitForFormErrors()
 
-    expect(wrapper.get('[data-validation="model-alias-0"] .el-form-item__error').text()).toContain(
-      '不能与规范名称相同',
-    )
     expect(wrapper.get('[data-validation="model-alias-1"] .el-form-item__error').text()).toContain(
       '别名不能重复',
     )
-    expect(document.activeElement).toBe(firstAlias.element)
+    expect(document.activeElement).toBe(wrapper.get('[data-test="model-alias-1"]').element)
     expect(onSubmit).not.toHaveBeenCalled()
     wrapper.unmount()
   })

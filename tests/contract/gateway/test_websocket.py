@@ -975,7 +975,12 @@ async def test_client_disconnect_is_health_neutral_and_final_audit_is_disconnect
     monkeypatch.setattr(gateway_module, "authenticate_api_key", authenticated)
     monkeypatch.setattr(gateway_module.CatalogRepository, "resolve_model", resolved)
     monkeypatch.setattr(gateway_module, "relay_websocket", disconnected)
-    route_router = FakeRouter(_route("ws://provider.example/realtime", _settings()))
+    selected_route = _route(
+        "ws://provider.example/realtime",
+        _settings(),
+        runtime_state=RouteRuntimeState.HALF_OPEN,
+    )
+    route_router = FakeRouter(selected_route)
     audit = FakeAudit()
     websocket = FakeGatewayWebSocket()
     service = WebSocketGatewayService(
@@ -990,6 +995,7 @@ async def test_client_disconnect_is_health_neutral_and_final_audit_is_disconnect
 
     assert route_router.successes == []
     assert route_router.failures == []
+    assert route_router.releases == [selected_route.route_id]
     assert audit.failed is not None
     assert audit.failed.client_disconnected is True
     assert audit.completed is None

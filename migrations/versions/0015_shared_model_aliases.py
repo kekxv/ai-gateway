@@ -35,5 +35,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    has_shared_aliases = op.get_bind().execute(
+        sa.text(
+            "SELECT 1 FROM model_aliases "
+            "GROUP BY alias HAVING COUNT(*) > 1 LIMIT 1"
+        )
+    ).scalar()
+    if has_shared_aliases is not None:
+        raise RuntimeError("Cannot downgrade shared aliases to globally unique aliases")
     op.drop_index("ix_model_aliases_alias", table_name="model_aliases")
     op.create_unique_constraint("uq_model_aliases_alias", "model_aliases", ["alias"])

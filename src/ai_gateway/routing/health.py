@@ -164,9 +164,26 @@ class RouteHealth:
                 changed = cast(CursorResult[Any], result).rowcount == 1
         return changed
 
+    async def release_half_open(self, route_id: int) -> bool:
+        async with self._mutation_session_factory() as mutation_session:
+            async with mutation_session.begin():
+                result = await mutation_session.execute(
+                    update(ModelRoute)
+                    .where(
+                        ModelRoute.id == route_id,
+                        ModelRoute.runtime_state == RouteRuntimeState.HALF_OPEN,
+                    )
+                    .values(
+                        runtime_state=RouteRuntimeState.OPEN,
+                        disabled_until=self._clock() - timedelta(seconds=1),
+                    )
+                )
+                changed = cast(CursorResult[Any], result).rowcount == 1
+        return changed
+
     async def record_failure(self, route_id: int, failure: object) -> bool:
         if not is_health_failure(failure):
-            return False
+            return await self.release_half_open(route_id)
 
         now = self._clock()
         async with self._mutation_session_factory() as mutation_session:

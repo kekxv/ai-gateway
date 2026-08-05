@@ -164,7 +164,7 @@ def test_websocket_protocol_network_and_service_closes_penalize_route(close_code
     assert is_health_failure(RouteFailure(error_code=f"websocket_close_{close_code}")) is True
 
 
-async def test_half_open_application_websocket_close_leaves_probe_state_unchanged(
+async def test_half_open_application_websocket_close_releases_probe(
     test_engine: AsyncEngine,
     committed_route: tuple[ResolvedModel, int],
 ) -> None:
@@ -181,8 +181,9 @@ async def test_half_open_application_websocket_close_leaves_probe_state_unchange
         )
         route = await _load_route(session, route_id)
 
-    assert changed is False
-    assert route.runtime_state is RouteRuntimeState.HALF_OPEN
+    assert changed is True
+    assert route.runtime_state is RouteRuntimeState.OPEN
+    assert route.disabled_until is not None
     assert route.consecutive_failures == 3
 
 

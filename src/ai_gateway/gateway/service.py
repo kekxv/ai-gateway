@@ -306,13 +306,44 @@ class GatewayService:
         )
 
         route_router = self._router_factory(self._session)
-        initial_route = await route_router.select_route(
-            resolved,
-            principal,
-            required_protocol=required_protocol,
-            preferred_protocol=inbound_protocol,
-            requested_model=requested_model,
-        )
+        try:
+            initial_route = await route_router.select_route(
+                resolved,
+                principal,
+                required_protocol=required_protocol,
+                preferred_protocol=inbound_protocol,
+                requested_model=requested_model,
+            )
+        except NoRouteAvailable as exc:
+            correlation_id = _audit_correlation_id(request)
+            audit_metadata: dict[str, str | None] = {
+                "requested_model": requested_model,
+                "canonical_model": resolved.canonical_name,
+            }
+            if correlation_id is not None:
+                audit_metadata["client_request_id"] = correlation_id
+            audit_id = await self._audit.start_request(
+                RequestContext(
+                    user_id=principal.user_id,
+                    api_key_id=principal.api_key_id,
+                    inbound_protocol=inbound_protocol,
+                    transport="http",
+                    stream=canonical.stream,
+                    headers=_audit_headers(request, correlation_id),
+                    metadata=audit_metadata,
+                ),
+                raw_body,
+                request_id=uuid4(),
+            )
+            await self._audit.fail_request(
+                audit_id,
+                RequestFailure(
+                    error_code=exc.code,
+                    http_status=exc.status_code,
+                    latency_ms=_elapsed_ms(started_at),
+                ),
+            )
+            raise
         selected_model_id = initial_route.model_id
 
         try:

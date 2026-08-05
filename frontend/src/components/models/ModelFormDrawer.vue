@@ -311,7 +311,6 @@ function validate(): string | null {
     const value = row.alias.trim()
     if (value === '') row.error = '请输入模型别名'
     else if (seen.has(value)) row.error = '模型别名不能重复'
-    else if (value === canonical) row.error = '别名不能与规范名称相同'
     seen.add(value)
   }
 

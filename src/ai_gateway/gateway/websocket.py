@@ -716,6 +716,8 @@ class WebSocketGatewayService:
                 )
             elif result.health_outcome is RelayHealthOutcome.SUCCESS:
                 await _safe_health(route_router.record_success(route.route_id))
+            else:
+                await _safe_health(route_router.release_half_open(route.route_id))
         except BaseException as exc:
             if isinstance(exc, anyio.get_cancelled_exc_class()):
                 result = RelayResult(

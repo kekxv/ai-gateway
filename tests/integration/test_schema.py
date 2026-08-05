@@ -278,6 +278,7 @@ def test_required_unique_constraints_and_indexes_are_declared() -> None:
     assert ("provider_id", "protocol", "base_url") in unique_column_sets("provider_protocols")
     assert ("canonical_name",) in unique_column_sets("models")
     assert ("alias",) not in unique_column_sets("model_aliases")
+    assert ("model_id", "alias") in unique_column_sets("model_aliases")
     assert ("model_id", "provider_id") in unique_column_sets("model_routes")
     assert ("idempotency_key",) in unique_column_sets("ledger_entries")
 

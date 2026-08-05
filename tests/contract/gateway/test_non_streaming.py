@@ -796,6 +796,40 @@ async def test_malformed_json_returns_native_400_without_upstream(
     assert not called
 
 
+async def test_no_route_request_is_audited(session: AsyncSession) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    alias = model.aliases[0].alias
+    upstream_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(500))
+    )
+    audit = FakeAudit()
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([]),
+    )
+    path, body = _request(Protocol.OPENAI, alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 503
+    assert audit.started is not None
+    assert audit.started.model_id is None
+    assert audit.started.metadata["requested_model"] == alias
+    assert audit.failed is not None
+    assert audit.failed.error_code == "no_route_available"
+    assert audit.failed.http_status == 503
+
+
 def test_upstream_urls_use_native_generation_endpoints_and_route_model() -> None:
     assert (
         upstream_url(Protocol.OPENAI, "https://provider.example/v1", "native-model")

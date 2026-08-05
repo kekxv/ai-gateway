@@ -181,7 +181,10 @@ class ModelPriceTier(Base):
 
 class ModelAlias(Base):
     __tablename__ = "model_aliases"
-    __table_args__ = (Index("ix_model_aliases_alias", "alias"),)
+    __table_args__ = (
+        UniqueConstraint("model_id", "alias", name="uq_model_aliases_model_alias"),
+        Index("ix_model_aliases_alias", "alias"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     model_id: Mapped[int] = mapped_column(ForeignKey("models.id"))
