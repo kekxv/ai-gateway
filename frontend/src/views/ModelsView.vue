@@ -46,6 +46,7 @@ import type {
   ProviderResponse,
 } from '@/api/types'
 import PageHeader from '@/components/common/PageHeader.vue'
+import ResourceStatusGroup from '@/components/common/ResourceStatusGroup.vue'
 import ModelFormDrawer from '@/components/models/ModelFormDrawer.vue'
 import RouteFormDrawer from '@/components/models/RouteFormDrawer.vue'
 import ModelCard from '@/components/models/ModelCard.vue'
@@ -133,6 +134,9 @@ const filteredModels = computed(() => {
   }
   return result
 })
+
+const enabledModels = computed(() => filteredModels.value.filter((model) => model.enabled))
+const disabledModels = computed(() => filteredModels.value.filter((model) => !model.enabled))
 
 const routesByModel = computed(() => {
   const map = new Map<number, ModelRouteResponse[]>()
@@ -821,27 +825,67 @@ onBeforeUnmount(() => {
         <template #extra><ElButton type="primary" @click="load">重新加载</ElButton></template>
       </ElResult>
 
-      <div v-else-if="filteredModels.length > 0" class="models-grid">
-        <ModelCard
-          v-for="model in filteredModels"
-          :key="model.id"
-          :data-test="`model-card-${String(model.id)}`"
-          :model="model"
-          :routes="routesByModel.get(model.id) ?? []"
-          :providers="providers"
-          :loading="controlsLocked"
-          :routes-loading="routesLoading"
-          :non-deletable="nonDeletableModelIds.has(model.id)"
-          :readonly="!auth.isAdmin"
-          @edit="openEditModel"
-          @delete="removeModel"
-          @disable="disableModel"
-          @edit-route="openEditRoute"
-          @delete-route="removeRoute"
-          @disable-route="disableRoute"
-          @recover-route="recoverRoute"
-          @create-route="openCreateRouteForModel(model.id)"
-        />
+      <div v-else-if="filteredModels.length > 0" class="resource-groups">
+        <ResourceStatusGroup
+          v-if="enabledModels.length > 0"
+          data-test="enabled-model-group"
+          status="enabled"
+          title="启用中"
+          :count="enabledModels.length"
+        >
+          <div class="models-grid">
+            <ModelCard
+              v-for="model in enabledModels"
+              :key="model.id"
+              :data-test="`model-card-${String(model.id)}`"
+              :model="model"
+              :routes="routesByModel.get(model.id) ?? []"
+              :providers="providers"
+              :loading="controlsLocked"
+              :routes-loading="routesLoading"
+              :non-deletable="nonDeletableModelIds.has(model.id)"
+              :readonly="!auth.isAdmin"
+              @edit="openEditModel"
+              @delete="removeModel"
+              @disable="disableModel"
+              @edit-route="openEditRoute"
+              @delete-route="removeRoute"
+              @disable-route="disableRoute"
+              @recover-route="recoverRoute"
+              @create-route="openCreateRouteForModel(model.id)"
+            />
+          </div>
+        </ResourceStatusGroup>
+        <ResourceStatusGroup
+          v-if="disabledModels.length > 0"
+          data-test="disabled-model-group"
+          status="disabled"
+          title="已停用"
+          :count="disabledModels.length"
+        >
+          <div class="models-grid">
+            <ModelCard
+              v-for="model in disabledModels"
+              :key="model.id"
+              :data-test="`model-card-${String(model.id)}`"
+              :model="model"
+              :routes="routesByModel.get(model.id) ?? []"
+              :providers="providers"
+              :loading="controlsLocked"
+              :routes-loading="routesLoading"
+              :non-deletable="nonDeletableModelIds.has(model.id)"
+              :readonly="!auth.isAdmin"
+              @edit="openEditModel"
+              @delete="removeModel"
+              @disable="disableModel"
+              @edit-route="openEditRoute"
+              @delete-route="removeRoute"
+              @disable-route="disableRoute"
+              @recover-route="recoverRoute"
+              @create-route="openCreateRouteForModel(model.id)"
+            />
+          </div>
+        </ResourceStatusGroup>
       </div>
 
       <ElEmpty
@@ -941,20 +985,25 @@ onBeforeUnmount(() => {
 
 .loading-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-  gap: 1rem;
-  padding: 1.25rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 0.75rem;
+  padding: 1rem;
 }
 
 .card-skeleton {
-  height: 250px;
+  height: 220px;
+}
+
+.resource-groups {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
 }
 
 .models-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-  gap: 1rem;
-  padding: 1.25rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 0.75rem;
 }
 
 code,
@@ -1002,6 +1051,10 @@ code,
   .loading-grid,
   .models-grid {
     grid-template-columns: 1fr;
+  }
+
+  .resource-groups {
+    padding: 0.75rem;
   }
 }
 </style>

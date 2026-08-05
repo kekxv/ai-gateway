@@ -169,6 +169,23 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('将启用与停用供应商分区并显示各自数量', async () => {
+    const disabledProvider = { ...geminiFixture, enabled: false }
+    const wrapper = await mountProviders([providerFixture, disabledProvider])
+
+    const enabledGroup = wrapper.get('[data-test="enabled-provider-group"]')
+    const disabledGroup = wrapper.get('[data-test="disabled-provider-group"]')
+    expect(enabledGroup.text()).toContain('启用中')
+    expect(enabledGroup.text()).toContain('1 个')
+    expect(enabledGroup.find('[data-test="provider-card-1"]').exists()).toBe(true)
+    expect(enabledGroup.find('[data-test="provider-card-2"]').exists()).toBe(false)
+    expect(disabledGroup.text()).toContain('已停用')
+    expect(disabledGroup.text()).toContain('1 个')
+    expect(disabledGroup.find('[data-test="provider-card-2"]').exists()).toBe(true)
+    expect(disabledGroup.find('[data-test="provider-card-1"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('编辑时只发送变更字段，不发送空白凭据或空白协议请求头', async () => {
     const requests: unknown[] = []
     server.use(

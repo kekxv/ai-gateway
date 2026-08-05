@@ -222,6 +222,25 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
+  it('将启用与停用模型分区并显示各自数量', async () => {
+    const disabledModel = { ...scientificZeroFixture, enabled: false }
+    useCatalog([modelFixture, disabledModel], [])
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    const enabledGroup = wrapper.get('[data-test="enabled-model-group"]')
+    const disabledGroup = wrapper.get('[data-test="disabled-model-group"]')
+    expect(enabledGroup.text()).toContain('启用中')
+    expect(enabledGroup.text()).toContain('1 个')
+    expect(enabledGroup.find('[data-test="model-card-1"]').exists()).toBe(true)
+    expect(enabledGroup.find('[data-test="model-card-2"]').exists()).toBe(false)
+    expect(disabledGroup.text()).toContain('已停用')
+    expect(disabledGroup.text()).toContain('1 个')
+    expect(disabledGroup.find('[data-test="model-card-2"]').exists()).toBe(true)
+    expect(disabledGroup.find('[data-test="model-card-1"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('提交启用状态别名对象并原样保留精确价格字符串', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(ModelFormDrawer, {

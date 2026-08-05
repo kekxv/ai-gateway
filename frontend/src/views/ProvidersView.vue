@@ -39,6 +39,7 @@ import type {
   ProviderUpdate,
 } from '@/api/types'
 import PageHeader from '@/components/common/PageHeader.vue'
+import ResourceStatusGroup from '@/components/common/ResourceStatusGroup.vue'
 import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
 import ModelSyncDialog from '@/components/providers/ModelSyncDialog.vue'
 import ProviderCard from '@/components/providers/ProviderCard.vue'
@@ -103,6 +104,11 @@ const filteredProviders = computed(() => {
     return searchable.some((value) => value.toLocaleLowerCase('zh-CN').includes(query))
   })
 })
+
+const enabledProviders = computed(() => filteredProviders.value.filter((provider) => provider.enabled))
+const disabledProviders = computed(() =>
+  filteredProviders.value.filter((provider) => !provider.enabled),
+)
 
 function errorText(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
@@ -580,18 +586,49 @@ onBeforeUnmount(() => {
         </template>
       </ElResult>
 
-      <div v-else-if="filteredProviders.length > 0" class="providers-grid">
-        <ProviderCard
-          v-for="provider in filteredProviders"
-          :key="provider.id"
-          :data-test="`provider-card-${String(provider.id)}`"
-          :provider="provider"
-          :loading="providerOperations.has(provider.id)"
-          :non-deletable="nonDeletableIds.has(provider.id)"
-          @edit="openEdit"
-          @delete="removeProvider"
-          @sync="openSyncDialog"
-        />
+      <div v-else-if="filteredProviders.length > 0" class="resource-groups">
+        <ResourceStatusGroup
+          v-if="enabledProviders.length > 0"
+          data-test="enabled-provider-group"
+          status="enabled"
+          title="启用中"
+          :count="enabledProviders.length"
+        >
+          <div class="providers-grid">
+            <ProviderCard
+              v-for="provider in enabledProviders"
+              :key="provider.id"
+              :data-test="`provider-card-${String(provider.id)}`"
+              :provider="provider"
+              :loading="providerOperations.has(provider.id)"
+              :non-deletable="nonDeletableIds.has(provider.id)"
+              @edit="openEdit"
+              @delete="removeProvider"
+              @sync="openSyncDialog"
+            />
+          </div>
+        </ResourceStatusGroup>
+        <ResourceStatusGroup
+          v-if="disabledProviders.length > 0"
+          data-test="disabled-provider-group"
+          status="disabled"
+          title="已停用"
+          :count="disabledProviders.length"
+        >
+          <div class="providers-grid">
+            <ProviderCard
+              v-for="provider in disabledProviders"
+              :key="provider.id"
+              :data-test="`provider-card-${String(provider.id)}`"
+              :provider="provider"
+              :loading="providerOperations.has(provider.id)"
+              :non-deletable="nonDeletableIds.has(provider.id)"
+              @edit="openEdit"
+              @delete="removeProvider"
+              @sync="openSyncDialog"
+            />
+          </div>
+        </ResourceStatusGroup>
       </div>
 
       <ElEmpty
@@ -663,20 +700,25 @@ onBeforeUnmount(() => {
 
 .provider-loading {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-  gap: 1rem;
-  padding: 1.25rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 0.75rem;
+  padding: 1rem;
 }
 
 .provider-skeleton {
-  height: 200px;
+  height: 180px;
+}
+
+.resource-groups {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
 }
 
 .providers-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-  gap: 1rem;
-  padding: 1.25rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 0.75rem;
 }
 
 @media (max-width: 640px) {
@@ -692,6 +734,10 @@ onBeforeUnmount(() => {
   .provider-loading,
   .providers-grid {
     grid-template-columns: 1fr;
+  }
+
+  .resource-groups {
+    padding: 0.75rem;
   }
 }
 </style>
