@@ -45,16 +45,17 @@ const dashboardSummary = {
       cost_amount: '0',
     },
   ],
+  provider_stats: [],
 }
 
 test('控制台概览只滚动主内容区，页面外壳保持在视口内', async ({ page }) => {
   await page.setViewportSize({ width: 1_200, height: 720 })
   await page.addInitScript(() => {
-    window.sessionStorage.setItem('gateway.access_token', 'e2e-access-token')
-    window.sessionStorage.setItem('gateway.refresh_token', 'e2e-refresh-token')
+    window.localStorage.setItem('gateway.access_token', 'e2e-access-token')
+    window.localStorage.setItem('gateway.refresh_token', 'e2e-refresh-token')
   })
   await page.route('**/auth/me', (route) => route.fulfill({ json: adminUser }))
-  await page.route('**/admin/dashboard/summary', (route) =>
+  await page.route('**/admin/dashboard/summary**', (route) =>
     route.fulfill({ json: dashboardSummary }),
   )
 
@@ -94,11 +95,11 @@ test('控制台概览只滚动主内容区，页面外壳保持在视口内', as
 test('图标模式侧栏只允许纵向滚动', async ({ page }) => {
   await page.setViewportSize({ width: 1_199, height: 420 })
   await page.addInitScript(() => {
-    window.sessionStorage.setItem('gateway.access_token', 'e2e-access-token')
-    window.sessionStorage.setItem('gateway.refresh_token', 'e2e-refresh-token')
+    window.localStorage.setItem('gateway.access_token', 'e2e-access-token')
+    window.localStorage.setItem('gateway.refresh_token', 'e2e-refresh-token')
   })
   await page.route('**/auth/me', (route) => route.fulfill({ json: adminUser }))
-  await page.route('**/admin/dashboard/summary', (route) =>
+  await page.route('**/admin/dashboard/summary**', (route) =>
     route.fulfill({ json: dashboardSummary }),
   )
 

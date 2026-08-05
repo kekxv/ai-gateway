@@ -73,7 +73,7 @@ async function setSwitch(locator: Locator, checked: boolean): Promise<void> {
 
 async function cleanupRequest(page: Page, request: CleanupRequest): Promise<number> {
   return page.evaluate(async ({ body, method, path }) => {
-    const token = window.sessionStorage.getItem('gateway.access_token')
+    const token = window.localStorage.getItem('gateway.access_token')
     if (token === null) return 401
     const response = await window.fetch(path, {
       method,
@@ -94,7 +94,7 @@ async function lookupEntityId(
   value: string | number,
 ): Promise<number | undefined> {
   return page.evaluate(async ({ field, path, value }) => {
-    const token = window.sessionStorage.getItem('gateway.access_token')
+    const token = window.localStorage.getItem('gateway.access_token')
     if (token === null) return undefined
     const response = await window.fetch(path, {
       headers: { Authorization: `Bearer ${token}` },
@@ -146,13 +146,13 @@ async function secretNodeIsAbsent(page: Page): Promise<boolean> {
   )
 }
 
-async function localStorageIsEmpty(page: Page): Promise<boolean> {
-  return page.evaluate(() => window.localStorage.length === 0)
+async function sessionStorageIsEmpty(page: Page): Promise<boolean> {
+  return page.evaluate(() => window.sessionStorage.length === 0)
 }
 
-async function sessionStorageHasOnlyTokens(page: Page): Promise<boolean> {
+async function localStorageHasOnlyTokens(page: Page): Promise<boolean> {
   return page.evaluate(() => {
-    const keys = Object.keys(window.sessionStorage).sort()
+    const keys = Object.keys(window.localStorage).sort()
     return (
       keys.length === 2 &&
       keys[0] === 'gateway.access_token' &&
@@ -203,13 +203,13 @@ async function cleanup(page: Page, entities: CreatedEntities, names: EntityNames
     await expectSafeCondition(() => secretNodeIsAbsent(page), 'Secret node was not removed')
   })
   await attemptCleanup(failures, 'local storage verification', async () => {
-    await expectSafeCondition(() => localStorageIsEmpty(page), 'Local storage was not empty')
+    await expectSafeCondition(
+      () => localStorageHasOnlyTokens(page),
+      'Local storage keys were not the exact allowlist',
+    )
   })
   await attemptCleanup(failures, 'session storage verification', async () => {
-    await expectSafeCondition(
-      () => sessionStorageHasOnlyTokens(page),
-      'Session storage keys were not the exact allowlist',
-    )
+    await expectSafeCondition(() => sessionStorageIsEmpty(page), 'Session storage was not empty')
   })
   if (entities.apiKeyId === undefined) {
     await recoverEntityId(
@@ -366,7 +366,7 @@ test('administrator can close and reopen public registration', async ({ page }) 
     await expect(page.getByText('公开注册已关闭')).toBeVisible()
 
     await page.evaluate(() => {
-      window.sessionStorage.clear()
+      window.localStorage.clear()
     })
     await page.goto('register')
     await expect(page.getByRole('heading', { level: 1, name: '创建账户' })).toBeVisible()
@@ -375,7 +375,7 @@ test('administrator can close and reopen public registration', async ({ page }) 
     await expect(page.getByRole('link', { name: '返回登录' })).toBeVisible()
   } finally {
     const hasSession = await page.evaluate(
-      () => window.sessionStorage.getItem('gateway.access_token') !== null,
+      () => window.localStorage.getItem('gateway.access_token') !== null,
     )
     if (!hasSession) await login(page)
     const status = await cleanupRequest(page, {
@@ -399,7 +399,7 @@ test('regular user can browse models and manage only their own API key', async (
 
   await page.goto('login')
   await page.evaluate(() => {
-    window.sessionStorage.clear()
+    window.localStorage.clear()
   })
   await page.goto('register')
   await page.getByTestId('register-email').fill(userEmail)
@@ -479,7 +479,7 @@ test('regular user can browse models and manage only their own API key', async (
   } finally {
     await closeSecretDialogIfPresent(page)
     await page.evaluate(() => {
-      window.sessionStorage.clear()
+      window.localStorage.clear()
     })
     await login(page)
     if (apiKeyId === undefined) {
@@ -641,10 +641,13 @@ test('creates, verifies, and safely cleans up console records', async ({ page })
       await page.getByTestId('secret-acknowledged').click()
       await page.getByTestId('secret-confirm-close').click()
       await expectSafeCondition(() => secretNodeIsAbsent(page), 'Secret node was not removed')
-      await expectSafeCondition(() => localStorageIsEmpty(page), 'Local storage was not empty')
       await expectSafeCondition(
-        () => sessionStorageHasOnlyTokens(page),
-        'Session storage keys were not the exact allowlist',
+        () => localStorageHasOnlyTokens(page),
+        'Local storage keys were not the exact allowlist',
+      )
+      await expectSafeCondition(
+        () => sessionStorageIsEmpty(page),
+        'Session storage was not empty',
       )
       await page.getByTestId('api-key-search').fill(apiKeyName)
       const apiKeyRow = page.getByRole('row').filter({ hasText: apiKeyName })

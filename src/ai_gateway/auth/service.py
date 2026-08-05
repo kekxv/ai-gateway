@@ -297,14 +297,7 @@ async def refresh_access_token(
             "Invalid or expired token",
             authenticate=True,
         )
-    user = await session.get(User, user_id)
-    if user is None:
-        raise_auth_error(
-            status.HTTP_401_UNAUTHORIZED,
-            "invalid_token",
-            "Invalid or expired token",
-            authenticate=True,
-        )
+    user = await _locked_user(session=session, user_id=user_id)
     if not user.is_active:
         raise_auth_error(status.HTTP_403_FORBIDDEN, "user_disabled", "User is disabled")
 
@@ -319,6 +312,9 @@ async def refresh_access_token(
                 "Invalid or expired token",
                 authenticate=True,
             )
+
+    user.tokens_invalidated_before = datetime.now(UTC).replace(tzinfo=None)
+    await session.commit()
 
     return (
         issue_access_token(user_id=user.id, settings=settings),
