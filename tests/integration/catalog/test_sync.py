@@ -206,7 +206,7 @@ async def test_scheduler_retains_only_advisory_lock_connection_during_discovery(
 
 
 @pytest.mark.asyncio
-async def test_sync_is_idempotent_preserves_aliases_and_never_mutates_manual_routes(
+async def test_sync_does_not_resolve_discovered_model_ids_through_aliases(
     session: AsyncSession,
     sync_settings: Settings,
 ) -> None:
@@ -290,10 +290,12 @@ async def test_sync_is_idempotent_preserves_aliases_and_never_mutates_manual_rou
 
     assert first.discovered_models == 3
     assert second.discovered_models == 3
+    assert model_names.count("alias-native") == 1
     assert model_names.count("native-new") == 1
     assert [alias.alias for alias in alias_model.aliases] == ["alias-native"]
-    assert routes_by_model["alias-target"].upstream_model == "alias-native"
-    assert routes_by_model["alias-target"].source is RouteSource.DISCOVERED
+    assert "alias-target" not in routes_by_model
+    assert routes_by_model["alias-native"].upstream_model == "alias-native"
+    assert routes_by_model["alias-native"].source is RouteSource.DISCOVERED
     assert routes_by_model["native-found"].upstream_model == "native-found"
     assert routes_by_model["native-found"].enabled is True
     assert routes_by_model["native-missing"].enabled is False

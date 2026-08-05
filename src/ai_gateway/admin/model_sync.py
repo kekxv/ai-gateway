@@ -23,7 +23,7 @@ from ai_gateway.catalog.discovery import discover_models, discovery_url
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import Protocol, RouteSource
 from ai_gateway.core.logging import sanitize_log_event
-from ai_gateway.db.models import Model, ModelAlias, ModelRoute, Provider, ProviderProtocol, User
+from ai_gateway.db.models import Model, ModelRoute, Provider, ProviderProtocol, User
 from ai_gateway.db.session import get_session
 
 router = APIRouter(prefix="/admin/providers", tags=["admin-providers"])
@@ -403,14 +403,4 @@ async def _models_by_discovered_name(
     canonical_models = list(
         await session.scalars(select(Model).where(Model.canonical_name.in_(names)))
     )
-    models_by_name = {model.canonical_name: model for model in canonical_models}
-    aliases = list(
-        await session.scalars(
-            select(ModelAlias)
-            .where(ModelAlias.alias.in_(names))
-            .options(selectinload(ModelAlias.model))
-        )
-    )
-    for alias in aliases:
-        models_by_name.setdefault(alias.alias, alias.model)
-    return models_by_name
+    return {model.canonical_name: model for model in canonical_models}
