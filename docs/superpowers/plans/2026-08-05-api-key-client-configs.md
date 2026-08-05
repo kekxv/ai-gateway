@@ -214,3 +214,27 @@ Expected: all tests pass.
 Run: `git diff --check && git status --short`
 
 Expected: no whitespace errors and only feature files changed.
+
+## Review remediation (2026-08-05)
+
+### Task 5: Resolve models against the manually entered API key
+
+**Files:** `frontend/src/components/api-keys/ClientConfigDialog.vue`, `frontend/tests/client-config-dialog.spec.ts`, `frontend/src/views/ApiKeysView.vue`, and `frontend/tests/api-keys.spec.ts`.
+
+- [ ] **Step 1: Write failing dialog tests** for `GET /v1/models`: send `Authorization: Bearer <key>` for Codex, OpenCode, and Pi; send `x-api-key` plus `anthropic-version: 2023-06-01` for Claude. Assert only returned `data[].id` values can be selected and a failed request keeps download disabled.
+- [ ] **Step 2: Confirm RED** with `npm --prefix frontend test -- --run tests/client-config-dialog.spec.ts`.
+- [ ] **Step 3: Implement minimal key-scoped resolution.** Add `verifyAndLoadModels()` to fetch `${baseUrl}/v1/models`, parse non-empty string IDs only, and clear resolved models when the key or client changes. Remove the catalog-model prop from the dialog so disabled or out-of-scope administrator models cannot be selected.
+- [ ] **Step 4: Confirm GREEN** with `npm --prefix frontend test -- --run tests/client-config-dialog.spec.ts tests/api-keys.spec.ts`.
+
+### Task 6: Prevent accidental overwrite and report download failures
+
+**Files:** `frontend/src/components/api-keys/ClientConfigDialog.vue` and `frontend/tests/client-config-dialog.spec.ts`.
+
+- [ ] **Step 1: Write failing tests** for a visible “请合并到已有配置，不要直接覆盖” warning and for a throwing `URL.createObjectURL`, asserting a `client-config-status` failure message.
+- [ ] **Step 2: Confirm RED** with `npm --prefix frontend test -- --run tests/client-config-dialog.spec.ts`.
+- [ ] **Step 3: Implement minimal handling.** Wrap Blob URL creation and temporary-anchor download in `try/catch/finally`, revoke only a created URL, and show “下载失败，请复制预览内容并合并到已有配置文件。” on failure.
+- [ ] **Step 4: Confirm GREEN** with `npm --prefix frontend test -- --run tests/client-config-dialog.spec.ts`.
+
+### Task 7: Final verification
+
+- [ ] Run `npm --prefix frontend test`, `npm --prefix frontend run lint`, `npm --prefix frontend run typecheck`, `npm --prefix frontend run build`, and `git diff --check`; all must exit zero.

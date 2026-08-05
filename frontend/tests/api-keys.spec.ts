@@ -17,6 +17,7 @@ import type {
   UserResponse,
 } from '@/api/types'
 import ApiKeyFormDrawer from '@/components/api-keys/ApiKeyFormDrawer.vue'
+import ClientConfigDialog from '@/components/api-keys/ClientConfigDialog.vue'
 import SecretResultDialog from '@/components/api-keys/SecretResultDialog.vue'
 import { routes } from '@/router'
 import { useAuthStore } from '@/stores/auth'
@@ -304,6 +305,35 @@ describe('接口密钥作用域与一次性明文', () => {
     expect(wrapper.get('[data-test="api-key-row-41"]').text()).not.toContain(
       'sk-gw-user-once-only',
     )
+    wrapper.unmount()
+  })
+
+  it('普通用户可从已加载的可用模型打开客户端配置，且不会请求管理员目录', async () => {
+    useAuthStore().user = regularUser
+    let adminRequests = 0
+    server.use(
+      http.get('/user/api-keys', () => HttpResponse.json([ownKey])),
+      http.get('/user/models', () => HttpResponse.json(models)),
+      http.get('/admin/:resource*', () => {
+        adminRequests += 1
+        return HttpResponse.json([])
+      }),
+    )
+
+    const wrapper = mount(ApiKeysView, { attachTo: document.body })
+    await flushPromises()
+
+    const headerActions = wrapper.get('.page-header__actions')
+    const actionButtons = headerActions.findAll('button')
+    expect(actionButtons[0]?.text()).toContain('使用示例')
+    expect(actionButtons[1]?.text()).toContain('生成配置文件')
+    await wrapper.get('[data-test="open-client-config"]').trigger('click')
+    await flushPromises()
+
+    const dialog = wrapper.getComponent(ClientConfigDialog)
+    expect(dialog.props('modelValue')).toBe(true)
+    expect(wrapper.get('[data-test="client-config-model"]').attributes('disabled')).toBeDefined()
+    expect(adminRequests).toBe(0)
     wrapper.unmount()
   })
 

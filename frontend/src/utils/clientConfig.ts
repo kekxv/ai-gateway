@@ -47,11 +47,19 @@ export function buildClientConfig(
       location: '~/.claude/settings.json',
       content: `${JSON.stringify({
         env: {
+          NAME: 'AI Gateway',
           ANTHROPIC_AUTH_TOKEN: apiKey,
           ANTHROPIC_BASE_URL: baseUrl,
           ANTHROPIC_MODEL: modelId,
-          ANTHROPIC_SMALL_FAST_MODEL: modelId,
+          ANTHROPIC_DEFAULT_OPUS_MODEL: modelId,
+          ANTHROPIC_DEFAULT_SONNET_MODEL: modelId,
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: modelId,
+          CLAUDE_CODE_SUBAGENT_MODEL: modelId,
         },
+        effortLevel: 'medium',
+        skipWorkflowUsageWarning: true,
+        theme: 'light-daltonized',
+        hasCompletedOnboarding: true,
       }, null, 2)}\n`,
     }
   }

@@ -9,18 +9,26 @@ const input = {
 }
 
 describe('客户端配置文件生成器', () => {
-  it('为 Claude Code 生成带 Anthropic 网关变量的 settings.json', () => {
+  it('为 Claude Code 生成可直接使用的完整 settings.json', () => {
     const file = buildClientConfig('claude', input)
 
     expect(file.filename).toBe('settings.json')
     expect(file.location).toBe('~/.claude/settings.json')
     expect(JSON.parse(file.content)).toEqual({
       env: {
+        NAME: 'AI Gateway',
         ANTHROPIC_AUTH_TOKEN: 'sk-gw-example',
         ANTHROPIC_BASE_URL: 'https://gateway.example',
         ANTHROPIC_MODEL: 'gateway-model',
-        ANTHROPIC_SMALL_FAST_MODEL: 'gateway-model',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'gateway-model',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'gateway-model',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'gateway-model',
+        CLAUDE_CODE_SUBAGENT_MODEL: 'gateway-model',
       },
+      effortLevel: 'medium',
+      skipWorkflowUsageWarning: true,
+      theme: 'light-daltonized',
+      hasCompletedOnboarding: true,
     })
   })
 

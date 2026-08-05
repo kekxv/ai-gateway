@@ -56,6 +56,7 @@ import type {
 } from '@/api/types'
 import { listUsers } from '@/api/users'
 import ApiKeyFormDrawer from '@/components/api-keys/ApiKeyFormDrawer.vue'
+import ClientConfigDialog from '@/components/api-keys/ClientConfigDialog.vue'
 import SecretResultDialog from '@/components/api-keys/SecretResultDialog.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -82,6 +83,7 @@ const oneTimeSecret = ref<string | null>(null)
 const secretOperationActive = ref(false)
 const keyOperations = ref(new Map<number, KeyOperation>())
 const examplesOpen = ref(false)
+const clientConfigOpen = ref(false)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const examplesTab = ref<any>('openai')
 
@@ -749,6 +751,10 @@ onBeforeUnmount(() => {
           <ElIcon><Document /></ElIcon>
           {{ examplesOpen ? '隐藏示例' : '使用示例' }}
         </ElButton>
+        <ElButton data-test="open-client-config" @click="clientConfigOpen = true">
+          <ElIcon><Document /></ElIcon>
+          生成配置文件
+        </ElButton>
         <ElButton
           data-test="create-api-key"
           type="primary"
@@ -983,6 +989,9 @@ onBeforeUnmount(() => {
       :model-value="secretOpen"
       :secret="oneTimeSecret"
       @close="closeSecret"
+    />
+    <ClientConfigDialog
+      v-model="clientConfigOpen"
     />
   </div>
 </template>
