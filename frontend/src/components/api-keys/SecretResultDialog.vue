@@ -8,6 +8,8 @@ import 'element-plus/theme-chalk/el-dialog.css'
 import 'element-plus/theme-chalk/el-overlay.css'
 import 'element-plus/theme-chalk/el-tabs.css'
 
+import ClientConfigDialog from '@/components/api-keys/ClientConfigDialog.vue'
+
 const props = defineProps<{
   modelValue: boolean
   secret: string | null
@@ -24,6 +26,7 @@ const actionStatus = ref('')
 const activeTab = ref<any>('openai')
 const testing = ref(false)
 const testResult = ref<{ success: boolean; message: string } | null>(null)
+const clientConfigOpen = ref(false)
 let outstandingObjectUrl: string | null = null
 
 const baseUrl = computed(() => props.gatewayUrl ?? window.location.origin)
@@ -83,6 +86,7 @@ function clearTransientState(): void {
   acknowledged.value = false
   actionStatus.value = ''
   testResult.value = null
+  clientConfigOpen.value = false
   revokeOutstandingUrl()
 }
 
@@ -228,6 +232,13 @@ function refuseClose(): void {
     >{{ secret }}</pre>
 
     <div class="secret-actions">
+      <ElButton
+        data-test="secret-generate-client-config"
+        :disabled="secret === null"
+        @click="clientConfigOpen = true"
+      >
+        生成配置文件
+      </ElButton>
       <ElButton data-test="secret-copy" :disabled="secret === null" @click="copySecret">
         复制密钥
       </ElButton>
@@ -302,6 +313,12 @@ function refuseClose(): void {
       </ElButton>
     </template>
   </ElDialog>
+  <ClientConfigDialog
+    v-if="secret !== null"
+    v-model="clientConfigOpen"
+    :api-key="secret"
+    :base-url="baseUrl"
+  />
 </template>
 
 <style scoped>

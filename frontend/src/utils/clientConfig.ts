@@ -4,6 +4,15 @@ export interface ClientConfigInput {
   apiKey: string
   baseUrl: string
   modelId: string
+  claudeModels?: Partial<ClaudeModelSelection>
+}
+
+export interface ClaudeModelSelection {
+  primary: string
+  opus: string
+  sonnet: string
+  haiku: string
+  subagent: string
 }
 
 export interface ClientConfigFile {
@@ -42,6 +51,7 @@ export function buildClientConfig(
   const openAiBaseUrl = `${baseUrl}/v1`
 
   if (target === 'claude') {
+    const claudeModels = input.claudeModels
     return {
       filename: 'settings.json',
       location: '~/.claude/settings.json',
@@ -50,11 +60,11 @@ export function buildClientConfig(
           NAME: 'AI Gateway',
           ANTHROPIC_AUTH_TOKEN: apiKey,
           ANTHROPIC_BASE_URL: baseUrl,
-          ANTHROPIC_MODEL: modelId,
-          ANTHROPIC_DEFAULT_OPUS_MODEL: modelId,
-          ANTHROPIC_DEFAULT_SONNET_MODEL: modelId,
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: modelId,
-          CLAUDE_CODE_SUBAGENT_MODEL: modelId,
+          ANTHROPIC_MODEL: claudeModels?.primary ?? modelId,
+          ANTHROPIC_DEFAULT_OPUS_MODEL: claudeModels?.opus ?? modelId,
+          ANTHROPIC_DEFAULT_SONNET_MODEL: claudeModels?.sonnet ?? modelId,
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: claudeModels?.haiku ?? modelId,
+          CLAUDE_CODE_SUBAGENT_MODEL: claudeModels?.subagent ?? modelId,
         },
         effortLevel: 'medium',
         skipWorkflowUsageWarning: true,

@@ -238,3 +238,27 @@ Expected: no whitespace errors and only feature files changed.
 ### Task 7: Final verification
 
 - [ ] Run `npm --prefix frontend test`, `npm --prefix frontend run lint`, `npm --prefix frontend run typecheck`, `npm --prefix frontend run build`, and `git diff --check`; all must exit zero.
+
+## Follow-up: key-first and multi-model client configuration (2026-08-05)
+
+### Task 8: Make configuration selection key-first and support Claude role models
+
+**Files:** `frontend/src/utils/clientConfig.ts`, `frontend/src/components/api-keys/ClientConfigDialog.vue`, `frontend/tests/client-config.spec.ts`, and `frontend/tests/client-config-dialog.spec.ts`.
+
+- [ ] **Step 1: Write failing tests.** Assert Claude configuration emits five independently selected model IDs for `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, and `CLAUDE_CODE_SUBAGENT_MODEL`. Assert the dialog renders API-key input and verification before any model select, then shows the five Claude selectors only after the key-scoped model list has loaded.
+- [ ] **Step 2: Confirm RED** with `npm --prefix frontend test -- --run tests/client-config.spec.ts tests/client-config-dialog.spec.ts`.
+- [ ] **Step 3: Implement minimal behavior.** Add optional Claude role-model input to the pure generator. Move the API key and verification controls before model controls; for Claude render five role-specific selectors and for other targets render one selector. Changing the key or target clears all resolved selections.
+- [ ] **Step 4: Confirm GREEN** with the focused command from Step 2.
+
+### Task 9: Offer configuration generation after one-time API-key creation
+
+**Files:** `frontend/src/components/api-keys/SecretResultDialog.vue` and `frontend/tests/api-keys.spec.ts`.
+
+- [ ] **Step 1: Write a failing integration test** that creates a one-time-secret dialog, activates “生成配置文件”, and verifies the nested client configuration dialog receives the one-time key without rendering an editable duplicate key field.
+- [ ] **Step 2: Confirm RED** with `npm --prefix frontend test -- --run tests/api-keys.spec.ts`.
+- [ ] **Step 3: Implement minimal integration.** Add an internal dialog-open ref and render `ClientConfigDialog` with the one-time secret supplied as a non-editable key source. Keep the acknowledgement gate and existing one-time-secret lifecycle unchanged.
+- [ ] **Step 4: Confirm GREEN** with the focused command from Step 2.
+
+### Task 10: Final verification
+
+- [ ] Run `npm --prefix frontend test`, `npm --prefix frontend run lint`, `npm --prefix frontend run typecheck`, `npm --prefix frontend run build`, and `git diff --check`; all must exit zero.

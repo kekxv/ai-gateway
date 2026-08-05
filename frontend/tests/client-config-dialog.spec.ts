@@ -17,6 +17,44 @@ afterEach(() => {
 })
 
 describe('客户端配置对话框', () => {
+  it('先验证接口密钥，再为 Claude 的各模型角色分别选择可用模型', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [
+        { id: 'claude-primary' },
+        { id: 'claude-opus' },
+        { id: 'claude-sonnet' },
+        { id: 'claude-haiku' },
+        { id: 'claude-subagent' },
+      ],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    const keyInput = wrapper.get('[data-test="client-config-key"]').element
+    const modelArea = wrapper.get('[data-test="client-config-models"]').element
+    expect(keyInput.compareDocumentPosition(modelArea) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    await wrapper.get('[data-test="client-config-key"]').setValue('sk-gw-real-secret')
+    await wrapper.get('[data-test="client-config-verify"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="client-config-claude-primary"]').setValue('claude-primary')
+    await wrapper.get('[data-test="client-config-claude-opus"]').setValue('claude-opus')
+    await wrapper.get('[data-test="client-config-claude-sonnet"]').setValue('claude-sonnet')
+    await wrapper.get('[data-test="client-config-claude-haiku"]').setValue('claude-haiku')
+    await wrapper.get('[data-test="client-config-claude-subagent"]').setValue('claude-subagent')
+
+    expect(JSON.parse(wrapper.get('[data-test="client-config-preview"]').text())).toMatchObject({
+      env: {
+        ANTHROPIC_MODEL: 'claude-primary',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku',
+        CLAUDE_CODE_SUBAGENT_MODEL: 'claude-subagent',
+      },
+    })
+  })
+
   it('使用手动输入的 Key 加载 OpenAI 兼容目标实际可用的模型 ID', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: [{ id: 'key-scoped-alias' }],

@@ -330,9 +330,10 @@ describe('接口密钥作用域与一次性明文', () => {
     await wrapper.get('[data-test="open-client-config"]').trigger('click')
     await flushPromises()
 
-    const dialog = wrapper.getComponent(ClientConfigDialog)
-    expect(dialog.props('modelValue')).toBe(true)
-    expect(wrapper.get('[data-test="client-config-model"]').attributes('disabled')).toBeDefined()
+    const dialog = wrapper.findAllComponents(ClientConfigDialog)
+      .find((component) => component.props('modelValue') === true)
+    expect(dialog).toBeDefined()
+    expect(wrapper.get('[data-test="client-config-claude-primary"]').attributes('disabled')).toBeDefined()
     expect(adminRequests).toBe(0)
     wrapper.unmount()
   })
@@ -581,6 +582,23 @@ describe('接口密钥作用域与一次性明文', () => {
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:one-time-secret')
     wrapper.unmount()
     expect(revokeObjectURL).toHaveBeenCalledTimes(1)
+  })
+
+  it('一次性密钥弹窗可直接打开配置生成，且不渲染第二个可编辑密钥输入框', async () => {
+    const wrapper = mount(SecretResultDialog, {
+      props: { modelValue: true, secret: 'sk-gw-once-only' },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="secret-generate-client-config"]').trigger('click')
+    await flushPromises()
+
+    const clientConfig = wrapper.getComponent(ClientConfigDialog)
+    expect(clientConfig.props('modelValue')).toBe(true)
+    expect(clientConfig.props('apiKey')).toBe('sk-gw-once-only')
+    expect(clientConfig.find('[data-test="client-config-key"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('创建响应只把 metadata 加入列表，确认关闭后 DOM 与父组件状态都清除明文', async () => {
