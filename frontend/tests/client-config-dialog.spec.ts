@@ -17,6 +17,13 @@ afterEach(() => {
 })
 
 describe('客户端配置对话框', () => {
+  it('在验证接口密钥前提示先加载模型', async () => {
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="client-config-models"]').text()).toContain('请先验证并加载模型')
+  })
+
   it('先验证接口密钥，再为 Claude 的各模型角色分别选择可用模型', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: [
@@ -55,9 +62,13 @@ describe('客户端配置对话框', () => {
     })
   })
 
-  it('使用手动输入的 Key 加载 OpenAI 兼容目标实际可用的模型 ID', async () => {
+  it('为 Codex 的各个角色选择独立的可用模型', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      data: [{ id: 'key-scoped-alias' }],
+      data: [
+        { id: 'codex-primary' },
+        { id: 'codex-review' },
+        { id: 'codex-subagent' },
+      ],
     }), { status: 200 }))
     vi.stubGlobal('fetch', fetch)
     const wrapper = mountDialog()
@@ -70,14 +81,78 @@ describe('客户端配置对话框', () => {
     expect(fetch).toHaveBeenCalledWith('https://gateway.example/v1/models', {
       headers: { Authorization: 'Bearer sk-gw-real-secret' },
     })
-    await wrapper.get('[data-test="client-config-model"]').setValue('key-scoped-alias')
+    await wrapper.get('[data-test="client-config-codex-primary"]').setValue('codex-primary')
+    await wrapper.get('[data-test="client-config-codex-review"]').setValue('codex-review')
+    await wrapper.get('[data-test="client-config-codex-subagent"]').setValue('codex-subagent')
 
     expect(wrapper.get('[data-test="client-config-preview"]').text()).toContain(
-      'model = "key-scoped-alias"',
+      'model = "codex-primary"',
+    )
+    expect(wrapper.get('[data-test="client-config-preview"]').text()).toContain(
+      'review_model = "codex-review"',
+    )
+    expect(wrapper.get('[data-test="client-config-preview"]').text()).toContain(
+      'default_subagent_model = "codex-subagent"',
     )
     expect(wrapper.get('[data-test="client-config-location"]').text()).toContain(
       '~/.codex/config.toml',
     )
+  })
+
+  it('为 OpenCode 的默认、规划、构建和审查角色选择独立模型', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [
+        { id: 'opencode-primary' },
+        { id: 'opencode-plan' },
+        { id: 'opencode-build' },
+        { id: 'opencode-review' },
+      ],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('[data-test="client-config-key"]').setValue('sk-gw-real-secret')
+    await wrapper.get('[data-test="client-config-target-opencode"]').trigger('click')
+    await wrapper.get('[data-test="client-config-verify"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="client-config-opencode-primary"]').setValue('opencode-primary')
+    await wrapper.get('[data-test="client-config-opencode-plan"]').setValue('opencode-plan')
+    await wrapper.get('[data-test="client-config-opencode-build"]').setValue('opencode-build')
+    await wrapper.get('[data-test="client-config-opencode-review"]').setValue('opencode-review')
+
+    expect(JSON.parse(wrapper.get('[data-test="client-config-preview"]').text())).toMatchObject({
+      model: 'gateway/opencode-primary',
+      agent: {
+        plan: { model: 'gateway/opencode-plan' },
+        build: { model: 'gateway/opencode-build' },
+        review: { model: 'gateway/opencode-review' },
+      },
+    })
+  })
+
+  it('为 Pi 选择多个可切换模型', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [{ id: 'pi-fast' }, { id: 'pi-deep' }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('[data-test="client-config-key"]').setValue('sk-gw-real-secret')
+    await wrapper.get('[data-test="client-config-target-pi"]').trigger('click')
+    await wrapper.get('[data-test="client-config-verify"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="client-config-pi-models"]').setValue(['pi-fast', 'pi-deep'])
+
+    expect(JSON.parse(wrapper.get('[data-test="client-config-preview"]').text())).toMatchObject({
+      providers: {
+        gateway: {
+          models: [
+            { id: 'pi-fast', name: 'pi-fast' },
+            { id: 'pi-deep', name: 'pi-deep' },
+          ],
+        },
+      },
+    })
   })
 
   it('使用 Claude 认证头加载模型', async () => {
@@ -114,7 +189,7 @@ describe('客户端配置对话框', () => {
     await wrapper.get('[data-test="client-config-target-pi"]').trigger('click')
     await wrapper.get('[data-test="client-config-verify"]').trigger('click')
     await flushPromises()
-    await wrapper.get('[data-test="client-config-model"]').setValue('pi-key-scoped')
+    await wrapper.get('[data-test="client-config-pi-models"]').setValue(['pi-key-scoped'])
     await wrapper.get('[data-test="client-config-download"]').trigger('click')
     await flushPromises()
 
@@ -143,7 +218,7 @@ describe('客户端配置对话框', () => {
     await wrapper.get('[data-test="client-config-target-pi"]').trigger('click')
     await wrapper.get('[data-test="client-config-verify"]').trigger('click')
     await flushPromises()
-    await wrapper.get('[data-test="client-config-model"]').setValue('downloadable-model')
+    await wrapper.get('[data-test="client-config-pi-models"]').setValue(['downloadable-model'])
 
     expect(wrapper.text()).toContain('请合并到已有配置，不要直接覆盖')
     await wrapper.get('[data-test="client-config-download"]').trigger('click')

@@ -5,6 +5,9 @@ export interface ClientConfigInput {
   baseUrl: string
   modelId: string
   claudeModels?: Partial<ClaudeModelSelection>
+  codexModels?: Partial<CodexModelSelection>
+  openCodeModels?: Partial<OpenCodeModelSelection>
+  piModelIds?: string[]
 }
 
 export interface ClaudeModelSelection {
@@ -13,6 +16,19 @@ export interface ClaudeModelSelection {
   sonnet: string
   haiku: string
   subagent: string
+}
+
+export interface CodexModelSelection {
+  primary: string
+  review: string
+  subagent: string
+}
+
+export interface OpenCodeModelSelection {
+  primary: string
+  plan: string
+  build: string
+  review: string
 }
 
 export interface ClientConfigFile {
@@ -41,6 +57,10 @@ function tomlString(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
+function selectedModel(value: string | undefined, fallback: string): string {
+  return value?.trim() || fallback
+}
+
 export function buildClientConfig(
   target: ClientConfigTarget,
   input: ClientConfigInput,
@@ -60,11 +80,11 @@ export function buildClientConfig(
           NAME: 'AI Gateway',
           ANTHROPIC_AUTH_TOKEN: apiKey,
           ANTHROPIC_BASE_URL: baseUrl,
-          ANTHROPIC_MODEL: claudeModels?.primary ?? modelId,
-          ANTHROPIC_DEFAULT_OPUS_MODEL: claudeModels?.opus ?? modelId,
-          ANTHROPIC_DEFAULT_SONNET_MODEL: claudeModels?.sonnet ?? modelId,
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: claudeModels?.haiku ?? modelId,
-          CLAUDE_CODE_SUBAGENT_MODEL: claudeModels?.subagent ?? modelId,
+          ANTHROPIC_MODEL: selectedModel(claudeModels?.primary, modelId),
+          ANTHROPIC_DEFAULT_OPUS_MODEL: selectedModel(claudeModels?.opus, modelId),
+          ANTHROPIC_DEFAULT_SONNET_MODEL: selectedModel(claudeModels?.sonnet, modelId),
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: selectedModel(claudeModels?.haiku, modelId),
+          CLAUDE_CODE_SUBAGENT_MODEL: selectedModel(claudeModels?.subagent, modelId),
         },
         effortLevel: 'medium',
         skipWorkflowUsageWarning: true,
@@ -75,10 +95,19 @@ export function buildClientConfig(
   }
 
   if (target === 'codex') {
+    const codexModels = input.codexModels
+    const primary = selectedModel(codexModels?.primary, modelId)
+    const review = selectedModel(codexModels?.review, modelId)
+    const subagent = selectedModel(codexModels?.subagent, modelId)
     return {
       filename: 'config.toml',
       location: '~/.codex/config.toml',
-      content: `model = "${tomlString(modelId)}"
+      content: `model = "${tomlString(primary)}"
+review_model = "${tomlString(review)}"
+
+[agents]
+default_subagent_model = "${tomlString(subagent)}"
+
 model_provider = "gateway"
 
 [model_providers.gateway]
@@ -91,24 +120,45 @@ wire_api = "responses"
   }
 
   if (target === 'opencode') {
+    const openCodeModels = input.openCodeModels
+    const primary = selectedModel(openCodeModels?.primary, modelId)
+    const plan = selectedModel(openCodeModels?.plan, modelId)
+    const build = selectedModel(openCodeModels?.build, modelId)
+    const review = selectedModel(openCodeModels?.review, modelId)
+    const models = Object.fromEntries(
+      [...new Set([primary, plan, build, review])].map((id) => [id, { name: id }]),
+    )
     return {
       filename: 'opencode.json',
       location: './opencode.json',
       content: `${JSON.stringify({
         $schema: 'https://opencode.ai/config.json',
-        model: `gateway/${modelId}`,
+        model: `gateway/${primary}`,
+        agent: {
+          plan: { model: `gateway/${plan}` },
+          build: { model: `gateway/${build}` },
+          review: {
+            description: 'Reviews code for best practices and potential issues',
+            mode: 'subagent',
+            model: `gateway/${review}`,
+            prompt: 'You are a code reviewer. Focus on security, performance, and maintainability.',
+            permission: { edit: 'deny' },
+          },
+        },
         provider: {
           gateway: {
             npm: '@ai-sdk/openai-compatible',
             name: 'AI Gateway',
             options: { baseURL: openAiBaseUrl, apiKey },
-            models: { [modelId]: { name: modelId } },
+            models,
           },
         },
       }, null, 2)}\n`,
     }
   }
 
+  const selectedPiModelIds = [...new Set((input.piModelIds ?? []).map((id) => id.trim()).filter(Boolean))]
+  const piModelIds = selectedPiModelIds.length > 0 ? selectedPiModelIds : [modelId]
   return {
     filename: 'models.json',
     location: '~/.pi/agent/models.json',
@@ -118,7 +168,7 @@ wire_api = "responses"
           baseUrl: openAiBaseUrl,
           api: 'openai-completions',
           apiKey,
-          models: [{ id: modelId, name: modelId }],
+          models: piModelIds.map((id) => ({ id, name: id })),
         },
       },
     }, null, 2)}\n`,

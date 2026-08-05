@@ -10,8 +10,10 @@ import 'element-plus/theme-chalk/el-overlay.css'
 import {
   buildClientConfig,
   type ClaudeModelSelection,
+  type CodexModelSelection,
   type ClientConfigFile,
   type ClientConfigTarget,
+  type OpenCodeModelSelection,
 } from '@/utils/clientConfig'
 
 const props = defineProps<{
@@ -25,7 +27,6 @@ const emit = defineEmits<{
 }>()
 
 const manualApiKey = ref('')
-const selectedModelId = ref('')
 const target = ref<ClientConfigTarget>('claude')
 const claudeModels = ref<ClaudeModelSelection>({
   primary: '',
@@ -34,6 +35,18 @@ const claudeModels = ref<ClaudeModelSelection>({
   haiku: '',
   subagent: '',
 })
+const codexModels = ref<CodexModelSelection>({
+  primary: '',
+  review: '',
+  subagent: '',
+})
+const openCodeModels = ref<OpenCodeModelSelection>({
+  primary: '',
+  plan: '',
+  build: '',
+  review: '',
+})
+const piModelIds = ref<string[]>([])
 const availableModelIds = ref<string[]>([])
 const loadingModels = ref(false)
 const modelLoadError = ref('')
@@ -50,23 +63,43 @@ const baseUrl = computed(() => props.baseUrl ?? window.location.origin)
 const effectiveApiKey = computed(() => props.apiKey ?? manualApiKey.value)
 const usesProvidedApiKey = computed(() => props.apiKey !== undefined)
 const isClaude = computed(() => target.value === 'claude')
+const isCodex = computed(() => target.value === 'codex')
+const isOpenCode = computed(() => target.value === 'opencode')
+const isPi = computed(() => target.value === 'pi')
 const claudeModelsReady = computed(() => Object.values(claudeModels.value).every((id) => id !== ''))
+const codexModelsReady = computed(() => Object.values(codexModels.value).every((id) => id !== ''))
+const openCodeModelsReady = computed(() => Object.values(openCodeModels.value).every((id) => id !== ''))
+const piModelsReady = computed(() => piModelIds.value.length > 0)
+const modelsReady = computed(() => {
+  if (isClaude.value) return claudeModelsReady.value
+  if (isCodex.value) return codexModelsReady.value
+  if (isOpenCode.value) return openCodeModelsReady.value
+  return piModelsReady.value
+})
 
 const configuration = computed<ClientConfigFile | null>(() => {
   if (effectiveApiKey.value.trim() === '') return null
-  if (isClaude.value && !claudeModelsReady.value) return null
-  if (!isClaude.value && selectedModelId.value === '') return null
+  if (!modelsReady.value) return null
+  const modelId = isClaude.value
+    ? claudeModels.value.primary
+    : isCodex.value
+      ? codexModels.value.primary
+      : isOpenCode.value
+        ? openCodeModels.value.primary
+        : piModelIds.value[0] ?? ''
   return buildClientConfig(target.value, {
     apiKey: effectiveApiKey.value,
     baseUrl: baseUrl.value,
-    modelId: isClaude.value ? claudeModels.value.primary : selectedModelId.value,
+    modelId,
     ...(isClaude.value ? { claudeModels: claudeModels.value } : {}),
+    ...(isCodex.value ? { codexModels: codexModels.value } : {}),
+    ...(isOpenCode.value ? { openCodeModels: openCodeModels.value } : {}),
+    ...(isPi.value ? { piModelIds: piModelIds.value } : {}),
   })
 })
 
 function resetResolvedModels(): void {
   availableModelIds.value = []
-  selectedModelId.value = ''
   claudeModels.value = {
     primary: '',
     opus: '',
@@ -74,6 +107,18 @@ function resetResolvedModels(): void {
     haiku: '',
     subagent: '',
   }
+  codexModels.value = {
+    primary: '',
+    review: '',
+    subagent: '',
+  }
+  openCodeModels.value = {
+    primary: '',
+    plan: '',
+    build: '',
+    review: '',
+  }
+  piModelIds.value = []
   modelLoadError.value = ''
 }
 
@@ -232,6 +277,9 @@ function download(): void {
     </p>
 
     <section class="model-selection" data-test="client-config-models">
+      <p v-if="availableModelIds.length === 0 && !loadingModels" class="model-selection-description">
+        请先验证并加载模型，再选择模型 ID。
+      </p>
       <template v-if="isClaude">
         <p class="model-selection-description">Claude Code 可为不同任务角色选择不同模型。</p>
         <div class="claude-model-grid">
@@ -272,17 +320,71 @@ function download(): void {
           </label>
         </div>
       </template>
+      <template v-else-if="isCodex">
+        <p class="model-selection-description">Codex 可为主任务、代码审查和子代理选择不同模型。</p>
+        <div class="model-grid">
+          <label for="client-config-codex-primary">默认模型
+            <select id="client-config-codex-primary" v-model="codexModels.primary" data-test="client-config-codex-primary" :disabled="loadingModels || availableModelIds.length === 0">
+              <option value="" disabled>选择模型</option>
+              <option v-for="modelId in availableModelIds" :key="modelId" :value="modelId">{{ modelId }}</option>
+            </select>
+          </label>
+          <label for="client-config-codex-review">审查模型
+            <select id="client-config-codex-review" v-model="codexModels.review" data-test="client-config-codex-review" :disabled="loadingModels || availableModelIds.length === 0">
+              <option value="" disabled>选择模型</option>
+              <option v-for="modelId in availableModelIds" :key="modelId" :value="modelId">{{ modelId }}</option>
+            </select>
+          </label>
+          <label for="client-config-codex-subagent">子代理模型
+            <select id="client-config-codex-subagent" v-model="codexModels.subagent" data-test="client-config-codex-subagent" :disabled="loadingModels || availableModelIds.length === 0">
+              <option value="" disabled>选择模型</option>
+              <option v-for="modelId in availableModelIds" :key="modelId" :value="modelId">{{ modelId }}</option>
+            </select>
+          </label>
+        </div>
+      </template>
+      <template v-else-if="isOpenCode">
+        <p class="model-selection-description">OpenCode 可为默认、规划、构建和审查任务选择不同模型。</p>
+        <div class="model-grid">
+          <label for="client-config-opencode-primary">默认模型
+            <select id="client-config-opencode-primary" v-model="openCodeModels.primary" data-test="client-config-opencode-primary" :disabled="loadingModels || availableModelIds.length === 0">
+              <option value="" disabled>选择模型</option>
+              <option v-for="modelId in availableModelIds" :key="modelId" :value="modelId">{{ modelId }}</option>
+            </select>
+          </label>
+          <label for="client-config-opencode-plan">规划模型
+            <select id="client-config-opencode-plan" v-model="openCodeModels.plan" data-test="client-config-opencode-plan" :disabled="loadingModels || availableModelIds.length === 0">
+              <option value="" disabled>选择模型</option>
+              <option v-for="modelId in availableModelIds" :key="modelId" :value="modelId">{{ modelId }}</option>
+            </select>
+          </label>
+          <label for="client-config-opencode-build">构建模型
+            <select id="client-config-opencode-build" v-model="openCodeModels.build" data-test="client-config-opencode-build" :disabled="loadingModels || availableModelIds.length === 0">
+              <option value="" disabled>选择模型</option>
+              <option v-for="modelId in availableModelIds" :key="modelId" :value="modelId">{{ modelId }}</option>
+            </select>
+          </label>
+          <label for="client-config-opencode-review">审查模型
+            <select id="client-config-opencode-review" v-model="openCodeModels.review" data-test="client-config-opencode-review" :disabled="loadingModels || availableModelIds.length === 0">
+              <option value="" disabled>选择模型</option>
+              <option v-for="modelId in availableModelIds" :key="modelId" :value="modelId">{{ modelId }}</option>
+            </select>
+          </label>
+        </div>
+      </template>
       <template v-else>
-        <label class="field-label" for="client-config-model">模型 ID</label>
+        <label class="field-label" for="client-config-pi-models">模型 ID（可多选）</label>
         <select
-          id="client-config-model"
-          v-model="selectedModelId"
-          data-test="client-config-model"
+          id="client-config-pi-models"
+          v-model="piModelIds"
+          data-test="client-config-pi-models"
+          multiple
+          size="5"
           :disabled="loadingModels || availableModelIds.length === 0"
         >
-          <option value="" disabled>选择模型</option>
           <option v-for="modelId in availableModelIds" :key="modelId" :value="modelId">{{ modelId }}</option>
         </select>
+        <p class="model-selection-description">Pi 会将选中的模型写入配置，之后可在客户端中切换。</p>
       </template>
     </section>
 
@@ -323,9 +425,11 @@ select { box-sizing: border-box; width: 100%; min-height: 2rem; padding: .45rem 
 .model-selection { margin-top: 1rem; }
 .model-selection-description { margin: 0 0 .65rem; color: var(--gateway-muted); font-size: .875rem; }
 .claude-model-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
-.claude-model-grid label { display: grid; gap: .4rem; color: var(--gateway-text); font-size: .9rem; font-weight: 600; }
+.claude-model-grid label, .model-grid label { display: grid; gap: .4rem; color: var(--gateway-text); font-size: .9rem; font-weight: 600; }
 .claude-model-grid label:first-child { grid-column: 1 / -1; }
-@media (max-width: 36rem) { .claude-model-grid { grid-template-columns: 1fr; } .claude-model-grid label:first-child { grid-column: auto; } }
+.model-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.model-grid label:first-child { grid-column: 1 / -1; }
+@media (max-width: 36rem) { .claude-model-grid, .model-grid { grid-template-columns: 1fr; } .claude-model-grid label:first-child, .model-grid label:first-child { grid-column: auto; } }
 .config-location { margin: 1rem 0 .5rem; color: var(--gateway-muted); }
 .config-preview { max-height: 20rem; margin: 0; padding: .8rem; overflow: auto; background: var(--el-fill-color-light); border: 1px solid var(--el-border-color); border-radius: var(--el-border-radius-base); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: .8rem; white-space: pre-wrap; word-break: break-word; }
 .empty-preview { margin: 1.25rem 0 0; color: var(--gateway-muted); font-size: .9rem; }
