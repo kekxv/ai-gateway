@@ -34,6 +34,7 @@ import 'element-plus/theme-chalk/el-alert.css'
 import 'element-plus/theme-chalk/el-button.css'
 import 'element-plus/theme-chalk/el-card.css'
 import 'element-plus/theme-chalk/el-date-picker.css'
+import 'element-plus/theme-chalk/el-date-picker-panel.css'
 import 'element-plus/theme-chalk/el-empty.css'
 import 'element-plus/theme-chalk/el-form.css'
 import 'element-plus/theme-chalk/el-input.css'
@@ -44,6 +45,7 @@ import 'element-plus/theme-chalk/el-skeleton.css'
 import 'element-plus/theme-chalk/el-skeleton-item.css'
 import 'element-plus/theme-chalk/el-table.css'
 import 'element-plus/theme-chalk/el-tag.css'
+import 'element-plus/theme-chalk/el-time-picker.css'
 import VChart from 'vue-echarts'
 
 import {
@@ -326,7 +328,6 @@ onBeforeUnmount(() => {
             <p class="timezone-note">{{ localRangeLabel() }}</p>
           </ElFormItem>
           <div class="quick-ranges" aria-label="快捷时间范围">
-            <span>快捷范围</span>
             <ElButton data-test="billing-quick-range-today" size="small" plain @click="setQuickRange(1)">今天</ElButton>
             <ElButton data-test="billing-quick-range-7d" size="small" plain @click="setQuickRange(7)">近 7 天</ElButton>
             <ElButton data-test="billing-quick-range-30d" size="small" plain @click="setQuickRange(30)">近 30 天</ElButton>
@@ -371,13 +372,6 @@ onBeforeUnmount(() => {
         <ElCard shadow="never"><span>平均延迟</span><strong>{{ formatDuration(totals.average_latency_ms) }}</strong><small>所有请求</small></ElCard>
       </section>
 
-      <section class="charts-grid">
-        <ElCard shadow="never" class="chart-card chart-card--wide"><h2>趋势</h2><VChart :option="trendChart" autoresize /></ElCard>
-        <ElCard v-if="isAdmin" shadow="never" class="chart-card"><h2>供应商分布</h2><VChart :option="providerChart" autoresize /></ElCard>
-        <ElCard shadow="never" class="chart-card"><h2>模型分布</h2><VChart :option="modelChart" autoresize /></ElCard>
-        <ElCard shadow="never" class="chart-card"><h2>API Key 分布</h2><VChart :option="apiKeyChart" autoresize /></ElCard>
-      </section>
-
       <section class="details-section">
         <div class="details-section__heading">
           <div><h2>维度明细</h2><p>图表仅展示前 20 项；表格保留完整结果并按用户费用降序。</p></div>
@@ -396,6 +390,13 @@ onBeforeUnmount(() => {
         <ElEmpty v-if="activeStats.length === 0" description="所选条件下暂无数据" />
         <ElPagination v-if="activeStats.length > pageSize" v-model:current-page="currentPage" background layout="prev, pager, next" :page-size="pageSize" :total="activeStats.length" />
       </section>
+
+      <section class="charts-grid">
+        <ElCard shadow="never" class="chart-card chart-card--wide"><h2>趋势</h2><VChart :option="trendChart" autoresize /></ElCard>
+        <ElCard v-if="isAdmin" shadow="never" class="chart-card"><h2>供应商分布</h2><VChart :option="providerChart" autoresize /></ElCard>
+        <ElCard shadow="never" class="chart-card"><h2>模型分布</h2><VChart :option="modelChart" autoresize /></ElCard>
+        <ElCard shadow="never" class="chart-card"><h2>API Key 分布</h2><VChart :option="apiKeyChart" autoresize /></ElCard>
+      </section>
     </template>
     <ElAlert v-else title="暂无账单数据" type="info" :closable="false" />
   </main>
@@ -404,14 +405,14 @@ onBeforeUnmount(() => {
 <style scoped>
 .billing-statistics { max-width: 1500px; margin: 0 auto; }
 .filters-card { margin-bottom: 1.25rem; }
-.filters-card :deep(.el-card__body) { padding: 1.15rem 1.25rem; }
-.filters { display: grid; gap: 1rem; }
-.filters__primary { display: grid; grid-template-columns: minmax(21rem, 1.35fr) auto; gap: 1rem 1.5rem; align-items: end; min-width: 0; }
-.filters__secondary { display: grid; grid-template-columns: repeat(3, minmax(11rem, 1fr)) auto; gap: 0 1rem; align-items: end; min-width: 0; }
+.filters-card :deep(.el-card__body) { padding: 1rem 1.25rem; }
+.filters { display: grid; gap: .75rem; }
+.filters__primary { display: grid; grid-template-columns: minmax(22rem, 42rem) auto; justify-content: start; gap: 1rem; min-width: 0; }
+.filters__secondary { display: grid; grid-template-columns: repeat(3, minmax(11rem, 1fr)) auto; gap: 0 1rem; align-items: end; min-width: 0; padding-top: .75rem; border-top: 1px solid var(--gateway-border); }
 .filters :deep(.el-form-item) { min-width: 0; margin-bottom: 0; }
 .filters :deep(.el-select), .filters :deep(.el-date-editor) { width: 100%; min-width: 0; }
 .filters__range { min-width: 0; }
-.quick-ranges { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; min-height: 2rem; padding-bottom: .1rem; color: var(--gateway-muted); font-size: .875rem; }
+.quick-ranges { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; align-self: start; margin-top: 1.8rem; }
 .filters__actions { align-self: end; }
 .timezone-note { margin: .4rem 0 0; color: var(--gateway-muted); font-size: .8125rem; line-height: 1.4; }
 .loading-state { margin: 1.25rem 0; }
@@ -419,7 +420,7 @@ onBeforeUnmount(() => {
 .kpi-grid :deep(.el-card__body) { display: grid; gap: .35rem; }
 .kpi-grid span, .kpi-grid small { color: var(--gateway-muted); }
 .kpi-grid strong { font-size: 1.5rem; line-height: 1.2; overflow-wrap: anywhere; }
-.charts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.charts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-top: 1rem; }
 .chart-card :deep(.el-card__body) { padding: 1rem; }
 .chart-card--wide { grid-column: 1 / -1; }
 .chart-card h2, .details-section h2 { margin: 0; font-size: 1rem; }
@@ -430,5 +431,5 @@ onBeforeUnmount(() => {
 .dimension-tabs { display: flex; flex-wrap: wrap; gap: .5rem; }
 .details-section :deep(.el-pagination) { justify-content: flex-end; margin-top: 1rem; }
 @media (max-width: 1100px) { .filters__secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .filters__actions { justify-self: end; } }
-@media (max-width: 700px) { .filters__primary, .filters__secondary, .kpi-grid, .charts-grid { grid-template-columns: 1fr; } .filters__actions { justify-self: stretch; } .filters__actions :deep(.el-button) { width: 100%; } .chart-card--wide { grid-column: auto; } .details-section__heading { flex-direction: column; } .chart-card :deep(.echarts) { height: 17rem; } }
+@media (max-width: 700px) { .filters__primary, .filters__secondary, .kpi-grid, .charts-grid { grid-template-columns: 1fr; } .quick-ranges { margin-top: 0; } .filters__actions { justify-self: stretch; } .filters__actions :deep(.el-button) { width: 100%; } .chart-card--wide { grid-column: auto; } .details-section__heading { flex-direction: column; } .chart-card :deep(.echarts) { height: 17rem; } }
 </style>
