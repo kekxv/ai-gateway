@@ -14,6 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from ai_gateway.admin.api_keys import router as api_keys_router
 from ai_gateway.admin.api_keys import self_router as self_api_keys_router
 from ai_gateway.admin.billing import router as billing_router
+from ai_gateway.admin.billing_statistics import (
+    admin_router as billing_statistics_admin_router,
+)
+from ai_gateway.admin.billing_statistics import user_router as billing_statistics_user_router
 from ai_gateway.admin.configuration import router as configuration_router
 from ai_gateway.admin.dashboard import router as dashboard_router
 from ai_gateway.admin.model_sync import router as model_sync_router
@@ -58,7 +62,7 @@ from ai_gateway.transport.http import HttpClientFactory
 from ai_gateway.user.dashboard import router as user_dashboard_router
 from ai_gateway.user.request_logs import router as user_request_logs_router
 
-REQUIRED_MIGRATION_HEAD = "0016"
+REQUIRED_MIGRATION_HEAD = "0017"
 _EXAMPLE_JWT_SECRET = "replace-with-a-long-random-secret"
 _EXAMPLE_ENCRYPTION_KEY = "replace-with-a-fernet-key"
 
@@ -276,8 +280,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(user_models_router)
     app.include_router(request_logs_router)
     app.include_router(user_dashboard_router)
+    app.include_router(billing_statistics_user_router)
     app.include_router(user_request_logs_router)
     app.include_router(billing_router)
+    app.include_router(billing_statistics_admin_router)
     app.include_router(dashboard_router)
     app.include_router(configuration_router)
     app.include_router(settings_router)

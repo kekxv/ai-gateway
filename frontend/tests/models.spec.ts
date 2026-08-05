@@ -286,6 +286,17 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
+  it('将模型操作按钮置于标题下方的独立一行', async () => {
+    useCatalog()
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    const card = wrapper.get('[data-test="model-card-1"]')
+    expect(card.find('.card-header .card-actions').exists()).toBe(false)
+    expect(card.find('.card-header + .card-actions').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('提交启用状态别名对象并原样保留精确价格字符串', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(ModelFormDrawer, {

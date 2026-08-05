@@ -198,39 +198,39 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
           :status="model.enabled ? 'enabled' : 'disabled'"
         />
       </div>
-      <div v-if="readonly !== true" class="card-actions">
-        <ElButton
-          :data-test="`toggle-model-${String(model.id)}`"
-          size="small"
-          :type="model.enabled ? 'warning' : 'success'"
-          plain
-          :disabled="loading === true"
-          @click="emit('toggle', model)"
-        >
-          <ElIcon><SwitchButton /></ElIcon>
-          {{ model.enabled ? '停用' : '启用' }}
-        </ElButton>
-        <ElButton
-          :data-test="`edit-model-${String(model.id)}`"
-          size="small"
-          :disabled="loading === true"
-          @click="emit('edit', model)"
-        >
-          <ElIcon><Edit /></ElIcon>
-          编辑
-        </ElButton>
-        <ElButton
-          size="small"
-          type="danger"
-          :data-test="`delete-model-${String(model.id)}`"
-          :disabled="loading === true || nonDeletable === true"
-          :title="nonDeletable ? '该模型已有请求历史，请改为停用' : undefined"
-          @click="emit('delete', model)"
-        >
-          <ElIcon><Delete /></ElIcon>
-          删除
-        </ElButton>
-      </div>
+    </div>
+    <div v-if="readonly !== true" class="card-actions">
+      <ElButton
+        :data-test="`toggle-model-${String(model.id)}`"
+        size="small"
+        :type="model.enabled ? 'warning' : 'success'"
+        plain
+        :disabled="loading === true"
+        @click="emit('toggle', model)"
+      >
+        <ElIcon><SwitchButton /></ElIcon>
+        {{ model.enabled ? '停用' : '启用' }}
+      </ElButton>
+      <ElButton
+        :data-test="`edit-model-${String(model.id)}`"
+        size="small"
+        :disabled="loading === true"
+        @click="emit('edit', model)"
+      >
+        <ElIcon><Edit /></ElIcon>
+        编辑
+      </ElButton>
+      <ElButton
+        size="small"
+        type="danger"
+        :data-test="`delete-model-${String(model.id)}`"
+        :disabled="loading === true || nonDeletable === true"
+        :title="nonDeletable ? '该模型已有请求历史，请改为停用' : undefined"
+        @click="emit('delete', model)"
+      >
+        <ElIcon><Delete /></ElIcon>
+        删除
+      </ElButton>
     </div>
 
     <div class="card-body">
@@ -543,10 +543,8 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
 
 .card-header {
   display: flex;
-  justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 0.875rem;
-  gap: 0.75rem;
+  margin-bottom: 0.5rem;
 }
 
 .model-info {
@@ -571,9 +569,9 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
 .card-actions {
   display: flex;
   gap: 0.375rem;
-  flex-shrink: 0;
   flex-wrap: wrap;
   justify-content: flex-end;
+  margin-bottom: 0.875rem;
 }
 
 .card-actions :deep(.el-button) {

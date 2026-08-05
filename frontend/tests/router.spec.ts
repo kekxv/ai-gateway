@@ -124,6 +124,7 @@ describe('导航守卫', () => {
     ['/models', 'models'],
     ['/api-keys', 'api-keys'],
     ['/request-logs', 'request-logs'],
+    ['/billing-statistics', 'billing-statistics'],
   ] as const)('允许普通用户访问自助路由 %s', async (path, routeName) => {
     const auth = useAuthStore()
     vi.spyOn(auth, 'restore').mockImplementation(() => {

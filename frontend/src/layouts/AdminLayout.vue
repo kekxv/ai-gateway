@@ -54,6 +54,7 @@ const navigation: NavigationItem[] = [
   { route: '/users', label: '用户管理', icon: User, requiresAdmin: true },
   { route: '/api-keys', label: '接口密钥', icon: Key },
   { route: '/request-logs', label: '请求日志', icon: Document },
+  { route: '/billing-statistics', label: '账单统计', icon: DataAnalysis },
   { route: '/security', label: '安全设置', icon: Lock },
 ]
 

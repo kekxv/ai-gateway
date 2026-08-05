@@ -56,50 +56,50 @@ function formatMultiplier(value: number | string): string {
         <h3 class="provider-name">{{ provider.name }}</h3>
         <StatusTag :status="provider.enabled ? 'enabled' : 'disabled'" />
       </div>
-      <div class="card-actions">
-        <ElButton
-          size="small"
-          :type="provider.enabled ? 'warning' : 'success'"
-          plain
-          :data-test="`toggle-provider-${String(provider.id)}`"
-          :disabled="loading"
-          @click="emit('toggle', provider)"
-        >
-          <ElIcon><SwitchButton /></ElIcon>
-          {{ provider.enabled ? '停用' : '启用' }}
-        </ElButton>
-        <ElButton
-          size="small"
-          type="primary"
-          :data-test="`sync-provider-${String(provider.id)}`"
-          :loading="loading"
-          :disabled="loading"
-          @click="emit('sync', provider)"
-        >
-          <ElIcon><Refresh /></ElIcon>
-          同步
-        </ElButton>
-        <ElButton
-          size="small"
-          :data-test="`edit-provider-${String(provider.id)}`"
-          :disabled="loading"
-          @click="emit('edit', provider)"
-        >
-          <ElIcon><Edit /></ElIcon>
-          编辑
-        </ElButton>
-        <ElButton
-          size="small"
-          type="danger"
-          :data-test="`delete-provider-${String(provider.id)}`"
-          :disabled="loading || nonDeletable"
-          :title="nonDeletable ? '该供应商已有请求历史，请改为停用' : undefined"
-          @click="emit('delete', provider)"
-        >
-          <ElIcon><Delete /></ElIcon>
-          删除
-        </ElButton>
-      </div>
+    </div>
+    <div class="card-actions">
+      <ElButton
+        size="small"
+        :type="provider.enabled ? 'warning' : 'success'"
+        plain
+        :data-test="`toggle-provider-${String(provider.id)}`"
+        :disabled="loading"
+        @click="emit('toggle', provider)"
+      >
+        <ElIcon><SwitchButton /></ElIcon>
+        {{ provider.enabled ? '停用' : '启用' }}
+      </ElButton>
+      <ElButton
+        size="small"
+        type="primary"
+        :data-test="`sync-provider-${String(provider.id)}`"
+        :loading="loading"
+        :disabled="loading"
+        @click="emit('sync', provider)"
+      >
+        <ElIcon><Refresh /></ElIcon>
+        同步
+      </ElButton>
+      <ElButton
+        size="small"
+        :data-test="`edit-provider-${String(provider.id)}`"
+        :disabled="loading"
+        @click="emit('edit', provider)"
+      >
+        <ElIcon><Edit /></ElIcon>
+        编辑
+      </ElButton>
+      <ElButton
+        size="small"
+        type="danger"
+        :data-test="`delete-provider-${String(provider.id)}`"
+        :disabled="loading || nonDeletable"
+        :title="nonDeletable ? '该供应商已有请求历史，请改为停用' : undefined"
+        @click="emit('delete', provider)"
+      >
+        <ElIcon><Delete /></ElIcon>
+        删除
+      </ElButton>
     </div>
 
     <div class="card-body">
@@ -183,10 +183,8 @@ function formatMultiplier(value: number | string): string {
 
 .card-header {
   display: flex;
-  justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 0.875rem;
-  gap: 0.75rem;
+  margin-bottom: 0.5rem;
 }
 
 .provider-info {
@@ -211,9 +209,9 @@ function formatMultiplier(value: number | string): string {
 .card-actions {
   display: flex;
   gap: 0.375rem;
-  flex-shrink: 0;
   flex-wrap: wrap;
   justify-content: flex-end;
+  margin-bottom: 0.875rem;
 }
 
 .card-actions :deep(.el-button) {

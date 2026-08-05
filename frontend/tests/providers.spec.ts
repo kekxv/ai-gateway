@@ -205,6 +205,15 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('将供应商操作按钮置于标题下方的独立一行', async () => {
+    const wrapper = await mountProviders()
+
+    const card = wrapper.get('[data-test="provider-card-1"]')
+    expect(card.find('.card-header .card-actions').exists()).toBe(false)
+    expect(card.find('.card-header + .card-actions').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('编辑时只发送变更字段，不发送空白凭据或空白协议请求头', async () => {
     const requests: unknown[] = []
     server.use(

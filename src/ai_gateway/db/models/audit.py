@@ -26,6 +26,8 @@ from ai_gateway.db.base import Base
 class RequestLog(Base):
     __tablename__ = "request_logs"
     __table_args__ = (
+        Index("ix_request_logs_created_at", "created_at"),
+        Index("ix_request_logs_model_created_at", "model_id", "created_at"),
         Index("ix_request_logs_user_created_at", "user_id", "created_at"),
         Index("ix_request_logs_api_key_created_at", "api_key_id", "created_at"),
         Index("ix_request_logs_provider_created_at", "provider_id", "created_at"),

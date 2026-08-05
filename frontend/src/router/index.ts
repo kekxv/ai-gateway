@@ -64,6 +64,12 @@ export const routes: RouteRecordRaw[] = [
         meta: { title: '请求日志', userTitle: '请求日志' },
       },
       {
+        path: 'billing-statistics',
+        name: 'billing-statistics',
+        component: () => import('@/views/BillingStatisticsView.vue'),
+        meta: { title: '账单统计', userTitle: '账单统计' },
+      },
+      {
         path: 'security',
         name: 'security',
         component: () => import('@/views/SecurityView.vue'),

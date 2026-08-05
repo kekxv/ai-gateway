@@ -159,6 +159,7 @@ describe('管理控制台外壳', () => {
     expect(navigationText).not.toContain('模型管理')
     expect(navigationText).not.toContain('用户管理')
     expect(navigationText).toContain('请求日志')
+    expect(navigationText).toContain('账单统计')
     expect(wrapper.get('.admin-email').text()).toBe(regularUser.email)
     expect(wrapper.get('.admin-header').text()).toContain('退出登录')
   })

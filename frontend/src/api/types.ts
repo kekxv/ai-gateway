@@ -183,6 +183,56 @@ export interface UserDashboardSummary {
   daily_usage: DailyUsagePoint[]
 }
 
+export interface BillingStatisticsTotals {
+  requests: number
+  failed_requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  user_cost: string
+  average_latency_ms: number | null
+}
+
+export interface AdminBillingStatisticsTotals extends BillingStatisticsTotals {
+  cost_amount: string
+  gross_profit: string
+}
+
+export interface BillingStatisticsDailyPoint extends BillingStatisticsTotals {
+  date: string
+}
+
+export interface AdminBillingStatisticsDailyPoint extends BillingStatisticsDailyPoint {
+  cost_amount: string
+  gross_profit: string
+}
+
+export interface BillingStatisticsDimensionStat extends BillingStatisticsTotals {
+  id: number | null
+  name: string
+}
+
+export interface AdminBillingStatisticsDimensionStat extends BillingStatisticsDimensionStat {
+  cost_amount: string
+  gross_profit: string
+}
+
+export interface UserBillingStatisticsResponse {
+  totals: BillingStatisticsTotals
+  daily_usage: BillingStatisticsDailyPoint[]
+  model_stats: BillingStatisticsDimensionStat[]
+  api_key_stats: BillingStatisticsDimensionStat[]
+}
+
+export interface AdminBillingStatisticsResponse {
+  totals: AdminBillingStatisticsTotals
+  daily_usage: AdminBillingStatisticsDailyPoint[]
+  provider_stats: AdminBillingStatisticsDimensionStat[]
+  model_stats: AdminBillingStatisticsDimensionStat[]
+  api_key_stats: AdminBillingStatisticsDimensionStat[]
+}
+
 export interface UserCreate {
   email: string
   password: string
