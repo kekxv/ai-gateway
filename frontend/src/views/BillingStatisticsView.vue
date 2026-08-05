@@ -236,6 +236,15 @@ function applyFilters(): void {
   void loadStatistics()
 }
 
+function setQuickRange(days: number): void {
+  const rangeEnd = new Date()
+  const rangeStart = new Date(rangeEnd)
+  rangeStart.setDate(rangeStart.getDate() - (days - 1))
+  rangeStart.setHours(0, 0, 0, 0)
+  selectedRange.value = [rangeStart, rangeEnd]
+  void loadStatistics()
+}
+
 function changeDimension(dimension: Dimension): void {
   selectedDimension.value = dimension
   currentPage.value = 1
@@ -304,35 +313,45 @@ onBeforeUnmount(() => {
 
     <ElCard class="filters-card" shadow="never">
       <ElForm class="filters" label-position="top">
-        <ElFormItem label="时间范围" class="filters__range">
-          <ElDatePicker
-            v-model="selectedRange"
-            type="datetimerange"
-            range-separator="至"
-            start-placeholder="开始时间"
-            end-placeholder="结束时间"
-            :clearable="false"
-          />
-          <p class="timezone-note">{{ localRangeLabel() }}</p>
-        </ElFormItem>
-        <ElFormItem v-if="isAdmin" label="供应商" data-test="provider-filter">
-          <FilterSelect v-model="selectedProviderIds" multiple filterable collapse-tags placeholder="选择供应商" :loading="filterOptionsLoading">
-            <FilterOption v-for="provider in providers" :key="provider.id" :label="provider.name" :value="provider.id" />
-          </FilterSelect>
-        </ElFormItem>
-        <ElFormItem label="模型">
-          <FilterSelect v-model="selectedModelIds" multiple filterable collapse-tags placeholder="选择模型" :loading="filterOptionsLoading">
-            <FilterOption v-for="model in models" :key="model.id" :label="modelLabel(model)" :value="model.id" />
-          </FilterSelect>
-        </ElFormItem>
-        <ElFormItem label="API Key">
-          <FilterSelect v-model="selectedApiKeyIds" multiple filterable collapse-tags placeholder="选择 API Key" :loading="filterOptionsLoading">
-            <FilterOption v-for="apiKey in apiKeys" :key="apiKey.id" :label="apiKeyLabel(apiKey)" :value="apiKey.id" />
-          </FilterSelect>
-        </ElFormItem>
-        <ElFormItem class="filters__actions">
-          <ElButton type="primary" :loading="loading" @click="applyFilters">查询</ElButton>
-        </ElFormItem>
+        <div class="filters__primary" data-test="billing-date-range">
+          <ElFormItem label="时间范围" class="filters__range">
+            <ElDatePicker
+              v-model="selectedRange"
+              type="datetimerange"
+              range-separator="至"
+              start-placeholder="开始时间"
+              end-placeholder="结束时间"
+              :clearable="false"
+            />
+            <p class="timezone-note">{{ localRangeLabel() }}</p>
+          </ElFormItem>
+          <div class="quick-ranges" aria-label="快捷时间范围">
+            <span>快捷范围</span>
+            <ElButton data-test="billing-quick-range-today" size="small" plain @click="setQuickRange(1)">今天</ElButton>
+            <ElButton data-test="billing-quick-range-7d" size="small" plain @click="setQuickRange(7)">近 7 天</ElButton>
+            <ElButton data-test="billing-quick-range-30d" size="small" plain @click="setQuickRange(30)">近 30 天</ElButton>
+          </div>
+        </div>
+        <div class="filters__secondary" data-test="billing-secondary-filters">
+          <ElFormItem v-if="isAdmin" label="供应商" data-test="provider-filter">
+            <FilterSelect v-model="selectedProviderIds" multiple filterable collapse-tags placeholder="选择供应商" :loading="filterOptionsLoading">
+              <FilterOption v-for="provider in providers" :key="provider.id" :label="provider.name" :value="provider.id" />
+            </FilterSelect>
+          </ElFormItem>
+          <ElFormItem label="模型" data-test="model-filter">
+            <FilterSelect v-model="selectedModelIds" multiple filterable collapse-tags placeholder="选择模型" :loading="filterOptionsLoading">
+              <FilterOption v-for="model in models" :key="model.id" :label="modelLabel(model)" :value="model.id" />
+            </FilterSelect>
+          </ElFormItem>
+          <ElFormItem label="API Key" data-test="api-key-filter">
+            <FilterSelect v-model="selectedApiKeyIds" multiple filterable collapse-tags placeholder="选择 API Key" :loading="filterOptionsLoading">
+              <FilterOption v-for="apiKey in apiKeys" :key="apiKey.id" :label="apiKeyLabel(apiKey)" :value="apiKey.id" />
+            </FilterSelect>
+          </ElFormItem>
+          <ElFormItem class="filters__actions">
+            <ElButton type="primary" :loading="loading" @click="applyFilters">查询</ElButton>
+          </ElFormItem>
+        </div>
       </ElForm>
     </ElCard>
 
@@ -385,9 +404,14 @@ onBeforeUnmount(() => {
 <style scoped>
 .billing-statistics { max-width: 1500px; margin: 0 auto; }
 .filters-card { margin-bottom: 1.25rem; }
-.filters { display: grid; grid-template-columns: repeat(4, minmax(11rem, 1fr)) auto; gap: 0 1rem; align-items: end; }
-.filters :deep(.el-select), .filters :deep(.el-date-editor) { width: 100%; }
-.filters__range { min-width: 18rem; }
+.filters-card :deep(.el-card__body) { padding: 1.15rem 1.25rem; }
+.filters { display: grid; gap: 1rem; }
+.filters__primary { display: grid; grid-template-columns: minmax(21rem, 1.35fr) auto; gap: 1rem 1.5rem; align-items: end; min-width: 0; }
+.filters__secondary { display: grid; grid-template-columns: repeat(3, minmax(11rem, 1fr)) auto; gap: 0 1rem; align-items: end; min-width: 0; }
+.filters :deep(.el-form-item) { min-width: 0; margin-bottom: 0; }
+.filters :deep(.el-select), .filters :deep(.el-date-editor) { width: 100%; min-width: 0; }
+.filters__range { min-width: 0; }
+.quick-ranges { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; min-height: 2rem; padding-bottom: .1rem; color: var(--gateway-muted); font-size: .875rem; }
 .filters__actions { align-self: end; }
 .timezone-note { margin: .4rem 0 0; color: var(--gateway-muted); font-size: .8125rem; line-height: 1.4; }
 .loading-state { margin: 1.25rem 0; }
@@ -405,6 +429,6 @@ onBeforeUnmount(() => {
 .details-section p { margin: .35rem 0 0; color: var(--gateway-muted); }
 .dimension-tabs { display: flex; flex-wrap: wrap; gap: .5rem; }
 .details-section :deep(.el-pagination) { justify-content: flex-end; margin-top: 1rem; }
-@media (max-width: 1100px) { .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 700px) { .filters, .kpi-grid, .charts-grid { grid-template-columns: 1fr; } .filters__range, .chart-card--wide { grid-column: auto; } .details-section__heading { flex-direction: column; } .chart-card :deep(.echarts) { height: 17rem; } }
+@media (max-width: 1100px) { .filters__secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .filters__actions { justify-self: end; } }
+@media (max-width: 700px) { .filters__primary, .filters__secondary, .kpi-grid, .charts-grid { grid-template-columns: 1fr; } .filters__actions { justify-self: stretch; } .filters__actions :deep(.el-button) { width: 100%; } .chart-card--wide { grid-column: auto; } .details-section__heading { flex-direction: column; } .chart-card :deep(.echarts) { height: 17rem; } }
 </style>

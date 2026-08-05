@@ -122,4 +122,27 @@ describe('账单统计', () => {
     expect(wrapper.text()).not.toContain('hidden@example.com')
     expect(wrapper.findAllComponents({ name: 'VChartStub' })).toHaveLength(4)
   })
+
+  it('将时间范围与次要筛选条件分组，并能用七天快捷范围重新查询', async () => {
+    const adminRequest = vi.spyOn(statisticsApi, 'getAdminBillingStatistics').mockResolvedValue(adminResponse)
+    const wrapper = mountPage({ ...regularUser, role: 'admin' })
+    await flushPromises()
+
+    const dateRange = wrapper.get('[data-test="billing-date-range"]')
+    const secondaryFilters = wrapper.get('[data-test="billing-secondary-filters"]')
+    expect(dateRange.find('[data-test="billing-quick-range-today"]').exists()).toBe(true)
+    expect(dateRange.find('[data-test="billing-quick-range-7d"]').exists()).toBe(true)
+    expect(dateRange.find('[data-test="billing-quick-range-30d"]').exists()).toBe(true)
+    expect(secondaryFilters.find('[data-test="provider-filter"]').exists()).toBe(true)
+    expect(secondaryFilters.find('[data-test="model-filter"]').exists()).toBe(true)
+    expect(secondaryFilters.find('[data-test="api-key-filter"]').exists()).toBe(true)
+
+    await wrapper.get('[data-test="billing-quick-range-7d"]').trigger('click')
+    await flushPromises()
+
+    expect(adminRequest).toHaveBeenCalledTimes(2)
+    const query = adminRequest.mock.calls[1]?.[0]
+    expect(query).toBeDefined()
+    expect(new Date(query?.startAt ?? '').getTime()).toBeLessThan(new Date(query?.endAt ?? '').getTime())
+  })
 })
