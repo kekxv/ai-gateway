@@ -68,6 +68,7 @@ class RecordingAudit:
 class RecordingRouter:
     successes: list[int] = field(default_factory=list)
     failures: list[int] = field(default_factory=list)
+    releases: list[int] = field(default_factory=list)
     consecutive_failures: int = 2
     runtime_state: RouteRuntimeState = RouteRuntimeState.HALF_OPEN
 
@@ -80,6 +81,11 @@ class RecordingRouter:
     async def record_failure(self, route_id: int, _: object) -> bool:
         self.failures.append(route_id)
         self.consecutive_failures += 1
+        return True
+
+    async def release_half_open(self, route_id: int) -> bool:
+        self.releases.append(route_id)
+        self.runtime_state = RouteRuntimeState.OPEN
         return True
 
 
@@ -171,6 +177,7 @@ async def test_mysql_stream_termination_closes_upstream_and_settles_reservation(
             websocket_url=None,
             upstream_model="m",
             weight=100,
+            runtime_state=RouteRuntimeState.HALF_OPEN,
         )
         context = GatewayContext(
             Protocol.OPENAI,
@@ -265,5 +272,8 @@ async def test_mysql_stream_termination_closes_upstream_and_settles_reservation(
     assert router.successes == []
     assert router.failures == ([route.route_id] if termination == "read_error" else [])
     if termination != "read_error":
+        assert router.releases == [route.route_id]
         assert router.consecutive_failures == 2
-        assert router.runtime_state is RouteRuntimeState.HALF_OPEN
+        assert router.runtime_state is RouteRuntimeState.OPEN
+    else:
+        assert router.releases == []

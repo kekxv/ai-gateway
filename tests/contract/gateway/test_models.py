@@ -272,6 +272,52 @@ async def test_model_list_deduplicates_shared_and_canonical_alias_selectors(
     assert shared_gemini["gatewayMetadata"] == {}
 
 
+async def test_model_list_deduplicates_case_insensitive_shared_selectors(
+    session: AsyncSession,
+) -> None:
+    provider = _provider(
+        "case-insensitive-selectors",
+        Protocol.OPENAI,
+        Protocol.CLAUDE,
+    )
+    lower_target = _model("case-selector-target-a")
+    lower_target.aliases.append(ModelAlias(alias="shared-case-selector"))
+    upper_target = _model("case-selector-target-b")
+    upper_target.aliases.append(ModelAlias(alias="SHARED-CASE-SELECTOR"))
+    session.add_all(
+        [
+            _route(lower_target, provider, Protocol.OPENAI),
+            _route(upper_target, provider, Protocol.OPENAI),
+        ]
+    )
+    user, _, raw_key = _api_key(ApiKeyScope.ALL)
+    session.add(user)
+    await session.flush()
+
+    async with _client(session, raw_key) as client:
+        listing = await client.get("/v1/models")
+        lower_detail = await client.get("/v1/models/shared-case-selector")
+        upper_detail = await client.get("/v1/models/SHARED-CASE-SELECTOR")
+        claude_detail = await client.get(
+            "/anthropic/v1/models/SHARED-CASE-SELECTOR",
+            headers={"anthropic-version": "2023-06-01"},
+        )
+
+    assert listing.status_code == 200
+    matching_ids = [
+        item["id"]
+        for item in listing.json()["data"]
+        if item["id"].casefold() == "shared-case-selector"
+    ]
+    assert matching_ids == ["shared-case-selector"]
+    assert lower_detail.status_code == 200
+    assert upper_detail.status_code == 200
+    assert claude_detail.status_code == 200
+    assert lower_detail.json()["id"] == "shared-case-selector"
+    assert upper_detail.json()["id"] == "shared-case-selector"
+    assert claude_detail.json()["id"] == "shared-case-selector"
+
+
 async def test_openai_detail_preserves_alias_identity_and_scope(
     session: AsyncSession,
 ) -> None:

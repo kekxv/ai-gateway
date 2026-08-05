@@ -1002,6 +1002,55 @@ async def test_client_disconnect_is_health_neutral_and_final_audit_is_disconnect
 
 
 @pytest.mark.asyncio
+async def test_gateway_cancellation_releases_active_half_open_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_gateway.gateway.websocket as gateway_module
+
+    relay_started = anyio.Event()
+
+    async def authenticated(*_: Any, **__: Any) -> ApiKeyPrincipal:
+        return ApiKeyPrincipal(1, 7, ApiKeyScope.ALL)
+
+    async def resolved(*_: Any, **__: Any) -> ResolvedModel:
+        return ResolvedModel(2, "friendly-alias", "canonical-model")
+
+    async def blocked_relay(*_: Any, **__: Any) -> RelayResult:
+        relay_started.set()
+        await anyio.sleep_forever()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(gateway_module, "authenticate_api_key", authenticated)
+    monkeypatch.setattr(gateway_module.CatalogRepository, "resolve_model", resolved)
+    monkeypatch.setattr(gateway_module, "relay_websocket", blocked_relay)
+    selected_route = _route(
+        "ws://provider.example/realtime",
+        _settings(),
+        runtime_state=RouteRuntimeState.HALF_OPEN,
+    )
+    route_router = FakeRouter(selected_route)
+    service = WebSocketGatewayService(
+        session=FakeSession(),  # type: ignore[arg-type]
+        settings=_settings(),
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        router_factory=lambda _: route_router,  # type: ignore[arg-type]
+    )
+
+    task = asyncio.create_task(
+        service.handle(FakeGatewayWebSocket(), Protocol.OPENAI)  # type: ignore[arg-type]
+    )
+    await relay_started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert route_router.releases == [selected_route.route_id]
+    assert route_router.successes == []
+    assert route_router.failures == []
+
+
+@pytest.mark.asyncio
 async def test_internal_relay_failure_audits_internal_error_not_disconnect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

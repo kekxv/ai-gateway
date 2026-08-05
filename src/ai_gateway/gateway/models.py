@@ -81,7 +81,11 @@ async def get_anthropic_model(model_id: str, request: Request, session: Session)
     try:
         principal = await authenticate_api_key(extract_api_key(request), session)
         models = await _list_selectable_models(session, principal, Protocol.CLAUDE)
-        model = next((item for item in models if item.selectable_id == model_id), None)
+        requested_key = _selector_key(model_id)
+        model = next(
+            (item for item in models if _selector_key(item.selectable_id) == requested_key),
+            None,
+        )
         if model is None:
             raise ModelNotFound(model_id)
         return JSONResponse(content=_claude_model(model))
@@ -94,7 +98,11 @@ async def get_openai_model(model_id: str, request: Request, session: Session) ->
     try:
         principal = await authenticate_api_key(extract_api_key(request), session)
         models = await _list_selectable_models(session, principal, Protocol.OPENAI)
-        model = next((item for item in models if item.selectable_id == model_id), None)
+        requested_key = _selector_key(model_id)
+        model = next(
+            (item for item in models if _selector_key(item.selectable_id) == requested_key),
+            None,
+        )
         if model is None:
             raise ModelNotFound(model_id)
         return JSONResponse(content=_openai_model(model))
@@ -133,17 +141,23 @@ async def _list_selectable_models(
         )
         .options(selectinload(Model.aliases))
         .distinct()
+        .order_by(Model.id)
     )
     models = (await session.scalars(query)).all()
-    targets_by_name: dict[str, dict[int, Model]] = {}
+    targets_by_key: dict[str, tuple[str, dict[int, Model]]] = {}
     for model in models:
-        targets_by_name.setdefault(model.canonical_name, {})[model.id] = model
-        for alias in model.aliases:
-            if alias.enabled:
-                targets_by_name.setdefault(alias.alias, {})[model.id] = model
+        names = [model.canonical_name]
+        names.extend(alias.alias for alias in model.aliases if alias.enabled)
+        for name in names:
+            key = _selector_key(name)
+            selector = targets_by_key.get(key)
+            if selector is None:
+                targets_by_key[key] = (name, {model.id: model})
+            else:
+                selector[1][model.id] = model
 
     selectable: list[SelectableModel] = []
-    for name, targets_by_id in targets_by_name.items():
+    for name, targets_by_id in targets_by_key.values():
         targets = list(targets_by_id.values())
         if len(targets) == 1:
             target = targets[0]
@@ -160,6 +174,10 @@ async def _list_selectable_models(
             )
         )
     return sorted(selectable, key=lambda item: item.selectable_id)
+
+
+def _selector_key(name: str) -> str:
+    return name.casefold()
 
 
 def _scope_condition(principal: ApiKeyPrincipal) -> Any:

@@ -315,6 +315,7 @@ class GatewayService:
                 requested_model=requested_model,
             )
         except NoRouteAvailable as exc:
+            await _release_read_session(self._session)
             correlation_id = _audit_correlation_id(request)
             audit_metadata: dict[str, str | None] = {
                 "requested_model": requested_model,
@@ -905,6 +906,7 @@ class GatewayService:
             _log_cleanup_failure("stream_audit", cleanup_exc)
 
         if disconnected or downstream_failed:
+            await _release_unstarted_half_open(router, route)
             return
         health_operation = (
             router.record_success(route.route_id)

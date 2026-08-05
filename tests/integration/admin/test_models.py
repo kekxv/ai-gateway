@@ -33,6 +33,31 @@ async def test_admin_models_can_share_an_alias(admin_client: AsyncClient) -> Non
 
 
 @pytest.mark.asyncio
+async def test_admin_model_conflict_describes_shared_alias_rules(
+    admin_client: AsyncClient,
+) -> None:
+    response = await admin_client.post(
+        "/admin/models",
+        json={
+            "canonical_name": "per-model-alias-conflict",
+            "display_name": "Per-model Alias Conflict",
+            "aliases": [
+                {"alias": "duplicate-case-alias", "enabled": True},
+                {"alias": "DUPLICATE-CASE-ALIAS", "enabled": True},
+            ],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "model_conflict",
+        "message": (
+            "Canonical model names must be unique; aliases must be unique within each model"
+        ),
+    }
+
+
+@pytest.mark.asyncio
 async def test_admin_model_canonical_name_may_match_an_existing_alias(
     admin_client: AsyncClient,
 ) -> None:

@@ -12,12 +12,13 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
-from ai_gateway.audit.service import RequestContext, RequestFailure, RequestResult
+from ai_gateway.audit.service import AuditService, RequestContext, RequestFailure, RequestResult
 from ai_gateway.billing.service import BillingService
 from ai_gateway.core.config import Settings
-from ai_gateway.core.enums import ApiKeyScope, Protocol
+from ai_gateway.core.enums import ApiKeyScope, Protocol, RequestStatus
 from ai_gateway.core.security import encrypt_secret
 from ai_gateway.db.models import (
     Account,
@@ -26,6 +27,7 @@ from ai_gateway.db.models import (
     ModelRoute,
     Provider,
     ProviderProtocol,
+    RequestLog,
     User,
 )
 from ai_gateway.gateway.dependencies import get_gateway_service
@@ -223,6 +225,91 @@ async def test_gateway_request_does_not_self_exhaust_pool_size_one(
     assert response.status_code == 200, response.text
     assert audit.completed is not None
     assert audit.failed is None
+
+
+async def test_no_route_audit_does_not_self_exhaust_pool_size_one(
+    test_engine: AsyncEngine,
+) -> None:
+    database_url = test_engine.url.render_as_string(hide_password=False)
+    engine = create_async_engine(
+        database_url,
+        pool_pre_ping=True,
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=0.1,
+    )
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    suffix = uuid4().hex
+    raw_key = f"sk-gw-no-route-pool-{suffix}"
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        database_url=database_url,
+        jwt_secret="no-route-pool-jwt-secret-at-least-32-bytes",
+        encryption_key=Fernet.generate_key().decode(),
+    )
+    async with sessions() as setup:
+        user = User(email=f"no-route-pool-{suffix}@example.com", password_hash="unused")
+        user.api_keys.append(
+            ApiKey(
+                name="no route pool lifecycle",
+                key_prefix=raw_key[:12],
+                key_hash=sha256(raw_key.encode()).digest(),
+                scope=ApiKeyScope.ALL,
+            )
+        )
+        model = Model(
+            canonical_name=f"no-route-pool-model-{suffix}",
+            display_name="No route pool lifecycle",
+        )
+        setup.add_all((user, model))
+        await setup.commit()
+
+    async def unexpected_upstream(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("a request without an eligible route must not call upstream")
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(unexpected_upstream))
+    try:
+        async with sessions() as gateway_session:
+            service = GatewayService(
+                session=gateway_session,
+                settings=settings,
+                billing_service=BillingService(sessions),
+                audit_service=AuditService(sessions),
+                http_client_factory=_FakeHttpClients(upstream_client),
+                router_factory=lambda session: Router(session, rng=random.Random(1)),
+            )
+            app = FastAPI()
+            app.include_router(openai_router)
+            app.dependency_overrides[get_gateway_service] = lambda: service
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers={"authorization": f"Bearer {raw_key}"},
+            ) as client:
+                response = await client.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": model.canonical_name,
+                        "messages": [{"role": "user", "content": "hello"}],
+                    },
+                )
+
+        async with sessions() as verify:
+            request_log = await verify.scalar(
+                select(RequestLog)
+                .where(RequestLog.user_id == user.id)
+                .order_by(RequestLog.created_at.desc())
+            )
+    finally:
+        await upstream_client.aclose()
+        await engine.dispose()
+
+    assert response.status_code == 503, response.text
+    assert request_log is not None
+    assert request_log.status is RequestStatus.FAILED
+    assert request_log.error_code == "no_route_available"
+    assert request_log.model_id is None
 
 
 def _assert_no_checked_out_connections(engine: AsyncEngine) -> None:

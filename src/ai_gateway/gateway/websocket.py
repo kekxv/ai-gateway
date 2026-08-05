@@ -591,7 +591,7 @@ class WebSocketGatewayService:
         billing_cycle: WebSocketBillingCycle | None = None
         usage = WebSocketUsage(protocol)
         result: RelayResult | None = None
-        relay_started = False
+        route_health_finalized = False
         try:
             principal = await authenticate_api_key(
                 extract_api_key(cast(Any, websocket)),
@@ -691,7 +691,6 @@ class WebSocketGatewayService:
                 except InsufficientBalance:
                     raise RelayAbort(4402, _close_reason("insufficient_balance")) from None
 
-            relay_started = True
             result = await relay_websocket(
                 cast(Any, websocket),
                 route,
@@ -714,10 +713,13 @@ class WebSocketGatewayService:
                         ),
                     )
                 )
+                route_health_finalized = True
             elif result.health_outcome is RelayHealthOutcome.SUCCESS:
                 await _safe_health(route_router.record_success(route.route_id))
+                route_health_finalized = True
             else:
                 await _safe_health(route_router.release_half_open(route.route_id))
+                route_health_finalized = True
         except BaseException as exc:
             if isinstance(exc, anyio.get_cancelled_exc_class()):
                 result = RelayResult(
@@ -734,6 +736,7 @@ class WebSocketGatewayService:
                 and isinstance(exc, UpstreamWebSocketError)
             ):
                 await _safe_health(route_router.record_failure(route.route_id, exc.failure))
+                route_health_finalized = True
             close = _gateway_close(exc)
             await _safe_close(websocket, close.code, _close_reason(close.error_code))
             result = RelayResult(
@@ -752,7 +755,7 @@ class WebSocketGatewayService:
         finally:
             cleanup_error: BaseException | None = None
             with anyio.CancelScope(shield=True):
-                if not relay_started and route is not None and route_router is not None:
+                if not route_health_finalized and route is not None and route_router is not None:
                     await _release_unstarted_half_open(route_router, route)
             with anyio.CancelScope(shield=True):
                 if billing_cycle is not None:

@@ -558,7 +558,7 @@ def _raise_model_conflict() -> NoReturn:
     raise_auth_error(
         status.HTTP_409_CONFLICT,
         "model_conflict",
-        "Canonical model names and aliases must be unique",
+        "Canonical model names must be unique; aliases must be unique within each model",
     )
 
 
