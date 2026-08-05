@@ -45,7 +45,7 @@ import ModelSyncDialog from '@/components/providers/ModelSyncDialog.vue'
 import ProviderCard from '@/components/providers/ProviderCard.vue'
 
 type NoticeType = 'success' | 'warning' | 'error'
-type ProviderOperation = 'edit' | 'sync' | 'delete'
+type ProviderOperation = 'edit' | 'sync' | 'delete' | 'toggle'
 
 interface ProviderSyncSession {
   token: symbol
@@ -488,6 +488,31 @@ async function removeProvider(provider: ProviderResponse): Promise<void> {
   }
 }
 
+async function toggleProvider(provider: ProviderResponse): Promise<void> {
+  if (!beginProviderOperation(provider.id, 'toggle')) return
+  const controller = operationController()
+  try {
+    const updated = await updateProvider(provider.id, { enabled: !provider.enabled }, controller.signal)
+    if (updated.id !== provider.id || !isCurrentProviderOperation(controller, provider.id, 'toggle')) {
+      return
+    }
+    replaceProvider(updated)
+    notice.value = {
+      type: 'success',
+      text: `供应商“${updated.name}”已${updated.enabled ? '启用' : '停用'}`,
+    }
+  } catch (error: unknown) {
+    if (isCurrentProviderOperation(controller, provider.id, 'toggle')) {
+      notice.value = { type: 'error', text: errorText(error, '供应商状态更新失败') }
+    }
+  } finally {
+    operationControllers.delete(controller)
+    if (isCurrentProviderOperation(controller, provider.id, 'toggle')) {
+      finishProviderOperation(provider.id, 'toggle')
+    }
+  }
+}
+
 onMounted(() => {
   void load()
 })
@@ -605,6 +630,7 @@ onBeforeUnmount(() => {
               @edit="openEdit"
               @delete="removeProvider"
               @sync="openSyncDialog"
+              @toggle="toggleProvider"
             />
           </div>
         </ResourceStatusGroup>
@@ -626,6 +652,7 @@ onBeforeUnmount(() => {
               @edit="openEdit"
               @delete="removeProvider"
               @sync="openSyncDialog"
+              @toggle="toggleProvider"
             />
           </div>
         </ResourceStatusGroup>

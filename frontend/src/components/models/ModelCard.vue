@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Edit, Delete, Plus, CopyDocument, Check } from '@element-plus/icons-vue'
+import { Edit, Delete, Plus, CopyDocument, Check, SwitchButton } from '@element-plus/icons-vue'
 import { ElButton, ElIcon, ElTag } from 'element-plus'
 import type {
   ModelResponse,
@@ -20,6 +20,7 @@ const props = defineProps<{
   loading?: boolean
   nonDeletable?: boolean
   routesLoading?: boolean
+  routeExpansion?: { expanded: boolean }
   readonly?: boolean
 }>()
 
@@ -27,14 +28,17 @@ const emit = defineEmits<{
   edit: [model: ModelResponse]
   delete: [model: ModelResponse]
   disable: [modelId: number]
+  toggle: [model: ModelResponse]
   editRoute: [route: ModelRouteResponse]
   deleteRoute: [route: ModelRouteResponse]
   disableRoute: [routeId: number, modelId: number]
   recoverRoute: [routeId: number, modelId: number]
   createRoute: []
+  'update:routesExpanded': [expanded: boolean]
 }>()
 
-const routesExpanded = ref(false)
+const localRoutesExpanded = ref(false)
+const priceDetailsExpanded = ref(false)
 const copiedField = ref<string | null>(null)
 
 interface LegacyClipboardDocument {
@@ -134,6 +138,27 @@ const routeStats = computed(() => {
   return { enabled, available, total: props.routes.length }
 })
 
+const routesExpanded = computed({
+  get: () => props.routeExpansion?.expanded ?? localRoutesExpanded.value,
+  set: (expanded: boolean) => {
+    localRoutesExpanded.value = expanded
+    emit('update:routesExpanded', expanded)
+  },
+})
+
+const hasPriceTiers = computed(
+  () =>
+    (props.model.price_tiers?.length ?? 0) > 0 ||
+    (props.model.public_price_tiers?.length ?? 0) > 0,
+)
+
+const priceTierSummary = computed(() => {
+  const publicTierCount = props.model.public_price_tiers?.length ?? 0
+  const internalTierCount = props.model.price_tiers?.length ?? 0
+  if (publicTierCount > 0) return `公开价格 · ${String(publicTierCount)} 个分段`
+  return `分段价格 · ${String(internalTierCount)} 个分段`
+})
+
 async function copyToClipboard(text: string, field: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
@@ -175,6 +200,17 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
       </div>
       <div v-if="readonly !== true" class="card-actions">
         <ElButton
+          :data-test="`toggle-model-${String(model.id)}`"
+          size="small"
+          :type="model.enabled ? 'warning' : 'success'"
+          plain
+          :disabled="loading === true"
+          @click="emit('toggle', model)"
+        >
+          <ElIcon><SwitchButton /></ElIcon>
+          {{ model.enabled ? '停用' : '启用' }}
+        </ElButton>
+        <ElButton
           :data-test="`edit-model-${String(model.id)}`"
           size="small"
           :disabled="loading === true"
@@ -202,7 +238,19 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
         <span class="label">规范名称：</span>
         <code>{{ model.canonical_name }}</code>
       </div>
-      <div v-if="readonly === true && (model.public_price_tiers?.length ?? 0) > 0" class="price-tiers">
+      <div v-if="hasPriceTiers" class="price-summary">
+        <span>{{ priceTierSummary }}</span>
+        <ElButton
+          :data-test="`model-price-details-${String(model.id)}`"
+          size="small"
+          text
+          type="primary"
+          @click="priceDetailsExpanded = !priceDetailsExpanded"
+        >
+          {{ priceDetailsExpanded ? '收起价格' : '查看价格' }}
+        </ElButton>
+      </div>
+      <div v-if="priceDetailsExpanded && readonly === true && (model.public_price_tiers?.length ?? 0) > 0" class="price-tiers">
         <div class="section-title">公开价格（每百万令牌）</div>
         <div
           v-for="(tier, index) in model.public_price_tiers"
@@ -233,7 +281,7 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
           </dl>
         </div>
       </div>
-      <div v-else-if="(model.price_tiers?.length ?? 0) > 0" class="price-tiers">
+      <div v-else-if="priceDetailsExpanded && (model.price_tiers?.length ?? 0) > 0" class="price-tiers">
         <div class="section-title">分段价格（每百万令牌）</div>
         <div
           v-for="tier in model.price_tiers"
@@ -264,7 +312,7 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
           </dl>
         </div>
       </div>
-      <div v-else class="basic-info">
+      <div v-else-if="!hasPriceTiers" class="basic-info">
         <div class="info-item canonical-info">
           <span class="label">规范名称：</span>
           <button
@@ -524,6 +572,8 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
   display: flex;
   gap: 0.375rem;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .card-actions :deep(.el-button) {
@@ -555,6 +605,21 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
   background: #f8fafc;
   border: 1px solid var(--gateway-border);
   border-radius: 10px;
+}
+
+.price-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.75rem;
+  color: #475569;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
 }
 
 .price-tiers > .section-title {

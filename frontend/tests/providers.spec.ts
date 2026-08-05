@@ -186,6 +186,25 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('通过快捷操作启用供应商并将它移入启用分区', async () => {
+    const patchBodies: unknown[] = []
+    const disabledProvider = { ...providerFixture, enabled: false }
+    server.use(
+      http.patch('/admin/providers/1', async ({ request }) => {
+        patchBodies.push(await request.json())
+        return HttpResponse.json({ ...providerFixture, enabled: true })
+      }),
+    )
+    const wrapper = await mountProviders([disabledProvider])
+
+    await wrapper.get('[data-test="toggle-provider-1"]').trigger('click')
+    await flushPromises()
+
+    expect(patchBodies).toEqual([{ enabled: true }])
+    expect(wrapper.get('[data-test="enabled-provider-group"]').find('[data-test="provider-card-1"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('编辑时只发送变更字段，不发送空白凭据或空白协议请求头', async () => {
     const requests: unknown[] = []
     server.use(

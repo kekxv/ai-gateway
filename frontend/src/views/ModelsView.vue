@@ -53,7 +53,7 @@ import ModelCard from '@/components/models/ModelCard.vue'
 import { useAuthStore } from '@/stores/auth'
 
 type NoticeType = 'success' | 'warning' | 'error'
-type ModelOperation = 'edit' | 'delete' | 'disable'
+type ModelOperation = 'edit' | 'delete' | 'disable' | 'toggle'
 type RouteOperation = 'edit' | 'delete' | 'disable' | 'recover'
 
 interface Notice {
@@ -92,6 +92,7 @@ const modelSubmitting = ref(false)
 const routeSubmitting = ref(false)
 const modelOperations = ref(new Map<number, ModelOperation>())
 const routeOperations = ref(new Map<number, RouteOperationState>())
+const expandedRouteModelIds = ref(new Set<number>())
 const nonDeletableModelIds = ref(new Set<number>())
 const deletedModelIds = new Set<number>()
 const deletedRouteIds = new Set<number>()
@@ -148,6 +149,39 @@ const routesByModel = computed(() => {
   return map
 })
 
+function routeIsUsable(route: ModelRouteResponse): boolean {
+  const provider = providers.value.find((item) => item.id === route.provider_id)
+  return (
+    route.enabled &&
+    provider?.enabled === true &&
+    provider.protocols.some((protocol) => protocol.enabled)
+  )
+}
+
+const availableModels = computed(() =>
+  enabledModels.value.filter((model) =>
+    (routesByModel.value.get(model.id) ?? []).some(
+      (route) => routeIsUsable(route) && route.runtime_state === 'closed',
+    ),
+  ),
+)
+
+const noUsableRouteModels = computed(() =>
+  enabledModels.value.filter(
+    (model) => !(routesByModel.value.get(model.id) ?? []).some(routeIsUsable),
+  ),
+)
+
+const unhealthyRouteModels = computed(() =>
+  enabledModels.value.filter((model) => {
+    const routes = routesByModel.value.get(model.id) ?? []
+    return (
+      routes.some(routeIsUsable) &&
+      !routes.some((route) => routeIsUsable(route) && route.runtime_state === 'closed')
+    )
+  }),
+)
+
 function errorText(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
 }
@@ -191,6 +225,13 @@ function finishRouteOperation(routeId: number, modelId: number, operation: Route
   const next = new Map(routeOperations.value)
   next.delete(routeId)
   routeOperations.value = next
+}
+
+function setRoutesExpanded(modelId: number, expanded: boolean): void {
+  const next = new Set(expandedRouteModelIds.value)
+  if (expanded) next.add(modelId)
+  else next.delete(modelId)
+  expandedRouteModelIds.value = next
 }
 
 function isCurrentModelOperation(
@@ -583,6 +624,34 @@ async function disableModel(modelId: number): Promise<void> {
   }
 }
 
+async function toggleModel(model: ModelResponse): Promise<void> {
+  if (
+    !catalogReady.value ||
+    loading.value ||
+    controlsLocked.value ||
+    !beginModelOperation(model.id, 'toggle')
+  ) return
+  const controller = operationController()
+  try {
+    const updated = await updateModel(model.id, { enabled: !model.enabled }, controller.signal)
+    if (updated.id !== model.id || !isCurrentModelOperation(controller, model.id, 'toggle')) return
+    replaceModel(updated)
+    modelNotice.value = {
+      type: 'success',
+      text: `模型“${updated.display_name}”已${updated.enabled ? '启用' : '停用'}`,
+    }
+  } catch (error: unknown) {
+    if (isCurrentModelOperation(controller, model.id, 'toggle')) {
+      modelNotice.value = { type: 'error', text: errorText(error, '模型状态更新失败') }
+    }
+  } finally {
+    operationControllers.delete(controller)
+    if (isCurrentModelOperation(controller, model.id, 'toggle')) {
+      finishModelOperation(model.id, 'toggle')
+    }
+  }
+}
+
 async function removeRoute(route: ModelRouteResponse): Promise<void> {
   const modelId = route.model_id
   if (
@@ -827,15 +896,15 @@ onBeforeUnmount(() => {
 
       <div v-else-if="filteredModels.length > 0" class="resource-groups">
         <ResourceStatusGroup
-          v-if="enabledModels.length > 0"
-          data-test="enabled-model-group"
+          v-if="auth.isAdmin && availableModels.length > 0"
+          data-test="available-model-group"
           status="enabled"
-          title="启用中"
-          :count="enabledModels.length"
+          title="可用"
+          :count="availableModels.length"
         >
           <div class="models-grid">
             <ModelCard
-              v-for="model in enabledModels"
+              v-for="model in availableModels"
               :key="model.id"
               :data-test="`model-card-${String(model.id)}`"
               :model="model"
@@ -843,21 +912,90 @@ onBeforeUnmount(() => {
               :providers="providers"
               :loading="controlsLocked"
               :routes-loading="routesLoading"
+              :route-expansion="{ expanded: expandedRouteModelIds.has(model.id) }"
               :non-deletable="nonDeletableModelIds.has(model.id)"
               :readonly="!auth.isAdmin"
               @edit="openEditModel"
               @delete="removeModel"
               @disable="disableModel"
+              @toggle="toggleModel"
               @edit-route="openEditRoute"
               @delete-route="removeRoute"
               @disable-route="disableRoute"
               @recover-route="recoverRoute"
+              @update:routes-expanded="setRoutesExpanded(model.id, $event)"
               @create-route="openCreateRouteForModel(model.id)"
             />
           </div>
         </ResourceStatusGroup>
         <ResourceStatusGroup
-          v-if="disabledModels.length > 0"
+          v-if="auth.isAdmin && noUsableRouteModels.length > 0"
+          data-test="no-usable-route-model-group"
+          status="warning"
+          title="无可用路由"
+          :count="noUsableRouteModels.length"
+        >
+          <div class="models-grid">
+            <ModelCard
+              v-for="model in noUsableRouteModels"
+              :key="model.id"
+              :data-test="`model-card-${String(model.id)}`"
+              :model="model"
+              :routes="routesByModel.get(model.id) ?? []"
+              :providers="providers"
+              :loading="controlsLocked"
+              :routes-loading="routesLoading"
+              :route-expansion="{ expanded: expandedRouteModelIds.has(model.id) }"
+              :non-deletable="nonDeletableModelIds.has(model.id)"
+              :readonly="!auth.isAdmin"
+              @edit="openEditModel"
+              @delete="removeModel"
+              @disable="disableModel"
+              @toggle="toggleModel"
+              @edit-route="openEditRoute"
+              @delete-route="removeRoute"
+              @disable-route="disableRoute"
+              @recover-route="recoverRoute"
+              @update:routes-expanded="setRoutesExpanded(model.id, $event)"
+              @create-route="openCreateRouteForModel(model.id)"
+            />
+          </div>
+        </ResourceStatusGroup>
+        <ResourceStatusGroup
+          v-if="auth.isAdmin && unhealthyRouteModels.length > 0"
+          data-test="unhealthy-route-model-group"
+          status="danger"
+          title="无健康路由"
+          :count="unhealthyRouteModels.length"
+        >
+          <div class="models-grid">
+            <ModelCard
+              v-for="model in unhealthyRouteModels"
+              :key="model.id"
+              :data-test="`model-card-${String(model.id)}`"
+              :model="model"
+              :routes="routesByModel.get(model.id) ?? []"
+              :providers="providers"
+              :loading="controlsLocked"
+              :routes-loading="routesLoading"
+              :route-expansion="{ expanded: expandedRouteModelIds.has(model.id) }"
+              :non-deletable="nonDeletableModelIds.has(model.id)"
+              :readonly="!auth.isAdmin"
+              @edit="openEditModel"
+              @delete="removeModel"
+              @disable="disableModel"
+              @toggle="toggleModel"
+              @edit-route="openEditRoute"
+              @delete-route="removeRoute"
+              @disable-route="disableRoute"
+              @recover-route="recoverRoute"
+              @update:routes-expanded="setRoutesExpanded(model.id, $event)"
+              @create-route="openCreateRouteForModel(model.id)"
+            />
+          </div>
+        </ResourceStatusGroup>
+        <ResourceStatusGroup
+          v-if="auth.isAdmin && disabledModels.length > 0"
           data-test="disabled-model-group"
           status="disabled"
           title="已停用"
@@ -873,19 +1011,33 @@ onBeforeUnmount(() => {
               :providers="providers"
               :loading="controlsLocked"
               :routes-loading="routesLoading"
+              :route-expansion="{ expanded: expandedRouteModelIds.has(model.id) }"
               :non-deletable="nonDeletableModelIds.has(model.id)"
               :readonly="!auth.isAdmin"
               @edit="openEditModel"
               @delete="removeModel"
               @disable="disableModel"
+              @toggle="toggleModel"
               @edit-route="openEditRoute"
               @delete-route="removeRoute"
               @disable-route="disableRoute"
               @recover-route="recoverRoute"
+              @update:routes-expanded="setRoutesExpanded(model.id, $event)"
               @create-route="openCreateRouteForModel(model.id)"
             />
           </div>
         </ResourceStatusGroup>
+        <div v-if="!auth.isAdmin" class="models-grid">
+          <ModelCard
+            v-for="model in enabledModels"
+            :key="model.id"
+            :data-test="`model-card-${String(model.id)}`"
+            :model="model"
+            :routes="[]"
+            :providers="[]"
+            readonly
+          />
+        </div>
       </div>
 
       <ElEmpty
@@ -1004,6 +1156,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
   gap: 0.75rem;
+  align-items: start;
 }
 
 code,

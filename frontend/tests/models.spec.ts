@@ -222,22 +222,67 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
-  it('将启用与停用模型分区并显示各自数量', async () => {
+  it('将启用模型按可用、无可用路由和无健康路由分区', async () => {
+    const noUsableRoute = { ...scientificZeroFixture, id: 3, canonical_name: 'no-usable-route' }
+    const unhealthyRoute = { ...scientificZeroFixture, id: 4, canonical_name: 'unhealthy-route' }
+    useCatalog(
+      [modelFixture, noUsableRoute, unhealthyRoute],
+      [
+        routeFixture,
+        { ...routeFixture, id: 203, model_id: unhealthyRoute.id, runtime_state: 'open' },
+      ],
+    )
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    const availableGroup = wrapper.get('[data-test="available-model-group"]')
+    const noUsableRouteGroup = wrapper.get('[data-test="no-usable-route-model-group"]')
+    const unhealthyRouteGroup = wrapper.get('[data-test="unhealthy-route-model-group"]')
+    expect(availableGroup.text()).toContain('可用')
+    expect(availableGroup.find('[data-test="model-card-1"]').exists()).toBe(true)
+    expect(noUsableRouteGroup.text()).toContain('无可用路由')
+    expect(noUsableRouteGroup.find('[data-test="model-card-3"]').exists()).toBe(true)
+    expect(unhealthyRouteGroup.text()).toContain('无健康路由')
+    expect(unhealthyRouteGroup.find('[data-test="model-card-4"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('将停用模型独立分区并显示数量', async () => {
     const disabledModel = { ...scientificZeroFixture, enabled: false }
     useCatalog([modelFixture, disabledModel], [])
     const wrapper = mount(ModelsView, { attachTo: document.body })
     await flushPromises()
 
-    const enabledGroup = wrapper.get('[data-test="enabled-model-group"]')
+    const noUsableRouteGroup = wrapper.get('[data-test="no-usable-route-model-group"]')
     const disabledGroup = wrapper.get('[data-test="disabled-model-group"]')
-    expect(enabledGroup.text()).toContain('启用中')
-    expect(enabledGroup.text()).toContain('1 个')
-    expect(enabledGroup.find('[data-test="model-card-1"]').exists()).toBe(true)
-    expect(enabledGroup.find('[data-test="model-card-2"]').exists()).toBe(false)
+    expect(noUsableRouteGroup.text()).toContain('无可用路由')
+    expect(noUsableRouteGroup.text()).toContain('1 个')
+    expect(noUsableRouteGroup.find('[data-test="model-card-1"]').exists()).toBe(true)
+    expect(noUsableRouteGroup.find('[data-test="model-card-2"]').exists()).toBe(false)
     expect(disabledGroup.text()).toContain('已停用')
     expect(disabledGroup.text()).toContain('1 个')
     expect(disabledGroup.find('[data-test="model-card-2"]').exists()).toBe(true)
     expect(disabledGroup.find('[data-test="model-card-1"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('通过快捷操作停用模型并将它移入已停用分区', async () => {
+    const patchBodies: unknown[] = []
+    useCatalog()
+    server.use(
+      http.patch('/admin/models/1', async ({ request }) => {
+        patchBodies.push(await request.json())
+        return HttpResponse.json({ ...modelFixture, enabled: false })
+      }),
+    )
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-test="toggle-model-1"]').trigger('click')
+    await flushPromises()
+
+    expect(patchBodies).toEqual([{ enabled: false }])
+    expect(wrapper.get('[data-test="disabled-model-group"]').find('[data-test="model-card-1"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -288,7 +333,7 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
-  it('将每个分段的长度范围与四类价格分组展示', () => {
+  it('默认收起分段价格，并在展开后展示每个分段的长度范围与四类价格', async () => {
     const wrapper = mount(ModelCard, {
       props: {
         model: {
@@ -316,6 +361,9 @@ describe('模型与别名管理', () => {
         providers: [],
       },
     })
+
+    expect(wrapper.find('[data-test="model-price-tier-301"]').exists()).toBe(false)
+    await wrapper.get('[data-test="model-price-details-1"]').trigger('click')
 
     const tiers = wrapper.findAll('[data-test^="model-price-tier-"]')
     expect(tiers).toHaveLength(2)

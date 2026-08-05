@@ -1,6 +1,6 @@
 <script setup lang="ts">
 defineProps<{
-  status: 'enabled' | 'disabled'
+  status: 'enabled' | 'disabled' | 'warning' | 'danger'
   title: string
   count: number
 }>()
@@ -100,6 +100,34 @@ defineProps<{
 .resource-status-group.is-disabled .resource-status-group__dot {
   background: #94a3b8;
   box-shadow: 0 0 0 3px #e2e8f0;
+}
+
+.resource-status-group.is-warning {
+  border-color: #fde68a;
+}
+
+.resource-status-group.is-warning .resource-status-group__header {
+  background: #fffbeb;
+  border-bottom-color: #fde68a;
+}
+
+.resource-status-group.is-warning .resource-status-group__dot {
+  background: #d97706;
+  box-shadow: 0 0 0 3px #fef3c7;
+}
+
+.resource-status-group.is-danger {
+  border-color: #fecdd3;
+}
+
+.resource-status-group.is-danger .resource-status-group__header {
+  background: #fff1f2;
+  border-bottom-color: #fecdd3;
+}
+
+.resource-status-group.is-danger .resource-status-group__dot {
+  background: #e11d48;
+  box-shadow: 0 0 0 3px #ffe4e6;
 }
 
 @media (max-width: 640px) {

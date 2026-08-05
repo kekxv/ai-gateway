@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Edit, Delete, Refresh } from '@element-plus/icons-vue'
+import { Edit, Delete, Refresh, SwitchButton } from '@element-plus/icons-vue'
 import { ElButton, ElIcon, ElTag } from 'element-plus'
 import type { Protocol, ProviderResponse } from '@/api/types'
 import StatusTag from '@/components/common/StatusTag.vue'
@@ -14,6 +14,7 @@ const emit = defineEmits<{
   edit: [provider: ProviderResponse]
   delete: [provider: ProviderResponse]
   sync: [provider: ProviderResponse]
+  toggle: [provider: ProviderResponse]
 }>()
 
 const protocolLabels: Readonly<Record<Protocol, string>> = {
@@ -56,6 +57,17 @@ function formatMultiplier(value: number | string): string {
         <StatusTag :status="provider.enabled ? 'enabled' : 'disabled'" />
       </div>
       <div class="card-actions">
+        <ElButton
+          size="small"
+          :type="provider.enabled ? 'warning' : 'success'"
+          plain
+          :data-test="`toggle-provider-${String(provider.id)}`"
+          :disabled="loading"
+          @click="emit('toggle', provider)"
+        >
+          <ElIcon><SwitchButton /></ElIcon>
+          {{ provider.enabled ? '停用' : '启用' }}
+        </ElButton>
         <ElButton
           size="small"
           type="primary"
@@ -200,6 +212,8 @@ function formatMultiplier(value: number | string): string {
   display: flex;
   gap: 0.375rem;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .card-actions :deep(.el-button) {
