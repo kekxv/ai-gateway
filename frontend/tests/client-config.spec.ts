@@ -56,11 +56,10 @@ describe('客户端配置文件生成器', () => {
       location: '~/.codex/config.toml',
       content: `model = "codex-primary"
 review_model = "codex-review"
+model_provider = "gateway"
 
 [agents]
 default_subagent_model = "codex-subagent"
-
-model_provider = "gateway"
 
 [model_providers.gateway]
 name = "AI Gateway"

@@ -104,11 +104,10 @@ export function buildClientConfig(
       location: '~/.codex/config.toml',
       content: `model = "${tomlString(primary)}"
 review_model = "${tomlString(review)}"
+model_provider = "gateway"
 
 [agents]
 default_subagent_model = "${tomlString(subagent)}"
-
-model_provider = "gateway"
 
 [model_providers.gateway]
 name = "AI Gateway"
