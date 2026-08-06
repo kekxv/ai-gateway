@@ -28,11 +28,6 @@ async function waitForFormErrors(): Promise<void> {
   await flushPromises()
 }
 
-async function waitForCatalogFile(): Promise<void> {
-  await new Promise((resolve) => window.setTimeout(resolve, 0))
-  await flushPromises()
-}
-
 const providerFixture: ProviderResponse = {
   id: 1,
   name: 'OpenAI 主线路',
@@ -1264,7 +1259,9 @@ describe('供应商与协议管理', () => {
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
 
     await input.trigger('change')
-    await waitForCatalogFile()
+    await vi.waitFor(() => {
+      expect(receivedBundles).toEqual([importedCatalog])
+    })
 
     expect(confirm).toHaveBeenCalledWith(
       expect.stringContaining('合并'),
@@ -1314,7 +1311,9 @@ describe('供应商与协议管理', () => {
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
 
     await input.trigger('change')
-    await waitForCatalogFile()
+    await vi.waitFor(() => {
+      expect(receivedBody).toBe(catalogText)
+    })
 
     expect(receivedBody).toBe(catalogText)
     expect(receivedBody).toContain('999999999999.12345678')
@@ -1338,11 +1337,12 @@ describe('供应商与协议管理', () => {
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
 
     await input.trigger('change')
-    await waitForCatalogFile()
+    await vi.waitFor(() => {
+      expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('JSON 格式不正确')
+    })
 
     expect(importRequests).toBe(0)
     expect(confirm).not.toHaveBeenCalled()
-    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('JSON 格式不正确')
     expect((input.element as HTMLInputElement).value).toBe('')
     wrapper.unmount()
   })
