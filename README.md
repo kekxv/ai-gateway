@@ -34,6 +34,8 @@ scale containers horizontally.
   ledger.
 - Redacted request logs with cursor pagination and GZIP-compressed request/response details.
 - Support for provider and model-level price multipliers for flexible billing adjustments.
+- Role-aware billing statistics with date-range, model, and API-key filters; administrators can
+  additionally filter by provider and compare upstream cost, billed user price, and gross profit.
 - A Chinese Vue 3 administration console for day-to-day gateway operations.
 - Administrator catalog backup/import controls and a legacy SQLite migration path.
 
@@ -192,6 +194,8 @@ and access account security settings. Regular-user keys may cover all models or 
 model set; they cannot select providers or another owner. Administrator accounts additionally have:
 
 - dashboard usage, cost, health, and resource summaries;
+- billing trends and breakdowns by provider, model, and API key; administrators can compare
+  upstream cost, billed user price, and gross profit;
 - provider protocols, credentials, model synchronization, models, aliases, and weighted routes;
 - users, balances, immutable ledger entries, and global/provider-scoped API-key management;
 - one-time API-key display with explicit copy/download acknowledgement;
