@@ -150,6 +150,11 @@ describe('管理控制台外壳', () => {
   it('普通用户看到概览、自助模型、请求日志、接口密钥、安全设置导航和账户入口', async () => {
     const { wrapper } = await mountShell(1200, undefined, regularUser)
     const navigationText = wrapper.get('nav[aria-label="控制台导航"]').text()
+    const navigationLabels = wrapper
+      .findAll('nav[aria-label="控制台导航"] .el-menu-item')
+      .map((item) => item.text())
+
+    expect(navigationLabels.slice(0, 2)).toEqual(['控制台概览', '账单统计'])
 
     expect(navigationText).toContain('可用模型')
     expect(navigationText).toContain('接口密钥')
