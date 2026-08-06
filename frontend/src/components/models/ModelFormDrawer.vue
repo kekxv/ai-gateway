@@ -157,7 +157,7 @@ function resetForm(): void {
   outputPrice.value = normalizeDecimalInput(model?.output_price_per_million ?? '0')
   cacheReadPrice.value = normalizeDecimalInput(model?.cache_read_price_per_million ?? '0')
   cacheWritePrice.value = normalizeDecimalInput(model?.cache_write_price_per_million ?? '0')
-  priceMultiplier.value = model?.price_multiplier ?? 1.0
+  priceMultiplier.value = Number(model?.price_multiplier ?? 1.0)
   enabled.value = model?.enabled ?? true
   aliases.value =
     model?.aliases.map((alias) => ({
@@ -399,7 +399,7 @@ function submitForm(): void {
   if (cacheWritePrice.value !== normalizeDecimalInput(model.cache_write_price_per_million)) {
     payload.cache_write_price_per_million = cacheWritePrice.value
   }
-  if (priceMultiplier.value !== model.price_multiplier) {
+  if (priceMultiplier.value !== Number(model.price_multiplier)) {
     payload.price_multiplier = priceMultiplier.value
   }
   if (enabled.value !== model.enabled) payload.enabled = enabled.value

@@ -405,7 +405,7 @@ export interface ModelResponse {
   output_price_per_million: string
   cache_read_price_per_million: string
   cache_write_price_per_million: string
-  price_multiplier: number
+  price_multiplier: number | string
   enabled: boolean
   aliases: ModelAliasResponse[]
   routing_strategy: RoutingStrategy

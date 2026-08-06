@@ -212,6 +212,9 @@ describe('管理控制台外壳', () => {
     const { router, wrapper } = await mountShell(767)
     await wrapper.get('[aria-label="打开导航菜单"]').trigger('click')
     await flushPromises()
+    const mobileNavigationLabels = [...document.querySelectorAll<HTMLElement>('.el-drawer .el-menu-item')]
+      .map((item) => item.textContent.trim())
+    expect(mobileNavigationLabels.slice(0, 2)).toEqual(['控制台概览', '账单统计'])
 
     const closeButton = document.querySelector<HTMLButtonElement>(
       '[aria-label="关闭导航菜单"]',

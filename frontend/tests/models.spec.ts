@@ -396,7 +396,7 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
-  it('按路由对比成本和用户价格，并保留四类价格的精度', async () => {
+  it('使用 API 序列化的模型倍率字符串按路由对比成本和用户价格', async () => {
     const apiProvider = {
       ...providerFixture,
       cost_multiplier: '0.80',
@@ -405,7 +405,7 @@ describe('模型与别名管理', () => {
 
     const wrapper = mount(ModelCard, {
       props: {
-        model: { ...modelFixture, price_multiplier: 1.5 },
+        model: { ...modelFixture, price_multiplier: '1.50' },
         routes: [routeFixture],
         providers: [apiProvider],
       },
