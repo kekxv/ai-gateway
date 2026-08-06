@@ -95,6 +95,22 @@ describe('导航守卫', () => {
     expect(router.currentRoute.value.name).toBe('dashboard')
   })
 
+  it('将根路径重定向到控制台页面', async () => {
+    const auth = useAuthStore()
+    vi.spyOn(auth, 'restore').mockImplementation(() => {
+      auth.user = adminUser
+      auth.ready = true
+      return Promise.resolve()
+    })
+    const router = createAppRouter(createMemoryHistory())
+
+    await router.push('/')
+    await router.isReady()
+
+    expect(router.currentRoute.value.name).toBe('dashboard')
+    expect(router.currentRoute.value.path).toBe('/console')
+  })
+
   it('允许未登录用户访问注册页', async () => {
     const router = createAppRouter(createMemoryHistory())
 
@@ -120,7 +136,7 @@ describe('导航守卫', () => {
   })
 
   it.each([
-    ['/', 'dashboard'],
+    ['/console', 'dashboard'],
     ['/models', 'models'],
     ['/api-keys', 'api-keys'],
     ['/request-logs', 'request-logs'],
@@ -189,6 +205,7 @@ describe('导航守卫', () => {
     })
 
     expect(wrapper.get('a.not-found__link').text()).toBe('返回控制台')
+    expect(wrapper.get('a.not-found__link').attributes('href')).toBe('/console')
     expect(wrapper.find('button').exists()).toBe(false)
     wrapper.unmount()
   })

@@ -8,7 +8,7 @@ import { RouterLink } from 'vue-router'
       <p class="not-found__code">404</p>
       <h1 id="not-found-title">页面不存在</h1>
       <p>无法找到你访问的页面，请检查地址或返回控制台。</p>
-      <RouterLink class="not-found__link" to="/">返回控制台</RouterLink>
+      <RouterLink class="not-found__link" to="/console">返回控制台</RouterLink>
     </section>
   </main>
 </template>
