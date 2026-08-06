@@ -512,6 +512,8 @@ test('keyboard focus moves from skip link through navigation to the page action'
   await page.keyboard.press('ArrowDown')
   await expect(page.getByRole('menuitem', { name: '控制台概览' })).toBeFocused()
   await page.keyboard.press('ArrowDown')
+  await expect(page.getByRole('menuitem', { name: '账单统计' })).toBeFocused()
+  await page.keyboard.press('ArrowDown')
   await expect(page.getByRole('menuitem', { name: '供应商管理' })).toBeFocused()
   await page.keyboard.press('Enter')
   const heading = page.getByRole('heading', { level: 1, name: '供应商管理' })
