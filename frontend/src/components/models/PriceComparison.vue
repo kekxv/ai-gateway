@@ -43,8 +43,9 @@ function tierLabel(maxInputTokens: number | null): string {
     : `长度 ≤ ${new Intl.NumberFormat('zh-CN').format(maxInputTokens)}`
 }
 
-function formatMultiplier(value: number): string {
-  return value.toFixed(2)
+function formatMultiplier(value: number | string): string {
+  const numericValue = typeof value === 'string' ? parseFloat(value) : value
+  return numericValue.toFixed(2)
 }
 
 function prices(tier: PriceTier): Array<{ label: string; value: string }> {
@@ -56,7 +57,7 @@ function prices(tier: PriceTier): Array<{ label: string; value: string }> {
   ]
 }
 
-function calculatedPrice(base: string, providerMultiplier: number): string {
+function calculatedPrice(base: string, providerMultiplier: number | string): string {
   return formatMoney(multiplyDecimals(base, props.model.price_multiplier, providerMultiplier))
 }
 </script>

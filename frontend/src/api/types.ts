@@ -310,8 +310,8 @@ export interface ProviderResponse {
   model_sync_interval_seconds: number
   last_model_sync_at: string | null
   protocols: ProviderProtocolResponse[]
-  cost_multiplier: number
-  public_multiplier: number
+  cost_multiplier: number | string
+  public_multiplier: number | string
 }
 
 export interface ModelSyncResult {

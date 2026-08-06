@@ -397,11 +397,17 @@ describe('模型与别名管理', () => {
   })
 
   it('按路由对比成本和用户价格，并保留四类价格的精度', async () => {
+    const apiProvider = {
+      ...providerFixture,
+      cost_multiplier: '0.80',
+      public_multiplier: '2.00',
+    } satisfies ProviderResponse
+
     const wrapper = mount(ModelCard, {
       props: {
         model: { ...modelFixture, price_multiplier: 1.5 },
         routes: [routeFixture],
-        providers: [{ ...providerFixture, cost_multiplier: 0.8, public_multiplier: 2 }],
+        providers: [apiProvider],
       },
     })
 
@@ -416,7 +422,11 @@ describe('模型与别名管理', () => {
     expect(comparison.text()).toContain('成本 ¥9.60000000')
     expect(comparison.text()).toContain('用户价格 ¥24.00000000')
     expect(comparison.text()).toContain('缓存读取')
+    expect(comparison.text()).toContain('成本 ¥0.60000000')
+    expect(comparison.text()).toContain('用户价格 ¥1.50000000')
     expect(comparison.text()).toContain('缓存写入')
+    expect(comparison.text()).toContain('成本 ¥3.00000000')
+    expect(comparison.text()).toContain('用户价格 ¥7.50000000')
     wrapper.unmount()
   })
 
@@ -439,6 +449,8 @@ describe('模型与别名管理', () => {
     expect(wrapper.findAll('[data-test^="price-comparison-tier-201-"]')).toHaveLength(2)
     expect(wrapper.text()).toContain('长度 ≤ 272,000')
     expect(wrapper.text()).toContain('不限长度')
+    expect(wrapper.text()).toContain('成本 ¥3.00000000')
+    expect(wrapper.text()).toContain('成本 ¥6.00000000')
     wrapper.unmount()
   })
 
