@@ -213,7 +213,9 @@ describe('模型与别名管理', () => {
     expect(wrapper.find('[data-test^="edit-model-"]').exists()).toBe(false)
     expect(wrapper.find('[data-test^="delete-model-"]').exists()).toBe(false)
     expect(wrapper.find('[data-test^="create-route-"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test^="price-comparison-toggle-"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('模型路由')
+    expect(wrapper.text()).not.toContain('成本倍率')
     expect(wrapper.findComponent(ModelFormDrawer).exists()).toBe(false)
     expect(wrapper.findComponent(RouteFormDrawer).exists()).toBe(false)
     expect(adminModelsRequests).toBe(0)
@@ -391,6 +393,52 @@ describe('模型与别名管理', () => {
       ['缓存读取', '¥0.30000000'],
       ['缓存写入', '¥3.75000000'],
     ])
+    wrapper.unmount()
+  })
+
+  it('按路由对比成本和用户价格，并保留四类价格的精度', async () => {
+    const wrapper = mount(ModelCard, {
+      props: {
+        model: { ...modelFixture, price_multiplier: 1.5 },
+        routes: [routeFixture],
+        providers: [{ ...providerFixture, cost_multiplier: 0.8, public_multiplier: 2 }],
+      },
+    })
+
+    expect(wrapper.find('[data-test="price-comparison-route-201"]').exists()).toBe(false)
+    await wrapper.get('[data-test="price-comparison-toggle-1"]').trigger('click')
+
+    const comparison = wrapper.get('[data-test="price-comparison-route-201"]')
+    expect(comparison.text()).toContain('成本倍率 0.80x')
+    expect(comparison.text()).toContain('用户倍率 2.00x')
+    expect(comparison.text()).toContain('成本 ¥2.40000000')
+    expect(comparison.text()).toContain('用户价格 ¥6.00000000')
+    expect(comparison.text()).toContain('成本 ¥9.60000000')
+    expect(comparison.text()).toContain('用户价格 ¥24.00000000')
+    expect(comparison.text()).toContain('缓存读取')
+    expect(comparison.text()).toContain('缓存写入')
+    wrapper.unmount()
+  })
+
+  it('按每个配置价格分段展示同一条路由的成本和用户价格', async () => {
+    const wrapper = mount(ModelCard, {
+      props: {
+        model: {
+          ...modelFixture,
+          price_tiers: [
+            { id: 301, max_input_tokens: 272000, input_price_per_million: '3', output_price_per_million: '15', cache_read_price_per_million: '0.3', cache_write_price_per_million: '3.75' },
+            { id: 302, max_input_tokens: null, input_price_per_million: '6', output_price_per_million: '22.5', cache_read_price_per_million: '0.6', cache_write_price_per_million: '7.5' },
+          ],
+        },
+        routes: [routeFixture],
+        providers: [providerFixture],
+      },
+    })
+
+    await wrapper.get('[data-test="price-comparison-toggle-1"]').trigger('click')
+    expect(wrapper.findAll('[data-test^="price-comparison-tier-201-"]')).toHaveLength(2)
+    expect(wrapper.text()).toContain('长度 ≤ 272,000')
+    expect(wrapper.text()).toContain('不限长度')
     wrapper.unmount()
   })
 

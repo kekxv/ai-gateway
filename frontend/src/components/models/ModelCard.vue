@@ -11,6 +11,7 @@ import type {
   RouteSource,
 } from '@/api/types'
 import StatusTag from '@/components/common/StatusTag.vue'
+import PriceComparison from '@/components/models/PriceComparison.vue'
 import { formatMoney } from '@/utils/format'
 
 const props = defineProps<{
@@ -39,6 +40,7 @@ const emit = defineEmits<{
 
 const localRoutesExpanded = ref(false)
 const priceDetailsExpanded = ref(false)
+const priceComparisonExpanded = ref(false)
 const copiedField = ref<string | null>(null)
 
 interface LegacyClipboardDocument {
@@ -347,6 +349,24 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
         <span class="label">模型倍率：</span>
         <ElTag type="warning" size="small">{{ parseFloat(String(model.price_multiplier ?? 1)).toFixed(2) }}x</ElTag>
       </div>
+      <div v-if="readonly !== true && routes.length > 0" class="price-summary price-comparison-summary">
+        <span>按路由比较成本与用户价格</span>
+        <ElButton
+          :data-test="`price-comparison-toggle-${String(model.id)}`"
+          size="small"
+          text
+          type="primary"
+          @click="priceComparisonExpanded = !priceComparisonExpanded"
+        >
+          {{ priceComparisonExpanded ? '收起对比' : '价格对比' }}
+        </ElButton>
+      </div>
+      <PriceComparison
+        v-if="readonly !== true && priceComparisonExpanded"
+        :model="model"
+        :routes="routes"
+        :providers="providers"
+      />
 
       <div v-if="model.aliases.length > 0" class="aliases-section">
         <div class="section-title">别名</div>
