@@ -309,7 +309,7 @@ async def test_no_route_audit_does_not_self_exhaust_pool_size_one(
     assert request_log is not None
     assert request_log.status is RequestStatus.FAILED
     assert request_log.error_code == "no_route_available"
-    assert request_log.model_id is None
+    assert request_log.model_id == model.id
 
 
 def _assert_no_checked_out_connections(engine: AsyncEngine) -> None:
