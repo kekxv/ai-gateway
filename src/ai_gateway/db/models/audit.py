@@ -28,6 +28,8 @@ class RequestLog(Base):
     __table_args__ = (
         Index("ix_request_logs_created_at", "created_at"),
         Index("ix_request_logs_model_created_at", "model_id", "created_at"),
+        Index("ix_request_logs_requested_model_created_at", "requested_model", "created_at"),
+        Index("ix_request_logs_resolved_model_created_at", "resolved_model", "created_at"),
         Index("ix_request_logs_user_created_at", "user_id", "created_at"),
         Index("ix_request_logs_api_key_created_at", "api_key_id", "created_at"),
         Index("ix_request_logs_provider_created_at", "provider_id", "created_at"),
@@ -38,6 +40,8 @@ class RequestLog(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     api_key_id: Mapped[int | None] = mapped_column(ForeignKey("api_keys.id"), nullable=True)
     model_id: Mapped[int | None] = mapped_column(ForeignKey("models.id"), nullable=True)
+    requested_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    resolved_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     provider_id: Mapped[int | None] = mapped_column(ForeignKey("providers.id"), nullable=True)
     model_route_id: Mapped[int | None] = mapped_column(
         ForeignKey("model_routes.id"),

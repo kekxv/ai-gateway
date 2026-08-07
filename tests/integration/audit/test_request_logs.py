@@ -154,6 +154,8 @@ async def test_request_lifecycle_writes_started_completion_and_redacted_details(
         user_id=member.id,
         api_key_id=api_key.id,
         model_id=model.id,
+        requested_model="fast-chat",
+        resolved_model="gpt-4.1-mini",
         inbound_protocol=Protocol.OPENAI,
         transport="http",
         stream=False,
@@ -172,6 +174,10 @@ async def test_request_lifecycle_writes_started_completion_and_redacted_details(
     started_detail = await session.get(RequestLogDetail, str(request_id))
 
     assert started is not None
+    assert (started.requested_model, started.resolved_model) == (
+        "fast-chat",
+        "gpt-4.1-mini",
+    )
     assert started.status is RequestStatus.STARTED
     assert started.provider_id is None
     assert started.completed_at is None

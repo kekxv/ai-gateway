@@ -140,6 +140,8 @@ def test_schema_contains_exact_tables_and_columns() -> None:
             "user_id",
             "api_key_id",
             "model_id",
+            "requested_model",
+            "resolved_model",
             "provider_id",
             "model_route_id",
             "inbound_protocol",

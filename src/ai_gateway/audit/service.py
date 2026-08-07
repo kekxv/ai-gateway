@@ -47,6 +47,8 @@ class RequestContext:
     stream: bool
     api_key_id: int | None = None
     model_id: int | None = None
+    requested_model: str | None = None
+    resolved_model: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -128,6 +130,8 @@ class AuditService:
                         user_id=context.user_id,
                         api_key_id=context.api_key_id,
                         model_id=context.model_id,
+                        requested_model=context.requested_model,
+                        resolved_model=context.resolved_model,
                         inbound_protocol=context.inbound_protocol,
                         transport=context.transport,
                         stream=context.stream,
