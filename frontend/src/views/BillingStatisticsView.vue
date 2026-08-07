@@ -335,17 +335,17 @@ onBeforeUnmount(() => {
         </div>
         <div class="filters__secondary" data-test="billing-secondary-filters">
           <ElFormItem v-if="isAdmin" label="供应商" data-test="provider-filter">
-            <FilterSelect v-model="selectedProviderIds" multiple filterable collapse-tags placeholder="选择供应商" :loading="filterOptionsLoading">
+            <FilterSelect v-model="selectedProviderIds" multiple filterable collapse-tags placeholder="选择供应商" :loading="filterOptionsLoading" :teleported="true" popper-class="billing-filter-popper">
               <FilterOption v-for="provider in providers" :key="provider.id" :label="provider.name" :value="provider.id" />
             </FilterSelect>
           </ElFormItem>
           <ElFormItem label="模型" data-test="model-filter">
-            <FilterSelect v-model="selectedModelIds" multiple filterable collapse-tags placeholder="选择模型" :loading="filterOptionsLoading">
+            <FilterSelect v-model="selectedModelIds" multiple filterable collapse-tags placeholder="选择模型" :loading="filterOptionsLoading" :teleported="true" popper-class="billing-filter-popper">
               <FilterOption v-for="model in models" :key="model.id" :label="modelLabel(model)" :value="model.id" />
             </FilterSelect>
           </ElFormItem>
           <ElFormItem label="API Key" data-test="api-key-filter">
-            <FilterSelect v-model="selectedApiKeyIds" multiple filterable collapse-tags placeholder="选择 API Key" :loading="filterOptionsLoading">
+            <FilterSelect v-model="selectedApiKeyIds" multiple filterable collapse-tags placeholder="选择 API Key" :loading="filterOptionsLoading" :teleported="true" popper-class="billing-filter-popper">
               <FilterOption v-for="apiKey in apiKeys" :key="apiKey.id" :label="apiKeyLabel(apiKey)" :value="apiKey.id" />
             </FilterSelect>
           </ElFormItem>

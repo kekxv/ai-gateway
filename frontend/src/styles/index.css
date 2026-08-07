@@ -90,6 +90,15 @@ select {
   outline-offset: 2px;
 }
 
+.billing-filter-popper {
+  z-index: 3100 !important;
+}
+
+.billing-filter-popper .el-select-dropdown__wrap {
+  max-height: calc(100vh - 10rem);
+  overflow-y: auto;
+}
+
 /* Scrollbar styling for webkit browsers */
 ::-webkit-scrollbar {
   width: 8px;

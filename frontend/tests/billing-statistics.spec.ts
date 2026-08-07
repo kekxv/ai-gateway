@@ -146,6 +146,19 @@ describe('账单统计', () => {
     expect(new Date(query?.startAt ?? '').getTime()).toBeLessThan(new Date(query?.endAt ?? '').getTime())
   })
 
+  it('将账单筛选下拉框传送到页面根节点并使用专用浮层样式', async () => {
+    vi.spyOn(statisticsApi, 'getAdminBillingStatistics').mockResolvedValue(adminResponse)
+    const wrapper = mountPage({ ...regularUser, role: 'admin' })
+    await flushPromises()
+
+    const filters = wrapper.findAllComponents({ name: 'ElSelect' })
+    expect(filters).toHaveLength(3)
+    for (const filter of filters) {
+      expect(filter.props('teleported')).toBe(true)
+      expect(filter.props('popperClass')).toBe('billing-filter-popper')
+    }
+  })
+
   it('在图表前展示维度明细，便于先查看完整统计结果', async () => {
     vi.spyOn(statisticsApi, 'getAdminBillingStatistics').mockResolvedValue(adminResponse)
     const wrapper = mountPage({ ...regularUser, role: 'admin' })
