@@ -13,6 +13,8 @@ export interface RequestLogQuery {
   userId?: number
   apiKeyId?: number
   modelId?: number
+  requestedModel?: string
+  resolvedModel?: string
   providerId?: number
   status?: RequestStatus
   protocol?: Protocol
@@ -27,6 +29,8 @@ type RequestLogParams = Partial<{
   user_id: number
   api_key_id: number
   model_id: number
+  requested_model: string
+  resolved_model: string
   provider_id: number
   status: RequestStatus
   protocol: Protocol
@@ -49,6 +53,8 @@ function isoTimestamp(value: string | undefined): string | undefined {
 function adminQueryParams(query: RequestLogQuery): RequestLogParams {
   const params: RequestLogParams = {}
   const requestId = nonEmpty(query.requestId)
+  const requestedModel = nonEmpty(query.requestedModel)
+  const resolvedModel = nonEmpty(query.resolvedModel)
   const cursor = nonEmpty(query.cursor)
   const createdFrom = isoTimestamp(query.createdFrom)
   const createdTo = isoTimestamp(query.createdTo)
@@ -57,6 +63,8 @@ function adminQueryParams(query: RequestLogQuery): RequestLogParams {
   if (query.userId !== undefined) params.user_id = query.userId
   if (query.apiKeyId !== undefined) params.api_key_id = query.apiKeyId
   if (query.modelId !== undefined) params.model_id = query.modelId
+  if (requestedModel !== undefined) params.requested_model = requestedModel
+  if (resolvedModel !== undefined) params.resolved_model = resolvedModel
   if (query.providerId !== undefined) params.provider_id = query.providerId
   if (query.status !== undefined) params.status = query.status
   if (query.protocol !== undefined) params.protocol = query.protocol
@@ -70,6 +78,8 @@ function adminQueryParams(query: RequestLogQuery): RequestLogParams {
 function userQueryParams(query: RequestLogQuery): RequestLogParams {
   const params: RequestLogParams = {}
   const requestId = nonEmpty(query.requestId)
+  const requestedModel = nonEmpty(query.requestedModel)
+  const resolvedModel = nonEmpty(query.resolvedModel)
   const cursor = nonEmpty(query.cursor)
   const createdFrom = isoTimestamp(query.createdFrom)
   const createdTo = isoTimestamp(query.createdTo)
@@ -77,6 +87,8 @@ function userQueryParams(query: RequestLogQuery): RequestLogParams {
   if (requestId !== undefined) params.request_id = requestId
   if (query.apiKeyId !== undefined) params.api_key_id = query.apiKeyId
   if (query.modelId !== undefined) params.model_id = query.modelId
+  if (requestedModel !== undefined) params.requested_model = requestedModel
+  if (resolvedModel !== undefined) params.resolved_model = resolvedModel
   if (query.status !== undefined) params.status = query.status
   if (query.protocol !== undefined) params.protocol = query.protocol
   if (createdFrom !== undefined) params.created_from = createdFrom

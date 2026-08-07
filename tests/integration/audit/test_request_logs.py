@@ -621,7 +621,7 @@ async def test_custom_app_binds_module_audit_lifecycle_to_its_own_configuration(
     assert "global-resource-secret" not in caplog.text
 
 
-async def test_admin_list_filters_cursor_and_detail_are_safe(
+async def test_admin_list_and_detail_filters_are_safe(
     monkeypatch: pytest.MonkeyPatch,
     session: AsyncSession,
     audit_session_factory: async_sessionmaker[AsyncSession],
@@ -631,12 +631,20 @@ async def test_admin_list_filters_cursor_and_detail_are_safe(
     admin, member, api_key, model, provider, route = audit_records
     service = AuditService(audit_session_factory)
     ids = []
+    model_identities = (
+        ("fast-chat", "gpt-4.1-mini"),
+        ("fast-chat", "gpt-4.1"),
+        (None, None),
+    )
     for index, protocol in enumerate((Protocol.OPENAI, Protocol.CLAUDE, Protocol.GEMINI)):
+        requested_model, resolved_model = model_identities[index]
         request_id = await service.start_request(
             RequestContext(
                 user_id=member.id,
                 api_key_id=api_key.id,
                 model_id=model.id,
+                requested_model=requested_model,
+                resolved_model=resolved_model,
                 inbound_protocol=protocol,
                 transport="http",
                 stream=False,
@@ -717,6 +725,34 @@ async def test_admin_list_filters_cursor_and_detail_are_safe(
         second_body = second.json()
         listed_ids = [item["id"] for item in first_body["items"] + second_body["items"]]
         assert len(listed_ids) == len(set(listed_ids)) == 3
+        items_by_id = {item["id"]: item for item in first_body["items"] + second_body["items"]}
+        assert items_by_id[str(ids[0])]["requested_model"] == "fast-chat"
+        assert items_by_id[str(ids[0])]["resolved_model"] == "gpt-4.1-mini"
+        assert items_by_id[str(ids[2])]["requested_model"] is None
+        assert items_by_id[str(ids[2])]["resolved_model"] is None
+
+        model_identity_filtered = await client.get(
+            "/admin/request-logs",
+            params={"requested_model": "fast-chat", "resolved_model": "gpt-4.1-mini"},
+        )
+        assert model_identity_filtered.status_code == 200, model_identity_filtered.text
+        assert [item["id"] for item in model_identity_filtered.json()["items"]] == [str(ids[0])]
+        assert model_identity_filtered.json()["items"][0]["requested_model"] == "fast-chat"
+        assert model_identity_filtered.json()["items"][0]["resolved_model"] == "gpt-4.1-mini"
+
+        requested_model_filtered = await client.get(
+            "/admin/request-logs",
+            params={"requested_model": "fast-chat"},
+        )
+        assert {item["id"] for item in requested_model_filtered.json()["items"]} == {
+            str(ids[0]),
+            str(ids[1]),
+        }
+        resolved_model_filtered = await client.get(
+            "/admin/request-logs",
+            params={"resolved_model": "gpt-4.1-mini"},
+        )
+        assert [item["id"] for item in resolved_model_filtered.json()["items"]] == [str(ids[0])]
 
         filtered = await client.get(
             "/admin/request-logs",
@@ -748,6 +784,8 @@ async def test_admin_list_filters_cursor_and_detail_are_safe(
         assert detail.json()["api_key_name"] == "audit-key"
         assert detail.json()["api_key_prefix"] == "sk-gw-audit-"
         assert detail.json()["model_name"] == "audit-model"
+        assert detail.json()["requested_model"] == "fast-chat"
+        assert detail.json()["resolved_model"] == "gpt-4.1-mini"
         assert detail.json()["provider_name"] == "audit-provider"
         assert detail.json()["route_upstream_model"] == "provider-audit-model"
         assert Decimal(detail.json()["cost_amount"]) == Decimal("0.00000001")
@@ -768,6 +806,8 @@ async def test_user_list_and_detail_include_readable_catalog_identities(
             user_id=member.id,
             api_key_id=api_key.id,
             model_id=model.id,
+            requested_model="member-fast-chat",
+            resolved_model="gpt-4.1-mini",
             inbound_protocol=Protocol.CLAUDE,
             transport="http",
             stream=True,
@@ -789,17 +829,33 @@ async def test_user_list_and_detail_include_readable_catalog_identities(
     async for client in _client_for(session, audit_settings, member):
         listing = await client.get(
             "/user/request-logs",
-            params={"request_id": str(request_id)},
+            params={
+                "request_id": str(request_id),
+                "requested_model": "member-fast-chat",
+                "resolved_model": "gpt-4.1-mini",
+            },
         )
         detail = await client.get(f"/user/request-logs/{request_id}")
+        wrong_requested_model = await client.get(
+            "/user/request-logs",
+            params={"request_id": str(request_id), "requested_model": "other-model"},
+        )
+        wrong_resolved_model = await client.get(
+            "/user/request-logs",
+            params={"request_id": str(request_id), "resolved_model": "other-model"},
+        )
 
     assert listing.status_code == 200, listing.text
     assert detail.status_code == 200, detail.text
+    assert wrong_requested_model.json()["items"] == []
+    assert wrong_resolved_model.json()["items"] == []
     for item in (listing.json()["items"][0], detail.json()):
         assert "user_email" not in item
         assert item["api_key_name"] == "audit-key"
         assert item["api_key_prefix"] == "sk-gw-audit-"
         assert item["model_name"] == "audit-model"
+        assert item["requested_model"] == "member-fast-chat"
+        assert item["resolved_model"] == "gpt-4.1-mini"
         for hidden_field in (
             "provider_id",
             "provider_name",

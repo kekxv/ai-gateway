@@ -42,6 +42,8 @@ const firstLog: RequestLogSummary = {
   api_key_prefix: 'sk-gw-audit-',
   model_id: 21,
   model_name: 'audit-model',
+  requested_model: 'fast-chat',
+  resolved_model: 'gpt-4.1-mini',
   provider_id: 11,
   provider_name: 'audit-provider',
   model_route_id: 201,
@@ -72,6 +74,8 @@ const secondLog: RequestLogSummary = {
   http_status: 200,
   error_code: null,
   stream: false,
+  requested_model: null,
+  resolved_model: null,
   created_at: '2026-07-22T07:00:00Z',
 }
 
@@ -173,6 +177,8 @@ const userLog: UserRequestLogSummary = {
   api_key_prefix: firstLog.api_key_prefix,
   model_id: firstLog.model_id,
   model_name: firstLog.model_name,
+  requested_model: firstLog.requested_model,
+  resolved_model: firstLog.resolved_model,
   inbound_protocol: firstLog.inbound_protocol,
   outbound_protocol: firstLog.outbound_protocol,
   transport: firstLog.transport,
@@ -281,6 +287,8 @@ describe('请求日志搜索与详情检查', () => {
       userId: 2,
       apiKeyId: 31,
       modelId: 21,
+      requestedModel: ' fast-chat ',
+      resolvedModel: ' gpt-4.1-mini ',
       providerId: 11,
       status: 'failed',
       protocol: 'claude',
@@ -297,6 +305,8 @@ describe('请求日志搜索与详情检查', () => {
       user_id: '2',
       api_key_id: '31',
       model_id: '21',
+      requested_model: 'fast-chat',
+      resolved_model: 'gpt-4.1-mini',
       provider_id: '11',
       status: 'failed',
       protocol: 'claude',
@@ -317,11 +327,19 @@ describe('请求日志搜索与详情检查', () => {
       }),
     )
 
-    await listUserRequestLogs({ apiKeyId: 31, modelId: 21, providerId: 11 })
+    await listUserRequestLogs({
+      apiKeyId: 31,
+      modelId: 21,
+      requestedModel: 'member-fast-chat',
+      resolvedModel: 'gpt-4.1-mini',
+      providerId: 11,
+    })
 
     expect(Object.fromEntries(requests[0]?.searchParams.entries() ?? [])).toEqual({
       api_key_id: '31',
       model_id: '21',
+      requested_model: 'member-fast-chat',
+      resolved_model: 'gpt-4.1-mini',
     })
   })
 
@@ -376,6 +394,8 @@ describe('请求日志搜索与详情检查', () => {
     await wrapper.get('[data-test="log-user-id"]').setValue('2')
     await wrapper.get('[data-test="log-api-key-id"]').setValue('31')
     await wrapper.get('[data-test="log-model-id"]').setValue('21')
+    await wrapper.get('[data-test="log-requested-model"]').setValue('fast-chat')
+    await wrapper.get('[data-test="log-resolved-model"]').setValue('gpt-4.1-mini')
     await wrapper.get('[data-test="log-provider-id"]').setValue('11')
     await flushPromises()
 
@@ -385,10 +405,20 @@ describe('请求日志搜索与详情检查', () => {
     expect(lastRequest?.searchParams.get('user_id')).toBe('2')
     expect(lastRequest?.searchParams.get('api_key_id')).toBe('31')
     expect(lastRequest?.searchParams.get('model_id')).toBe('21')
+    expect(lastRequest?.searchParams.get('requested_model')).toBe('fast-chat')
+    expect(lastRequest?.searchParams.get('resolved_model')).toBe('gpt-4.1-mini')
     expect(lastRequest?.searchParams.get('provider_id')).toBe('11')
     expect(lastRequest?.searchParams.has('cursor')).toBe(false)
     const exposed = wrapper.vm as unknown as { cursorStack: Array<string | null> }
     expect(exposed.cursorStack).toEqual([])
+
+    await wrapper.get('[data-test="logs-clear"]').trigger('click')
+    await flushPromises()
+    expect((wrapper.get('[data-test="log-requested-model"]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.get('[data-test="log-resolved-model"]').element as HTMLInputElement).value).toBe('')
+    expect(requests.at(-1)?.searchParams.has('model_id')).toBe(false)
+    expect(requests.at(-1)?.searchParams.has('requested_model')).toBe(false)
+    expect(requests.at(-1)?.searchParams.has('resolved_model')).toBe(false)
     wrapper.unmount()
   })
 
@@ -411,6 +441,8 @@ describe('请求日志搜索与详情检查', () => {
     expect(row.text()).toContain('Audit Key')
     expect(row.text()).not.toContain('sk-gw-audit-…')
     expect(row.text()).toContain('audit-model')
+    expect(row.text()).toContain('调用：fast-chat')
+    expect(row.text()).toContain('实际：gpt-4.1-mini')
     expect(row.text()).toContain('audit-provider')
     expect(row.text()).toContain('provider-audit-model')
     expect(row.text()).toContain('Claude → OpenAI')
@@ -447,6 +479,8 @@ describe('请求日志搜索与详情检查', () => {
     expect(wrapper.get('[data-test="log-model-id"]').text()).toContain('Audit Model')
     const row = wrapper.get(`[data-test="request-log-${userLog.id}"]`)
     expect(row.text()).toContain('audit-model')
+    expect(row.text()).toContain('调用：fast-chat')
+    expect(row.text()).toContain('实际：gpt-4.1-mini')
     expect(row.text()).not.toContain('audit-provider')
     expect(row.text()).not.toContain('provider-audit-model')
 
@@ -455,6 +489,33 @@ describe('请求日志搜索与详情检查', () => {
     expect(document.body.textContent).not.toContain('供应商 / 上游模型')
     expect(document.body.textContent).not.toContain('audit-provider')
     expect(document.body.textContent).not.toContain('provider-audit-model')
+    wrapper.unmount()
+  })
+
+  it('列表和详情为历史空模型身份显示占位符', async () => {
+    const historicalDetail: RequestLogDetail = {
+      ...detail,
+      id: secondLog.id,
+      requested_model: null,
+      resolved_model: null,
+    }
+    server.use(
+      http.get('/admin/request-logs', () =>
+        HttpResponse.json({ items: [secondLog], next_cursor: null }),
+      ),
+      http.get('/admin/request-logs/:requestId', () => HttpResponse.json(historicalDetail)),
+    )
+    const wrapper = mountRequestLogs()
+    await flushPromises()
+
+    const row = wrapper.get(`[data-test="request-log-${secondLog.id}"]`)
+    expect(row.text()).toContain('调用：—')
+    expect(row.text()).toContain('实际：—')
+    await wrapper.get(`[data-test="inspect-log-${secondLog.id}"]`).trigger('click')
+    await flushPromises()
+    const drawerText = document.body.querySelector('.request-detail-drawer')?.textContent ?? ''
+    expect(drawerText).toContain('调用：—')
+    expect(drawerText).toContain('实际：—')
     wrapper.unmount()
   })
 
@@ -483,6 +544,9 @@ describe('请求日志搜索与详情检查', () => {
     expect(document.body.textContent).toContain('缓存写入')
     expect(document.body.textContent).toContain('789')
     expect(document.body.textContent).toContain('123')
+    const drawerText = document.body.querySelector('.request-detail-drawer')?.textContent ?? ''
+    expect(drawerText).toContain('调用：fast-chat')
+    expect(drawerText).toContain('实际：gpt-4.1-mini')
     expect(document.body.textContent).toContain('<script>window.__unsafe = true</script>')
     expect(document.body.querySelector('script')).toBeNull()
     const requestDetails = document.body.querySelector('[data-test="request-json-section"]')

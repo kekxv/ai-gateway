@@ -248,6 +248,10 @@ function apiKeyLabel(name: string | null): string {
             模型
           </div>
           <div class="hero-value hero-model-name">{{ detail.model_name ?? '已删除模型' }}</div>
+          <div class="hero-model-identities">
+            <span>调用：{{ detail.requested_model ?? '—' }}</span>
+            <span>实际：{{ detail.resolved_model ?? '—' }}</span>
+          </div>
           <div v-if="!hideSensitive" class="hero-sub">
             <span>{{ (detail as RequestLogDetail).provider_name ?? '已删除供应商' }}</span>
             <span class="hero-sep">·</span>
@@ -616,6 +620,14 @@ function apiKeyLabel(name: string | null): string {
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
+}
+
+.hero-model-identities {
+  display: grid;
+  gap: 0.2rem;
+  margin-top: 0.4rem;
+  color: var(--gateway-muted);
+  font-size: 0.82rem;
 }
 
 .hero-sub {

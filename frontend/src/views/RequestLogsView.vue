@@ -48,6 +48,8 @@ interface FilterDraft {
   userId: string | number
   apiKeyId: string | number
   modelId: string | number
+  requestedModel: string
+  resolvedModel: string
   providerId: string | number
   status: '' | RequestStatus
   protocol: '' | Protocol
@@ -62,6 +64,8 @@ const filters = reactive<FilterDraft>({
   userId: '',
   apiKeyId: '',
   modelId: '',
+  requestedModel: '',
+  resolvedModel: '',
   providerId: '',
   status: '',
   protocol: '',
@@ -115,6 +119,8 @@ function optionalInteger(value: string | number): number | undefined {
 function currentQuery(cursor: string | null): RequestLogQuery {
   const query: RequestLogQuery = {
     requestId: filters.requestId,
+    requestedModel: filters.requestedModel,
+    resolvedModel: filters.resolvedModel,
     createdFrom: filters.createdFrom,
     createdTo: filters.createdTo,
     pageSize: pageSize.value,
@@ -223,6 +229,8 @@ function clearFilters(): void {
   filters.userId = ''
   filters.apiKeyId = ''
   filters.modelId = ''
+  filters.requestedModel = ''
+  filters.resolvedModel = ''
   filters.providerId = ''
   filters.status = ''
   filters.protocol = ''
@@ -299,7 +307,7 @@ onBeforeUnmount(() => {
       <div class="filter-heading">
         <h2 id="request-log-filter-title">筛选</h2>
         <div class="filter-actions">
-          <ElButton size="small" @click="clearFilters">清空</ElButton>
+          <ElButton data-test="logs-clear" size="small" @click="clearFilters">清空</ElButton>
           <ElButton size="small" type="primary" @click="applyFilters">
             <ElIcon><Search /></ElIcon>
             查询
@@ -332,6 +340,14 @@ onBeforeUnmount(() => {
             <option value="">全部模型</option>
             <option v-for="model in models" :key="model.id" :value="model.id">{{ model.display_name }}</option>
           </select>
+        </label>
+        <label>
+          <span>调用模型</span>
+          <input v-model="filters.requestedModel" data-test="log-requested-model" type="search" placeholder="输入调用时的模型名" @change="applyFilters">
+        </label>
+        <label>
+          <span>实际模型</span>
+          <input v-model="filters.resolvedModel" data-test="log-resolved-model" type="search" placeholder="输入解析后的模型名" @change="applyFilters">
         </label>
         <label v-if="auth.isAdmin">
           <span>供应商</span>
@@ -437,6 +453,8 @@ onBeforeUnmount(() => {
               <td>
                 <div class="entity-cell">
                   <strong>{{ log.model_name ?? '已删除模型' }}</strong>
+                  <small>调用：{{ log.requested_model ?? '—' }}</small>
+                  <small>实际：{{ log.resolved_model ?? '—' }}</small>
                   <template v-if="auth.isAdmin">
                     <span>{{ (log as RequestLogSummary).provider_name ?? '已删除供应商' }}</span>
                     <small>上游：{{ (log as RequestLogSummary).route_upstream_model ?? '已删除路由' }}</small>

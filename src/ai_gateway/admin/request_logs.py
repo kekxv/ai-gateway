@@ -38,6 +38,8 @@ class RequestLogSummary(BaseModel):
     api_key_prefix: str | None
     model_id: int | None
     model_name: str | None
+    requested_model: str | None
+    resolved_model: str | None
     provider_id: int | None
     provider_name: str | None
     model_route_id: int | None
@@ -77,6 +79,8 @@ _SUMMARY_COLUMNS = (
     RequestLog.user_id,
     RequestLog.api_key_id,
     RequestLog.model_id,
+    RequestLog.requested_model,
+    RequestLog.resolved_model,
     RequestLog.provider_id,
     RequestLog.model_route_id,
     RequestLog.inbound_protocol,
@@ -129,6 +133,8 @@ async def list_request_logs(
     user_id: int | None = None,
     api_key_id: int | None = None,
     model_id: int | None = None,
+    requested_model: str | None = None,
+    resolved_model: str | None = None,
     provider_id: int | None = None,
     status_filter: Annotated[RequestStatus | None, Query(alias="status")] = None,
     protocol_filter: Annotated[Protocol | None, Query(alias="protocol")] = None,
@@ -144,6 +150,8 @@ async def list_request_logs(
         user_id=user_id,
         api_key_id=api_key_id,
         model_id=model_id,
+        requested_model=requested_model,
+        resolved_model=resolved_model,
         provider_id=provider_id,
         status_filter=status_filter,
         protocol_filter=protocol_filter,
@@ -221,6 +229,8 @@ def _apply_filters(
     user_id: int | None,
     api_key_id: int | None,
     model_id: int | None,
+    requested_model: str | None,
+    resolved_model: str | None,
     provider_id: int | None,
     status_filter: RequestStatus | None,
     protocol_filter: Protocol | None,
@@ -235,6 +245,10 @@ def _apply_filters(
         query = query.where(RequestLog.api_key_id == api_key_id)
     if model_id is not None:
         query = query.where(RequestLog.model_id == model_id)
+    if requested_model is not None:
+        query = query.where(RequestLog.requested_model == requested_model)
+    if resolved_model is not None:
+        query = query.where(RequestLog.resolved_model == resolved_model)
     if provider_id is not None:
         query = query.where(RequestLog.provider_id == provider_id)
     if status_filter is not None:

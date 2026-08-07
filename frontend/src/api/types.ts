@@ -537,6 +537,8 @@ export interface RequestLogSummary {
   api_key_prefix: string | null
   model_id: number | null
   model_name: string | null
+  requested_model: string | null
+  resolved_model: string | null
   provider_id: number | null
   provider_name: string | null
   model_route_id: number | null
