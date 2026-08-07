@@ -34,6 +34,12 @@ scale containers horizontally.
   ledger.
 - Redacted request logs with cursor pagination and GZIP-compressed request/response details.
 - Support for provider and model-level price multipliers for flexible billing adjustments.
+- Administrators can select multiple models and compare cost and billed-user price ranges by
+  pricing tier for input, output, cache-read, and cache-write tokens. Routes are used only to
+  aggregate eligible provider price ranges, not as comparison subjects.
+- Tier upper bounds can be entered as raw tokens or in `K` units (`1K = 1000 tokens`). Values are
+  converted back to integer tokens before saving, preserving existing tier boundaries and billing
+  behavior.
 - Role-aware billing statistics with date-range, model, and API-key filters; administrators can
   additionally filter by provider and compare upstream cost, billed user price, and gross profit.
 - A Chinese Vue 3 administration console for day-to-day gateway operations.
@@ -196,7 +202,8 @@ model set; they cannot select providers or another owner. Administrator accounts
 - dashboard usage, cost, health, and resource summaries;
 - billing trends and breakdowns by provider, model, and API key; administrators can compare
   upstream cost, billed user price, and gross profit;
-- provider protocols, credentials, model synchronization, models, aliases, and weighted routes;
+- provider protocols, credentials, model synchronization, models, aliases, and weighted routes,
+  including selected-model price comparison and Token/`K` tier-limit editing;
 - users, balances, immutable ledger entries, and global/provider-scoped API-key management;
 - one-time API-key display with explicit copy/download acknowledgement;
 - request-log filters, backend cursor navigation, and redacted JSON detail inspection;
