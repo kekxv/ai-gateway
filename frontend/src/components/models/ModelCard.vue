@@ -124,9 +124,9 @@ function formatDate(value: string | null): string {
 }
 
 function tierLabel(maxInputTokens: number | null): string {
-  return maxInputTokens === null
-    ? '不限长度'
-    : `长度 ≤ ${new Intl.NumberFormat('zh-CN').format(maxInputTokens)}`
+  if (maxInputTokens === null) return '不限长度'
+  if (maxInputTokens % 1000 === 0) return `Length ≤ ${String(maxInputTokens / 1000)}K`
+  return `Length ≤ ${new Intl.NumberFormat('zh-CN').format(maxInputTokens)}`
 }
 
 function formatPriceRange(minimum: string, maximum: string): string {

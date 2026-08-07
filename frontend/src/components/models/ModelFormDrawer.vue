@@ -31,13 +31,18 @@ interface AliasRow {
 
 interface PriceTierRow {
   key: number
-  maxInputTokens: number | null
+  maxInputValue: number | null
+  maxInputUnit: TierLimitUnit
   inputPrice: string
   outputPrice: string
   cacheReadPrice: string
   cacheWritePrice: string
   error: string
 }
+
+type TierLimitUnit = 'token' | 'k'
+
+const TOKENS_PER_K = 1000
 
 const props = defineProps<{
   modelValue: boolean
@@ -75,6 +80,48 @@ let nextTierKey = 1
 
 const editing = computed(() => props.model !== null)
 const drawerTitle = computed(() => (editing.value ? '编辑模型' : '新建模型'))
+
+function tierLimitState(maxInputTokens: number | null): {
+  value: number | null
+  unit: TierLimitUnit
+} {
+  if (maxInputTokens === null) return { value: null, unit: 'k' }
+  return maxInputTokens % TOKENS_PER_K === 0
+    ? { value: maxInputTokens / TOKENS_PER_K, unit: 'k' }
+    : { value: maxInputTokens, unit: 'token' }
+}
+
+function tierLimitTokens(row: PriceTierRow): number | null {
+  if (row.maxInputValue === null) return null
+  if (row.maxInputUnit === 'token') return row.maxInputValue
+
+  const source = String(row.maxInputValue)
+  const match = /^([+-]?)(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(source)
+  if (match === null) return row.maxInputValue * TOKENS_PER_K
+
+  const sign = match[1] === '-' ? -1n : 1n
+  const whole = match[2] ?? '0'
+  const fraction = match[3] ?? ''
+  const exponent = Number(match[4] ?? '0')
+  const shift = exponent - fraction.length + 3
+  const digits = sign * BigInt(`${whole}${fraction}`)
+  if (shift >= 0) return Number(digits * 10n ** BigInt(shift))
+
+  const divisor = 10n ** BigInt(-shift)
+  if (digits % divisor !== 0n) return row.maxInputValue * TOKENS_PER_K
+  return Number(digits / divisor)
+}
+
+function changeTierLimitUnit(row: PriceTierRow, event: Event): void {
+  const target = event.target
+  if (!(target instanceof HTMLSelectElement)) return
+  const nextUnit: TierLimitUnit = target.value === 'k' ? 'k' : 'token'
+  const tokens = tierLimitTokens(row)
+  row.maxInputUnit = nextUnit
+  if (tokens !== null) {
+    row.maxInputValue = nextUnit === 'k' ? tokens / TOKENS_PER_K : tokens
+  }
+}
 
 function normalizeDecimalInput(value: string): string {
   const trimmed = value.trim()
@@ -167,15 +214,19 @@ function resetForm(): void {
       error: '',
     })) ?? []
   priceTiers.value =
-    model?.price_tiers?.map((tier) => ({
-      key: nextTierKey++,
-      maxInputTokens: tier.max_input_tokens,
-      inputPrice: normalizeDecimalInput(tier.input_price_per_million),
-      outputPrice: normalizeDecimalInput(tier.output_price_per_million),
-      cacheReadPrice: normalizeDecimalInput(tier.cache_read_price_per_million),
-      cacheWritePrice: normalizeDecimalInput(tier.cache_write_price_per_million),
-      error: '',
-    })) ?? []
+    model?.price_tiers?.map((tier) => {
+      const limit = tierLimitState(tier.max_input_tokens)
+      return {
+        key: nextTierKey++,
+        maxInputValue: limit.value,
+        maxInputUnit: limit.unit,
+        inputPrice: normalizeDecimalInput(tier.input_price_per_million),
+        outputPrice: normalizeDecimalInput(tier.output_price_per_million),
+        cacheReadPrice: normalizeDecimalInput(tier.cache_read_price_per_million),
+        cacheWritePrice: normalizeDecimalInput(tier.cache_write_price_per_million),
+        error: '',
+      }
+    }) ?? []
   resetErrors()
 }
 
@@ -204,7 +255,8 @@ function removeAlias(index: number): void {
 function addPriceTier(): void {
   const row: PriceTierRow = {
     key: nextTierKey++,
-    maxInputTokens: null,
+    maxInputValue: null,
+    maxInputUnit: 'k',
     inputPrice: inputPrice.value,
     outputPrice: outputPrice.value,
     cacheReadPrice: cacheReadPrice.value,
@@ -218,7 +270,7 @@ function addPriceTier(): void {
 function removePriceTier(index: number): void {
   priceTiers.value.splice(index, 1)
   const last = priceTiers.value.at(-1)
-  if (last !== undefined) last.maxInputTokens = null
+  if (last !== undefined) last.maxInputValue = null
 }
 
 function requestClose(): void {
@@ -259,7 +311,7 @@ function aliasesChanged(model: ModelResponse): boolean {
 
 function tierPayload(): ModelPriceTierInput[] {
   return priceTiers.value.map((row, index) => ({
-    max_input_tokens: index === priceTiers.value.length - 1 ? null : row.maxInputTokens,
+    max_input_tokens: index === priceTiers.value.length - 1 ? null : tierLimitTokens(row),
     input_price_per_million: row.inputPrice,
     output_price_per_million: row.outputPrice,
     cache_read_price_per_million: row.cacheReadPrice,
@@ -322,9 +374,9 @@ function validate(): string | null {
       continue
     }
     if (index < priceTiers.value.length - 1) {
-      const limit = row.maxInputTokens
-      if (limit === null || !Number.isInteger(limit) || limit <= previousLimit) {
-        row.error = '长度上限必须是严格递增的正整数'
+      const limit = tierLimitTokens(row)
+      if (limit === null || !Number.isSafeInteger(limit) || limit <= previousLimit) {
+        row.error = '长度上限换算后必须是严格递增的正安全整数'
         continue
       }
       previousLimit = limit
@@ -537,14 +589,26 @@ function submitForm(): void {
               </div>
               <ElFormItem class="tier-limit-field" label="长度上限" :error="row.error">
                 <span v-if="index === priceTiers.length - 1" class="tier-unbounded">不限长度（最终分段）</span>
-                <ElInputNumber
-                  v-else
-                  v-model="row.maxInputTokens"
-                  :data-test="`model-tier-limit-${String(index)}`"
-                  :min="1"
-                  :step="1000"
-                  controls-position="right"
-                />
+                <div v-else class="tier-limit-input">
+                  <ElInputNumber
+                    v-model="row.maxInputValue"
+                    :data-test="`model-tier-limit-${String(index)}`"
+                    :min="row.maxInputUnit === 'k' ? 0.001 : 1"
+                    :step="1"
+                    controls-position="right"
+                  />
+                  <select
+                    :value="row.maxInputUnit"
+                    :data-test="`model-tier-limit-unit-${String(index)}`"
+                    class="tier-limit-unit"
+                    :aria-label="`分段 ${String(index + 1)} 长度单位`"
+                    :disabled="submitting"
+                    @change="changeTierLimitUnit(row, $event)"
+                  >
+                    <option value="token">无单位</option>
+                    <option value="k">K</option>
+                  </select>
+                </div>
               </ElFormItem>
               <ElButton
                 class="tier-remove"
@@ -745,6 +809,27 @@ function submitForm(): void {
 
 .tier-limit-field :deep(.el-input-number) {
   width: 100%;
+}
+
+.tier-limit-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 5.5rem;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.tier-limit-unit {
+  min-width: 0;
+  padding: 0 0.5rem;
+  border: 1px solid var(--gateway-border);
+  border-radius: 4px;
+  background: var(--gateway-panel);
+  color: var(--gateway-text);
+}
+
+.tier-limit-unit:focus {
+  outline: none;
+  border-color: var(--gateway-brand);
 }
 
 .tier-remove {

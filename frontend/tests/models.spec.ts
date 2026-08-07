@@ -383,7 +383,7 @@ describe('模型与别名管理', () => {
 
     const tiers = wrapper.findAll('[data-test^="model-price-tier-"]')
     expect(tiers).toHaveLength(2)
-    expect(tiers[0]?.get('.price-tier__header').text()).toContain('长度 ≤ 272,000')
+    expect(tiers[0]?.get('.price-tier__header').text()).toContain('Length ≤ 272K')
     expect(tiers[1]?.get('.price-tier__header').text()).toContain('不限长度')
     expect(
       tiers[0]?.findAll('.price-metric').map((metric) => [
@@ -399,7 +399,7 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
-  it('勾选多个模型后在弹窗按模型对比成本和用户价格，并忽略停用路由', async () => {
+  it('勾选多个模型后按模型分段对比价格范围，并排除不可用的价格来源', async () => {
     const firstProvider = {
       ...providerFixture,
       cost_multiplier: '0.50',
@@ -408,10 +408,39 @@ describe('模型与别名管理', () => {
     const secondProvider = {
       ...providerFixture,
       id: 12,
-      name: '停用供应商不应展示',
+      name: '第二供应商不应展示',
       cost_multiplier: '1.50',
       public_multiplier: '3.00',
       protocols: providerFixture.protocols.map((protocol) => ({ ...protocol, id: 121 })),
+    } satisfies ProviderResponse
+    const disabledProvider = {
+      ...providerFixture,
+      id: 13,
+      name: '停用供应商不应计价',
+      enabled: false,
+      cost_multiplier: '9.00',
+      public_multiplier: '9.00',
+      protocols: providerFixture.protocols.map((protocol) => ({ ...protocol, id: 131 })),
+    } satisfies ProviderResponse
+    const noProtocolProvider = {
+      ...providerFixture,
+      id: 14,
+      name: '无协议供应商不应计价',
+      cost_multiplier: '8.00',
+      public_multiplier: '8.00',
+      protocols: providerFixture.protocols.map((protocol) => ({
+        ...protocol,
+        id: 141,
+        enabled: false,
+      })),
+    } satisfies ProviderResponse
+    const disabledRouteProvider = {
+      ...providerFixture,
+      id: 15,
+      name: '停用路由供应商不应计价',
+      cost_multiplier: '7.00',
+      public_multiplier: '7.00',
+      protocols: providerFixture.protocols.map((protocol) => ({ ...protocol, id: 151 })),
     } satisfies ProviderResponse
     const secondModel = {
       ...scientificZeroFixture,
@@ -421,15 +450,42 @@ describe('模型与别名管理', () => {
       output_price_per_million: '12.00000000',
       cache_read_price_per_million: '1.00000000',
       cache_write_price_per_million: '3.00000000',
+      price_tiers: [
+        {
+          id: 401,
+          max_input_tokens: 272000,
+          input_price_per_million: '4.00000000',
+          output_price_per_million: '12.00000000',
+          cache_read_price_per_million: '1.00000000',
+          cache_write_price_per_million: '3.00000000',
+        },
+        {
+          id: 402,
+          max_input_tokens: null,
+          input_price_per_million: '5.00000000',
+          output_price_per_million: '15.00000000',
+          cache_read_price_per_million: '1.50000000',
+          cache_write_price_per_million: '4.00000000',
+        },
+      ],
     } satisfies ModelResponse
     useCatalog(
       [modelFixture, secondModel],
       [
         routeFixture,
         { ...routeFixture, id: 202, model_id: secondModel.id, provider_id: secondProvider.id },
-        { ...routeFixture, id: 203, provider_id: secondProvider.id, enabled: false },
+        { ...routeFixture, id: 203, provider_id: secondProvider.id },
+        { ...routeFixture, id: 204, provider_id: disabledProvider.id },
+        { ...routeFixture, id: 205, provider_id: noProtocolProvider.id },
+        { ...routeFixture, id: 206, provider_id: disabledRouteProvider.id, enabled: false },
       ],
-      [firstProvider, secondProvider],
+      [
+        firstProvider,
+        secondProvider,
+        disabledProvider,
+        noProtocolProvider,
+        disabledRouteProvider,
+      ],
     )
     const wrapper = mount(ModelsView, { attachTo: document.body })
     await flushPromises()
@@ -449,16 +505,21 @@ describe('模型与别名管理', () => {
     expect(comparison).not.toBeNull()
     expect(comparison?.textContent).toContain('GPT 4.1')
     expect(comparison?.textContent).toContain('Claude Sonnet')
-    expect(comparison?.textContent).toContain('¥1.00000000')
-    expect(comparison?.textContent).toContain('¥4.00000000')
+    expect(comparison?.textContent).toContain('Length ≤ 272K')
+    expect(comparison?.textContent).toContain('¥1.00000000 – ¥3.00000000')
+    expect(comparison?.textContent).toContain('¥4.00000000 – ¥6.00000000')
     expect(comparison?.textContent).toContain('¥6.00000000')
     expect(comparison?.textContent).toContain('¥12.00000000')
     expect(comparison?.textContent).not.toContain('OpenAI 主线路')
-    expect(comparison?.textContent).not.toContain('停用供应商不应展示')
+    expect(comparison?.textContent).not.toContain('第二供应商不应展示')
+    expect(comparison?.textContent).not.toContain('停用供应商不应计价')
+    expect(comparison?.textContent).not.toContain('无协议供应商不应计价')
+    expect(comparison?.textContent).not.toContain('停用路由供应商不应计价')
     wrapper.unmount()
   })
 
-  it('在紧凑分段编辑卡片中回填长度范围和四类价格', async () => {
+  it('在紧凑分段编辑卡片中用 K 回填长度并按整数 Token 提交', async () => {
+    const onSubmit = vi.fn()
     const wrapper = mount(ModelFormDrawer, {
       props: {
         modelValue: true,
@@ -484,6 +545,7 @@ describe('模型与别名管理', () => {
           ],
         },
         submitting: false,
+        onSubmit,
       },
       attachTo: document.body,
     })
@@ -492,10 +554,18 @@ describe('模型与别名管理', () => {
     const rows = wrapper.findAll('.tier-row')
     expect(rows).toHaveLength(2)
     expect(rows[0]?.get('.tier-limit-field').text()).toContain('长度上限')
+    expect(
+      (wrapper.get('[data-test="model-tier-limit-0"] input').element as HTMLInputElement).value,
+    ).toBe('272')
+    const unit = wrapper.get('[data-test="model-tier-limit-unit-0"]')
+    expect(unit.element).toHaveProperty('value', 'k')
+    await unit.setValue('token')
     expect(wrapper.get('[data-test="model-tier-limit-0"] input').element).toHaveProperty(
       'value',
       '272000',
     )
+    await unit.setValue('k')
+    await wrapper.get('[data-test="model-tier-limit-0"] input').setValue('1.001')
     expect(rows[1]?.get('.tier-limit-field').text()).toContain('不限长度（最终分段）')
     expect(rows[1]?.find('[data-test="model-tier-limit-1"]').exists()).toBe(false)
     expect(rows.every((row) => row.findAll('.tier-price-grid .el-form-item').length === 4)).toBe(
@@ -517,6 +587,61 @@ describe('模型与别名管理', () => {
       'value',
       '7.50000000',
     )
+    await wrapper.get('[data-test="model-submit"]').trigger('click')
+    const payload = onSubmit.mock.calls[0]?.[0] as {
+      price_tiers?: Array<{ max_input_tokens: number | null }>
+    }
+    expect(payload.price_tiers?.[0]?.max_input_tokens).toBe(1001)
+    wrapper.unmount()
+  })
+
+  it('拒绝超过安全整数范围的分段长度', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ModelFormDrawer, {
+      props: {
+        modelValue: true,
+        model: {
+          ...modelFixture,
+          price_tiers: [
+            {
+              id: 301,
+              max_input_tokens: 272000,
+              input_price_per_million: '3',
+              output_price_per_million: '15',
+              cache_read_price_per_million: '0.3',
+              cache_write_price_per_million: '3.75',
+            },
+            {
+              id: 302,
+              max_input_tokens: null,
+              input_price_per_million: '6',
+              output_price_per_million: '22.5',
+              cache_read_price_per_million: '0.6',
+              cache_write_price_per_million: '7.5',
+            },
+          ],
+        },
+        submitting: false,
+        onSubmit,
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="model-tier-limit-unit-0"]').element).toHaveProperty(
+      'value',
+      'k',
+    )
+    await wrapper
+      .get('[data-test="model-tier-limit-0"] input')
+      .setValue(String(Number.MAX_SAFE_INTEGER))
+    await wrapper.get('[data-test="model-submit"]').trigger('click')
+    await waitForFormErrors()
+
+    expect(
+      wrapper.get('[data-validation="model-price-tier-0"] .el-form-item__error').text(),
+    ).toContain('安全整数')
+    expect(onSubmit).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -862,7 +987,7 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
-  it('成功删除模型并保留其他独立模型卡片', async () => {
+  it('成功删除模型后清理价格比对选择并保留其他独立模型卡片', async () => {
     useCatalog([modelFixture, scientificZeroFixture])
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({
       value: '',
@@ -872,11 +997,16 @@ describe('模型与别名管理', () => {
     const wrapper = mount(ModelsView, { attachTo: document.body })
     await flushPromises()
 
+    await wrapper.get('[data-test="compare-model-1"]').trigger('click')
+    await wrapper.get('[data-test="compare-model-2"]').trigger('click')
+    expect(wrapper.get('[data-test="price-comparison-open"]').attributes('disabled')).toBeUndefined()
     await wrapper.get('[data-test="delete-model-1"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('[data-test="model-card-1"]').exists()).toBe(false)
     expect(wrapper.get('[data-test="model-card-2"]').text()).toContain('零价格模型')
+    expect(wrapper.get('[data-test="price-comparison-open"]').text()).toContain('（1）')
+    expect(wrapper.get('[data-test="price-comparison-open"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-test="model-notice"]').text()).toContain('已删除')
     wrapper.unmount()
   })
