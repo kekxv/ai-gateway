@@ -451,13 +451,17 @@ onBeforeUnmount(() => {
               </td>
               <td v-else>{{ apiKeyLabel(log.api_key_name) }}</td>
               <td>
-                <div class="entity-cell">
+                <div class="entity-cell entity-cell--model">
                   <strong>{{ log.model_name ?? '已删除模型' }}</strong>
-                  <small>调用：{{ log.requested_model ?? '—' }}</small>
-                  <small>实际：{{ log.resolved_model ?? '—' }}</small>
+                  <div class="model-selectors" data-test="log-model-selectors">
+                    <small>调用：{{ log.requested_model ?? '—' }}</small>
+                    <small>实际：{{ log.resolved_model ?? '—' }}</small>
+                  </div>
                   <template v-if="auth.isAdmin">
-                    <span>{{ (log as RequestLogSummary).provider_name ?? '已删除供应商' }}</span>
-                    <small>上游：{{ (log as RequestLogSummary).route_upstream_model ?? '已删除路由' }}</small>
+                    <div class="provider-route" data-test="log-provider-route">
+                      <span>{{ (log as RequestLogSummary).provider_name ?? '已删除供应商' }}</span>
+                      <small>上游：{{ (log as RequestLogSummary).route_upstream_model ?? '已删除路由' }}</small>
+                    </div>
                   </template>
                 </div>
               </td>
@@ -625,7 +629,7 @@ onBeforeUnmount(() => {
 
 .log-table th,
 .log-table td {
-  padding: 0.8rem 0.9rem;
+  padding: 0.55rem 0.75rem;
   text-align: left;
   vertical-align: top;
   border-bottom: 1px solid var(--gateway-border);
@@ -650,11 +654,31 @@ onBeforeUnmount(() => {
 
 .entity-cell {
   display: grid;
-  gap: 0.2rem;
+  gap: 0.1rem;
+  line-height: 1.35;
 }
 
 .entity-cell small {
   color: var(--gateway-muted);
+}
+
+.model-selectors,
+.provider-route {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.4rem;
+  align-items: baseline;
+}
+
+.model-selectors small + small::before,
+.provider-route small::before {
+  margin-right: 0.4rem;
+  color: var(--gateway-border);
+  content: '·';
+}
+
+.provider-route {
+  color: var(--gateway-text);
 }
 
 .request-info-tags {

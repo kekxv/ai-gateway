@@ -456,6 +456,19 @@ describe('请求日志搜索与详情检查', () => {
     wrapper.unmount()
   })
 
+  it('将模型解析和上游路由信息合并为紧凑的元数据行', async () => {
+    const wrapper = await mountLogs()
+    const row = wrapper.get(`[data-test="request-log-${firstLog.id}"]`)
+
+    expect(row.get('[data-test="log-model-selectors"]').text()).toContain(
+      '调用：fast-chat实际：gpt-4.1-mini',
+    )
+    expect(row.get('[data-test="log-provider-route"]').text()).toContain(
+      'audit-provider上游：provider-audit-model',
+    )
+    wrapper.unmount()
+  })
+
   it('普通用户只加载有权限的筛选项，列表和详情均不显示供应商信息', async () => {
     let providerRequests = 0
     server.use(
