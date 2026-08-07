@@ -876,6 +876,64 @@ async def test_model_not_found_after_authentication_is_audited_once(
     assert audit.failed.http_status == 404
 
 
+async def test_billing_failure_after_model_selection_is_audited_once(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    alias = model.aliases[0].alias
+    route = RouteCandidate(
+        route_id=161,
+        model_id=model.id,
+        provider_id=261,
+        provider_protocol_id=361,
+        protocol=Protocol.OPENAI,
+        base_url="https://provider.example/v1",
+        websocket_url=None,
+        upstream_model="native-billing-failure",
+        weight=100,
+        provider_credential_encrypted=encrypt_secret("{}", settings=settings),
+    )
+
+    class FailingReservationBilling(FakeBilling):
+        async def reserve_balance(self, **_: Any) -> BalanceReservation:
+            raise InsufficientBalance(required=Decimal("1"), available=Decimal("0"))
+
+    async def unexpected_upstream(_: httpx.Request) -> httpx.Response:
+        pytest.fail("billing failure must stop before the upstream request")
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(unexpected_upstream))
+    audit = FakeAudit()
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FailingReservationBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([route]),
+    )
+    path, body = _request(Protocol.OPENAI, alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={"authorization": f"Bearer {RAW_KEY}"},
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 402
+    assert audit.start_calls == 1
+    assert audit.fail_calls == 1
+    assert audit.started is not None
+    assert audit.started.model_id == model.id
+    assert audit.started.requested_model == alias
+    assert audit.started.resolved_model == model.canonical_name
+    assert audit.failed is not None
+    assert audit.failed.error_code == "insufficient_balance"
+    assert audit.failed.http_status == 402
+    assert audit.completed is None
+
+
 def test_upstream_urls_use_native_generation_endpoints_and_route_model() -> None:
     assert (
         upstream_url(Protocol.OPENAI, "https://provider.example/v1", "native-model")

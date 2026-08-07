@@ -387,6 +387,7 @@ class GatewayService:
             raise
         selected_model_id = initial_route.model_id
 
+        priced_model: Model | None = None
         try:
             if isinstance(self._session, AsyncSession):
                 priced_model = await self._session.scalar(
@@ -436,6 +437,44 @@ class GatewayService:
                 ),
                 provider_public_multiplier=reservation_public_multiplier,
             )
+        except GatewayError as exc:
+            await _release_read_session(self._session)
+            await _run_cleanup_shielded(_release_unstarted_half_open(route_router, initial_route))
+            correlation_id = _audit_correlation_id(request)
+            selected_canonical_model = (
+                priced_model.canonical_name if priced_model is not None else resolved.canonical_name
+            )
+            billing_failure_metadata: dict[str, str | None] = {
+                "requested_model": requested_model,
+                "canonical_model": selected_canonical_model,
+            }
+            if correlation_id is not None:
+                billing_failure_metadata["client_request_id"] = correlation_id
+            audit_id = await self._audit.start_request(
+                RequestContext(
+                    user_id=principal.user_id,
+                    api_key_id=principal.api_key_id,
+                    model_id=selected_model_id,
+                    requested_model=requested_model,
+                    resolved_model=selected_canonical_model,
+                    inbound_protocol=inbound_protocol,
+                    transport="http",
+                    stream=canonical.stream,
+                    headers=_audit_headers(request, correlation_id),
+                    metadata=billing_failure_metadata,
+                ),
+                raw_body,
+                request_id=uuid4(),
+            )
+            await self._audit.fail_request(
+                audit_id,
+                RequestFailure(
+                    error_code=exc.code,
+                    http_status=exc.status_code,
+                    latency_ms=_elapsed_ms(started_at),
+                ),
+            )
+            raise
         except BaseException:
             await _run_cleanup_shielded(_release_unstarted_half_open(route_router, initial_route))
             raise
