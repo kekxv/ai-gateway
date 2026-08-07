@@ -66,6 +66,8 @@ interface ComparisonRow {
   output: PriceRange
   cacheRead: PriceRange
   cacheWrite: PriceRange
+  inputCostMinimum: number | null
+  outputCostMinimum: number | null
   inputUserMinimum: number | null
   outputUserMinimum: number | null
 }
@@ -153,6 +155,16 @@ function publicPrices(
   )
 }
 
+function costPrices(
+  model: ModelResponse,
+  providers: ProviderResponse[],
+  base: string,
+): string[] {
+  return providers.map((provider) =>
+    multiplyDecimals(base, model.price_multiplier, provider.cost_multiplier),
+  )
+}
+
 function minimumPrice(values: string[]): number | null {
   if (values.length === 0) return null
   const minimum = values.reduce((current, value) =>
@@ -180,6 +192,8 @@ const rows = computed<ComparisonRow[]>(() =>
       output: priceRange(model, providers, tier.output),
       cacheRead: priceRange(model, providers, tier.cacheRead),
       cacheWrite: priceRange(model, providers, tier.cacheWrite),
+      inputCostMinimum: minimumPrice(costPrices(model, providers, tier.input)),
+      outputCostMinimum: minimumPrice(costPrices(model, providers, tier.output)),
       inputUserMinimum: minimumPrice(publicPrices(model, providers, tier.input)),
       outputUserMinimum: minimumPrice(publicPrices(model, providers, tier.output)),
     }))
@@ -187,13 +201,19 @@ const rows = computed<ComparisonRow[]>(() =>
 )
 
 const chartRows = computed(() =>
-  rows.value.filter((row) => row.inputUserMinimum !== null || row.outputUserMinimum !== null),
+  rows.value.filter(
+    (row) =>
+      row.inputCostMinimum !== null ||
+      row.outputCostMinimum !== null ||
+      row.inputUserMinimum !== null ||
+      row.outputUserMinimum !== null,
+  ),
 )
 
 const comparisonChart = computed<ChartOption>(() => ({
   aria: {
     enabled: true,
-    description: '比较所选模型每百万 Token 的最低用户输入与输出单价。',
+    description: '比较所选模型每百万 Token 的最低成本和用户输入与输出单价。',
   },
   grid: { left: 58, right: 24, top: 28, bottom: 76 },
   tooltip: {
@@ -208,13 +228,25 @@ const comparisonChart = computed<ChartOption>(() => ({
   yAxis: { type: 'value', name: '¥ / 百万 Tokens' },
   series: [
     {
-      name: '输入单价',
+      name: '输入成本',
+      type: 'bar',
+      data: chartRows.value.map((row) => row.inputCostMinimum),
+      itemStyle: { color: '#b45309', borderRadius: [5, 5, 0, 0] },
+    },
+    {
+      name: '输入用户价格',
       type: 'bar',
       data: chartRows.value.map((row) => row.inputUserMinimum),
       itemStyle: { color: '#2563eb', borderRadius: [5, 5, 0, 0] },
     },
     {
-      name: '输出单价',
+      name: '输出成本',
+      type: 'bar',
+      data: chartRows.value.map((row) => row.outputCostMinimum),
+      itemStyle: { color: '#c2410c', borderRadius: [5, 5, 0, 0] },
+    },
+    {
+      name: '输出用户价格',
       type: 'bar',
       data: chartRows.value.map((row) => row.outputUserMinimum),
       itemStyle: { color: '#0f766e', borderRadius: [5, 5, 0, 0] },
@@ -256,7 +288,7 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
     @update:model-value="emit('update:modelValue', $event)"
   >
     <p class="comparison-description">
-      按模型和价格分段比较每百万 Token 成本与用户价格；价格范围来自当前启用的供应商路由。
+      按模型和价格分段比较每百万 Token 的成本与用户价格；所有价格均已计入模型和供应商倍率。
     </p>
     <section class="comparison-overview">
       <div class="comparison-summary" data-test="model-comparison-summary">
@@ -271,12 +303,12 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
           <small>启用且支持协议</small>
         </div>
         <div class="summary-card summary-card--input">
-          <span>最低输入单价</span>
+          <span>最低输入用户价</span>
           <strong>{{ priceLabel(cheapestInput, 'inputUserMinimum') }}</strong>
           <small>{{ cheapestInput?.modelName ?? '暂无可用路由' }}</small>
         </div>
         <div class="summary-card summary-card--output">
-          <span>最低输出单价</span>
+          <span>最低输出用户价</span>
           <strong>{{ priceLabel(cheapestOutput, 'outputUserMinimum') }}</strong>
           <small>{{ cheapestOutput?.modelName ?? '暂无可用路由' }}</small>
         </div>
@@ -290,10 +322,15 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
       <section class="comparison-chart" data-test="model-comparison-chart">
         <div class="comparison-chart__heading">
           <div>
-            <h3>最低用户单价</h3>
-            <p>每百万 Tokens；仅统计可用供应商路由。</p>
+            <h3>最低成本与用户价格</h3>
+            <p>每百万 Tokens；已计入模型和供应商倍率，仅统计可用供应商路由。</p>
           </div>
-          <div class="chart-legend" aria-label="图例"><span class="legend-swatch legend-swatch--input" />输入 <span class="legend-swatch legend-swatch--output" />输出</div>
+          <div class="chart-legend" aria-label="图例">
+            <span class="legend-swatch legend-swatch--input-cost" />输入成本
+            <span class="legend-swatch legend-swatch--input" />输入用户价
+            <span class="legend-swatch legend-swatch--output-cost" />输出成本
+            <span class="legend-swatch legend-swatch--output" />输出用户价
+          </div>
         </div>
         <VChart v-if="chartRows.length > 0" :option="comparisonChart" autoresize />
         <p v-else class="chart-empty">所选模型暂无可用供应商路由，无法生成价格图表。</p>
@@ -405,7 +442,9 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
 
 .chart-legend { display: flex; gap: .4rem; align-items: center; color: var(--gateway-muted); font-size: .8125rem; white-space: nowrap; }
 .legend-swatch { width: .7rem; height: .7rem; border-radius: .2rem; }
+.legend-swatch--input-cost { background: #b45309; }
 .legend-swatch--input { background: #2563eb; }
+.legend-swatch--output-cost { background: #c2410c; }
 .legend-swatch--output { background: #0f766e; }
 
 .comparison-table-section { display: grid; gap: 1rem; }

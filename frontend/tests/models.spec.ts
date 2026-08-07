@@ -409,6 +409,10 @@ describe('模型与别名管理', () => {
   })
 
   it('勾选多个模型后按模型分段对比价格范围，并排除不可用的价格来源', async () => {
+    const firstModel = {
+      ...modelFixture,
+      price_multiplier: '1.25',
+    } satisfies ModelResponse
     const firstProvider = {
       ...providerFixture,
       cost_multiplier: '0.50',
@@ -479,7 +483,7 @@ describe('模型与别名管理', () => {
       ],
     } satisfies ModelResponse
     useCatalog(
-      [modelFixture, secondModel],
+      [firstModel, secondModel],
       [
         routeFixture,
         { ...routeFixture, id: 202, model_id: secondModel.id, provider_id: secondProvider.id },
@@ -515,8 +519,8 @@ describe('模型与别名管理', () => {
     expect(comparison?.textContent).toContain('GPT 4.1')
     expect(comparison?.textContent).toContain('Claude Sonnet')
     expect(comparison?.textContent).toContain('Length ≤ 272K')
-    expect(comparison?.textContent).toContain('¥1.00000000 – ¥3.00000000')
-    expect(comparison?.textContent).toContain('¥4.00000000 – ¥6.00000000')
+    expect(comparison?.textContent).toContain('¥1.25000000 – ¥3.75000000')
+    expect(comparison?.textContent).toContain('¥5.00000000 – ¥7.50000000')
     expect(comparison?.textContent).toContain('¥6.00000000')
     expect(comparison?.textContent).toContain('¥12.00000000')
     expect(comparison?.textContent).not.toContain('OpenAI 主线路')
@@ -527,12 +531,16 @@ describe('模型与别名管理', () => {
     expect(comparison?.querySelector('[data-test="model-comparison-summary"]')).not.toBeNull()
     expect(comparison?.querySelector('[data-test="model-comparison-chart"]')).not.toBeNull()
     expect(comparison?.textContent).toContain('已选模型')
-    expect(comparison?.textContent).toContain('最低输入单价')
+    expect(comparison?.textContent).toContain('最低输入用户价')
     const chart = wrapper.getComponent({ name: 'VChartStub' })
-    const option = chart.props('option') as { series: Array<{ name: string; type: string }> }
+    const option = chart.props('option') as {
+      series: Array<{ name: string; type: string; data: Array<number | null> }>
+    }
     expect(option.series).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: '输入单价', type: 'bar' }),
-      expect.objectContaining({ name: '输出单价', type: 'bar' }),
+      expect.objectContaining({ name: '输入成本', type: 'bar', data: [1.25, 6, 7.5] }),
+      expect.objectContaining({ name: '输入用户价格', type: 'bar', data: [5, 12, 15] }),
+      expect.objectContaining({ name: '输出成本', type: 'bar', data: [5, 18, 22.5] }),
+      expect.objectContaining({ name: '输出用户价格', type: 'bar', data: [20, 36, 45] }),
     ]))
     wrapper.unmount()
   })
