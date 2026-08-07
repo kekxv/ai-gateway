@@ -592,6 +592,7 @@ class WebSocketGatewayService:
         usage = WebSocketUsage(protocol)
         result: RelayResult | None = None
         route_health_finalized = False
+        audit_terminal = False
         try:
             principal = await authenticate_api_key(
                 extract_api_key(cast(Any, websocket)),
@@ -610,6 +611,9 @@ class WebSocketGatewayService:
             raw_subprotocols,
         )
         await websocket.accept(subprotocol=selected_subprotocol)
+        initial_request: Frame | None = None
+        requested_model: str | None = None
+        resolved: ResolvedModel | None = None
         try:
             initial_request, requested_model = await _initial_request_and_model(websocket, protocol)
             resolved = await CatalogRepository(self._session).resolve_model(requested_model)
@@ -643,6 +647,8 @@ class WebSocketGatewayService:
                     user_id=principal.user_id,
                     api_key_id=principal.api_key_id,
                     model_id=route.model_id,
+                    requested_model=requested_model,
+                    resolved_model=priced_model.canonical_name,
                     inbound_protocol=protocol,
                     transport="websocket",
                     stream=True,
@@ -737,6 +743,36 @@ class WebSocketGatewayService:
             ):
                 await _safe_health(route_router.record_failure(route.route_id, exc.failure))
                 route_health_finalized = True
+            if audit_id is None and requested_model is not None and isinstance(exc, GatewayError):
+                resolved_model = resolved.canonical_name if resolved is not None else None
+                audit_id = await self._audit.start_request(
+                    RequestContext(
+                        user_id=principal.user_id,
+                        api_key_id=principal.api_key_id,
+                        model_id=resolved.model_id if resolved is not None else None,
+                        requested_model=requested_model,
+                        resolved_model=resolved_model,
+                        inbound_protocol=protocol,
+                        transport="websocket",
+                        stream=True,
+                        headers=dict(websocket.headers),
+                        metadata={
+                            "requested_model": requested_model,
+                            "canonical_model": resolved_model,
+                        },
+                    ),
+                    _frame_bytes(initial_request),
+                    request_id=uuid4(),
+                )
+                await self._audit.fail_request(
+                    audit_id,
+                    RequestFailure(
+                        error_code=exc.code,
+                        http_status=exc.status_code,
+                        latency_ms=_elapsed_ms(started_at),
+                    ),
+                )
+                audit_terminal = True
             close = _gateway_close(exc)
             await _safe_close(websocket, close.code, _close_reason(close.error_code))
             result = RelayResult(
@@ -778,7 +814,7 @@ class WebSocketGatewayService:
                     health_outcome=RelayHealthOutcome.NEUTRAL,
                 )
             with anyio.CancelScope(shield=True):
-                if audit_id is not None:
+                if audit_id is not None and not audit_terminal:
                     usage_result = usage.snapshot()
                     cost = (
                         billing_cycle.incurred_cost if billing_cycle is not None else Decimal("0")

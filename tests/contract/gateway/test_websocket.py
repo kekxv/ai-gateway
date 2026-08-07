@@ -24,6 +24,7 @@ from ai_gateway.billing.service import (
     InsufficientBalance,
     SettlementResult,
 )
+from ai_gateway.catalog.repository import ModelNotFound
 from ai_gateway.catalog.schemas import ResolvedModel
 from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import ApiKeyScope, Protocol, RouteRuntimeState
@@ -171,6 +172,8 @@ class FakeAudit:
     failed: RequestFailure | None = None
     completed: RequestResult | None = None
     started: RequestContext | None = None
+    start_calls: int = 0
+    fail_calls: int = 0
 
     async def start_request(
         self,
@@ -179,10 +182,12 @@ class FakeAudit:
         *,
         request_id: Any = None,
     ) -> Any:
+        self.start_calls += 1
         self.started = context
         return request_id
 
     async def fail_request(self, _: Any, failure: RequestFailure) -> None:
+        self.fail_calls += 1
         self.failed = failure
 
     async def complete_request(self, _: Any, result: RequestResult) -> None:
@@ -771,11 +776,12 @@ async def test_invalid_api_key_closes_4401_before_route_or_upstream(
     monkeypatch.setattr(gateway_module, "authenticate_api_key", invalid)
     route_router = FakeRouter(unsupported=True)
     billing = FakeBilling()
+    audit = FakeAudit()
     service = WebSocketGatewayService(
         session=FakeSession(),  # type: ignore[arg-type]
         settings=_settings(),
         billing_service=billing,  # type: ignore[arg-type]
-        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
         router_factory=lambda _: route_router,  # type: ignore[arg-type]
     )
 
@@ -785,6 +791,8 @@ async def test_invalid_api_key_closes_4401_before_route_or_upstream(
     assert websocket.events == ["accept", "close"]
     assert route_router.selection is None
     assert billing.reserve_calls == 0
+    assert audit.start_calls == 0
+    assert audit.fail_calls == 0
 
 
 @pytest.mark.asyncio
@@ -807,11 +815,12 @@ async def test_claude_only_route_closes_unsupported_transport_before_reservation
     monkeypatch.setattr(gateway_module.CatalogRepository, "resolve_model", resolved)
     route_router = FakeRouter(unsupported=True)
     billing = FakeBilling()
+    audit = FakeAudit()
     service = WebSocketGatewayService(
         session=FakeSession(),  # type: ignore[arg-type]
         settings=_settings(),
         billing_service=billing,  # type: ignore[arg-type]
-        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
         router_factory=lambda _: route_router,  # type: ignore[arg-type]
     )
 
@@ -823,6 +832,52 @@ async def test_claude_only_route_closes_unsupported_transport_before_reservation
     assert route_router.selection["protocol"] is Protocol.OPENAI
     assert route_router.selection["require_websocket"] is True
     assert billing.reserve_calls == 0
+    assert audit.start_calls == 1
+    assert audit.fail_calls == 1
+    assert audit.started is not None
+    assert audit.started.model_id == 2
+    assert audit.started.requested_model == "friendly-alias"
+    assert audit.started.resolved_model == "canonical-model"
+    assert audit.failed is not None
+    assert audit.failed.error_code == "no_route_available"
+
+
+@pytest.mark.asyncio
+async def test_websocket_model_not_found_after_authentication_is_audited_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_gateway.gateway.websocket as gateway_module
+
+    async def authenticated(*_: Any, **__: Any) -> ApiKeyPrincipal:
+        return ApiKeyPrincipal(1, 7, ApiKeyScope.ALL)
+
+    async def missing(_: Any, requested_model: str) -> ResolvedModel:
+        raise ModelNotFound(requested_model)
+
+    monkeypatch.setattr(gateway_module, "authenticate_api_key", authenticated)
+    monkeypatch.setattr(gateway_module.CatalogRepository, "resolve_model", missing)
+    audit = FakeAudit()
+    websocket = FakeGatewayWebSocket(model="missing-alias")
+    service = WebSocketGatewayService(
+        session=FakeSession(),  # type: ignore[arg-type]
+        settings=_settings(),
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        router_factory=lambda _: FakeRouter(),  # type: ignore[arg-type]
+    )
+
+    await service.handle(websocket, Protocol.OPENAI)  # type: ignore[arg-type]
+
+    assert websocket.close_calls == [(4400, '{"code":"model_not_found"}')]
+    assert audit.start_calls == 1
+    assert audit.fail_calls == 1
+    assert audit.started is not None
+    assert audit.started.model_id is None
+    assert audit.started.requested_model == "missing-alias"
+    assert audit.started.resolved_model is None
+    assert audit.failed is not None
+    assert audit.failed.error_code == "model_not_found"
+    assert audit.completed is None
 
 
 @pytest.mark.asyncio
@@ -903,6 +958,8 @@ async def test_shared_alias_selected_model_controls_websocket_billing_and_audit(
     assert billing.settlement_costs == [Decimal("0.00003000")]
     assert audit.started is not None
     assert audit.started.model_id == route_b.model_id
+    assert audit.started.requested_model == alias
+    assert audit.started.resolved_model == model_b.canonical_name
     assert audit.started.metadata == {
         "requested_model": alias,
         "canonical_model": model_b.canonical_name,

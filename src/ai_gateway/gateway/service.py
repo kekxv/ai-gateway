@@ -292,8 +292,45 @@ class GatewayService:
         if force_stream:
             payload["stream"] = True
 
-        resolved = await CatalogRepository(self._session).resolve_model(requested_model)
-        canonical = _decode_gateway_request(payload, inbound_protocol, openai_operation)
+        resolved: ResolvedModel | None = None
+        try:
+            resolved = await CatalogRepository(self._session).resolve_model(requested_model)
+            canonical = _decode_gateway_request(payload, inbound_protocol, openai_operation)
+        except GatewayError as exc:
+            await _release_read_session(self._session)
+            correlation_id = _audit_correlation_id(request)
+            resolved_model = resolved.canonical_name if resolved is not None else None
+            preflight_audit_metadata: dict[str, str | None] = {
+                "requested_model": requested_model,
+                "canonical_model": resolved_model,
+            }
+            if correlation_id is not None:
+                preflight_audit_metadata["client_request_id"] = correlation_id
+            audit_id = await self._audit.start_request(
+                RequestContext(
+                    user_id=principal.user_id,
+                    api_key_id=principal.api_key_id,
+                    model_id=resolved.model_id if resolved is not None else None,
+                    requested_model=requested_model,
+                    resolved_model=resolved_model,
+                    inbound_protocol=inbound_protocol,
+                    transport="http",
+                    stream=payload.get("stream") is True,
+                    headers=_audit_headers(request, correlation_id),
+                    metadata=preflight_audit_metadata,
+                ),
+                raw_body,
+                request_id=uuid4(),
+            )
+            await self._audit.fail_request(
+                audit_id,
+                RequestFailure(
+                    error_code=exc.code,
+                    http_status=exc.status_code,
+                    latency_ms=_elapsed_ms(started_at),
+                ),
+            )
+            raise
         prepared = _PreparedRequest(
             raw_body,
             payload,
@@ -327,6 +364,9 @@ class GatewayService:
                 RequestContext(
                     user_id=principal.user_id,
                     api_key_id=principal.api_key_id,
+                    model_id=resolved.model_id,
+                    requested_model=requested_model,
+                    resolved_model=resolved.canonical_name,
                     inbound_protocol=inbound_protocol,
                     transport="http",
                     stream=canonical.stream,
@@ -422,6 +462,8 @@ class GatewayService:
                     user_id=principal.user_id,
                     api_key_id=principal.api_key_id,
                     model_id=selected_model_id,
+                    requested_model=requested_model,
+                    resolved_model=priced_model.canonical_name,
                     inbound_protocol=inbound_protocol,
                     transport="http",
                     stream=canonical.stream,
