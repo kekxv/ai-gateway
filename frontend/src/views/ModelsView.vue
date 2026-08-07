@@ -50,6 +50,7 @@ import ResourceStatusGroup from '@/components/common/ResourceStatusGroup.vue'
 import ModelFormDrawer from '@/components/models/ModelFormDrawer.vue'
 import RouteFormDrawer from '@/components/models/RouteFormDrawer.vue'
 import ModelCard from '@/components/models/ModelCard.vue'
+import ModelPriceComparisonDialog from '@/components/models/ModelPriceComparisonDialog.vue'
 import { useAuthStore } from '@/stores/auth'
 
 type NoticeType = 'success' | 'warning' | 'error'
@@ -90,6 +91,8 @@ const editingRoute = ref<ModelRouteResponse | null>(null)
 const routeDrawerModelId = ref<number | null>(null)
 const modelSubmitting = ref(false)
 const routeSubmitting = ref(false)
+const priceComparisonOpen = ref(false)
+const selectedModelIds = ref(new Set<number>())
 const modelOperations = ref(new Map<number, ModelOperation>())
 const routeOperations = ref(new Map<number, RouteOperationState>())
 const expandedRouteModelIds = ref(new Set<number>())
@@ -148,6 +151,25 @@ const routesByModel = computed(() => {
   }
   return map
 })
+
+const selectedModels = computed(() =>
+  models.value.filter((model) => selectedModelIds.value.has(model.id)),
+)
+
+function setModelSelected(modelId: number, selected: boolean): void {
+  const next = new Set(selectedModelIds.value)
+  if (selected) next.add(modelId)
+  else next.delete(modelId)
+  selectedModelIds.value = next
+}
+
+function pruneSelectedModels(): void {
+  const currentIds = new Set(models.value.map((model) => model.id))
+  selectedModelIds.value = new Set(
+    [...selectedModelIds.value].filter((modelId) => currentIds.has(modelId)),
+  )
+  if (selectedModelIds.value.size < 2) priceComparisonOpen.value = false
+}
 
 function routeIsUsable(route: ModelRouteResponse): boolean {
   const provider = providers.value.find((item) => item.id === route.provider_id)
@@ -272,6 +294,8 @@ async function load(): Promise<void> {
       models.value = loadedModels
       providers.value = []
       allRoutes.value = []
+      selectedModelIds.value = new Set()
+      priceComparisonOpen.value = false
       catalogReady.value = true
       loadError.value = ''
       return
@@ -286,6 +310,7 @@ async function load(): Promise<void> {
     catalogReady.value = true
     if (startingRevision !== stateRevision) return
     models.value = loadedModels.filter((model) => !deletedModelIds.has(model.id))
+    pruneSelectedModels()
     allRoutes.value = loadedRoutes.filter(
       (route) => !deletedRouteIds.has(route.id) && !deletedModelIds.has(route.model_id),
     )
@@ -577,6 +602,7 @@ async function removeModel(model: ModelResponse): Promise<void> {
     stateRevision += 1
     deletedModelIds.add(model.id)
     models.value = models.value.filter((item) => item.id !== model.id)
+    pruneSelectedModels()
     allRoutes.value = allRoutes.value.filter((route) => route.model_id !== model.id)
     modelNotice.value = { type: 'success', text: `模型“${model.display_name}”已删除` }
   } catch (error: unknown) {
@@ -806,6 +832,13 @@ onBeforeUnmount(() => {
     >
       <template v-if="auth.isAdmin" #actions>
         <ElButton
+          data-test="price-comparison-open"
+          :disabled="selectedModels.length < 2 || controlsLocked"
+          @click="priceComparisonOpen = true"
+        >
+          价格比对（{{ selectedModels.length }}）
+        </ElButton>
+        <ElButton
           data-test="create-model"
           type="primary"
           :disabled="!catalogReady || loading || controlsLocked"
@@ -915,6 +948,9 @@ onBeforeUnmount(() => {
               :route-expansion="{ expanded: expandedRouteModelIds.has(model.id) }"
               :non-deletable="nonDeletableModelIds.has(model.id)"
               :readonly="!auth.isAdmin"
+              selectable
+              :selected="selectedModelIds.has(model.id)"
+              @update:selected="setModelSelected(model.id, $event)"
               @edit="openEditModel"
               @delete="removeModel"
               @disable="disableModel"
@@ -948,6 +984,9 @@ onBeforeUnmount(() => {
               :route-expansion="{ expanded: expandedRouteModelIds.has(model.id) }"
               :non-deletable="nonDeletableModelIds.has(model.id)"
               :readonly="!auth.isAdmin"
+              selectable
+              :selected="selectedModelIds.has(model.id)"
+              @update:selected="setModelSelected(model.id, $event)"
               @edit="openEditModel"
               @delete="removeModel"
               @disable="disableModel"
@@ -981,6 +1020,9 @@ onBeforeUnmount(() => {
               :route-expansion="{ expanded: expandedRouteModelIds.has(model.id) }"
               :non-deletable="nonDeletableModelIds.has(model.id)"
               :readonly="!auth.isAdmin"
+              selectable
+              :selected="selectedModelIds.has(model.id)"
+              @update:selected="setModelSelected(model.id, $event)"
               @edit="openEditModel"
               @delete="removeModel"
               @disable="disableModel"
@@ -1014,6 +1056,9 @@ onBeforeUnmount(() => {
               :route-expansion="{ expanded: expandedRouteModelIds.has(model.id) }"
               :non-deletable="nonDeletableModelIds.has(model.id)"
               :readonly="!auth.isAdmin"
+              selectable
+              :selected="selectedModelIds.has(model.id)"
+              @update:selected="setModelSelected(model.id, $event)"
               @edit="openEditModel"
               @delete="removeModel"
               @disable="disableModel"
@@ -1045,6 +1090,14 @@ onBeforeUnmount(() => {
         :description="searchText.trim() === '' && providerFilter === null ? '暂无模型' : '没有匹配的模型'"
       />
     </section>
+
+    <ModelPriceComparisonDialog
+      v-if="auth.isAdmin"
+      v-model="priceComparisonOpen"
+      :models="selectedModels"
+      :routes="allRoutes"
+      :providers="providers"
+    />
 
     <ModelFormDrawer
       v-if="auth.isAdmin"

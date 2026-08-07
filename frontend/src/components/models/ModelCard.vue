@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Edit, Delete, Plus, CopyDocument, Check, SwitchButton } from '@element-plus/icons-vue'
-import { ElButton, ElIcon, ElTag } from 'element-plus'
+import { ElButton, ElCheckbox, ElIcon, ElTag } from 'element-plus'
 import type {
   ModelResponse,
   ModelRouteResponse,
@@ -11,7 +11,6 @@ import type {
   RouteSource,
 } from '@/api/types'
 import StatusTag from '@/components/common/StatusTag.vue'
-import PriceComparison from '@/components/models/PriceComparison.vue'
 import { formatMoney } from '@/utils/format'
 
 const props = defineProps<{
@@ -23,6 +22,8 @@ const props = defineProps<{
   routesLoading?: boolean
   routeExpansion?: { expanded: boolean }
   readonly?: boolean
+  selectable?: boolean
+  selected?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -35,12 +36,12 @@ const emit = defineEmits<{
   disableRoute: [routeId: number, modelId: number]
   recoverRoute: [routeId: number, modelId: number]
   createRoute: []
+  'update:selected': [selected: boolean]
   'update:routesExpanded': [expanded: boolean]
 }>()
 
 const localRoutesExpanded = ref(false)
 const priceDetailsExpanded = ref(false)
-const priceComparisonExpanded = ref(false)
 const copiedField = ref<string | null>(null)
 
 interface LegacyClipboardDocument {
@@ -200,6 +201,15 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
           :status="model.enabled ? 'enabled' : 'disabled'"
         />
       </div>
+      <ElCheckbox
+        v-if="selectable === true"
+        :model-value="selected === true"
+        :data-test="`compare-model-${String(model.id)}`"
+        :aria-label="`选择对比模型 ${model.display_name}`"
+        @change="emit('update:selected', Boolean($event))"
+      >
+        对比
+      </ElCheckbox>
     </div>
     <div v-if="readonly !== true" class="card-actions">
       <ElButton
@@ -349,25 +359,6 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
         <span class="label">模型倍率：</span>
         <ElTag type="warning" size="small">{{ parseFloat(String(model.price_multiplier ?? 1)).toFixed(2) }}x</ElTag>
       </div>
-      <div v-if="readonly !== true && routes.length > 0" class="price-summary price-comparison-summary">
-        <span>按路由比较成本与用户价格</span>
-        <ElButton
-          :data-test="`price-comparison-toggle-${String(model.id)}`"
-          size="small"
-          text
-          type="primary"
-          @click="priceComparisonExpanded = !priceComparisonExpanded"
-        >
-          {{ priceComparisonExpanded ? '收起对比' : '价格对比' }}
-        </ElButton>
-      </div>
-      <PriceComparison
-        v-if="readonly !== true && priceComparisonExpanded"
-        :model="model"
-        :routes="routes"
-        :providers="providers"
-      />
-
       <div v-if="model.aliases.length > 0" class="aliases-section">
         <div class="section-title">别名</div>
         <div class="aliases-list">

@@ -146,10 +146,11 @@ afterAll(() => {
 function useCatalog(
   models: ModelResponse[] = [modelFixture],
   modelRoutes: ModelRouteResponse[] = [routeFixture],
+  providers: ProviderResponse[] = [providerFixture],
 ): void {
   server.use(
     http.get('/admin/models', () => HttpResponse.json(models)),
-    http.get('/admin/providers', () => HttpResponse.json([providerFixture])),
+    http.get('/admin/providers', () => HttpResponse.json(providers)),
     http.get('/admin/model-routes', ({ request }) => {
       const modelId = new URL(request.url).searchParams.get('model_id')
       return HttpResponse.json(
@@ -214,6 +215,8 @@ describe('模型与别名管理', () => {
     expect(wrapper.find('[data-test^="delete-model-"]').exists()).toBe(false)
     expect(wrapper.find('[data-test^="create-route-"]').exists()).toBe(false)
     expect(wrapper.find('[data-test^="price-comparison-toggle-"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test^="compare-model-"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="price-comparison-open"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('模型路由')
     expect(wrapper.text()).not.toContain('成本倍率')
     expect(wrapper.findComponent(ModelFormDrawer).exists()).toBe(false)
@@ -396,61 +399,62 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
-  it('使用 API 序列化的模型倍率字符串按路由对比成本和用户价格', async () => {
-    const apiProvider = {
+  it('勾选多个模型后在弹窗按模型对比成本和用户价格，并忽略停用路由', async () => {
+    const firstProvider = {
       ...providerFixture,
-      cost_multiplier: '0.80',
+      cost_multiplier: '0.50',
       public_multiplier: '2.00',
     } satisfies ProviderResponse
+    const secondProvider = {
+      ...providerFixture,
+      id: 12,
+      name: '停用供应商不应展示',
+      cost_multiplier: '1.50',
+      public_multiplier: '3.00',
+      protocols: providerFixture.protocols.map((protocol) => ({ ...protocol, id: 121 })),
+    } satisfies ProviderResponse
+    const secondModel = {
+      ...scientificZeroFixture,
+      display_name: 'Claude Sonnet',
+      canonical_name: 'claude-sonnet',
+      input_price_per_million: '4.00000000',
+      output_price_per_million: '12.00000000',
+      cache_read_price_per_million: '1.00000000',
+      cache_write_price_per_million: '3.00000000',
+    } satisfies ModelResponse
+    useCatalog(
+      [modelFixture, secondModel],
+      [
+        routeFixture,
+        { ...routeFixture, id: 202, model_id: secondModel.id, provider_id: secondProvider.id },
+        { ...routeFixture, id: 203, provider_id: secondProvider.id, enabled: false },
+      ],
+      [firstProvider, secondProvider],
+    )
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
 
-    const wrapper = mount(ModelCard, {
-      props: {
-        model: { ...modelFixture, price_multiplier: '1.50' },
-        routes: [routeFixture],
-        providers: [apiProvider],
-      },
-    })
+    const openButton = wrapper.get('[data-test="price-comparison-open"]')
+    expect(openButton.attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="compare-model-1"]').trigger('click')
+    expect(openButton.attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="compare-model-2"]').trigger('click')
+    expect(openButton.attributes('disabled')).toBeUndefined()
+    await openButton.trigger('click')
+    await flushPromises()
 
-    expect(wrapper.find('[data-test="price-comparison-route-201"]').exists()).toBe(false)
-    await wrapper.get('[data-test="price-comparison-toggle-1"]').trigger('click')
-
-    const comparison = wrapper.get('[data-test="price-comparison-route-201"]')
-    expect(comparison.text()).toContain('成本倍率 0.80x')
-    expect(comparison.text()).toContain('用户倍率 2.00x')
-    expect(comparison.text()).toContain('成本 ¥2.40000000')
-    expect(comparison.text()).toContain('用户价格 ¥6.00000000')
-    expect(comparison.text()).toContain('成本 ¥9.60000000')
-    expect(comparison.text()).toContain('用户价格 ¥24.00000000')
-    expect(comparison.text()).toContain('缓存读取')
-    expect(comparison.text()).toContain('成本 ¥0.60000000')
-    expect(comparison.text()).toContain('用户价格 ¥1.50000000')
-    expect(comparison.text()).toContain('缓存写入')
-    expect(comparison.text()).toContain('成本 ¥3.00000000')
-    expect(comparison.text()).toContain('用户价格 ¥7.50000000')
-    wrapper.unmount()
-  })
-
-  it('按每个配置价格分段展示同一条路由的成本和用户价格', async () => {
-    const wrapper = mount(ModelCard, {
-      props: {
-        model: {
-          ...modelFixture,
-          price_tiers: [
-            { id: 301, max_input_tokens: 272000, input_price_per_million: '3', output_price_per_million: '15', cache_read_price_per_million: '0.3', cache_write_price_per_million: '3.75' },
-            { id: 302, max_input_tokens: null, input_price_per_million: '6', output_price_per_million: '22.5', cache_read_price_per_million: '0.6', cache_write_price_per_million: '7.5' },
-          ],
-        },
-        routes: [routeFixture],
-        providers: [providerFixture],
-      },
-    })
-
-    await wrapper.get('[data-test="price-comparison-toggle-1"]').trigger('click')
-    expect(wrapper.findAll('[data-test^="price-comparison-tier-201-"]')).toHaveLength(2)
-    expect(wrapper.text()).toContain('长度 ≤ 272,000')
-    expect(wrapper.text()).toContain('不限长度')
-    expect(wrapper.text()).toContain('成本 ¥3.00000000')
-    expect(wrapper.text()).toContain('成本 ¥6.00000000')
+    const comparison = document.querySelector<HTMLElement>(
+      '[data-test="model-price-comparison-dialog"]',
+    )
+    expect(comparison).not.toBeNull()
+    expect(comparison?.textContent).toContain('GPT 4.1')
+    expect(comparison?.textContent).toContain('Claude Sonnet')
+    expect(comparison?.textContent).toContain('¥1.00000000')
+    expect(comparison?.textContent).toContain('¥4.00000000')
+    expect(comparison?.textContent).toContain('¥6.00000000')
+    expect(comparison?.textContent).toContain('¥12.00000000')
+    expect(comparison?.textContent).not.toContain('OpenAI 主线路')
+    expect(comparison?.textContent).not.toContain('停用供应商不应展示')
     wrapper.unmount()
   })
 
