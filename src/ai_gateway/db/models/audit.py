@@ -20,6 +20,7 @@ from sqlalchemy.dialects.mysql import LONGBLOB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ai_gateway.core.enums import Protocol, RequestStatus, UsageSource, enum_values
+from ai_gateway.core.limits import MODEL_SELECTOR_MAX_LENGTH
 from ai_gateway.db.base import Base
 
 
@@ -40,8 +41,12 @@ class RequestLog(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     api_key_id: Mapped[int | None] = mapped_column(ForeignKey("api_keys.id"), nullable=True)
     model_id: Mapped[int | None] = mapped_column(ForeignKey("models.id"), nullable=True)
-    requested_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    resolved_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    requested_model: Mapped[str | None] = mapped_column(
+        String(MODEL_SELECTOR_MAX_LENGTH), nullable=True
+    )
+    resolved_model: Mapped[str | None] = mapped_column(
+        String(MODEL_SELECTOR_MAX_LENGTH), nullable=True
+    )
     provider_id: Mapped[int | None] = mapped_column(ForeignKey("providers.id"), nullable=True)
     model_route_id: Mapped[int | None] = mapped_column(
         ForeignKey("model_routes.id"),

@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Mappi
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from hashlib import sha256
 from time import monotonic
 from typing import Any, Literal
 from typing import Protocol as TypingProtocol
@@ -50,6 +51,7 @@ from ai_gateway.catalog.schemas import ResolvedModel
 from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import Protocol, RouteRuntimeState, UsageSource
 from ai_gateway.core.errors import GatewayError
+from ai_gateway.core.limits import MODEL_SELECTOR_MAX_LENGTH
 from ai_gateway.core.logging import current_request_id
 from ai_gateway.db.models import Model, Provider
 from ai_gateway.protocols.base import (
@@ -258,6 +260,7 @@ class GatewayService:
         principal = await authenticate_api_key(extract_api_key(request), self._session)
         raw_body = await request.body()
         payload, requested_model = _request_payload(raw_body, Protocol.CLAUDE, None)
+        _ensure_model_selector_length(requested_model)
         resolved = await CatalogRepository(self._session).resolve_model(requested_model)
         router = self._router_factory(self._session)
         if not await router.has_eligible_route(resolved, principal):
@@ -294,14 +297,16 @@ class GatewayService:
 
         resolved: ResolvedModel | None = None
         try:
+            _ensure_model_selector_length(requested_model)
             resolved = await CatalogRepository(self._session).resolve_model(requested_model)
             canonical = _decode_gateway_request(payload, inbound_protocol, openai_operation)
         except GatewayError as exc:
             await _release_read_session(self._session)
             correlation_id = _audit_correlation_id(request)
             resolved_model = resolved.canonical_name if resolved is not None else None
+            audit_requested_model = _audit_model_selector_identity(requested_model)
             preflight_audit_metadata: dict[str, str | None] = {
-                "requested_model": requested_model,
+                "requested_model": audit_requested_model,
                 "canonical_model": resolved_model,
             }
             if correlation_id is not None:
@@ -311,7 +316,7 @@ class GatewayService:
                     user_id=principal.user_id,
                     api_key_id=principal.api_key_id,
                     model_id=resolved.model_id if resolved is not None else None,
-                    requested_model=requested_model,
+                    requested_model=audit_requested_model,
                     resolved_model=resolved_model,
                     inbound_protocol=inbound_protocol,
                     transport="http",
@@ -1589,12 +1594,37 @@ def _request_payload(
     if not is_object(payload):
         raise InvalidRequestError("Request body must be a JSON object")
     model = path_model if protocol is Protocol.GEMINI else payload.get("model")
-    if not isinstance(model, str) or not model.strip():
+    if not isinstance(model, str):
         raise InvalidRequestError("A non-empty model is required")
-    normalized_model = model.removeprefix("models/") if protocol is Protocol.GEMINI else model
+    normalized_model = _normalize_requested_model(model, protocol)
     payload = payload.copy()
     payload["model"] = normalized_model
     return payload, normalized_model
+
+
+def _normalize_requested_model(model: str, protocol: Protocol) -> str:
+    normalized = model.strip()
+    if protocol is Protocol.GEMINI:
+        normalized = normalized.removeprefix("models/")
+    if not normalized:
+        raise InvalidRequestError("A non-empty model is required")
+    return normalized
+
+
+def _ensure_model_selector_length(model: str) -> None:
+    if len(model) > MODEL_SELECTOR_MAX_LENGTH:
+        raise InvalidRequestError(
+            f"Model selector must be at most {MODEL_SELECTOR_MAX_LENGTH} characters"
+        )
+
+
+def _audit_model_selector_identity(model: str) -> str:
+    """Represent rejected overlong selectors unambiguously within the audit column."""
+    if len(model) <= MODEL_SELECTOR_MAX_LENGTH:
+        return model
+    digest_marker = f"...[sha256:{sha256(model.encode()).hexdigest()}]"
+    prefix_length = MODEL_SELECTOR_MAX_LENGTH - len(digest_marker)
+    return f"{model[:prefix_length]}{digest_marker}"
 
 
 def _decode_gateway_request(

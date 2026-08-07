@@ -17,10 +17,15 @@ from pydantic import (
 
 from ai_gateway.catalog.credentials import validate_provider_credential
 from ai_gateway.core.enums import Protocol, RouteRuntimeState, RouteSource
+from ai_gateway.core.limits import MODEL_SELECTOR_MAX_LENGTH
 
 CatalogName = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=255),
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=MODEL_SELECTOR_MAX_LENGTH,
+    ),
 ]
 BaseUrl = Annotated[
     str,

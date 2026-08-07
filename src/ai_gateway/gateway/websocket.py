@@ -43,7 +43,13 @@ from ai_gateway.core.enums import Protocol, UsageSource
 from ai_gateway.core.errors import GatewayError
 from ai_gateway.db.models import Model, Provider
 from ai_gateway.db.session import get_session
-from ai_gateway.gateway.service import _release_read_session, _release_unstarted_half_open
+from ai_gateway.gateway.service import (
+    _audit_model_selector_identity,
+    _ensure_model_selector_length,
+    _normalize_requested_model,
+    _release_read_session,
+    _release_unstarted_half_open,
+)
 from ai_gateway.protocols.types import CanonicalUsage
 from ai_gateway.routing.service import router_for_settings
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFailure
@@ -616,6 +622,7 @@ class WebSocketGatewayService:
         resolved: ResolvedModel | None = None
         try:
             initial_request, requested_model = await _initial_request_and_model(websocket, protocol)
+            _ensure_model_selector_length(requested_model)
             resolved = await CatalogRepository(self._session).resolve_model(requested_model)
             route_router = self._router_factory(self._session)
             route = await route_router.select_route(
@@ -745,19 +752,20 @@ class WebSocketGatewayService:
                 route_health_finalized = True
             if audit_id is None and requested_model is not None and isinstance(exc, GatewayError):
                 resolved_model = resolved.canonical_name if resolved is not None else None
+                audit_requested_model = _audit_model_selector_identity(requested_model)
                 audit_id = await self._audit.start_request(
                     RequestContext(
                         user_id=principal.user_id,
                         api_key_id=principal.api_key_id,
                         model_id=resolved.model_id if resolved is not None else None,
-                        requested_model=requested_model,
+                        requested_model=audit_requested_model,
                         resolved_model=resolved_model,
                         inbound_protocol=protocol,
                         transport="websocket",
                         stream=True,
                         headers=dict(websocket.headers),
                         metadata={
-                            "requested_model": requested_model,
+                            "requested_model": audit_requested_model,
                             "canonical_model": resolved_model,
                         },
                     ),
@@ -1043,15 +1051,6 @@ def _total_tokens(usage: CanonicalUsage) -> int:
         + usage.cache_read_tokens
         + usage.cache_write_tokens
     )
-
-
-def _normalize_requested_model(model: str, protocol: Protocol) -> str:
-    normalized = model.strip()
-    if protocol is Protocol.GEMINI:
-        normalized = normalized.removeprefix("models/")
-    if not normalized:
-        raise _GatewayClose(4400, "invalid_request")
-    return normalized
 
 
 def _frame_bytes(frame: Frame | None) -> bytes:

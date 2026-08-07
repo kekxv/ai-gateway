@@ -857,7 +857,7 @@ async def test_websocket_model_not_found_after_authentication_is_audited_once(
     monkeypatch.setattr(gateway_module, "authenticate_api_key", authenticated)
     monkeypatch.setattr(gateway_module.CatalogRepository, "resolve_model", missing)
     audit = FakeAudit()
-    websocket = FakeGatewayWebSocket(model="missing-alias")
+    websocket = FakeGatewayWebSocket(model="  missing-alias  ")
     service = WebSocketGatewayService(
         session=FakeSession(),  # type: ignore[arg-type]
         settings=_settings(),
@@ -877,6 +877,52 @@ async def test_websocket_model_not_found_after_authentication_is_audited_once(
     assert audit.started.resolved_model is None
     assert audit.failed is not None
     assert audit.failed.error_code == "model_not_found"
+    assert audit.completed is None
+
+
+@pytest.mark.asyncio
+async def test_websocket_overlong_model_selector_is_rejected_before_lookup_and_audited_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_gateway.gateway.websocket as gateway_module
+
+    async def authenticated(*_: Any, **__: Any) -> ApiKeyPrincipal:
+        return ApiKeyPrincipal(1, 7, ApiKeyScope.ALL)
+
+    lookup_calls = 0
+
+    async def missing(_: Any, requested_model: str) -> ResolvedModel:
+        nonlocal lookup_calls
+        lookup_calls += 1
+        raise ModelNotFound(requested_model)
+
+    selector = "x" * 256
+    digest = "85e62acd750c4eb56b7b6a1d66dca5bfaac5f062608a1a893410d0288936c09a"
+    stored_identity = f"{'x' * 179}...[sha256:{digest}]"
+    monkeypatch.setattr(gateway_module, "authenticate_api_key", authenticated)
+    monkeypatch.setattr(gateway_module.CatalogRepository, "resolve_model", missing)
+    audit = FakeAudit()
+    websocket = FakeGatewayWebSocket(model=selector)
+    service = WebSocketGatewayService(
+        session=FakeSession(),  # type: ignore[arg-type]
+        settings=_settings(),
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=audit,  # type: ignore[arg-type]
+        router_factory=lambda _: FakeRouter(),  # type: ignore[arg-type]
+    )
+
+    await service.handle(websocket, Protocol.OPENAI)  # type: ignore[arg-type]
+
+    assert lookup_calls == 0
+    assert websocket.close_calls == [(4400, '{"code":"invalid_request"}')]
+    assert audit.start_calls == 1
+    assert audit.fail_calls == 1
+    assert audit.started is not None
+    assert audit.started.model_id is None
+    assert audit.started.requested_model == stored_identity
+    assert audit.started.resolved_model is None
+    assert audit.failed is not None
+    assert audit.failed.error_code == "invalid_request"
     assert audit.completed is None
 
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
+from typing import Any, cast
 
 import pytest
 import pytest_asyncio
@@ -15,7 +16,7 @@ from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel
-from sqlalchemy import delete, event
+from sqlalchemy import delete, event, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from ai_gateway.audit.codec import gunzip_json, gzip_json
@@ -40,6 +41,9 @@ from ai_gateway.db.models import (
     User,
 )
 from ai_gateway.db.session import get_session
+from ai_gateway.gateway.dependencies import get_gateway_service
+from ai_gateway.gateway.openai import router as openai_router
+from ai_gateway.gateway.service import GatewayService
 from ai_gateway.main import create_app
 
 
@@ -242,6 +246,115 @@ async def test_request_lifecycle_writes_started_completion_and_redacted_details(
             "source": "provider",
         },
     }
+
+
+async def test_authenticated_overlong_model_selector_is_rejected_with_one_persisted_audit_row(
+    session: AsyncSession,
+    audit_session_factory: async_sessionmaker[AsyncSession],
+    audit_records: tuple[User, User, ApiKey, Model, Provider, ModelRoute],
+    audit_settings: Settings,
+) -> None:
+    _, member, api_key, _, _, _ = audit_records
+    selector = "x" * 256
+    digest = "85e62acd750c4eb56b7b6a1d66dca5bfaac5f062608a1a893410d0288936c09a"
+    stored_identity = f"{'x' * 179}...[sha256:{digest}]"
+    service = GatewayService(
+        session=session,
+        settings=audit_settings,
+        billing_service=cast(Any, None),
+        audit_service=AuditService(audit_session_factory),
+        http_client_factory=cast(Any, None),
+    )
+    app = FastAPI()
+    app.include_router(openai_router)
+    app.dependency_overrides[get_gateway_service] = lambda: service
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": "Bearer sk-gw-audit-key"},
+    ) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={"model": selector, "messages": [{"role": "user", "content": "hello"}]},
+        )
+
+    rows = (
+        await session.scalars(
+            select(RequestLog).where(
+                RequestLog.user_id == member.id,
+                RequestLog.api_key_id == api_key.id,
+            )
+        )
+    ).all()
+    assert (response.status_code, len(rows)) == (400, 1)
+    stored = rows[0]
+    assert stored.status is RequestStatus.FAILED
+    assert stored.error_code == "invalid_request"
+    assert stored.model_id is None
+    assert stored.resolved_model is None
+    assert stored.requested_model == stored_identity
+    assert len(stored.requested_model) == 255
+
+
+async def test_http_model_selector_whitespace_is_normalized_before_audit_and_exact_filtering(
+    session: AsyncSession,
+    audit_session_factory: async_sessionmaker[AsyncSession],
+    audit_records: tuple[User, User, ApiKey, Model, Provider, ModelRoute],
+    audit_settings: Settings,
+) -> None:
+    admin, member, api_key, _, _, _ = audit_records
+    normalized_selector = "missing-audit-model"
+    padded_selector = f"  {normalized_selector}  "
+    service = GatewayService(
+        session=session,
+        settings=audit_settings,
+        billing_service=cast(Any, None),
+        audit_service=AuditService(audit_session_factory),
+        http_client_factory=cast(Any, None),
+    )
+    gateway_app = FastAPI()
+    gateway_app.include_router(openai_router)
+    gateway_app.dependency_overrides[get_gateway_service] = lambda: service
+
+    async with AsyncClient(
+        transport=ASGITransport(app=gateway_app),
+        base_url="http://test",
+        headers={"Authorization": "Bearer sk-gw-audit-key"},
+    ) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": padded_selector,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    stored = await session.scalar(
+        select(RequestLog).where(
+            RequestLog.user_id == member.id,
+            RequestLog.api_key_id == api_key.id,
+        )
+    )
+    assert response.status_code == 404
+    assert stored is not None
+    async for client in _client_for(session, audit_settings, admin):
+        normalized_filter = await client.get(
+            "/admin/request-logs",
+            params={"requested_model": normalized_selector},
+        )
+        padded_filter = await client.get(
+            "/admin/request-logs",
+            params={"requested_model": padded_selector},
+        )
+
+    assert normalized_filter.status_code == 200, normalized_filter.text
+    assert padded_filter.status_code == 200, padded_filter.text
+    assert (
+        stored.requested_model,
+        [item["id"] for item in normalized_filter.json()["items"]],
+        padded_filter.json()["items"],
+    ) == (normalized_selector, [stored.id], [])
 
 
 async def test_claude_sse_response_detail_is_structured_redacted_and_includes_usage(

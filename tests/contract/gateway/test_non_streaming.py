@@ -38,6 +38,7 @@ from ai_gateway.gateway.service import (
     UpstreamError,
     UpstreamTimeout,
     _billing_key,
+    _request_payload,
     native_error_response,
     upstream_url,
 )
@@ -838,8 +839,13 @@ async def test_no_route_request_is_audited(session: AsyncSession) -> None:
     assert audit.failed.http_status == 503
 
 
+@pytest.mark.parametrize(
+    "selector",
+    ["missing-alias", pytest.param("x" * 255, id="maximum-length")],
+)
 async def test_model_not_found_after_authentication_is_audited_once(
     session: AsyncSession,
+    selector: str,
 ) -> None:
     settings = _settings()
     await _catalog(session)
@@ -855,7 +861,7 @@ async def test_model_not_found_after_authentication_is_audited_once(
         http_client_factory=FakeHttpClients(upstream_client),
         router_factory=lambda _: FakeRouter([]),
     )
-    path, body = _request(Protocol.OPENAI, "missing-alias")
+    path, body = _request(Protocol.OPENAI, selector)
     async with AsyncClient(
         transport=ASGITransport(app=_app(service)),
         base_url="http://test",
@@ -869,7 +875,7 @@ async def test_model_not_found_after_authentication_is_audited_once(
     assert audit.fail_calls == 1
     assert audit.started is not None
     assert audit.started.model_id is None
-    assert audit.started.requested_model == "missing-alias"
+    assert audit.started.requested_model == selector
     assert audit.started.resolved_model is None
     assert audit.failed is not None
     assert audit.failed.error_code == "model_not_found"
@@ -945,6 +951,17 @@ def request_model_path(request: httpx.Request) -> str:
     marker = "/models/"
     encoded = request.url.raw_path.decode().split(marker, 1)[1].split(":generateContent", 1)[0]
     return httpx.URL(f"https://example.test/{encoded}").path.lstrip("/")
+
+
+def test_gemini_http_model_selector_is_stripped_before_models_prefix_removal() -> None:
+    payload, requested_model = _request_payload(
+        b'{"contents":[]}',
+        Protocol.GEMINI,
+        "  models/missing-gemini-model  ",
+    )
+
+    assert requested_model == "missing-gemini-model"
+    assert payload["model"] == "missing-gemini-model"
 
 
 async def test_authentication_precedes_malformed_json(session: AsyncSession) -> None:
