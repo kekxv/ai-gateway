@@ -3,6 +3,7 @@ import { ElMessageBox, type MessageBoxData } from 'element-plus'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { createPinia, setActivePinia } from 'pinia'
+import { defineComponent } from 'vue'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type {
@@ -17,6 +18,14 @@ import RouteFormDrawer from '@/components/models/RouteFormDrawer.vue'
 import { routes } from '@/router'
 import { useAuthStore } from '@/stores/auth'
 import ModelsView from '@/views/ModelsView.vue'
+
+vi.mock('vue-echarts', () => ({
+  default: defineComponent({
+    name: 'VChartStub',
+    props: { option: { type: Object, required: true } },
+    template: '<div class="v-chart-stub" />',
+  }),
+}))
 
 interface Deferred<T> {
   promise: Promise<T>
@@ -515,6 +524,16 @@ describe('模型与别名管理', () => {
     expect(comparison?.textContent).not.toContain('停用供应商不应计价')
     expect(comparison?.textContent).not.toContain('无协议供应商不应计价')
     expect(comparison?.textContent).not.toContain('停用路由供应商不应计价')
+    expect(comparison?.querySelector('[data-test="model-comparison-summary"]')).not.toBeNull()
+    expect(comparison?.querySelector('[data-test="model-comparison-chart"]')).not.toBeNull()
+    expect(comparison?.textContent).toContain('已选模型')
+    expect(comparison?.textContent).toContain('最低输入单价')
+    const chart = wrapper.getComponent({ name: 'VChartStub' })
+    const option = chart.props('option') as { series: Array<{ name: string; type: string }> }
+    expect(option.series).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: '输入单价', type: 'bar' }),
+      expect.objectContaining({ name: '输出单价', type: 'bar' }),
+    ]))
     wrapper.unmount()
   })
 
