@@ -368,6 +368,145 @@ async def test_openai_native_operations_use_matching_upstream_endpoint_and_prese
     assert billing.settled_usage == usage
 
 
+def _openai_route(settings: Settings) -> RouteCandidate:
+    return RouteCandidate(
+        route_id=5,
+        model_id=1,
+        provider_id=2,
+        provider_protocol_id=6,
+        protocol=Protocol.OPENAI,
+        base_url="https://upstream.example/v1",
+        websocket_url=None,
+        upstream_model="upstream-model",
+        weight=100,
+        supports_responses=True,
+        provider_credential_encrypted=encrypt_secret("{}", settings=settings),
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "payload", "upstream_content", "content_type"),
+    [
+        (
+            "/v1/audio/speech",
+            {"model": "alias", "input": "Hello", "voice": "alloy"},
+            b"\x00ID3audio-bytes\xff",
+            "audio/mpeg",
+        ),
+        (
+            "/v1/images/generations",
+            {"model": "alias", "prompt": "A fox"},
+            b'{"created":1,"data":[{"url":"https://images.example/fox.png"}]}',
+            "application/json",
+        ),
+    ],
+)
+async def test_openai_media_json_operations_forward_to_matching_native_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    payload: dict[str, str],
+    upstream_content: bytes,
+    content_type: str,
+) -> None:
+    seen: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=upstream_content, headers={"content-type": content_type})
+
+    settings = _settings()
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app, _, router = _gateway_for_route(
+        monkeypatch,
+        settings=settings,
+        route=_openai_route(settings),
+        upstream_client=upstream_client,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://gateway.test",
+        headers={"authorization": "Bearer sk-gw-test"},
+    ) as client:
+        response = await client.post(path, json=payload)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200, response.text
+    assert seen[0].url.path == path
+    assert orjson.loads(seen[0].content) == {**payload, "model": "upstream-model"}
+    assert response.content == upstream_content
+    assert response.headers["content-type"].startswith(content_type)
+    assert router.required_protocols == [Protocol.OPENAI]
+
+
+@pytest.mark.parametrize(
+    ("path", "file_field"),
+    [
+        ("/v1/audio/transcriptions", "file"),
+        ("/v1/audio/translations", "file"),
+        ("/v1/images/edits", "image"),
+        ("/v1/images/variations", "image"),
+    ],
+)
+async def test_openai_media_multipart_operations_replace_only_model_part(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    file_field: str,
+) -> None:
+    boundary = "gateway-media-boundary"
+    file_bytes = b"\x00unchanged-upload\xff"
+    multipart_body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="model"\r\n'
+        "\r\n"
+        "alias\r\n"
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="{file_field}"; filename="sample.bin"\r\n'
+        "Content-Type: application/octet-stream\r\n"
+        "\r\n"
+    ).encode() + file_bytes + f"\r\n--{boundary}--\r\n".encode()
+    seen: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            content=b'{"text":"transcribed"}',
+            headers={"content-type": "application/json"},
+        )
+
+    settings = _settings()
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app, _, router = _gateway_for_route(
+        monkeypatch,
+        settings=settings,
+        route=_openai_route(settings),
+        upstream_client=upstream_client,
+    )
+    content_type = f"multipart/form-data; boundary={boundary}"
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://gateway.test",
+        headers={"authorization": "Bearer sk-gw-test"},
+    ) as client:
+        response = await client.post(
+            path,
+            content=multipart_body,
+            headers={"content-type": content_type},
+        )
+    await upstream_client.aclose()
+
+    expected_body = multipart_body.replace(b"\r\n\r\nalias\r\n", b"\r\n\r\nupstream-model\r\n")
+    assert response.status_code == 200, response.text
+    assert seen[0].url.path == path
+    assert seen[0].headers["content-type"] == content_type
+    assert seen[0].content == expected_body
+    assert file_bytes in seen[0].content
+    assert response.content == b'{"text":"transcribed"}'
+    assert router.required_protocols == [Protocol.OPENAI]
+
+
 @pytest.mark.parametrize(
     ("operation", "suffix"),
     [

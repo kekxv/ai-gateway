@@ -6,6 +6,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Mappi
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from email.message import Message
+from email.parser import BytesHeaderParser
 from hashlib import sha256
 from time import monotonic
 from typing import Any, Literal
@@ -82,7 +84,26 @@ type OpenAIOperation = Literal[
     "responses",
     "embeddings",
     "completions",
+    "audio_speech",
+    "audio_transcriptions",
+    "audio_translations",
+    "images_generations",
+    "images_edits",
+    "images_variations",
 ]
+
+_NATIVE_OPENAI_OPERATIONS = frozenset(
+    {
+        "embeddings",
+        "completions",
+        "audio_speech",
+        "audio_transcriptions",
+        "audio_translations",
+        "images_generations",
+        "images_edits",
+        "images_variations",
+    }
+)
 
 
 class HttpClientProvider(TypingProtocol):
@@ -225,6 +246,7 @@ class _PreparedRequest:
     endpoint_path: str = "/v1/chat/completions"
     openai_operation: OpenAIOperation = "chat_completions"
     required_protocol: Protocol | None = None
+    content_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,7 +313,13 @@ class GatewayService:
         # Authentication deliberately precedes parsing or catalog/database work.
         principal = await authenticate_api_key(extract_api_key(request), self._session)
         raw_body = await request.body()
-        payload, requested_model = _request_payload(raw_body, inbound_protocol, path_model)
+        content_type = request.headers.get("content-type")
+        payload, requested_model = _request_payload(
+            raw_body,
+            inbound_protocol,
+            path_model,
+            content_type=content_type,
+        )
         if force_stream:
             payload["stream"] = True
 
@@ -345,6 +373,7 @@ class GatewayService:
             endpoint_path,
             openai_operation,
             required_protocol,
+            content_type,
         )
 
         route_router = self._router_factory(self._session)
@@ -1562,6 +1591,12 @@ def upstream_url(
             "responses": "responses",
             "embeddings": "embeddings",
             "completions": "completions",
+            "audio_speech": "audio/speech",
+            "audio_transcriptions": "audio/transcriptions",
+            "audio_translations": "audio/translations",
+            "images_generations": "images/generations",
+            "images_edits": "images/edits",
+            "images_variations": "images/variations",
         }[openai_operation]
         return f"{base}/{suffix}" if base.endswith("/v1") else f"{base}/v1/{suffix}"
     if selected is Protocol.CLAUDE:
@@ -1586,20 +1621,111 @@ def _request_payload(
     raw_body: bytes,
     protocol: Protocol,
     path_model: str | None,
+    *,
+    content_type: str | None = None,
 ) -> tuple[dict[str, Any], str]:
+    if (
+        protocol is Protocol.OPENAI
+        and content_type is not None
+        and _is_multipart_form_data(content_type)
+    ):
+        multipart_model = _multipart_model_value(raw_body, content_type)
+        normalized_model = _normalize_requested_model(multipart_model, protocol)
+        return {"model": normalized_model}, normalized_model
     try:
         payload = orjson.loads(raw_body)
     except (UnicodeDecodeError, orjson.JSONDecodeError):
         raise InvalidRequestError("Request body must contain valid JSON") from None
     if not is_object(payload):
         raise InvalidRequestError("Request body must be a JSON object")
-    model = path_model if protocol is Protocol.GEMINI else payload.get("model")
+    model: Any = path_model if protocol is Protocol.GEMINI else payload.get("model")
     if not isinstance(model, str):
         raise InvalidRequestError("A non-empty model is required")
     normalized_model = _normalize_requested_model(model, protocol)
     payload = payload.copy()
     payload["model"] = normalized_model
     return payload, normalized_model
+
+
+@dataclass(frozen=True, slots=True)
+class _MultipartPart:
+    name: str | None
+    filename: str | None
+    content_start: int
+    content_end: int
+
+
+def _is_multipart_form_data(content_type: str | None) -> bool:
+    return content_type is not None and content_type.split(";", 1)[0].strip().lower() == (
+        "multipart/form-data"
+    )
+
+
+def _multipart_model_value(raw_body: bytes, content_type: str) -> str:
+    for part in _multipart_parts(raw_body, content_type):
+        if part.name == "model" and part.filename is None:
+            try:
+                return raw_body[part.content_start : part.content_end].decode("utf-8")
+            except UnicodeDecodeError:
+                raise InvalidRequestError("A non-empty model is required") from None
+    raise InvalidRequestError("A non-empty model is required")
+
+
+def _rewrite_multipart_model(raw_body: bytes, content_type: str, upstream_model: str) -> bytes:
+    for part in _multipart_parts(raw_body, content_type):
+        if part.name == "model" and part.filename is None:
+            return (
+                raw_body[: part.content_start]
+                + upstream_model.encode("utf-8")
+                + raw_body[part.content_end :]
+            )
+    raise InvalidRequestError("A non-empty model is required")
+
+
+def _multipart_parts(raw_body: bytes, content_type: str) -> tuple[_MultipartPart, ...]:
+    boundary = _multipart_boundary(content_type)
+    delimiter = b"--" + boundary
+    if not raw_body.startswith(delimiter):
+        raise InvalidRequestError("Request body must contain valid multipart form data")
+
+    parts: list[_MultipartPart] = []
+    position = len(delimiter)
+    while True:
+        if raw_body[position : position + 2] == b"--":
+            return tuple(parts)
+        if raw_body[position : position + 2] != b"\r\n":
+            raise InvalidRequestError("Request body must contain valid multipart form data")
+        headers_start = position + 2
+        headers_end = raw_body.find(b"\r\n\r\n", headers_start)
+        if headers_end == -1:
+            raise InvalidRequestError("Request body must contain valid multipart form data")
+        headers = BytesHeaderParser().parsebytes(raw_body[headers_start:headers_end] + b"\r\n")
+        next_delimiter = raw_body.find(b"\r\n" + delimiter, headers_end + 4)
+        if next_delimiter == -1:
+            raise InvalidRequestError("Request body must contain valid multipart form data")
+        name = headers.get_param("name", header="content-disposition")
+        filename = headers.get_param("filename", header="content-disposition")
+        parts.append(
+            _MultipartPart(
+                name=name if isinstance(name, str) else None,
+                filename=filename if isinstance(filename, str) else None,
+                content_start=headers_end + 4,
+                content_end=next_delimiter,
+            )
+        )
+        position = next_delimiter + 2 + len(delimiter)
+
+
+def _multipart_boundary(content_type: str) -> bytes:
+    message = Message()
+    message["content-type"] = content_type
+    boundary = message.get_param("boundary", header="content-type")
+    if message.get_content_type().lower() != "multipart/form-data" or not isinstance(boundary, str):
+        raise InvalidRequestError("Request body must contain valid multipart form data")
+    try:
+        return boundary.encode("ascii")
+    except UnicodeEncodeError:
+        raise InvalidRequestError("Request body must contain valid multipart form data") from None
 
 
 def _normalize_requested_model(model: str, protocol: Protocol) -> str:
@@ -1634,6 +1760,8 @@ def _decode_gateway_request(
 ) -> CanonicalRequest:
     if inbound_protocol is Protocol.OPENAI and openai_operation in {"embeddings", "completions"}:
         return _native_openai_billing_request(payload, openai_operation)
+    if inbound_protocol is Protocol.OPENAI and openai_operation in _NATIVE_OPENAI_OPERATIONS:
+        return _native_passthrough_billing_request(payload)
     if inbound_protocol is Protocol.OPENAI and openai_operation == "responses":
         return _native_responses_billing_request(payload)
     try:
@@ -1790,6 +1918,19 @@ def _upstream_body(
     *,
     default_max_output_tokens: int = 4096,
 ) -> bytes:
+    if prepared.content_type is not None and _is_multipart_form_data(prepared.content_type):
+        if (
+            route.protocol is not Protocol.OPENAI
+            or prepared.inbound_protocol is not Protocol.OPENAI
+        ):
+            raise UnsupportedFeatureError(
+                "multipart/form-data", "requires an OpenAI provider protocol"
+            )
+        return _rewrite_multipart_model(
+            prepared.raw_body,
+            prepared.content_type,
+            route.upstream_model,
+        )
     if route.protocol is prepared.inbound_protocol and not (
         prepared.openai_operation == "responses"
         and route.protocol is Protocol.OPENAI
@@ -1846,7 +1987,7 @@ def _convert_response(
     canonical_response: CanonicalResponse | None = None
     if route.protocol is inbound_protocol:
         if inbound_protocol is Protocol.OPENAI and (
-            openai_operation in {"embeddings", "completions"}
+            openai_operation in _NATIVE_OPENAI_OPERATIONS
             or (openai_operation == "responses" and route.supports_responses)
         ):
             return (
@@ -1946,7 +2087,7 @@ def _route_uses_native_openai_operation(
         return False
     if prepared.openai_operation == "responses":
         return route_uses_native_responses(prepared, route)
-    return prepared.openai_operation in {"embeddings", "completions"}
+    return prepared.openai_operation in _NATIVE_OPENAI_OPERATIONS
 
 
 def _outbound_openai_operation(

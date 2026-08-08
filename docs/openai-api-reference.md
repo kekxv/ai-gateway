@@ -213,6 +213,24 @@ response to Chat, Claude, or Gemini.
 }
 ```
 
+### Audio and Images APIs
+
+The gateway forwards the following native OpenAI endpoints to eligible OpenAI provider routes:
+
+- `POST /v1/audio/speech`
+- `POST /v1/audio/transcriptions`
+- `POST /v1/audio/translations`
+- `POST /v1/images/generations`
+- `POST /v1/images/edits`
+- `POST /v1/images/variations`
+
+These endpoints are OpenAI-only native operations: requests and responses are not converted to
+Claude or Gemini formats. JSON requests retain their OpenAI shape while the configured model alias
+is replaced with the provider's upstream model name. For multipart requests, including audio files
+and image uploads, the gateway preserves the original body, file bytes, part headers, and boundary;
+only the `model` form field is replaced. Uploaded files are not persisted locally, and request
+auditing for non-JSON multipart bodies stores only metadata such as byte length and SHA-256.
+
 ### Completions API (Legacy)
 
 **Endpoint:** `POST /v1/completions`
