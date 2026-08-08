@@ -456,15 +456,19 @@ async def test_openai_media_multipart_operations_replace_only_model_part(
     boundary = "gateway-media-boundary"
     file_bytes = b"\x00unchanged-upload\xff"
     multipart_body = (
-        f"--{boundary}\r\n"
-        'Content-Disposition: form-data; name="model"\r\n'
-        "\r\n"
-        "alias\r\n"
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="{file_field}"; filename="sample.bin"\r\n'
-        "Content-Type: application/octet-stream\r\n"
-        "\r\n"
-    ).encode() + file_bytes + f"\r\n--{boundary}--\r\n".encode()
+        (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="model"\r\n'
+            "\r\n"
+            "alias\r\n"
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{file_field}"; filename="sample.bin"\r\n'
+            "Content-Type: application/octet-stream\r\n"
+            "\r\n"
+        ).encode()
+        + file_bytes
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
     seen: list[httpx.Request] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
