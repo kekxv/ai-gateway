@@ -32,6 +32,19 @@ def test_console_serves_index_history_and_assets(tmp_path: Path) -> None:
         assert asset_response.text == "export {}"
 
 
+def test_console_redirects_root_requests_to_console(tmp_path: Path) -> None:
+    dist = tmp_path / "dist"
+    _write_dist(dist)
+    app = FastAPI()
+    mount_console(app, dist)
+
+    with TestClient(app) as client:
+        response = client.get("/", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/console/"
+
+
 def test_console_is_not_registered_when_dist_is_missing(tmp_path: Path) -> None:
     app = FastAPI()
     original_route_count = len(app.routes)

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from starlette.staticfiles import StaticFiles
 
 
@@ -23,3 +23,8 @@ def mount_console(app: FastAPI, dist_dir: Path) -> None:
     app.add_api_route("/console", console_index, include_in_schema=False)
     app.add_api_route("/console/", console_index, include_in_schema=False)
     app.add_api_route("/console/{path:path}", console_index, include_in_schema=False)
+
+    async def console_root_redirect() -> RedirectResponse:
+        return RedirectResponse(url="/console/")
+
+    app.add_api_route("/", console_root_redirect, include_in_schema=False)
