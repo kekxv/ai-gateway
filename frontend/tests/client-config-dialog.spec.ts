@@ -146,12 +146,32 @@ describe('客户端配置对话框', () => {
     expect(JSON.parse(wrapper.get('[data-test="client-config-preview"]').text())).toMatchObject({
       providers: {
         gateway: {
+          api: 'openai-completions',
           models: [
             { id: 'pi-fast', name: 'pi-fast' },
             { id: 'pi-deep', name: 'pi-deep' },
           ],
         },
       },
+    })
+  })
+
+  it('允许 Pi 选择 OpenAI Responses API', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [{ id: 'pi-responses' }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('[data-test="client-config-key"]').setValue('sk-gw-real-secret')
+    await wrapper.get('[data-test="client-config-target-pi"]').trigger('click')
+    await wrapper.get('[data-test="client-config-verify"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="client-config-pi-models"]').setValue(['pi-responses'])
+    await wrapper.get('[data-test="client-config-pi-api"]').setValue('openai-responses')
+
+    expect(JSON.parse(wrapper.get('[data-test="client-config-preview"]').text())).toMatchObject({
+      providers: { gateway: { api: 'openai-responses' } },
     })
   })
 

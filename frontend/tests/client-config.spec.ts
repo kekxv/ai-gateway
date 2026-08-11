@@ -151,6 +151,21 @@ wire_api = "responses"
     })
   })
 
+  it('为 Pi 生成 OpenAI Responses API 配置', () => {
+    const file = buildClientConfig('pi', {
+      ...input,
+      piApi: 'openai-responses',
+    })
+
+    expect(JSON.parse(file.content)).toMatchObject({
+      providers: {
+        gateway: {
+          api: 'openai-responses',
+        },
+      },
+    })
+  })
+
   it('拒绝缺失的 API key、网关地址或模型 ID', () => {
     expect(() => buildClientConfig('pi', { ...input, apiKey: ' ' })).toThrow('API key')
     expect(() => buildClientConfig('pi', { ...input, baseUrl: '' })).toThrow('base URL')

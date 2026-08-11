@@ -14,6 +14,7 @@ import {
   type ClientConfigFile,
   type ClientConfigTarget,
   type OpenCodeModelSelection,
+  type PiApi,
 } from '@/utils/clientConfig'
 
 const props = defineProps<{
@@ -47,6 +48,7 @@ const openCodeModels = ref<OpenCodeModelSelection>({
   review: '',
 })
 const piModelIds = ref<string[]>([])
+const piApi = ref<PiApi>('openai-completions')
 const availableModelIds = ref<string[]>([])
 const loadingModels = ref(false)
 const modelLoadError = ref('')
@@ -94,7 +96,7 @@ const configuration = computed<ClientConfigFile | null>(() => {
     ...(isClaude.value ? { claudeModels: claudeModels.value } : {}),
     ...(isCodex.value ? { codexModels: codexModels.value } : {}),
     ...(isOpenCode.value ? { openCodeModels: openCodeModels.value } : {}),
-    ...(isPi.value ? { piModelIds: piModelIds.value } : {}),
+    ...(isPi.value ? { piModelIds: piModelIds.value, piApi: piApi.value } : {}),
   })
 })
 
@@ -119,6 +121,7 @@ function resetResolvedModels(): void {
     review: '',
   }
   piModelIds.value = []
+  piApi.value = 'openai-completions'
   modelLoadError.value = ''
 }
 
@@ -373,6 +376,11 @@ function download(): void {
         </div>
       </template>
       <template v-else>
+        <label class="field-label" for="client-config-pi-api">OpenAI API 类型</label>
+        <select id="client-config-pi-api" v-model="piApi" data-test="client-config-pi-api">
+          <option value="openai-completions">Chat Completions</option>
+          <option value="openai-responses">Responses</option>
+        </select>
         <label class="field-label" for="client-config-pi-models">模型 ID（可多选）</label>
         <select
           id="client-config-pi-models"

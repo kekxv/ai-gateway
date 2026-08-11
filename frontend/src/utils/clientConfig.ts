@@ -8,7 +8,10 @@ export interface ClientConfigInput {
   codexModels?: Partial<CodexModelSelection>
   openCodeModels?: Partial<OpenCodeModelSelection>
   piModelIds?: string[]
+  piApi?: PiApi
 }
+
+export type PiApi = 'openai-completions' | 'openai-responses'
 
 export interface ClaudeModelSelection {
   primary: string
@@ -158,6 +161,7 @@ wire_api = "responses"
 
   const selectedPiModelIds = [...new Set((input.piModelIds ?? []).map((id) => id.trim()).filter(Boolean))]
   const piModelIds = selectedPiModelIds.length > 0 ? selectedPiModelIds : [modelId]
+  const piApi = input.piApi ?? 'openai-completions'
   return {
     filename: 'models.json',
     location: '~/.pi/agent/models.json',
@@ -165,7 +169,7 @@ wire_api = "responses"
       providers: {
         gateway: {
           baseUrl: openAiBaseUrl,
-          api: 'openai-completions',
+          api: piApi,
           apiKey,
           models: piModelIds.map((id) => ({ id, name: id })),
         },
