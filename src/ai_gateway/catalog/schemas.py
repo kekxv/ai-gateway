@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
@@ -16,7 +16,7 @@ from pydantic import (
 )
 
 from ai_gateway.catalog.credentials import validate_provider_credential
-from ai_gateway.core.enums import Protocol, RouteRuntimeState, RouteSource
+from ai_gateway.core.enums import ModelType, Protocol, RouteRuntimeState, RouteSource
 from ai_gateway.core.limits import MODEL_SELECTOR_MAX_LENGTH
 
 CatalogName = Annotated[
@@ -151,6 +151,31 @@ class ModelPriceTierResponse(ModelPriceTierInput):
     id: int
 
 
+class ModelTimePriceRuleInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    weekdays: set[int] = Field(min_length=1)
+    start_time: time
+    end_time: time
+    effective_at: datetime | None = None
+    input_price_per_million: Price
+    output_price_per_million: Price
+    cache_read_price_per_million: Price = Decimal("0")
+    cache_write_price_per_million: Price = Decimal("0")
+
+    @model_validator(mode="after")
+    def validate_time_range_and_weekdays(self) -> ModelTimePriceRuleInput:
+        if self.start_time >= self.end_time:
+            raise ValueError("end_time must be later than start_time")
+        if any(day < 0 or day > 6 for day in self.weekdays):
+            raise ValueError("weekdays must contain values from 0 (Monday) to 6 (Sunday)")
+        return self
+
+
+class ModelTimePriceRuleResponse(ModelTimePriceRuleInput):
+    id: int
+
+
 class PublicModelPriceTierResponse(BaseModel):
     max_input_tokens: int | None
     input_price_per_million_min: Decimal
@@ -168,6 +193,7 @@ class ModelCreate(BaseModel):
 
     canonical_name: CatalogName
     display_name: CatalogName
+    model_type: ModelType = ModelType.TEXT
     input_price_per_million: Price = Decimal("0")
     output_price_per_million: Price = Decimal("0")
     cache_read_price_per_million: Price = Decimal("0")
@@ -177,6 +203,7 @@ class ModelCreate(BaseModel):
     routing_strategy: RoutingStrategy = "weighted_random"
     price_multiplier: PriceMultiplier = Decimal("1.00")
     price_tiers: list[ModelPriceTierInput] = Field(default_factory=list)
+    time_price_rules: list[ModelTimePriceRuleInput] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_aliases(self) -> ModelCreate:
@@ -190,6 +217,7 @@ class ModelUpdate(BaseModel):
 
     canonical_name: CatalogName | None = None
     display_name: CatalogName | None = None
+    model_type: ModelType | None = None
     input_price_per_million: Price | None = None
     output_price_per_million: Price | None = None
     cache_read_price_per_million: Price | None = None
@@ -199,6 +227,7 @@ class ModelUpdate(BaseModel):
     routing_strategy: RoutingStrategy | None = None
     price_multiplier: PriceMultiplier | None = None
     price_tiers: list[ModelPriceTierInput] | None = None
+    time_price_rules: list[ModelTimePriceRuleInput] | None = None
 
     @model_validator(mode="after")
     def validate_aliases(self) -> ModelUpdate:
@@ -219,6 +248,7 @@ class ModelResponse(BaseModel):
     id: int
     canonical_name: str
     display_name: str
+    model_type: ModelType = ModelType.TEXT
     input_price_per_million: Decimal
     output_price_per_million: Decimal
     cache_read_price_per_million: Decimal
@@ -230,12 +260,14 @@ class ModelResponse(BaseModel):
     updated_at: datetime
     price_multiplier: Decimal
     price_tiers: list[ModelPriceTierResponse]
+    time_price_rules: list[ModelTimePriceRuleResponse] = Field(default_factory=list)
 
 
 class UserModelResponse(BaseModel):
     id: int
     canonical_name: str
     display_name: str
+    model_type: ModelType
     input_price_per_million: Decimal
     output_price_per_million: Decimal
     cache_read_price_per_million: Decimal

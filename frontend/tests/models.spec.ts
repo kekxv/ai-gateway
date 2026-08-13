@@ -333,16 +333,55 @@ describe('模型与别名管理', () => {
     expect(onSubmit).toHaveBeenCalledWith({
       canonical_name: 'gpt-4.1',
       display_name: 'GPT 4.1',
+      model_type: 'text',
       input_price_per_million: '2.00000000',
       output_price_per_million: '8.00000000',
       cache_read_price_per_million: '0.50000000',
       cache_write_price_per_million: '2.50000000',
       price_multiplier: 1.0,
       price_tiers: [],
+      time_price_rules: [],
       enabled: true,
       aliases: [{ alias: 'fast-chat', enabled: false }],
       routing_strategy: 'weighted_random',
     })
+    wrapper.unmount()
+  })
+
+  it('提交模型类型与按星期选择的时段价格规则', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ModelFormDrawer, {
+      props: { modelValue: true, model: null, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="model-canonical-name"]').setValue('image-generator')
+    await wrapper.get('[data-test="model-display-name"]').setValue('Image Generator')
+    await wrapper.get('[data-test="model-type"]').setValue('text_to_image')
+    await wrapper.get('[data-test="add-model-time-price-rule"]').trigger('click')
+    await wrapper.get('[data-test="model-time-rule-day-0-5"]').trigger('click')
+    await wrapper.get('[data-test="model-time-rule-start-0"]').setValue('14:00:00')
+    await wrapper.get('[data-test="model-time-rule-end-0"]').setValue('18:00:00')
+    await wrapper.get('[data-test="model-submit"]').trigger('click')
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model_type: 'text_to_image',
+        time_price_rules: [
+          {
+            weekdays: [0, 1, 2, 3, 4, 5],
+            start_time: '14:00:00',
+            end_time: '18:00:00',
+            effective_at: null,
+            input_price_per_million: '0',
+            output_price_per_million: '0',
+            cache_read_price_per_million: '0',
+            cache_write_price_per_million: '0',
+          },
+        ],
+      }),
+    )
     wrapper.unmount()
   })
 

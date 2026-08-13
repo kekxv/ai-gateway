@@ -636,7 +636,10 @@ class WebSocketGatewayService:
                 priced_model = await self._session.scalar(
                     select(Model)
                     .where(Model.id == route.model_id)
-                    .options(selectinload(Model.price_tiers))
+                    .options(
+                        selectinload(Model.price_tiers),
+                        selectinload(Model.time_price_rules),
+                    )
                 )
             else:
                 priced_model = await self._session.get(Model, route.model_id)

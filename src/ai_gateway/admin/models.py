@@ -22,6 +22,8 @@ from ai_gateway.catalog.schemas import (
     ModelRouteCreate,
     ModelRouteResponse,
     ModelRouteUpdate,
+    ModelTimePriceRuleInput,
+    ModelTimePriceRuleResponse,
     ModelUpdate,
     PublicModelPriceTierResponse,
     RoutingStrategy,
@@ -35,6 +37,7 @@ from ai_gateway.db.models import (
     ModelAlias,
     ModelPriceTier,
     ModelRoute,
+    ModelTimePriceRule,
     Provider,
     ProviderProtocol,
     RequestLog,
@@ -62,6 +65,7 @@ async def create_model(payload: ModelCreate, session: Session, _: AdminUser) -> 
     model = Model(
         canonical_name=payload.canonical_name,
         display_name=payload.display_name,
+        model_type=payload.model_type,
         input_price_per_million=payload.input_price_per_million,
         output_price_per_million=payload.output_price_per_million,
         cache_read_price_per_million=payload.cache_read_price_per_million,
@@ -71,6 +75,7 @@ async def create_model(payload: ModelCreate, session: Session, _: AdminUser) -> 
         price_multiplier=payload.price_multiplier,
         aliases=[ModelAlias(alias=item.alias, enabled=item.enabled) for item in aliases],
         price_tiers=[_new_price_tier(item) for item in payload.price_tiers],
+        time_price_rules=[_new_time_price_rule(item) for item in payload.time_price_rules],
     )
     if payload.price_tiers:
         _sync_legacy_prices(model, payload.price_tiers[0])
@@ -91,7 +96,11 @@ async def list_models(session: Session, _: AdminUser) -> list[ModelResponse]:
     models = (
         await session.scalars(
             select(Model)
-            .options(selectinload(Model.aliases), selectinload(Model.price_tiers))
+            .options(
+                selectinload(Model.aliases),
+                selectinload(Model.price_tiers),
+                selectinload(Model.time_price_rules),
+            )
             .order_by(Model.id)
         )
     ).all()
@@ -104,7 +113,11 @@ async def list_available_models(session: Session, _: CurrentUser) -> list[UserMo
         await session.scalars(
             select(Model)
             .where(Model.enabled.is_(True))
-            .options(selectinload(Model.aliases), selectinload(Model.price_tiers))
+            .options(
+                selectinload(Model.aliases),
+                selectinload(Model.price_tiers),
+                selectinload(Model.time_price_rules),
+            )
             .order_by(Model.id)
         )
     ).all()
@@ -159,6 +172,8 @@ async def update_model(
         model.canonical_name = payload.canonical_name
     if payload.display_name is not None:
         model.display_name = payload.display_name
+    if payload.model_type is not None:
+        model.model_type = payload.model_type
     if payload.input_price_per_million is not None:
         model.input_price_per_million = payload.input_price_per_million
     if payload.output_price_per_million is not None:
@@ -185,6 +200,8 @@ async def update_model(
         model.price_tiers = [_new_price_tier(item) for item in payload.price_tiers]
         if payload.price_tiers:
             _sync_legacy_prices(model, payload.price_tiers[0])
+    if payload.time_price_rules is not None:
+        model.time_price_rules = [_new_time_price_rule(item) for item in payload.time_price_rules]
     if aliases is not None:
         _replace_aliases(model, aliases)
     try:
@@ -340,7 +357,11 @@ async def _get_model(session: AsyncSession, model_id: int) -> Model:
     model = await session.scalar(
         select(Model)
         .where(Model.id == model_id)
-        .options(selectinload(Model.aliases), selectinload(Model.price_tiers))
+        .options(
+            selectinload(Model.aliases),
+            selectinload(Model.price_tiers),
+            selectinload(Model.time_price_rules),
+        )
     )
     if model is None:
         raise_auth_error(status.HTTP_404_NOT_FOUND, "model_not_found", "Model not found")
@@ -415,6 +436,7 @@ def _model_response(model: Model, *, enabled_aliases_only: bool = False) -> Mode
         id=model.id,
         canonical_name=model.canonical_name,
         display_name=model.display_name,
+        model_type=model.model_type,
         input_price_per_million=model.input_price_per_million,
         output_price_per_million=model.output_price_per_million,
         cache_read_price_per_million=model.cache_read_price_per_million,
@@ -438,6 +460,20 @@ def _model_response(model: Model, *, enabled_aliases_only: bool = False) -> Mode
                 cache_write_price_per_million=tier.cache_write_price_per_million,
             )
             for tier in _ordered_price_tiers(model.price_tiers)
+        ],
+        time_price_rules=[
+            ModelTimePriceRuleResponse(
+                id=rule.id,
+                weekdays={day for day in range(7) if rule.weekdays & (1 << day)},
+                start_time=rule.start_time,
+                end_time=rule.end_time,
+                effective_at=rule.effective_at,
+                input_price_per_million=rule.input_price_per_million,
+                output_price_per_million=rule.output_price_per_million,
+                cache_read_price_per_million=rule.cache_read_price_per_million,
+                cache_write_price_per_million=rule.cache_write_price_per_million,
+            )
+            for rule in model.time_price_rules
         ],
     )
 
@@ -485,6 +521,7 @@ def _user_model_response(
         id=model.id,
         canonical_name=model.canonical_name,
         display_name=model.display_name,
+        model_type=model.model_type,
         input_price_per_million=(
             public_tiers[0].input_price_per_million_min if public_tiers else Decimal("0")
         ),
@@ -513,6 +550,19 @@ def _user_model_response(
 def _new_price_tier(payload: ModelPriceTierInput) -> ModelPriceTier:
     return ModelPriceTier(
         max_input_tokens=payload.max_input_tokens,
+        input_price_per_million=payload.input_price_per_million,
+        output_price_per_million=payload.output_price_per_million,
+        cache_read_price_per_million=payload.cache_read_price_per_million,
+        cache_write_price_per_million=payload.cache_write_price_per_million,
+    )
+
+
+def _new_time_price_rule(payload: ModelTimePriceRuleInput) -> ModelTimePriceRule:
+    return ModelTimePriceRule(
+        weekdays=sum(1 << day for day in payload.weekdays),
+        start_time=payload.start_time,
+        end_time=payload.end_time,
+        effective_at=payload.effective_at,
         input_price_per_million=payload.input_price_per_million,
         output_price_per_million=payload.output_price_per_million,
         cache_read_price_per_million=payload.cache_read_price_per_million,

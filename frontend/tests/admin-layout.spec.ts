@@ -147,6 +147,17 @@ beforeEach(() => {
 })
 
 describe('管理控制台外壳', () => {
+  it('控制台概览与账单统计使用不同的导航图标', async () => {
+    const { wrapper } = await mountShell()
+    const icons = wrapper
+      .findAll('nav[aria-label="控制台导航"] .el-menu-item .el-icon')
+      .slice(0, 2)
+      .map((icon) => icon.html())
+
+    expect(icons).toHaveLength(2)
+    expect(icons[0]).not.toBe(icons[1])
+  })
+
   it('普通用户看到概览、自助模型、请求日志、接口密钥、安全设置导航和账户入口', async () => {
     const { wrapper } = await mountShell(1200, undefined, regularUser)
     const navigationText = wrapper.get('nav[aria-label="控制台导航"]').text()

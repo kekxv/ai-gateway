@@ -5,6 +5,7 @@ from ai_gateway.db.models.catalog import (
     ModelAlias,
     ModelPriceTier,
     ModelRoute,
+    ModelTimePriceRule,
     Provider,
     ProviderProtocol,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "Model",
     "ModelAlias",
     "ModelPriceTier",
+    "ModelTimePriceRule",
     "ModelRoute",
     "Provider",
     "ProviderProtocol",

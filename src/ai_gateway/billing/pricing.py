@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, time
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Protocol, overload
+from typing import Protocol, cast, overload
 
 from sqlalchemy.orm.exc import DetachedInstanceError
 
@@ -10,6 +11,7 @@ from ai_gateway.protocols.types import CanonicalUsage
 
 MONEY_QUANTUM = Decimal("0.00000001")
 TOKENS_PER_MILLION = Decimal("1000000")
+BEIJING_TIMEZONE = "Asia/Shanghai"
 
 
 class PricedModel(Protocol):
@@ -21,6 +23,12 @@ class PricedModel(Protocol):
 
 class PriceTier(PricedModel, Protocol):
     max_input_tokens: int | None
+
+
+class TimePriceRule(PricedModel, Protocol):
+    weekdays: int
+    start_time: time
+    end_time: time
 
 
 def total_input_tokens(usage: CanonicalUsage) -> int:
@@ -57,6 +65,31 @@ def select_price_tier(model: PricedModel, usage: CanonicalUsage) -> PricedModel:
     raise ValueError("model price tiers do not include an unbounded tier")
 
 
+def select_time_price_rule(model: PricedModel, at: datetime) -> TimePriceRule | None:
+    """Return the configured Beijing-time rule matching the timestamp."""
+
+    from zoneinfo import ZoneInfo
+
+    if at.tzinfo is None:
+        raise ValueError("pricing timestamp must be timezone-aware")
+    local = at.astimezone(ZoneInfo(BEIJING_TIMEZONE))
+    weekday_mask = 1 << local.weekday()
+    rules = cast(
+        tuple[TimePriceRule, ...] | list[TimePriceRule], getattr(model, "time_price_rules", ())
+    )
+    for rule in rules:
+        effective_at = getattr(rule, "effective_at", None)
+        if (
+            rule.weekdays & weekday_mask
+            and (
+                effective_at is None or at.replace(tzinfo=None) >= effective_at.replace(tzinfo=None)
+            )
+            and rule.start_time <= local.time() < rule.end_time
+        ):
+            return rule
+    return None
+
+
 @overload
 def calculate_cost(
     model: PricedModel,
@@ -65,6 +98,7 @@ def calculate_cost(
     *,
     model_multiplier: Decimal | None = None,
     provider_multiplier: Decimal | None = None,
+    at: datetime | None = None,
 ) -> Decimal: ...
 
 
@@ -78,6 +112,7 @@ def calculate_cost(
     usage: CanonicalUsage,
     model_multiplier: Decimal | None = None,
     provider_multiplier: Decimal | None = None,
+    at: datetime | None = None,
 ) -> Decimal: ...
 
 
@@ -91,6 +126,7 @@ def calculate_cost(
     cache_write_price: Decimal | None = None,
     model_multiplier: Decimal | None = None,
     provider_multiplier: Decimal | None = None,
+    at: datetime | None = None,
 ) -> Decimal:
     """Calculate a model charge using only Decimal arithmetic.
 
@@ -117,7 +153,10 @@ def calculate_cost(
             )
         ):
             raise TypeError("provide either model or explicit prices, not both")
-        selected_price = select_price_tier(model, usage)
+        selected_time_price = select_time_price_rule(model, at or datetime.now(UTC))
+        selected_price = (
+            select_price_tier(model, usage) if selected_time_price is None else selected_time_price
+        )
         input_price = selected_price.input_price_per_million
         output_price = selected_price.output_price_per_million
         cache_read_price = getattr(selected_price, "cache_read_price_per_million", Decimal("0"))

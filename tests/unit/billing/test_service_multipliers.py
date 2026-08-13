@@ -7,7 +7,7 @@ settling requests.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -35,7 +35,7 @@ from ai_gateway.billing.service import (
     settle_request as module_settle_request,
 )
 from ai_gateway.core.enums import LedgerKind, UsageSource
-from ai_gateway.db.models import Model, Provider
+from ai_gateway.db.models import Model, ModelTimePriceRule, Provider
 from ai_gateway.protocols.types import CanonicalUsage
 
 # ---------------------------------------------------------------------------
@@ -149,6 +149,39 @@ def _build_session_factory(mock_session: AsyncMock) -> MagicMock:
 # ---------------------------------------------------------------------------
 # reserve_balance multiplier tests
 # ---------------------------------------------------------------------------
+
+
+async def test_settlement_reuses_the_reservation_time_for_time_price_rules() -> None:
+    model = _make_model(price_multiplier=Decimal("1.00"))
+    model.time_price_rules = [
+        ModelTimePriceRule(
+            weekdays=1,
+            start_time=time(9),
+            end_time=time(12),
+            input_price_per_million=Decimal("20"),
+            output_price_per_million=Decimal("20"),
+            cache_read_price_per_million=Decimal("0"),
+            cache_write_price_per_million=Decimal("0"),
+        )
+    ]
+    reservation_at = datetime(2026, 8, 17, 1, 0, tzinfo=UTC)  # Monday 09:00 Beijing
+    reservation_entry = _make_ledger_entry(
+        entry_id=42,
+        metadata={"pricing_at": reservation_at.isoformat(), "recovery_pending": False},
+    )
+    session = _build_session_mock(
+        scalar_returns=[100, _make_account(account_id=100), reservation_entry, None],
+    )
+    service = BillingService(_build_session_factory(session))
+
+    result = await service.settle_request(
+        reservation_id=42,
+        idempotency_key=f"time-rule-settle-{uuid4().hex}",
+        model=model,
+        usage=CanonicalUsage(1_000_000, 0),
+    )
+
+    assert result.actual_cost == Decimal("20.00000000")
 
 
 class TestReserveWithMultipliers:

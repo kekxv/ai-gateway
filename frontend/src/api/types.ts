@@ -339,6 +339,8 @@ export interface ModelAliasInput {
 
 export type AliasInput = string | ModelAliasInput
 
+export type ModelType = 'text' | 'image' | 'text_to_image' | 'audio' | 'video' | 'embedding'
+
 export interface ModelPriceTierInput {
   max_input_tokens: number | null
   input_price_per_million: string
@@ -348,6 +350,21 @@ export interface ModelPriceTierInput {
 }
 
 export interface ModelPriceTierResponse extends ModelPriceTierInput {
+  id: number
+}
+
+export interface ModelTimePriceRuleInput {
+  weekdays: number[]
+  start_time: string
+  end_time: string
+  effective_at?: string | null
+  input_price_per_million: string
+  output_price_per_million: string
+  cache_read_price_per_million: string
+  cache_write_price_per_million: string
+}
+
+export interface ModelTimePriceRuleResponse extends ModelTimePriceRuleInput {
   id: number
 }
 
@@ -366,6 +383,7 @@ export interface PublicModelPriceTierResponse {
 export interface ModelCreate {
   canonical_name: string
   display_name: string
+  model_type?: ModelType
   input_price_per_million?: string
   output_price_per_million?: string
   cache_read_price_per_million?: string
@@ -375,11 +393,13 @@ export interface ModelCreate {
   aliases?: AliasInput[]
   routing_strategy?: RoutingStrategy
   price_tiers?: ModelPriceTierInput[]
+  time_price_rules?: ModelTimePriceRuleInput[]
 }
 
 export interface ModelUpdate {
   canonical_name?: string | null
   display_name?: string | null
+  model_type?: ModelType | null
   input_price_per_million?: string | null
   output_price_per_million?: string | null
   cache_read_price_per_million?: string | null
@@ -389,6 +409,7 @@ export interface ModelUpdate {
   aliases?: AliasInput[] | null
   routing_strategy?: RoutingStrategy | null
   price_tiers?: ModelPriceTierInput[] | null
+  time_price_rules?: ModelTimePriceRuleInput[] | null
 }
 
 export interface ModelAliasResponse {
@@ -401,6 +422,7 @@ export interface ModelResponse {
   id: number
   canonical_name: string
   display_name: string
+  model_type?: ModelType
   input_price_per_million: string
   output_price_per_million: string
   cache_read_price_per_million: string
@@ -412,6 +434,7 @@ export interface ModelResponse {
   created_at: string
   updated_at: string
   price_tiers?: ModelPriceTierResponse[]
+  time_price_rules?: ModelTimePriceRuleResponse[]
   public_price_tiers?: PublicModelPriceTierResponse[]
 }
 

@@ -20,7 +20,14 @@ import 'element-plus/theme-chalk/el-input-number.css'
 import 'element-plus/theme-chalk/el-overlay.css'
 import 'element-plus/theme-chalk/el-switch.css'
 
-import type { ModelCreate, ModelPriceTierInput, ModelResponse, ModelUpdate } from '@/api/types'
+import type {
+  ModelCreate,
+  ModelPriceTierInput,
+  ModelResponse,
+  ModelTimePriceRuleInput,
+  ModelType,
+  ModelUpdate,
+} from '@/api/types'
 
 interface AliasRow {
   key: number
@@ -33,6 +40,19 @@ interface PriceTierRow {
   key: number
   maxInputValue: number | null
   maxInputUnit: TierLimitUnit
+  inputPrice: string
+  outputPrice: string
+  cacheReadPrice: string
+  cacheWritePrice: string
+  error: string
+}
+
+interface TimePriceRuleRow {
+  key: number
+  weekdays: number[]
+  startTime: string
+  endTime: string
+  effectiveAt: string
   inputPrice: string
   outputPrice: string
   cacheReadPrice: string
@@ -60,6 +80,7 @@ const signedScientificZeroPattern = /^[+-]?0+(?:\.0+)?[eE][+-]?\d+$/
 const scientificDecimalPattern = /^\+?(\d+)(?:\.(\d+))?[eE]([+-]?)(\d+)$/
 const canonicalName = ref('')
 const displayName = ref('')
+const modelType = ref<ModelType>('text')
 const inputPrice = ref('0')
 const outputPrice = ref('0')
 const cacheReadPrice = ref('0')
@@ -68,6 +89,7 @@ const priceMultiplier = ref(1.0)
 const enabled = ref(true)
 const aliases = ref<AliasRow[]>([])
 const priceTiers = ref<PriceTierRow[]>([])
+const timePriceRules = ref<TimePriceRuleRow[]>([])
 const canonicalNameError = ref('')
 const displayNameError = ref('')
 const inputPriceError = ref('')
@@ -77,6 +99,8 @@ const cacheWritePriceError = ref('')
 const formContent = ref<HTMLElement | null>(null)
 let nextAliasKey = 1
 let nextTierKey = 1
+let nextTimeRuleKey = 1
+const weekdayLabels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
 const editing = computed(() => props.model !== null)
 const drawerTitle = computed(() => (editing.value ? '编辑模型' : '新建模型'))
@@ -180,11 +204,13 @@ function resetErrors(): void {
   cacheWritePriceError.value = ''
   for (const row of aliases.value) row.error = ''
   for (const row of priceTiers.value) row.error = ''
+  for (const row of timePriceRules.value) row.error = ''
 }
 
 function clearDraft(): void {
   canonicalName.value = ''
   displayName.value = ''
+  modelType.value = 'text'
   inputPrice.value = '0'
   outputPrice.value = '0'
   cacheReadPrice.value = '0'
@@ -193,6 +219,7 @@ function clearDraft(): void {
   enabled.value = true
   aliases.value = []
   priceTiers.value = []
+  timePriceRules.value = []
   resetErrors()
 }
 
@@ -200,6 +227,7 @@ function resetForm(): void {
   const model = props.model
   canonicalName.value = model?.canonical_name ?? ''
   displayName.value = model?.display_name ?? ''
+  modelType.value = model?.model_type ?? 'text'
   inputPrice.value = normalizeDecimalInput(model?.input_price_per_million ?? '0')
   outputPrice.value = normalizeDecimalInput(model?.output_price_per_million ?? '0')
   cacheReadPrice.value = normalizeDecimalInput(model?.cache_read_price_per_million ?? '0')
@@ -227,6 +255,19 @@ function resetForm(): void {
         error: '',
       }
     }) ?? []
+  timePriceRules.value =
+    model?.time_price_rules?.map((rule) => ({
+      key: nextTimeRuleKey++,
+      weekdays: [...rule.weekdays],
+      startTime: rule.start_time,
+      endTime: rule.end_time,
+      effectiveAt: rule.effective_at === null || rule.effective_at === undefined ? '' : rule.effective_at.slice(0, 16),
+      inputPrice: normalizeDecimalInput(rule.input_price_per_million),
+      outputPrice: normalizeDecimalInput(rule.output_price_per_million),
+      cacheReadPrice: normalizeDecimalInput(rule.cache_read_price_per_million),
+      cacheWritePrice: normalizeDecimalInput(rule.cache_write_price_per_million),
+      error: '',
+    })) ?? []
   resetErrors()
 }
 
@@ -273,6 +314,25 @@ function removePriceTier(index: number): void {
   if (last !== undefined) last.maxInputValue = null
 }
 
+function addTimePriceRule(): void {
+  timePriceRules.value.push({
+    key: nextTimeRuleKey++,
+    weekdays: [0, 1, 2, 3, 4],
+    startTime: '09:00:00',
+    endTime: '12:00:00',
+    effectiveAt: '',
+    inputPrice: inputPrice.value,
+    outputPrice: outputPrice.value,
+    cacheReadPrice: cacheReadPrice.value,
+    cacheWritePrice: cacheWritePrice.value,
+    error: '',
+  })
+}
+
+function removeTimePriceRule(index: number): void {
+  timePriceRules.value.splice(index, 1)
+}
+
 function requestClose(): void {
   if (props.submitting) return
   clearDraft()
@@ -317,6 +377,36 @@ function tierPayload(): ModelPriceTierInput[] {
     cache_read_price_per_million: row.cacheReadPrice,
     cache_write_price_per_million: row.cacheWritePrice,
   }))
+}
+
+function timePriceRulePayload(): ModelTimePriceRuleInput[] {
+  return timePriceRules.value.map((rule) => ({
+    weekdays: [...rule.weekdays].sort((left, right) => left - right),
+    start_time: rule.startTime,
+    end_time: rule.endTime,
+    effective_at: rule.effectiveAt === '' ? null : rule.effectiveAt,
+    input_price_per_million: rule.inputPrice,
+    output_price_per_million: rule.outputPrice,
+    cache_read_price_per_million: rule.cacheReadPrice,
+    cache_write_price_per_million: rule.cacheWritePrice,
+  }))
+}
+
+function timePriceRulesChanged(model: ModelResponse): boolean {
+  const stored = (model.time_price_rules ?? []).map((rule) => ({
+    weekdays: rule.weekdays,
+    start_time: rule.start_time,
+    end_time: rule.end_time,
+    effective_at:
+      rule.effective_at === null || rule.effective_at === undefined
+        ? null
+        : rule.effective_at.slice(0, 16),
+    input_price_per_million: rule.input_price_per_million,
+    output_price_per_million: rule.output_price_per_million,
+    cache_read_price_per_million: rule.cache_read_price_per_million,
+    cache_write_price_per_million: rule.cache_write_price_per_million,
+  }))
+  return JSON.stringify(timePriceRulePayload()) !== JSON.stringify(stored)
 }
 
 function priceTiersChanged(model: ModelResponse): boolean {
@@ -382,6 +472,17 @@ function validate(): string | null {
       previousLimit = limit
     }
   }
+  for (const row of timePriceRules.value) {
+    if (
+      row.weekdays.length === 0 ||
+      row.startTime >= row.endTime ||
+      [row.inputPrice, row.outputPrice, row.cacheReadPrice, row.cacheWritePrice].some(
+        (price) => !decimalPattern.test(price),
+      )
+    ) {
+      row.error = '请选择星期、填写有效时间段与四项非负价格'
+    }
+  }
 
   if (canonicalNameError.value !== '') return '[data-validation="model-canonical-name"] input'
   if (displayNameError.value !== '') return '[data-validation="model-display-name"] input'
@@ -421,6 +522,7 @@ function submitForm(): void {
     emit('submit', {
       canonical_name: canonical,
       display_name: display,
+      model_type: modelType.value,
       input_price_per_million: inputPrice.value,
       output_price_per_million: outputPrice.value,
       cache_read_price_per_million: cacheReadPrice.value,
@@ -430,6 +532,7 @@ function submitForm(): void {
       aliases: aliasPayload,
       routing_strategy: 'weighted_random',
       price_tiers: tierPayload(),
+      time_price_rules: timePriceRulePayload(),
     })
     return
   }
@@ -439,6 +542,7 @@ function submitForm(): void {
   const payload: ModelUpdate = {}
   if (canonical !== model.canonical_name) payload.canonical_name = canonical
   if (display !== model.display_name) payload.display_name = display
+  if (modelType.value !== (model.model_type ?? 'text')) payload.model_type = modelType.value
   if (inputPrice.value !== normalizeDecimalInput(model.input_price_per_million)) {
     payload.input_price_per_million = inputPrice.value
   }
@@ -457,6 +561,7 @@ function submitForm(): void {
   if (enabled.value !== model.enabled) payload.enabled = enabled.value
   if (aliasesChanged(model)) payload.aliases = aliasPayload
   if (priceTiersChanged(model)) payload.price_tiers = tierPayload()
+  if (timePriceRulesChanged(model)) payload.time_price_rules = timePriceRulePayload()
   emit('submit', payload)
 }
 </script>
@@ -488,6 +593,16 @@ function submitForm(): void {
             :error="canonicalNameError"
           >
             <ElInput v-model="canonicalName" data-test="model-canonical-name" maxlength="255" />
+          </ElFormItem>
+          <ElFormItem label="模型类型">
+            <select v-model="modelType" data-test="model-type" class="tier-limit-unit">
+              <option value="text">文本</option>
+              <option value="image">图像理解</option>
+              <option value="text_to_image">文生图</option>
+              <option value="audio">音频</option>
+              <option value="video">视频</option>
+              <option value="embedding">向量嵌入</option>
+            </select>
           </ElFormItem>
           <ElFormItem
             data-validation="model-display-name"
@@ -626,6 +741,44 @@ function submitForm(): void {
               <ElFormItem label="输出价格"><ElInput v-model="row.outputPrice" :data-test="`model-tier-output-${String(index)}`" inputmode="decimal" spellcheck="false" /></ElFormItem>
               <ElFormItem label="缓存读取价格"><ElInput v-model="row.cacheReadPrice" :data-test="`model-tier-cache-read-${String(index)}`" inputmode="decimal" spellcheck="false" /></ElFormItem>
               <ElFormItem label="缓存写入价格"><ElInput v-model="row.cacheWritePrice" :data-test="`model-tier-cache-write-${String(index)}`" inputmode="decimal" spellcheck="false" /></ElFormItem>
+            </div>
+          </div>
+        </section>
+
+        <section class="tier-section" aria-labelledby="model-time-price-heading">
+          <div class="section-heading">
+            <div>
+              <h3 id="model-time-price-heading">按时段计费</h3>
+              <p>按北京时间匹配；未命中任何规则时使用基础价格或分段价格。</p>
+            </div>
+            <ElButton data-test="add-model-time-price-rule" plain :disabled="submitting" @click="addTimePriceRule">
+              <ElIcon><Plus /></ElIcon>添加时段
+            </ElButton>
+          </div>
+          <div v-if="timePriceRules.length === 0" class="empty-alias">未配置时段规则</div>
+          <div v-for="(rule, index) in timePriceRules" :key="rule.key" class="tier-row">
+            <div class="tier-row__header">
+              <div class="tier-row__title"><strong>时段 {{ String(index + 1) }}</strong><span>北京时间</span></div>
+              <ElButton text type="danger" :data-test="`remove-model-time-price-rule-${String(index)}`" @click="removeTimePriceRule(index)">
+                <ElIcon><Delete /></ElIcon>移除
+              </ElButton>
+            </div>
+            <ElFormItem label="适用星期" :error="rule.error">
+              <div class="weekday-checkboxes">
+                <label v-for="(label, day) in weekdayLabels" :key="label">
+                  <input v-model="rule.weekdays" type="checkbox" :value="day" :data-test="`model-time-rule-day-${String(index)}-${String(day)}`" />
+                  {{ label }}
+                </label>
+              </div>
+            </ElFormItem>
+            <div class="tier-price-grid">
+              <ElFormItem label="开始时间"><ElInput v-model="rule.startTime" :data-test="`model-time-rule-start-${String(index)}`" placeholder="09:00:00" /></ElFormItem>
+              <ElFormItem label="结束时间"><ElInput v-model="rule.endTime" :data-test="`model-time-rule-end-${String(index)}`" placeholder="12:00:00" /></ElFormItem>
+              <ElFormItem label="生效时间（可选）"><ElInput v-model="rule.effectiveAt" type="datetime-local" /></ElFormItem>
+              <ElFormItem label="输入价格"><ElInput v-model="rule.inputPrice" inputmode="decimal" /></ElFormItem>
+              <ElFormItem label="输出价格"><ElInput v-model="rule.outputPrice" inputmode="decimal" /></ElFormItem>
+              <ElFormItem label="缓存读取价格"><ElInput v-model="rule.cacheReadPrice" inputmode="decimal" /></ElFormItem>
+              <ElFormItem label="缓存写入价格"><ElInput v-model="rule.cacheWritePrice" inputmode="decimal" /></ElFormItem>
             </div>
           </div>
         </section>

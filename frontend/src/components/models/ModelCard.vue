@@ -59,6 +59,15 @@ const sourceLabels: Readonly<Record<RouteSource, string>> = {
   discovered: '自动发现',
 }
 
+const modelTypeLabels: Readonly<Record<NonNullable<ModelResponse['model_type']>, string>> = {
+  text: '文本',
+  image: '图像理解',
+  text_to_image: '文生图',
+  audio: '音频',
+  video: '视频',
+  embedding: '向量嵌入',
+}
+
 const runtimeDetails: Readonly<
   Record<RouteRuntimeState, { label: string; type: 'success' | 'warning' | 'danger' }>
 > = {
@@ -246,6 +255,7 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
     </div>
 
     <div class="card-body">
+      <div class="info-item"><span class="label">模型类型：</span>{{ modelTypeLabels[model.model_type ?? 'text'] }}</div>
       <div v-if="(model.price_tiers?.length ?? 0) > 0 || (model.public_price_tiers?.length ?? 0) > 0" class="info-item">
         <span class="label">规范名称：</span>
         <code>{{ model.canonical_name }}</code>

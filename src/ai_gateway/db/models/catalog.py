@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -21,7 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.mysql import LONGBLOB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from ai_gateway.core.enums import Protocol, RouteRuntimeState, RouteSource, enum_values
+from ai_gateway.core.enums import ModelType, Protocol, RouteRuntimeState, RouteSource, enum_values
 from ai_gateway.db.base import Base
 
 if TYPE_CHECKING:
@@ -103,6 +103,11 @@ class Model(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     canonical_name: Mapped[str] = mapped_column(String(255), unique=True)
     display_name: Mapped[str] = mapped_column(String(255))
+    model_type: Mapped[ModelType] = mapped_column(
+        Enum(ModelType, name="model_type", values_callable=enum_values),
+        default=ModelType.TEXT,
+        server_default=ModelType.TEXT.value,
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     input_price_per_million: Mapped[Decimal] = mapped_column(
         Numeric(20, 8),
@@ -156,6 +161,11 @@ class Model(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    time_price_rules: Mapped[list[ModelTimePriceRule]] = relationship(
+        back_populates="model",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class ModelPriceTier(Base):
@@ -177,6 +187,24 @@ class ModelPriceTier(Base):
     cache_write_price_per_million: Mapped[Decimal] = mapped_column(Numeric(20, 8))
 
     model: Mapped[Model] = relationship(back_populates="price_tiers")
+
+
+class ModelTimePriceRule(Base):
+    __tablename__ = "model_time_price_rules"
+    __table_args__ = (Index("ix_model_time_price_rules_model", "model_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    model_id: Mapped[int] = mapped_column(ForeignKey("models.id", ondelete="CASCADE"))
+    weekdays: Mapped[int] = mapped_column(Integer)
+    start_time: Mapped[time] = mapped_column()
+    end_time: Mapped[time] = mapped_column()
+    effective_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    input_price_per_million: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    output_price_per_million: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    cache_read_price_per_million: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    cache_write_price_per_million: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+
+    model: Mapped[Model] = relationship(back_populates="time_price_rules")
 
 
 class ModelAlias(Base):

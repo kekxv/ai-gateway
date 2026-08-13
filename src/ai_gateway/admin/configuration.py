@@ -19,6 +19,7 @@ from ai_gateway.catalog.schemas import (
     BaseUrl,
     CatalogName,
     ModelPriceTierInput,
+    ModelTimePriceRuleInput,
     Price,
     PriceMultiplier,
     ProviderCredentialObject,
@@ -28,13 +29,14 @@ from ai_gateway.catalog.schemas import (
     _validate_price_tiers,
 )
 from ai_gateway.core.config import Settings, get_settings
-from ai_gateway.core.enums import Protocol, RouteRuntimeState, RouteSource
+from ai_gateway.core.enums import ModelType, Protocol, RouteRuntimeState, RouteSource
 from ai_gateway.core.security import decrypt_secret, encrypt_secret
 from ai_gateway.db.models import (
     Model,
     ModelAlias,
     ModelPriceTier,
     ModelRoute,
+    ModelTimePriceRule,
     Provider,
     ProviderProtocol,
     User,
@@ -101,6 +103,7 @@ class CatalogModel(BaseModel):
 
     canonical_name: CatalogName
     display_name: CatalogName
+    model_type: ModelType = ModelType.TEXT
     input_price_per_million: Price = Decimal("0")
     output_price_per_million: Price = Decimal("0")
     cache_read_price_per_million: Price = Decimal("0")
@@ -111,6 +114,7 @@ class CatalogModel(BaseModel):
     aliases: list[CatalogAlias] = Field(default_factory=list)
     routes: list[CatalogRoute] = Field(default_factory=list)
     price_tiers: list[ModelPriceTierInput] = Field(default_factory=list)
+    time_price_rules: list[ModelTimePriceRuleInput] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_price_tiers(self) -> CatalogModel:
@@ -155,6 +159,7 @@ async def export_catalog_bundle(
                 selectinload(Model.aliases),
                 selectinload(Model.routes).selectinload(ModelRoute.provider),
                 selectinload(Model.price_tiers),
+                selectinload(Model.time_price_rules),
             )
             .order_by(Model.canonical_name)
         )
@@ -345,7 +350,11 @@ async def _merge_catalog_bundle(
         for model in (
             await session.scalars(
                 select(Model)
-                .options(selectinload(Model.aliases), selectinload(Model.price_tiers))
+                .options(
+                    selectinload(Model.aliases),
+                    selectinload(Model.price_tiers),
+                    selectinload(Model.time_price_rules),
+                )
                 .where(Model.canonical_name.in_([item.canonical_name for item in bundle.models]))
             )
         ).all()
@@ -365,6 +374,7 @@ async def _merge_catalog_bundle(
         else:
             models_updated += 1
         model.display_name = model_payload.display_name
+        model.model_type = model_payload.model_type
         model.input_price_per_million = model_payload.input_price_per_million
         model.output_price_per_million = model_payload.output_price_per_million
         model.cache_read_price_per_million = model_payload.cache_read_price_per_million
@@ -381,6 +391,19 @@ async def _merge_catalog_bundle(
                 cache_write_price_per_million=tier.cache_write_price_per_million,
             )
             for tier in model_payload.price_tiers
+        ]
+        model.time_price_rules = [
+            ModelTimePriceRule(
+                weekdays=sum(1 << day for day in rule.weekdays),
+                start_time=rule.start_time,
+                end_time=rule.end_time,
+                effective_at=rule.effective_at,
+                input_price_per_million=rule.input_price_per_million,
+                output_price_per_million=rule.output_price_per_million,
+                cache_read_price_per_million=rule.cache_read_price_per_million,
+                cache_write_price_per_million=rule.cache_write_price_per_million,
+            )
+            for rule in model_payload.time_price_rules
         ]
         if model_payload.price_tiers:
             first_tier = model_payload.price_tiers[0]
@@ -530,6 +553,7 @@ def _catalog_model(model: Model) -> CatalogModel:
     return CatalogModel(
         canonical_name=model.canonical_name,
         display_name=model.display_name,
+        model_type=model.model_type,
         input_price_per_million=model.input_price_per_million,
         output_price_per_million=model.output_price_per_million,
         cache_read_price_per_million=model.cache_read_price_per_million,
@@ -568,5 +592,18 @@ def _catalog_model(model: Model) -> CatalogModel:
                     item.max_input_tokens or 0,
                 ),
             )
+        ],
+        time_price_rules=[
+            ModelTimePriceRuleInput(
+                weekdays={day for day in range(7) if rule.weekdays & (1 << day)},
+                start_time=rule.start_time,
+                end_time=rule.end_time,
+                effective_at=rule.effective_at,
+                input_price_per_million=rule.input_price_per_million,
+                output_price_per_million=rule.output_price_per_million,
+                cache_read_price_per_million=rule.cache_read_price_per_million,
+                cache_write_price_per_million=rule.cache_write_price_per_million,
+            )
+            for rule in model.time_price_rules
         ],
     )

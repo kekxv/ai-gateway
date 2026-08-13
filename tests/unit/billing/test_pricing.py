@@ -1,9 +1,10 @@
+from datetime import UTC, datetime, time
 from decimal import Decimal
 
 from ai_gateway.billing.pricing import calculate_cost, select_price_tier
 from ai_gateway.billing.service import DEFAULT_MAX_OUTPUT_TOKENS
 from ai_gateway.core.config import Settings
-from ai_gateway.db.models import Model, ModelPriceTier
+from ai_gateway.db.models import Model, ModelPriceTier, ModelTimePriceRule
 from ai_gateway.protocols.types import CanonicalUsage
 
 
@@ -142,3 +143,29 @@ def test_model_without_tiers_uses_legacy_prices() -> None:
 
     assert select_price_tier(model, CanonicalUsage(1_000_000, 1_000_000)) is model
     assert calculate_cost(model, CanonicalUsage(1_000_000, 1_000_000)) == Decimal("7.00000000")
+
+
+def test_cost_uses_matching_configured_weekday_time_rule() -> None:
+    model = Model(
+        canonical_name="time-priced-model",
+        display_name="Time priced model",
+        input_price_per_million=Decimal("10"),
+        output_price_per_million=Decimal("25"),
+        time_price_rules=[
+            ModelTimePriceRule(
+                weekdays=31,  # Monday through Friday
+                start_time=time(9),
+                end_time=time(12),
+                input_price_per_million=Decimal("3"),
+                output_price_per_million=Decimal("9"),
+                cache_read_price_per_million=Decimal("1"),
+                cache_write_price_per_million=Decimal("2"),
+            )
+        ],
+    )
+
+    assert calculate_cost(
+        model,
+        CanonicalUsage(1_000_000, 1_000_000),
+        at=datetime(2026, 8, 17, 1, 0, tzinfo=UTC),  # Monday 09:00 Beijing
+    ) == Decimal("12.00000000")

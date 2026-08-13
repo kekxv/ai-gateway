@@ -7,6 +7,15 @@ class Protocol(StrEnum):
     GEMINI = "gemini"
 
 
+class ModelType(StrEnum):
+    TEXT = "text"
+    IMAGE = "image"
+    TEXT_TO_IMAGE = "text_to_image"
+    AUDIO = "audio"
+    VIDEO = "video"
+    EMBEDDING = "embedding"
+
+
 class ApiKeyScope(StrEnum):
     ALL = "all"
     PROVIDERS = "providers"

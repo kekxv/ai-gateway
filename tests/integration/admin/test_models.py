@@ -272,3 +272,76 @@ async def test_model_price_tiers_round_trip_and_sync_legacy_prices(
     assert [tier["id"] for tier in fetched_tiers] == [tier["id"] for tier in body["price_tiers"]]
     assert [tier["max_input_tokens"] for tier in fetched_tiers] == [272000, None]
     assert Decimal(fetched_tiers[0]["input_price_per_million"]) == Decimal("1.00")
+
+
+async def test_model_type_and_time_price_rules_round_trip_and_partial_updates(
+    admin_client: AsyncClient,
+) -> None:
+    rules = [
+        {
+            "weekdays": [0, 1, 2, 3, 4],
+            "start_time": "09:00:00",
+            "end_time": "12:00:00",
+            "effective_at": "2026-08-17T00:00:00+08:00",
+            "input_price_per_million": "3.00",
+            "output_price_per_million": "9.00",
+            "cache_read_price_per_million": "1.00",
+            "cache_write_price_per_million": "2.00",
+        }
+    ]
+    created = await admin_client.post(
+        "/admin/models",
+        json={
+            "canonical_name": "image-generation-model",
+            "display_name": "Image Generation Model",
+            "model_type": "text_to_image",
+            "time_price_rules": rules,
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["model_type"] == "text_to_image"
+    assert [
+        {key: value for key, value in rule.items() if key != "id"}
+        for rule in body["time_price_rules"]
+    ] == rules
+
+    unchanged = await admin_client.patch(
+        f"/admin/models/{body['id']}",
+        json={"display_name": "Updated Image Generation Model"},
+    )
+    assert unchanged.status_code == 200, unchanged.text
+    assert unchanged.json()["model_type"] == "text_to_image"
+    assert len(unchanged.json()["time_price_rules"]) == 1
+
+    updated = await admin_client.patch(
+        f"/admin/models/{body['id']}",
+        json={"model_type": "image", "time_price_rules": []},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["model_type"] == "image"
+    assert updated.json()["time_price_rules"] == []
+
+
+async def test_model_time_price_rules_reject_invalid_weekdays_and_time_ranges(
+    admin_client: AsyncClient,
+) -> None:
+    response = await admin_client.post(
+        "/admin/models",
+        json={
+            "canonical_name": "invalid-time-rule-model",
+            "display_name": "Invalid Time Rule Model",
+            "time_price_rules": [
+                {
+                    "weekdays": [],
+                    "start_time": "12:00:00",
+                    "end_time": "09:00:00",
+                    "input_price_per_million": "3.00",
+                    "output_price_per_million": "9.00",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422

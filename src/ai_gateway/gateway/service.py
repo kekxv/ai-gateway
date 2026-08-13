@@ -427,7 +427,10 @@ class GatewayService:
                 priced_model = await self._session.scalar(
                     select(Model)
                     .where(Model.id == selected_model_id)
-                    .options(selectinload(Model.price_tiers))
+                    .options(
+                        selectinload(Model.price_tiers),
+                        selectinload(Model.time_price_rules),
+                    )
                 )
             else:
                 priced_model = await self._session.get(Model, selected_model_id)

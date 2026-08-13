@@ -163,6 +163,7 @@ class BillingService:
         recovery: ReservationRecovery | None = None,
         provider: Provider | None = None,
         provider_public_multiplier: Decimal | None = None,
+        pricing_at: datetime | None = None,
     ) -> BalanceReservation:
         if estimated_input_tokens < 0:
             raise ValueError("estimated_input_tokens must be nonnegative")
@@ -177,11 +178,16 @@ class BillingService:
             if provider_public_multiplier < 0:
                 raise ValueError("provider_public_multiplier must be nonnegative")
             public_mult = provider_public_multiplier
+        effective_pricing_at = pricing_at or datetime.now(UTC)
+        cost_kwargs: dict[str, datetime] = {}
+        if pricing_at is not None:
+            cost_kwargs["at"] = pricing_at
         reserved_amount = calculate_cost(
             model,
             CanonicalUsage(estimated_input_tokens, selected_max_output),
             model_multiplier=model_mult,
             provider_multiplier=public_mult,
+            **cost_kwargs,
         )
         _validate_money_magnitude(reserved_amount, "reservation amount")
 
@@ -263,6 +269,7 @@ class BillingService:
                         "reserved_amount": str(reserved_amount),
                         "model_multiplier": str(model_mult),
                         "public_multiplier": str(public_mult),
+                        "pricing_at": effective_pricing_at.isoformat(),
                         "reservation_fingerprint": fingerprint,
                     }
                     if recovery is not None:
@@ -308,20 +315,6 @@ class BillingService:
             idempotency_key,
             suffix_length=max(len(":release"), len(":usage")),
         )
-        actual_cost, platform_cost = _settlement_costs(
-            model=model,
-            usage=usage,
-            cost=cost,
-            cost_amount=cost_amount,
-            provider=provider,
-        )
-        fingerprint = _settlement_fingerprint(
-            reservation_id=reservation_id,
-            actual_cost=actual_cost,
-            cost_amount=platform_cost,
-            usage=usage,
-            usage_source=usage_source,
-        )
         try:
             async with self._session_factory() as session:
                 async with session.begin():
@@ -346,6 +339,27 @@ class BillingService:
                         raise ReservationNotFound
                     if reservation.request_id is None:
                         raise RuntimeError("reservation is missing its request ID")
+                    raw_pricing_at = reservation.metadata_json.get("pricing_at")
+                    pricing_at = (
+                        datetime.fromisoformat(str(raw_pricing_at))
+                        if raw_pricing_at is not None
+                        else None
+                    )
+                    actual_cost, platform_cost = _settlement_costs(
+                        model=model,
+                        usage=usage,
+                        cost=cost,
+                        cost_amount=cost_amount,
+                        provider=provider,
+                        pricing_at=pricing_at,
+                    )
+                    fingerprint = _settlement_fingerprint(
+                        reservation_id=reservation_id,
+                        actual_cost=actual_cost,
+                        cost_amount=platform_cost,
+                        usage=usage,
+                        usage_source=usage_source,
+                    )
                     if expected_recovery_version is not None:
                         metadata = reservation.metadata_json
                         if (
@@ -993,6 +1007,7 @@ def _settlement_costs(
     cost: Decimal | None,
     cost_amount: Decimal | None,
     provider: Provider | None = None,
+    pricing_at: datetime | None = None,
 ) -> tuple[Decimal, Decimal]:
     if cost is not None:
         if model is not None:
@@ -1009,12 +1024,16 @@ def _settlement_costs(
     if model is None or usage is None:
         raise TypeError("model and usage are required when cost is omitted")
     model_mult, public_mult, cost_mult = get_effective_multipliers(model, provider)
+    cost_kwargs: dict[str, datetime] = {}
+    if pricing_at is not None:
+        cost_kwargs["at"] = pricing_at
     public_cost = _money(
         calculate_cost(
             model,
             usage,
             model_multiplier=model_mult,
             provider_multiplier=public_mult,
+            **cost_kwargs,
         ),
         "settlement cost",
     )
@@ -1024,6 +1043,7 @@ def _settlement_costs(
             usage,
             model_multiplier=model_mult,
             provider_multiplier=cost_mult,
+            **cost_kwargs,
         ),
         "settlement cost amount",
     )
