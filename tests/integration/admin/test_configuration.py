@@ -133,6 +133,7 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
             {
                 "canonical_name": "model-a",
                 "display_name": "Model A",
+                "model_type": "text",
                 "input_price_per_million": 0.12345678,
                 "output_price_per_million": 1.23456789,
                 "cache_read_price_per_million": 0.01234567,
@@ -153,10 +154,12 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
                     }
                 ],
                 "price_tiers": [],
+                "time_price_rules": [],
             },
             {
                 "canonical_name": "model-z",
                 "display_name": "Model Z",
+                "model_type": "text",
                 "input_price_per_million": 0.0,
                 "output_price_per_million": 0.0,
                 "cache_read_price_per_million": 0.0,
@@ -167,6 +170,7 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
                 "aliases": [],
                 "routes": [],
                 "price_tiers": [],
+                "time_price_rules": [],
             },
         ],
     }
