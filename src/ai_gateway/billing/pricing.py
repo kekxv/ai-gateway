@@ -74,9 +74,16 @@ def select_time_price_rule(model: PricedModel, at: datetime) -> TimePriceRule | 
         raise ValueError("pricing timestamp must be timezone-aware")
     local = at.astimezone(ZoneInfo(BEIJING_TIMEZONE))
     weekday_mask = 1 << local.weekday()
-    rules = cast(
-        tuple[TimePriceRule, ...] | list[TimePriceRule], getattr(model, "time_price_rules", ())
-    )
+    try:
+        rules = cast(
+            tuple[TimePriceRule, ...] | list[TimePriceRule],
+            getattr(model, "time_price_rules", ()),
+        )
+    except DetachedInstanceError:
+        # Time pricing, like tier pricing, must not cause implicit ORM I/O.
+        # Detached legacy callers retain the base-price fallback when the
+        # relationship was not preloaded.
+        rules = ()
     for rule in rules:
         effective_at = getattr(rule, "effective_at", None)
         if (
