@@ -358,7 +358,7 @@ describe('模型与别名管理', () => {
 
     await wrapper.get('[data-test="model-canonical-name"]').setValue('image-generator')
     await wrapper.get('[data-test="model-display-name"]').setValue('Image Generator')
-    await wrapper.get('[data-test="model-type-image"]').setValue(true)
+    await wrapper.get('[data-test="model-type-image"] input').setValue(true)
     await wrapper.get('[data-test="add-model-time-price-rule"]').trigger('click')
     await wrapper.get('[data-test="model-time-rule-day-0-5"]').trigger('click')
     await wrapper.get('[data-test="model-time-rule-start-0"]').setValue('14:00:00')
@@ -385,6 +385,22 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
+  it('使用紧凑复选按钮组展示模型类型并保留类型选择器', async () => {
+    const wrapper = mount(ModelFormDrawer, {
+      props: { modelValue: true, model: null, submitting: false },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const modelTypeGroup = wrapper.get('[data-test="model-type-group"]')
+    expect(modelTypeGroup.classes()).toContain('model-type-checkboxes')
+    expect(modelTypeGroup.findAll('.el-checkbox-button')).toHaveLength(6)
+    expect(wrapper.get('[data-test="model-type-text"] input').element).toBeInstanceOf(HTMLInputElement)
+    expect(wrapper.get('[data-test="model-type-image"] input').element).toBeInstanceOf(HTMLInputElement)
+
+    wrapper.unmount()
+  })
+
   it('要求至少选择一种模型类型', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(ModelFormDrawer, {
@@ -395,7 +411,7 @@ describe('模型与别名管理', () => {
 
     await wrapper.get('[data-test="model-canonical-name"]').setValue('image-only')
     await wrapper.get('[data-test="model-display-name"]').setValue('Image Only')
-    await wrapper.get('[data-test="model-type-text"]').setValue(false)
+    await wrapper.get('[data-test="model-type-text"] input').setValue(false)
     await wrapper.get('form').trigger('submit')
     await waitForFormErrors()
 

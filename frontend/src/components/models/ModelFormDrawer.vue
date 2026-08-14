@@ -3,6 +3,8 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { Delete, Plus } from '@element-plus/icons-vue'
 import {
   ElButton,
+  ElCheckboxButton,
+  ElCheckboxGroup,
   ElDrawer,
   ElForm,
   ElFormItem,
@@ -12,6 +14,7 @@ import {
   ElSwitch,
 } from 'element-plus'
 import 'element-plus/theme-chalk/el-button.css'
+import 'element-plus/theme-chalk/el-checkbox.css'
 import 'element-plus/theme-chalk/el-drawer.css'
 import 'element-plus/theme-chalk/el-form.css'
 import 'element-plus/theme-chalk/el-form-item.css'
@@ -605,14 +608,14 @@ function submitForm(): void {
             <ElInput v-model="canonicalName" data-test="model-canonical-name" maxlength="255" />
           </ElFormItem>
           <ElFormItem data-validation="model-types" label="模型类型" :error="modelTypesError">
-            <div class="weekday-checkboxes">
-              <label><input v-model="modelTypes" type="checkbox" value="text" data-test="model-type-text" />文本</label>
-              <label><input v-model="modelTypes" type="checkbox" value="image" data-test="model-type-image" />图像理解</label>
-              <label><input v-model="modelTypes" type="checkbox" value="text_to_image" data-test="model-type-text_to_image" />文生图</label>
-              <label><input v-model="modelTypes" type="checkbox" value="audio" data-test="model-type-audio" />音频</label>
-              <label><input v-model="modelTypes" type="checkbox" value="video" data-test="model-type-video" />视频</label>
-              <label><input v-model="modelTypes" type="checkbox" value="embedding" data-test="model-type-embedding" />向量嵌入</label>
-            </div>
+            <ElCheckboxGroup v-model="modelTypes" data-test="model-type-group" class="model-type-checkboxes">
+              <ElCheckboxButton value="text" data-test="model-type-text">文本</ElCheckboxButton>
+              <ElCheckboxButton value="image" data-test="model-type-image">图像理解</ElCheckboxButton>
+              <ElCheckboxButton value="text_to_image" data-test="model-type-text_to_image">文生图</ElCheckboxButton>
+              <ElCheckboxButton value="audio" data-test="model-type-audio">音频</ElCheckboxButton>
+              <ElCheckboxButton value="video" data-test="model-type-video">视频</ElCheckboxButton>
+              <ElCheckboxButton value="embedding" data-test="model-type-embedding">向量嵌入</ElCheckboxButton>
+            </ElCheckboxGroup>
           </ElFormItem>
           <ElFormItem
             data-validation="model-display-name"
@@ -890,6 +893,16 @@ function submitForm(): void {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0 1rem;
+}
+
+.model-type-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.model-type-checkboxes :deep(.el-checkbox-button) {
+  margin: 0;
 }
 
 .switch-row,
