@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ProviderResponse } from '@/api/types'
+import type { ModelResponse, ProviderResponse } from '@/api/types'
 import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
 import ModelSyncDialog from '@/components/providers/ModelSyncDialog.vue'
 import { routes } from '@/router'
@@ -79,6 +79,57 @@ const geminiFixture: ProviderResponse = {
   ],
 }
 
+const harnessModelsFixture: ModelResponse[] = [
+  {
+    id: 101,
+    canonical_name: 'chat-model',
+    display_name: 'Chat model',
+    model_type: 'text',
+    input_price_per_million: '0',
+    output_price_per_million: '0',
+    cache_read_price_per_million: '0',
+    cache_write_price_per_million: '0',
+    price_multiplier: 1,
+    enabled: true,
+    aliases: [],
+    routing_strategy: 'weighted_random',
+    created_at: '2026-08-14T00:00:00Z',
+    updated_at: '2026-08-14T00:00:00Z',
+  },
+  {
+    id: 102,
+    canonical_name: 'vision-model',
+    display_name: 'Vision model',
+    model_type: 'image',
+    input_price_per_million: '0',
+    output_price_per_million: '0',
+    cache_read_price_per_million: '0',
+    cache_write_price_per_million: '0',
+    price_multiplier: 1,
+    enabled: true,
+    aliases: [],
+    routing_strategy: 'weighted_random',
+    created_at: '2026-08-14T00:00:00Z',
+    updated_at: '2026-08-14T00:00:00Z',
+  },
+  {
+    id: 103,
+    canonical_name: 'disabled-model',
+    display_name: 'Disabled model',
+    model_type: 'text',
+    input_price_per_million: '0',
+    output_price_per_million: '0',
+    cache_read_price_per_million: '0',
+    cache_write_price_per_million: '0',
+    price_multiplier: 1,
+    enabled: false,
+    aliases: [],
+    routing_strategy: 'weighted_random',
+    created_at: '2026-08-14T00:00:00Z',
+    updated_at: '2026-08-14T00:00:00Z',
+  },
+]
+
 const server = setupServer()
 
 beforeAll(() => {
@@ -134,6 +185,22 @@ async function confirmSelectedModels(wrapper: VueWrapper): Promise<void> {
 }
 
 describe('供应商与协议管理', () => {
+  it('生成 DeepSeek Harness 配置时仅导出启用模型', async () => {
+    server.use(http.get('/admin/models', () => HttpResponse.json(harnessModelsFixture)))
+    const wrapper = await mountProviders()
+
+    await wrapper.get('[data-test="generate-deepseek-harness-config"]').trigger('click')
+    await flushPromises()
+
+    const settings = wrapper.get('[data-test="deepseek-harness-settings"]').text()
+    expect(settings).toContain('api: openai-responses')
+    expect(settings).toContain('id: chat-model')
+    expect(settings).toContain('id: vision-model')
+    expect(settings).toContain('input: [text, image]')
+    expect(settings).not.toContain('disabled-model')
+    wrapper.unmount()
+  })
+
   it('通过独立懒加载路由提供供应商页面', async () => {
     const shellRoute = routes.find((route) => route.path === '/')
     const providerRoute = shellRoute?.children?.find((route) => route.name === 'providers')
