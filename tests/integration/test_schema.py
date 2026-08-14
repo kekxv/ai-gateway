@@ -91,6 +91,7 @@ def test_schema_contains_exact_tables_and_columns() -> None:
             "canonical_name",
             "display_name",
             "model_type",
+            "model_types",
             "enabled",
             "input_price_per_million",
             "output_price_per_million",

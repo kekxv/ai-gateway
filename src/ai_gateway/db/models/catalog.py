@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     DateTime,
@@ -107,6 +108,10 @@ class Model(Base):
         Enum(ModelType, name="model_type", values_callable=enum_values),
         default=ModelType.TEXT,
         server_default=ModelType.TEXT.value,
+    )
+    model_types: Mapped[list[ModelType]] = mapped_column(
+        JSON,
+        default=lambda: [ModelType.TEXT],
     )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     input_price_per_million: Mapped[Decimal] = mapped_column(

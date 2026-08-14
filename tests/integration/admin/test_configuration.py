@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ai_gateway.admin.model_sync import sync_provider_models
-from ai_gateway.core.enums import Protocol, RouteRuntimeState, RouteSource
+from ai_gateway.core.enums import ModelType, Protocol, RouteRuntimeState, RouteSource
 from ai_gateway.core.security import decrypt_secret, encrypt_secret
 from ai_gateway.db.models import Model, ModelAlias, ModelRoute, Provider, ProviderProtocol
 
@@ -54,6 +54,7 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
     model_a = Model(
         canonical_name="model-a",
         display_name="Model A",
+        model_types=[ModelType.TEXT, ModelType.IMAGE],
         input_price_per_million=Decimal("0.12345678"),
         output_price_per_million=Decimal("1.23456789"),
         cache_read_price_per_million=Decimal("0.01234567"),
@@ -134,6 +135,7 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
                 "canonical_name": "model-a",
                 "display_name": "Model A",
                 "model_type": "text",
+                "model_types": ["text", "image"],
                 "input_price_per_million": 0.12345678,
                 "output_price_per_million": 1.23456789,
                 "cache_read_price_per_million": 0.01234567,
@@ -160,6 +162,7 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
                 "canonical_name": "model-z",
                 "display_name": "Model Z",
                 "model_type": "text",
+                "model_types": ["text"],
                 "input_price_per_million": 0.0,
                 "output_price_per_million": 0.0,
                 "cache_read_price_per_million": 0.0,
@@ -283,6 +286,7 @@ def _import_bundle(
             {
                 "canonical_name": "import-model",
                 "display_name": "Imported Model",
+                "model_types": ["text", "image"],
                 "input_price_per_million": input_price,
                 "output_price_per_million": output_price,
                 "cache_read_price_per_million": cache_read_price,
@@ -343,6 +347,8 @@ async def test_admin_import_creates_catalog_resources_and_redacted_secrets_use_e
     assert len(provider.protocols) == 1
     assert provider.protocols[0].extra_headers_encrypted is None
     assert model is not None
+    assert model.model_types == [ModelType.TEXT, ModelType.IMAGE]
+    assert model.model_type is ModelType.TEXT
     assert model.input_price_per_million == Decimal("0.11000000")
     assert model.output_price_per_million == Decimal("0.22000000")
     assert model.cache_read_price_per_million == Decimal("0.03000000")

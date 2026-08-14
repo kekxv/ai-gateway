@@ -44,6 +44,12 @@ PriceMultiplier = Annotated[
 RoutingStrategy = Literal["weighted_random"]
 
 
+def normalized_model_types(values: list[ModelType]) -> list[ModelType]:
+    if not values or len(values) != len(set(values)):
+        raise ValueError("model_types must contain unique values")
+    return values
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedModel:
     model_id: int
@@ -194,6 +200,7 @@ class ModelCreate(BaseModel):
     canonical_name: CatalogName
     display_name: CatalogName
     model_type: ModelType = ModelType.TEXT
+    model_types: list[ModelType] = Field(default_factory=list)
     input_price_per_million: Price = Decimal("0")
     output_price_per_million: Price = Decimal("0")
     cache_read_price_per_million: Price = Decimal("0")
@@ -207,6 +214,11 @@ class ModelCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_aliases(self) -> ModelCreate:
+        if "model_types" in self.model_fields_set:
+            self.model_types = normalized_model_types(self.model_types)
+            self.model_type = self.model_types[0]
+        else:
+            self.model_types = [self.model_type]
         _validate_unique_aliases(self.aliases)
         _validate_price_tiers(self.price_tiers)
         return self
@@ -218,6 +230,7 @@ class ModelUpdate(BaseModel):
     canonical_name: CatalogName | None = None
     display_name: CatalogName | None = None
     model_type: ModelType | None = None
+    model_types: list[ModelType] | None = None
     input_price_per_million: Price | None = None
     output_price_per_million: Price | None = None
     cache_read_price_per_million: Price | None = None
@@ -231,6 +244,11 @@ class ModelUpdate(BaseModel):
 
     @model_validator(mode="after")
     def validate_aliases(self) -> ModelUpdate:
+        if self.model_types is not None:
+            self.model_types = normalized_model_types(self.model_types)
+            self.model_type = self.model_types[0]
+        elif self.model_type is not None:
+            self.model_types = [self.model_type]
         if self.aliases is not None:
             _validate_unique_aliases(self.aliases)
         if self.price_tiers is not None:
@@ -249,6 +267,7 @@ class ModelResponse(BaseModel):
     canonical_name: str
     display_name: str
     model_type: ModelType = ModelType.TEXT
+    model_types: list[ModelType] = Field(default_factory=lambda: [ModelType.TEXT])
     input_price_per_million: Decimal
     output_price_per_million: Decimal
     cache_read_price_per_million: Decimal
@@ -268,6 +287,7 @@ class UserModelResponse(BaseModel):
     canonical_name: str
     display_name: str
     model_type: ModelType
+    model_types: list[ModelType]
     input_price_per_million: Decimal
     output_price_per_million: Decimal
     cache_read_price_per_million: Decimal

@@ -27,6 +27,7 @@ from ai_gateway.catalog.schemas import (
     WebsocketUrl,
     _provider_multiplier_fields,
     _validate_price_tiers,
+    normalized_model_types,
 )
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import ModelType, Protocol, RouteRuntimeState, RouteSource
@@ -104,6 +105,7 @@ class CatalogModel(BaseModel):
     canonical_name: CatalogName
     display_name: CatalogName
     model_type: ModelType = ModelType.TEXT
+    model_types: list[ModelType] = Field(default_factory=list)
     input_price_per_million: Price = Decimal("0")
     output_price_per_million: Price = Decimal("0")
     cache_read_price_per_million: Price = Decimal("0")
@@ -118,6 +120,11 @@ class CatalogModel(BaseModel):
 
     @model_validator(mode="after")
     def validate_price_tiers(self) -> CatalogModel:
+        if "model_types" in self.model_fields_set:
+            self.model_types = normalized_model_types(self.model_types)
+            self.model_type = self.model_types[0]
+        else:
+            self.model_types = [self.model_type]
         _validate_price_tiers(self.price_tiers)
         return self
 
@@ -374,7 +381,8 @@ async def _merge_catalog_bundle(
         else:
             models_updated += 1
         model.display_name = model_payload.display_name
-        model.model_type = model_payload.model_type
+        model.model_types = model_payload.model_types
+        model.model_type = model_payload.model_types[0]
         model.input_price_per_million = model_payload.input_price_per_million
         model.output_price_per_million = model_payload.output_price_per_million
         model.cache_read_price_per_million = model_payload.cache_read_price_per_million
@@ -554,6 +562,7 @@ def _catalog_model(model: Model) -> CatalogModel:
         canonical_name=model.canonical_name,
         display_name=model.display_name,
         model_type=model.model_type,
+        model_types=model.model_types,
         input_price_per_million=model.input_price_per_million,
         output_price_per_million=model.output_price_per_million,
         cache_read_price_per_million=model.cache_read_price_per_million,

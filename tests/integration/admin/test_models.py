@@ -302,6 +302,7 @@ async def test_model_type_and_time_price_rules_round_trip_and_partial_updates(
     assert created.status_code == 201, created.text
     body = created.json()
     assert body["model_type"] == "text_to_image"
+    assert body["model_types"] == ["text_to_image"]
     assert [
         {key: value for key, value in rule.items() if key != "id"}
         for rule in body["time_price_rules"]
@@ -313,6 +314,7 @@ async def test_model_type_and_time_price_rules_round_trip_and_partial_updates(
     )
     assert unchanged.status_code == 200, unchanged.text
     assert unchanged.json()["model_type"] == "text_to_image"
+    assert unchanged.json()["model_types"] == ["text_to_image"]
     assert len(unchanged.json()["time_price_rules"]) == 1
 
     updated = await admin_client.patch(
@@ -321,7 +323,53 @@ async def test_model_type_and_time_price_rules_round_trip_and_partial_updates(
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["model_type"] == "image"
+    assert updated.json()["model_types"] == ["image"]
     assert updated.json()["time_price_rules"] == []
+
+
+@pytest.mark.asyncio
+async def test_model_types_round_trip_and_keep_legacy_model_type_synchronized(
+    admin_client: AsyncClient,
+) -> None:
+    created = await admin_client.post(
+        "/admin/models",
+        json={
+            "canonical_name": "vision-chat",
+            "display_name": "Vision Chat",
+            "model_types": ["text", "image"],
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    assert created.json()["model_types"] == ["text", "image"]
+    assert created.json()["model_type"] == "text"
+
+    updated = await admin_client.patch(
+        f"/admin/models/{created.json()['id']}",
+        json={"model_types": ["image"]},
+    )
+
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["model_types"] == ["image"]
+    assert updated.json()["model_type"] == "image"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_types", [[], ["text", "text"]])
+async def test_model_types_must_be_nonempty_and_unique(
+    admin_client: AsyncClient,
+    model_types: list[str],
+) -> None:
+    response = await admin_client.post(
+        "/admin/models",
+        json={
+            "canonical_name": f"invalid-model-types-{'-'.join(model_types) or 'empty'}",
+            "display_name": "Invalid Model Types",
+            "model_types": model_types,
+        },
+    )
+
+    assert response.status_code == 422
 
 
 async def test_model_time_price_rules_reject_invalid_weekdays_and_time_ranges(
