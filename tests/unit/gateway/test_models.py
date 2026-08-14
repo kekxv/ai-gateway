@@ -21,3 +21,18 @@ def test_openai_model_response_exposes_optional_model_capabilities() -> None:
         "model_types": ["text", "image"],
         "model_type": "text",
     }
+
+
+def test_openai_model_response_accepts_string_capabilities_from_schema_bootstrap() -> None:
+    response = _openai_model(
+        SelectableModel(
+            selectable_id="bootstrap-model",
+            canonical_name="bootstrap-model",
+            display_name="Bootstrap Model",
+            model_types=["text", "image"],  # type: ignore[list-item]
+            model_type="text",  # type: ignore[arg-type]
+        )
+    )
+
+    assert response["model_types"] == ["text", "image"]
+    assert response["model_type"] == "text"

@@ -210,10 +210,16 @@ def _openai_model(model: SelectableModel) -> dict[str, Any]:
         "metadata": model.metadata,
     }
     if model.model_types is not None:
-        response["model_types"] = [model_type.value for model_type in model.model_types]
+        response["model_types"] = [
+            _model_type_value(model_type) for model_type in model.model_types
+        ]
     if model.model_type is not None:
-        response["model_type"] = model.model_type.value
+        response["model_type"] = _model_type_value(model.model_type)
     return response
+
+
+def _model_type_value(model_type: ModelType | str) -> str:
+    return model_type.value if isinstance(model_type, ModelType) else model_type
 
 
 def _gemini_model(model: SelectableModel) -> dict[str, Any]:
