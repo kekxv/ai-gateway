@@ -201,6 +201,63 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('重新加载 Harness 模型时清除过期默认模型并禁用导出', async () => {
+    const reloadedModels = deferred<Response>()
+    let modelRequests = 0
+    server.use(http.get('/admin/models', () => {
+      modelRequests += 1
+      return modelRequests === 1 ? HttpResponse.json(harnessModelsFixture) : reloadedModels.promise
+    }))
+    const wrapper = await mountProviders()
+
+    await wrapper.get('[data-test="generate-deepseek-harness-config"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('#harness-default-model').setValue('chat-model')
+    await wrapper.get('[data-test="deepseek-harness-close"]').trigger('click')
+    await wrapper.get('[data-test="generate-deepseek-harness-config"]').trigger('click')
+    await wrapper.get('[data-test="deepseek-harness-api-key"]').setValue('sk-gw-secret')
+
+    expect(wrapper.get<HTMLSelectElement>('#harness-default-model').element.value).toBe('')
+    expect(wrapper.get('[data-test="deepseek-harness-download-settings"]').attributes('aria-disabled')).toBe('true')
+
+    reloadedModels.resolve(HttpResponse.json([
+      { ...harnessModelsFixture[0], enabled: false },
+      harnessModelsFixture[1],
+    ]))
+    await flushPromises()
+
+    expect(wrapper.get<HTMLSelectElement>('#harness-default-model').element.value).toBe('')
+    expect(wrapper.get('[data-test="deepseek-harness-download-settings"]').attributes('aria-disabled')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('忽略过期 Harness 模型加载响应', async () => {
+    const staleResponse = deferred<Response>()
+    const currentResponse = deferred<Response>()
+    let modelRequests = 0
+    server.use(http.get('/admin/models', () => {
+      modelRequests += 1
+      if (modelRequests === 1) return HttpResponse.json(harnessModelsFixture)
+      return modelRequests === 2 ? staleResponse.promise : currentResponse.promise
+    }))
+    const wrapper = await mountProviders()
+
+    await wrapper.get('[data-test="generate-deepseek-harness-config"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="deepseek-harness-close"]').trigger('click')
+    await wrapper.get('[data-test="generate-deepseek-harness-config"]').trigger('click')
+    await wrapper.get('[data-test="generate-deepseek-harness-config"]').trigger('click')
+    currentResponse.resolve(HttpResponse.json([harnessModelsFixture[1]]))
+    await flushPromises()
+    staleResponse.resolve(HttpResponse.json([harnessModelsFixture[0]]))
+    await flushPromises()
+
+    const optionValues = wrapper.findAll('#harness-default-model option').map((option) => option.attributes('value'))
+    expect(optionValues).toContain('vision-model')
+    expect(optionValues).not.toContain('chat-model')
+    wrapper.unmount()
+  })
+
   it('通过独立懒加载路由提供供应商页面', async () => {
     const shellRoute = routes.find((route) => route.path === '/')
     const providerRoute = shellRoute?.children?.find((route) => route.name === 'providers')

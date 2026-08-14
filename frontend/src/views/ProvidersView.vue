@@ -103,19 +103,26 @@ const harnessFiles = computed(() => buildDeepSeekHarnessFiles({
     enabled: model.enabled,
   })),
 }))
-const harnessReady = computed(() => [
+const harnessEnabledModelNames = computed(() => new Set(
+  harnessModels.value
+    .filter((model) => model.enabled)
+    .map((model) => model.canonical_name),
+))
+const harnessReady = computed(() => !harnessLoadingModels.value && harnessModelLoadError.value === '' && [
   harnessProviderId.value,
   harnessDisplayName.value,
   harnessBaseUrl.value,
   harnessApiKeyEnv.value,
   harnessApiKey.value,
   harnessDefaultModel.value,
-].every((value) => value.trim() !== ''))
+].every((value) => value.trim() !== '') &&
+  harnessEnabledModelNames.value.has(harnessDefaultModel.value.trim()))
 let requestController: AbortController | undefined
 let saveController: AbortController | undefined
 const operationControllers = new Set<AbortController>()
 let mounted = true
 let loadGeneration = 0
+let harnessLoadGeneration = 0
 let stateRevision = 0
 let drawerSessionGeneration = 0
 let activeSaveToken: symbol | undefined
@@ -168,14 +175,24 @@ function downloadCatalog(blob: Blob): void {
 }
 
 async function loadHarnessModels(): Promise<void> {
+  const generation = ++harnessLoadGeneration
+  const previousDefaultModel = harnessDefaultModel.value
   harnessLoadingModels.value = true
   harnessModelLoadError.value = ''
+  harnessModels.value = []
+  harnessDefaultModel.value = ''
   try {
-    harnessModels.value = await listModels()
+    const models = await listModels()
+    if (!mounted || generation !== harnessLoadGeneration || !harnessDialogOpen.value) return
+    harnessModels.value = models
+    if (models.some((model) => model.enabled && model.canonical_name === previousDefaultModel)) {
+      harnessDefaultModel.value = previousDefaultModel
+    }
   } catch (error: unknown) {
+    if (!mounted || generation !== harnessLoadGeneration || !harnessDialogOpen.value) return
     harnessModelLoadError.value = errorText(error, '模型列表加载失败')
   } finally {
-    harnessLoadingModels.value = false
+    if (mounted && generation === harnessLoadGeneration) harnessLoadingModels.value = false
   }
 }
 
@@ -185,7 +202,12 @@ function openHarnessDialog(): void {
 }
 
 function closeHarnessDialog(): void {
+  harnessLoadGeneration += 1
   harnessApiKey.value = ''
+  harnessDefaultModel.value = ''
+  harnessModels.value = []
+  harnessModelLoadError.value = ''
+  harnessLoadingModels.value = false
   harnessDialogOpen.value = false
 }
 
@@ -606,6 +628,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   mounted = false
   loadGeneration += 1
+  harnessLoadGeneration += 1
   drawerSessionGeneration += 1
   requestController?.abort()
   saveController?.abort()
