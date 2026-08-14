@@ -608,7 +608,7 @@ function submitForm(): void {
             <ElInput v-model="canonicalName" data-test="model-canonical-name" maxlength="255" />
           </ElFormItem>
           <ElFormItem data-validation="model-types" label="模型类型" :error="modelTypesError">
-            <ElCheckboxGroup v-model="modelTypes" data-test="model-type-group" class="model-type-checkboxes">
+            <ElCheckboxGroup v-model="modelTypes" size="small" data-test="model-type-group" class="model-type-checkboxes">
               <ElCheckboxButton value="text" data-test="model-type-text">文本</ElCheckboxButton>
               <ElCheckboxButton value="image" data-test="model-type-image">图像理解</ElCheckboxButton>
               <ElCheckboxButton value="text_to_image" data-test="model-type-text_to_image">文生图</ElCheckboxButton>
@@ -903,6 +903,14 @@ function submitForm(): void {
 
 .model-type-checkboxes :deep(.el-checkbox-button) {
   margin: 0;
+}
+
+.model-type-checkboxes :deep(.el-checkbox-button__inner) {
+  border-radius: var(--el-border-radius-base);
+}
+
+.model-type-checkboxes :deep(.el-checkbox-button:not(:first-child) .el-checkbox-button__inner) {
+  border-left: var(--el-border);
 }
 
 .switch-row,

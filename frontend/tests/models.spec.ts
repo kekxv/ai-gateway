@@ -394,7 +394,9 @@ describe('模型与别名管理', () => {
 
     const modelTypeGroup = wrapper.get('[data-test="model-type-group"]')
     expect(modelTypeGroup.classes()).toContain('model-type-checkboxes')
-    expect(modelTypeGroup.findAll('.el-checkbox-button')).toHaveLength(6)
+    const modelTypeButtons = modelTypeGroup.findAll('.el-checkbox-button')
+    expect(modelTypeButtons).toHaveLength(6)
+    expect(modelTypeButtons.every((button) => button.classes().includes('el-checkbox-button--small'))).toBe(true)
     expect(wrapper.get('[data-test="model-type-text"] input').element).toBeInstanceOf(HTMLInputElement)
     expect(wrapper.get('[data-test="model-type-image"] input').element).toBeInstanceOf(HTMLInputElement)
 
