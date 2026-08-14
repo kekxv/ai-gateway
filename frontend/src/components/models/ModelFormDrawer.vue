@@ -913,6 +913,11 @@ function submitForm(): void {
   border-left: var(--el-border);
 }
 
+.model-type-checkboxes :deep(.el-checkbox-button.is-checked:not(:first-child) .el-checkbox-button__inner),
+.model-type-checkboxes :deep(.el-checkbox-button.is-focus:not(:first-child) .el-checkbox-button__inner) {
+  border-left-color: var(--el-checkbox-button-checked-border-color);
+}
+
 .switch-row,
 .section-heading,
 .alias-row,
