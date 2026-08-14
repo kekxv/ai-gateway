@@ -16,6 +16,9 @@ import {
   type OpenCodeModelSelection,
   type PiApi,
 } from '@/utils/clientConfig'
+import { buildDeepSeekHarnessFiles } from '@/lib/deepseekHarness'
+
+type DialogTarget = ClientConfigTarget | 'deepseek-harness'
 
 const props = defineProps<{
   modelValue: boolean
@@ -28,7 +31,7 @@ const emit = defineEmits<{
 }>()
 
 const manualApiKey = ref('')
-const target = ref<ClientConfigTarget>('claude')
+const target = ref<DialogTarget>('claude')
 const claudeModels = ref<ClaudeModelSelection>({
   primary: '',
   opus: '',
@@ -49,16 +52,18 @@ const openCodeModels = ref<OpenCodeModelSelection>({
 })
 const piModelIds = ref<string[]>([])
 const piApi = ref<PiApi>('openai-completions')
+const harnessDefaultModel = ref('')
 const availableModelIds = ref<string[]>([])
 const loadingModels = ref(false)
 const modelLoadError = ref('')
 const actionStatus = ref('')
 
-const targets: Array<{ id: ClientConfigTarget; label: string }> = [
+const targets: Array<{ id: DialogTarget; label: string }> = [
   { id: 'claude', label: 'Claude Code' },
   { id: 'codex', label: 'Codex' },
   { id: 'opencode', label: 'OpenCode' },
   { id: 'pi', label: 'Pi' },
+  { id: 'deepseek-harness', label: 'DeepSeek Harness' },
 ]
 
 const baseUrl = computed(() => props.baseUrl ?? window.location.origin)
@@ -68,18 +73,36 @@ const isClaude = computed(() => target.value === 'claude')
 const isCodex = computed(() => target.value === 'codex')
 const isOpenCode = computed(() => target.value === 'opencode')
 const isPi = computed(() => target.value === 'pi')
+const isHarness = computed(() => target.value === 'deepseek-harness')
 const claudeModelsReady = computed(() => Object.values(claudeModels.value).every((id) => id !== ''))
 const codexModelsReady = computed(() => Object.values(codexModels.value).every((id) => id !== ''))
 const openCodeModelsReady = computed(() => Object.values(openCodeModels.value).every((id) => id !== ''))
 const piModelsReady = computed(() => piModelIds.value.length > 0)
+const harnessModelsReady = computed(() => harnessDefaultModel.value !== '')
 const modelsReady = computed(() => {
   if (isClaude.value) return claudeModelsReady.value
   if (isCodex.value) return codexModelsReady.value
   if (isOpenCode.value) return openCodeModelsReady.value
+  if (isHarness.value) return harnessModelsReady.value
   return piModelsReady.value
 })
 
+const harnessFiles = computed(() => {
+  if (!isHarness.value || effectiveApiKey.value.trim() === '' || !harnessModelsReady.value) return null
+  return buildDeepSeekHarnessFiles({
+    providerId: 'ai-gateway',
+    displayName: 'AI Gateway',
+    baseUrl: `${baseUrl.value.replace(/\/+$/, '')}/v1`,
+    apiKeyEnv: 'AI_GATEWAY_API_KEY',
+    apiKey: effectiveApiKey.value,
+    defaultModel: harnessDefaultModel.value,
+    models: availableModelIds.value.map((canonical_name) => ({ canonical_name, enabled: true })),
+  })
+})
+
 const configuration = computed<ClientConfigFile | null>(() => {
+  const selectedTarget = target.value
+  if (selectedTarget === 'deepseek-harness') return null
   if (effectiveApiKey.value.trim() === '') return null
   if (!modelsReady.value) return null
   const modelId = isClaude.value
@@ -89,7 +112,7 @@ const configuration = computed<ClientConfigFile | null>(() => {
       : isOpenCode.value
         ? openCodeModels.value.primary
         : piModelIds.value[0] ?? ''
-  return buildClientConfig(target.value, {
+  return buildClientConfig(selectedTarget, {
     apiKey: effectiveApiKey.value,
     baseUrl: baseUrl.value,
     modelId,
@@ -122,6 +145,7 @@ function resetResolvedModels(): void {
   }
   piModelIds.value = []
   piApi.value = 'openai-completions'
+  harnessDefaultModel.value = ''
   modelLoadError.value = ''
 }
 
@@ -185,25 +209,37 @@ async function verifyAndLoadModels(): Promise<void> {
   }
 }
 
-function download(): void {
-  if (configuration.value === null) return
+function downloadFile(filename: string, content: string, type: string): void {
   let objectUrl: string | null = null
   let anchor: HTMLAnchorElement | null = null
   try {
-    const blob = new Blob([configuration.value.content], { type: 'text/plain;charset=utf-8' })
+    const blob = new Blob([content], { type })
     objectUrl = URL.createObjectURL(blob)
     anchor = document.createElement('a')
     anchor.href = objectUrl
-    anchor.download = configuration.value.filename
+    anchor.download = filename
     anchor.rel = 'noopener'
     document.body.append(anchor)
     anchor.click()
-    actionStatus.value = '下载已开始。'
-  } catch {
-    actionStatus.value = '下载失败，请复制预览内容并合并到已有配置文件。'
   } finally {
     anchor?.remove()
     if (objectUrl !== null) URL.revokeObjectURL(objectUrl)
+  }
+}
+
+function download(): void {
+  try {
+    if (harnessFiles.value !== null) {
+      downloadFile('.credentials.yaml', harnessFiles.value.credentialsYaml, 'text/yaml;charset=utf-8')
+      downloadFile('settings.yaml', harnessFiles.value.settingsYaml, 'text/yaml;charset=utf-8')
+    } else if (configuration.value !== null) {
+      downloadFile(configuration.value.filename, configuration.value.content, 'text/plain;charset=utf-8')
+    } else {
+      return
+    }
+    actionStatus.value = '下载已开始。'
+  } catch {
+    actionStatus.value = '下载失败，请复制预览内容并合并到已有配置文件。'
   }
 }
 </script>
@@ -375,6 +411,19 @@ function download(): void {
           </label>
         </div>
       </template>
+      <template v-else-if="isHarness">
+        <label class="field-label" for="client-config-deepseek-harness-model">默认模型</label>
+        <select
+          id="client-config-deepseek-harness-model"
+          v-model="harnessDefaultModel"
+          data-test="client-config-deepseek-harness-model"
+          :disabled="loadingModels || availableModelIds.length === 0"
+        >
+          <option value="" disabled>选择模型</option>
+          <option v-for="modelId in availableModelIds" :key="modelId" :value="modelId">{{ modelId }}</option>
+        </select>
+        <p class="model-selection-description">DeepSeek Harness 会将全部可用模型写入设置，并使用此模型作为默认值。</p>
+      </template>
       <template v-else>
         <label class="field-label" for="client-config-pi-api">OpenAI API 类型</label>
         <select id="client-config-pi-api" v-model="piApi" data-test="client-config-pi-api">
@@ -396,7 +445,20 @@ function download(): void {
       </template>
     </section>
 
-    <template v-if="configuration">
+    <template v-if="harnessFiles">
+      <p class="config-location" data-test="client-config-location">
+        保存位置：<code>~/.dsh/.credentials.yaml</code> 和 <code>~/.dsh/settings.yaml</code>
+      </p>
+      <section class="harness-file" aria-labelledby="client-config-harness-credentials-heading">
+        <h3 id="client-config-harness-credentials-heading">.credentials.yaml</h3>
+        <pre class="config-preview" data-test="client-config-harness-credentials">{{ harnessFiles.credentialsYaml }}</pre>
+      </section>
+      <section class="harness-file" aria-labelledby="client-config-harness-settings-heading">
+        <h3 id="client-config-harness-settings-heading">settings.yaml</h3>
+        <pre class="config-preview" data-test="client-config-harness-settings">{{ harnessFiles.settingsYaml }}</pre>
+      </section>
+    </template>
+    <template v-else-if="configuration">
       <p class="config-location" data-test="client-config-location">
         保存位置：<code>{{ configuration.location }}</code>
       </p>
@@ -409,7 +471,7 @@ function download(): void {
       <ElButton
         data-test="client-config-download"
         type="primary"
-        :disabled="configuration === null"
+        :disabled="configuration === null && harnessFiles === null"
         @click="download"
       >
         下载配置文件
@@ -439,6 +501,7 @@ select { box-sizing: border-box; width: 100%; min-height: 2rem; padding: .45rem 
 .model-grid label:first-child { grid-column: 1 / -1; }
 @media (max-width: 36rem) { .claude-model-grid, .model-grid { grid-template-columns: 1fr; } .claude-model-grid label:first-child, .model-grid label:first-child { grid-column: auto; } }
 .config-location { margin: 1rem 0 .5rem; color: var(--gateway-muted); }
+.harness-file h3 { margin: 1rem 0 .5rem; color: var(--gateway-text); font-size: .95rem; }
 .config-preview { max-height: 20rem; margin: 0; padding: .8rem; overflow: auto; background: var(--el-fill-color-light); border: 1px solid var(--el-border-color); border-radius: var(--el-border-radius-base); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: .8rem; white-space: pre-wrap; word-break: break-word; }
 .empty-preview { margin: 1.25rem 0 0; color: var(--gateway-muted); font-size: .9rem; }
 </style>

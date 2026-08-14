@@ -193,6 +193,60 @@ describe('客户端配置对话框', () => {
     })
   })
 
+  it('将 DeepSeek Harness 作为可选择的客户端并加载默认模型', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [{ id: 'harness-chat' }, { id: 'harness-vision' }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    await wrapper.get('[data-test="client-config-key"]').setValue('sk-gw-real-secret')
+    await wrapper.get('[data-test="client-config-target-deepseek-harness"]').trigger('click')
+    await wrapper.get('[data-test="client-config-verify"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-test="client-config-deepseek-harness-model"] option').map((option) => option.attributes('value'))).toEqual([
+      '',
+      'harness-chat',
+      'harness-vision',
+    ])
+  })
+
+  it('下载 Harness 的两个配置文件并在关闭时清除接口密钥', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [{ id: 'harness-chat' }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    const createObjectUrl = vi.fn(() => 'blob:client-config')
+    const revokeObjectUrl = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectUrl })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectUrl })
+    const downloadedFiles: string[] = []
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloadedFiles.push(this.download)
+    })
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    await wrapper.get('[data-test="client-config-key"]').setValue('sk-gw-real-secret')
+    await wrapper.get('[data-test="client-config-target-deepseek-harness"]').trigger('click')
+    await wrapper.get('[data-test="client-config-verify"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="client-config-deepseek-harness-model"]').setValue('harness-chat')
+    await wrapper.get('[data-test="client-config-download"]').trigger('click')
+    await flushPromises()
+
+    expect(createObjectUrl).toHaveBeenCalledTimes(2)
+    expect(click).toHaveBeenCalledTimes(2)
+    expect(downloadedFiles).toEqual(['.credentials.yaml', 'settings.yaml'])
+    expect(revokeObjectUrl).toHaveBeenCalledWith('blob:client-config')
+
+    await wrapper.get('[data-test="client-config-close"]').trigger('click')
+    expect(wrapper.emitted('update:modelValue')).toEqual([[false]])
+    expect(wrapper.get<HTMLInputElement>('[data-test="client-config-key"]').element.value).toBe('')
+  })
+
   it('下载 Pi 的 models.json，并在关闭时清除输入密钥', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: [{ id: 'pi-key-scoped' }],
