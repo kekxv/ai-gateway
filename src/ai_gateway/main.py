@@ -62,7 +62,7 @@ from ai_gateway.transport.http import HttpClientFactory
 from ai_gateway.user.dashboard import router as user_dashboard_router
 from ai_gateway.user.request_logs import router as user_request_logs_router
 
-REQUIRED_MIGRATION_HEAD = "0018"
+REQUIRED_MIGRATION_HEAD = "0020"
 _EXAMPLE_JWT_SECRET = "replace-with-a-long-random-secret"
 _EXAMPLE_ENCRYPTION_KEY = "replace-with-a-fernet-key"
 

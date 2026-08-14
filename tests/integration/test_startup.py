@@ -4,6 +4,8 @@ from types import TracebackType
 from typing import cast
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -13,6 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from ai_gateway import main as main_module
 from ai_gateway.core.config import Settings
 from ai_gateway.main import REQUIRED_MIGRATION_HEAD, create_app, verify_database
+
+
+def test_required_migration_head_matches_alembic_head() -> None:
+    script = ScriptDirectory.from_config(Config("alembic.ini"))
+
+    assert REQUIRED_MIGRATION_HEAD == script.get_current_head()
 
 
 class StubConnection:
