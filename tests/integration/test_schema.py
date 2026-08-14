@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import inspect, select, text
 from sqlalchemy.dialects.mysql import BINARY, CHAR, DECIMAL, LONGBLOB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -385,6 +385,23 @@ async def test_scalar_model_type_persists_as_a_single_model_type(session) -> Non
 
     await session.flush()
 
+    assert model.model_type is ModelType.IMAGE
+    assert model.model_types == [ModelType.IMAGE]
+
+
+async def test_raw_scalar_model_type_uses_matching_model_types_server_default(session) -> None:
+    await session.execute(
+        text(
+            "INSERT INTO models (canonical_name, display_name, model_type) "
+            "VALUES ('raw-scalar-image-model', 'Raw Scalar Image Model', 'image')"
+        )
+    )
+
+    model = await session.scalar(
+        select(Model).where(Model.canonical_name == "raw-scalar-image-model")
+    )
+
+    assert model is not None
     assert model.model_type is ModelType.IMAGE
     assert model.model_types == [ModelType.IMAGE]
 

@@ -114,7 +114,7 @@ class Model(Base):
     model_types: Mapped[list[ModelType]] = mapped_column(
         JSON,
         default=lambda: [ModelType.TEXT],
-        server_default=text("(JSON_ARRAY('text'))"),
+        server_default=text("(JSON_ARRAY(model_type))"),
     )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     input_price_per_million: Mapped[Decimal] = mapped_column(

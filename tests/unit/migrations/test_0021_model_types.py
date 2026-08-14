@@ -48,7 +48,7 @@ def test_migration_backfills_and_reverses_model_types(monkeypatch) -> None:
     assert recorder.altered_columns[0][:2] == ("models", "model_types")
     assert recorder.altered_columns[0][2]["nullable"] is False
     assert isinstance(recorder.altered_columns[0][2]["existing_type"], sa.JSON)
-    assert str(recorder.altered_columns[0][2]["server_default"]) == "(JSON_ARRAY('text'))"
+    assert str(recorder.altered_columns[0][2]["server_default"]) == "(JSON_ARRAY(model_type))"
 
     migration.downgrade()
 

@@ -22,7 +22,7 @@ def upgrade() -> None:
         "model_types",
         existing_type=sa.JSON(),
         nullable=False,
-        server_default=sa.text("(JSON_ARRAY('text'))"),
+        server_default=sa.text("(JSON_ARRAY(model_type))"),
     )
 
 
