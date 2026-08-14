@@ -14,7 +14,8 @@ import {
   ElSwitch,
 } from 'element-plus'
 import 'element-plus/theme-chalk/el-button.css'
-import 'element-plus/theme-chalk/el-checkbox.css'
+import 'element-plus/theme-chalk/el-checkbox-button.css'
+import 'element-plus/theme-chalk/el-checkbox-group.css'
 import 'element-plus/theme-chalk/el-drawer.css'
 import 'element-plus/theme-chalk/el-form.css'
 import 'element-plus/theme-chalk/el-form-item.css'

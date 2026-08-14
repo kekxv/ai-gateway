@@ -235,6 +235,35 @@ describe('客户端配置对话框', () => {
     expect(settings).toContain('id: harness-image\n        name: harness-image\n        input: [image]')
   })
 
+  it('在切换客户端和接口密钥后忽略过期的模型加载结果', async () => {
+    let resolveModels = (_response: Response): void => {
+      throw new Error(`Expected model request to start before resolving HTTP ${String(_response.status)}`)
+    }
+    const fetch = vi.fn(() => new Promise<Response>((resolve) => {
+      resolveModels = resolve
+    }))
+    vi.stubGlobal('fetch', fetch)
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    await wrapper.get('[data-test="client-config-key"]').setValue('sk-gw-old-secret')
+    await wrapper.get('[data-test="client-config-target-deepseek-harness"]').trigger('click')
+    await wrapper.get('[data-test="client-config-verify"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(fetch).toHaveBeenCalledOnce()
+    })
+    await wrapper.get('[data-test="client-config-target-codex"]').trigger('click')
+    await wrapper.get('[data-test="client-config-key"]').setValue('sk-gw-new-secret')
+
+    resolveModels(new Response(JSON.stringify({
+      data: [{ id: 'stale-harness-image', model_types: ['image'] }],
+    }), { status: 200 }))
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-test="client-config-codex-primary"] option').map((option) => option.attributes('value'))).toEqual([''])
+    expect(wrapper.text()).not.toContain('已加载 1 个可用模型')
+  })
+
   it('下载 Harness 的两个配置文件并在关闭时清除接口密钥', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: [{ id: 'harness-chat' }],

@@ -62,6 +62,7 @@ const availableModelIds = computed(() => availableModels.value.map((model) => mo
 const loadingModels = ref(false)
 const modelLoadError = ref('')
 const actionStatus = ref('')
+let modelLoadGeneration = 0
 
 const targets: Array<{ id: DialogTarget; label: string }> = [
   { id: 'claude', label: 'Claude Code' },
@@ -134,6 +135,8 @@ const configuration = computed<ClientConfigFile | null>(() => {
 })
 
 function resetResolvedModels(): void {
+  modelLoadGeneration += 1
+  loadingModels.value = false
   availableModels.value = []
   claudeModels.value = {
     primary: '',
@@ -160,7 +163,7 @@ function resetResolvedModels(): void {
 }
 
 watch(
-  [manualApiKey, target],
+  [effectiveApiKey, target],
   resetResolvedModels,
 )
 
@@ -171,15 +174,14 @@ function close(): void {
   emit('update:modelValue', false)
 }
 
-function modelRequestHeaders(): Record<string, string> {
-  const key = effectiveApiKey.value.trim()
-  if (target.value === 'claude') {
+function modelRequestHeaders(requestTarget: DialogTarget, requestApiKey: string): Record<string, string> {
+  if (requestTarget === 'claude') {
     return {
-      'x-api-key': key,
+      'x-api-key': requestApiKey,
       'anthropic-version': '2023-06-01',
     }
   }
-  return { Authorization: `Bearer ${key}` }
+  return { Authorization: `Bearer ${requestApiKey}` }
 }
 
 function isModelType(value: unknown): value is ModelType {
@@ -207,27 +209,44 @@ function extractModels(payload: unknown): LoadedModel[] {
 
 async function verifyAndLoadModels(): Promise<void> {
   if (effectiveApiKey.value.trim() === '' || loadingModels.value) return
+  resetResolvedModels()
+  const request = {
+    generation: modelLoadGeneration,
+    target: target.value,
+    apiKey: effectiveApiKey.value.trim(),
+    baseUrl: baseUrl.value,
+  }
   loadingModels.value = true
   modelLoadError.value = ''
-  resetResolvedModels()
+  const isCurrentRequest = (): boolean => (
+    request.generation === modelLoadGeneration &&
+    request.target === target.value &&
+    request.apiKey === effectiveApiKey.value.trim() &&
+    request.baseUrl === baseUrl.value
+  )
   try {
-    const response = await fetch(`${baseUrl.value}/v1/models`, {
-      headers: modelRequestHeaders(),
+    const response = await fetch(`${request.baseUrl}/v1/models`, {
+      headers: modelRequestHeaders(request.target, request.apiKey),
     })
+    if (!isCurrentRequest()) return
     if (!response.ok) {
       modelLoadError.value = response.status === 401 || response.status === 403
         ? '接口密钥无效或没有访问模型的权限。'
         : `加载可用模型失败：HTTP ${String(response.status)}`
       return
     }
-    availableModels.value = extractModels(await response.json())
+    const models = extractModels(await response.json())
+    if (!isCurrentRequest()) return
+    availableModels.value = models
     if (availableModelIds.value.length === 0) {
       modelLoadError.value = '此接口密钥没有可用于该客户端的模型。'
     }
   } catch {
-    modelLoadError.value = '无法加载可用模型，请检查网关地址和网络连接。'
+    if (isCurrentRequest()) {
+      modelLoadError.value = '无法加载可用模型，请检查网关地址和网络连接。'
+    }
   } finally {
-    loadingModels.value = false
+    if (isCurrentRequest()) loadingModels.value = false
   }
 }
 
