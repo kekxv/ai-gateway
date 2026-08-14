@@ -49,4 +49,38 @@ describe('DeepSeek Harness configuration serializer', () => {
     expect(files.settingsYaml).toContain('      baseURL: "https://gateway.example/v1#preview"')
     expect(files.settingsYaml).toContain('  provider: "provider: one"\n  model: "model: one"')
   })
+
+  it('defaults an omitted API to openai-responses', () => {
+    const files = buildDeepSeekHarnessFiles({
+      providerId: 'gateway',
+      displayName: 'Gateway',
+      baseUrl: 'https://gateway.example/v1',
+      apiKeyEnv: 'GATEWAY_API_KEY',
+      apiKey: 'sk-gw-test',
+      defaultModel: 'chat',
+      models: [{ canonical_name: 'chat', model_type: 'text', enabled: true }],
+    })
+
+    expect(files.settingsYaml).toContain('api: openai-responses')
+  })
+
+  it('orders model names by locale-independent code point order', () => {
+    const files = buildDeepSeekHarnessFiles({
+      providerId: 'gateway',
+      displayName: 'Gateway',
+      baseUrl: 'https://gateway.example/v1',
+      apiKeyEnv: 'GATEWAY_API_KEY',
+      apiKey: 'sk-gw-test',
+      api: 'openai-responses',
+      defaultModel: 'beta',
+      models: [
+        { canonical_name: 'zebra', model_type: 'text', enabled: true },
+        { canonical_name: 'Álpha', model_type: 'text', enabled: true },
+        { canonical_name: 'beta', model_type: 'text', enabled: true },
+      ],
+    })
+
+    expect(files.settingsYaml.indexOf('- id: beta')).toBeLessThan(files.settingsYaml.indexOf('- id: zebra'))
+    expect(files.settingsYaml.indexOf('- id: zebra')).toBeLessThan(files.settingsYaml.indexOf('- id: "Álpha"'))
+  })
 })

@@ -10,7 +10,7 @@ export interface DeepSeekHarnessOptions {
   baseUrl: string
   apiKeyEnv: string
   apiKey: string
-  api: string
+  api?: 'openai-responses' | 'openai-completions'
   defaultModel: string
   models: DeepSeekHarnessModel[]
 }
@@ -29,7 +29,12 @@ function quoteYamlScalar(value: string): string {
 export function buildDeepSeekHarnessFiles(options: DeepSeekHarnessOptions): DeepSeekHarnessFiles {
   const models = options.models
     .filter((model) => model.enabled)
-    .sort((left, right) => left.canonical_name.localeCompare(right.canonical_name))
+    .sort((left, right) => {
+      if (left.canonical_name < right.canonical_name) return -1
+      if (left.canonical_name > right.canonical_name) return 1
+      return 0
+    })
+  const api = options.api ?? 'openai-responses'
 
   const credentialsYaml = `${quoteYamlScalar(options.apiKeyEnv)}: ${JSON.stringify(options.apiKey)}\n`
   const modelYaml = models.map((model) => [
@@ -47,7 +52,7 @@ export function buildDeepSeekHarnessFiles(options: DeepSeekHarnessOptions): Deep
     `      displayName: ${quoteYamlScalar(options.displayName)}`,
     `      baseURL: ${quoteYamlScalar(options.baseUrl)}`,
     `      apiKeyEnv: ${quoteYamlScalar(options.apiKeyEnv)}`,
-    `      api: ${quoteYamlScalar(options.api)}`,
+    `      api: ${quoteYamlScalar(api)}`,
     '      models:',
     modelYaml,
     'agent-default-model:',
