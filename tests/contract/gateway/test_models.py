@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai_gateway.core.enums import ApiKeyScope, Protocol
+from ai_gateway.core.enums import ApiKeyScope, ModelType, Protocol
 from ai_gateway.db.models import (
     ApiKey,
     ApiKeyModel,
@@ -184,18 +184,24 @@ async def test_openai_and_gemini_list_selectable_aliases_in_native_shapes(
                 "object": "model",
                 "owned_by": "gateway",
                 "metadata": {"canonical_model": "gpt-4.1-mini"},
+                "model_types": ["text"],
+                "model_type": "text",
             },
             {
                 "id": "fast-chat",
                 "object": "model",
                 "owned_by": "gateway",
                 "metadata": {"canonical_model": "gpt-4.1-mini"},
+                "model_types": ["text"],
+                "model_type": "text",
             },
             {
                 "id": "gpt-4.1-mini",
                 "object": "model",
                 "owned_by": "gateway",
                 "metadata": {},
+                "model_types": ["text"],
+                "model_type": "text",
             },
         ],
     }
@@ -231,6 +237,34 @@ async def test_openai_and_gemini_list_selectable_aliases_in_native_shapes(
             },
         ]
     }
+
+
+async def test_openai_model_list_exposes_model_capabilities(
+    session: AsyncSession,
+) -> None:
+    provider = _provider("capability-listing", Protocol.OPENAI)
+    model = _model("multimodal-model")
+    model.model_types = [ModelType.TEXT, ModelType.IMAGE]
+    model.model_type = ModelType.TEXT
+    session.add(_route(model, provider, Protocol.OPENAI))
+    user, _, raw_key = _api_key(ApiKeyScope.ALL)
+    session.add(user)
+    await session.flush()
+
+    async with _client(session, raw_key) as client:
+        response = await client.get("/v1/models")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == [
+        {
+            "id": "multimodal-model",
+            "object": "model",
+            "owned_by": "gateway",
+            "metadata": {},
+            "model_types": ["text", "image"],
+            "model_type": "text",
+        },
+    ]
 
 
 async def test_model_list_deduplicates_shared_and_canonical_alias_selectors(
@@ -334,6 +368,8 @@ async def test_openai_detail_preserves_alias_identity_and_scope(
         "object": "model",
         "owned_by": "gateway",
         "metadata": {"canonical_model": "gpt-4.1-mini"},
+        "model_types": ["text"],
+        "model_type": "text",
     }
     assert canonical_response.status_code == 200
     assert canonical_response.json() == {
@@ -341,6 +377,8 @@ async def test_openai_detail_preserves_alias_identity_and_scope(
         "object": "model",
         "owned_by": "gateway",
         "metadata": {},
+        "model_types": ["text"],
+        "model_type": "text",
     }
     for response in (disabled_alias_response, absent_response):
         assert response.status_code == 404
@@ -393,6 +431,8 @@ async def test_openai_detail_accepts_slash_ids_from_list(
         "object": "model",
         "owned_by": "gateway",
         "metadata": metadata,
+        "model_types": ["text"],
+        "model_type": "text",
     }
 
 
@@ -680,6 +720,8 @@ async def test_openai_endpoint_without_anthropic_version_returns_openai_format(
                 "object": "model",
                 "owned_by": "gateway",
                 "metadata": {},
+                "model_types": ["text"],
+                "model_type": "text",
             }
         ],
     }

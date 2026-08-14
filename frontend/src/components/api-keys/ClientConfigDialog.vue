@@ -16,9 +16,13 @@ import {
   type OpenCodeModelSelection,
   type PiApi,
 } from '@/utils/clientConfig'
-import { buildDeepSeekHarnessFiles } from '@/lib/deepseekHarness'
+import { buildDeepSeekHarnessFiles, type DeepSeekHarnessModel } from '@/lib/deepseekHarness'
+import type { ModelType } from '@/api/types'
 
 type DialogTarget = ClientConfigTarget | 'deepseek-harness'
+type LoadedModel = Pick<DeepSeekHarnessModel, 'model_types' | 'model_type'> & { id: string }
+
+const modelTypeValues = new Set<ModelType>(['text', 'image', 'text_to_image', 'audio', 'video', 'embedding'])
 
 const props = defineProps<{
   modelValue: boolean
@@ -53,7 +57,8 @@ const openCodeModels = ref<OpenCodeModelSelection>({
 const piModelIds = ref<string[]>([])
 const piApi = ref<PiApi>('openai-completions')
 const harnessDefaultModel = ref('')
-const availableModelIds = ref<string[]>([])
+const availableModels = ref<LoadedModel[]>([])
+const availableModelIds = computed(() => availableModels.value.map((model) => model.id))
 const loadingModels = ref(false)
 const modelLoadError = ref('')
 const actionStatus = ref('')
@@ -96,7 +101,12 @@ const harnessFiles = computed(() => {
     apiKeyEnv: 'AI_GATEWAY_API_KEY',
     apiKey: effectiveApiKey.value,
     defaultModel: harnessDefaultModel.value,
-    models: availableModelIds.value.map((canonical_name) => ({ canonical_name, enabled: true })),
+    models: availableModels.value.map((model) => ({
+      canonical_name: model.id,
+      enabled: true,
+      ...(model.model_types === undefined ? {} : { model_types: model.model_types }),
+      ...(model.model_type === undefined ? {} : { model_type: model.model_type }),
+    })),
   })
 })
 
@@ -124,7 +134,7 @@ const configuration = computed<ClientConfigFile | null>(() => {
 })
 
 function resetResolvedModels(): void {
-  availableModelIds.value = []
+  availableModels.value = []
   claudeModels.value = {
     primary: '',
     opus: '',
@@ -172,15 +182,27 @@ function modelRequestHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${key}` }
 }
 
-function extractModelIds(payload: unknown): string[] {
+function isModelType(value: unknown): value is ModelType {
+  return typeof value === 'string' && modelTypeValues.has(value as ModelType)
+}
+
+function extractModels(payload: unknown): LoadedModel[] {
   if (typeof payload !== 'object' || payload === null || !('data' in payload)) return []
   const data = payload.data
   if (!Array.isArray(data)) return []
-  return [...new Set(data.flatMap((item) => {
-    if (typeof item !== 'object' || item === null || !('id' in item)) return []
-    const id = (item as { id: unknown }).id
-    return typeof id === 'string' && id.trim() !== '' ? [id] : []
-  }))]
+  const models = new Map<string, LoadedModel>()
+  data.forEach((item) => {
+    if (typeof item !== 'object' || item === null || !('id' in item)) return
+    const { id, model_types, model_type } = item as Record<string, unknown>
+    if (typeof id !== 'string' || id.trim() === '' || models.has(id)) return
+    const modelTypes = Array.isArray(model_types) ? model_types.filter(isModelType) : undefined
+    models.set(id, {
+      id,
+      ...(modelTypes === undefined ? {} : { model_types: modelTypes }),
+      ...(isModelType(model_type) ? { model_type } : {}),
+    })
+  })
+  return [...models.values()]
 }
 
 async function verifyAndLoadModels(): Promise<void> {
@@ -198,7 +220,7 @@ async function verifyAndLoadModels(): Promise<void> {
         : `加载可用模型失败：HTTP ${String(response.status)}`
       return
     }
-    availableModelIds.value = extractModelIds(await response.json())
+    availableModels.value = extractModels(await response.json())
     if (availableModelIds.value.length === 0) {
       modelLoadError.value = '此接口密钥没有可用于该客户端的模型。'
     }

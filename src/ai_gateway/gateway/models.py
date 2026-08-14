@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from ai_gateway.auth.api_key import ApiKeyPrincipal, authenticate_api_key, extract_api_key
 from ai_gateway.catalog.repository import ModelNotFound
-from ai_gateway.core.enums import ApiKeyScope, Protocol
+from ai_gateway.core.enums import ApiKeyScope, ModelType, Protocol
 from ai_gateway.db.models import Model, ModelRoute, Provider, ProviderProtocol
 from ai_gateway.db.session import get_session
 from ai_gateway.gateway.service import native_error_response
@@ -26,6 +26,8 @@ class SelectableModel:
     selectable_id: str
     canonical_name: str | None
     display_name: str
+    model_types: list[ModelType] | None = None
+    model_type: ModelType | None = None
 
     @property
     def metadata(self) -> dict[str, str]:
@@ -163,14 +165,20 @@ async def _list_selectable_models(
             target = targets[0]
             canonical_name = target.canonical_name
             display_name = target.display_name
+            model_types = target.model_types
+            model_type = target.model_type
         else:
             canonical_name = None
             display_name = name
+            model_types = None
+            model_type = None
         selectable.append(
             SelectableModel(
                 selectable_id=name,
                 canonical_name=canonical_name,
                 display_name=display_name,
+                model_types=model_types,
+                model_type=model_type,
             )
         )
     return sorted(selectable, key=lambda item: item.selectable_id)
@@ -195,12 +203,17 @@ def _scope_condition(principal: ApiKeyPrincipal) -> Any:
 
 
 def _openai_model(model: SelectableModel) -> dict[str, Any]:
-    return {
+    response: dict[str, Any] = {
         "id": model.selectable_id,
         "object": "model",
         "owned_by": "gateway",
         "metadata": model.metadata,
     }
+    if model.model_types is not None:
+        response["model_types"] = [model_type.value for model_type in model.model_types]
+    if model.model_type is not None:
+        response["model_type"] = model.model_type.value
+    return response
 
 
 def _gemini_model(model: SelectableModel) -> dict[str, Any]:

@@ -213,6 +213,28 @@ describe('客户端配置对话框', () => {
     ])
   })
 
+  it('保留 Harness 模型的图像和多模态输入能力', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [
+        { id: 'harness-multimodal', object: 'model', owned_by: 'gateway', model_types: ['text', 'image'] },
+        { id: 'harness-image', object: 'model', owned_by: 'gateway', model_type: 'image' },
+      ],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    await wrapper.get('[data-test="client-config-key"]').setValue('sk-gw-real-secret')
+    await wrapper.get('[data-test="client-config-target-deepseek-harness"]').trigger('click')
+    await wrapper.get('[data-test="client-config-verify"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="client-config-deepseek-harness-model"]').setValue('harness-multimodal')
+
+    const settings = wrapper.get('[data-test="client-config-harness-settings"]').text()
+    expect(settings).toContain('id: harness-multimodal\n        name: harness-multimodal\n        input: [text, image]')
+    expect(settings).toContain('id: harness-image\n        name: harness-image\n        input: [image]')
+  })
+
   it('下载 Harness 的两个配置文件并在关闭时清除接口密钥', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: [{ id: 'harness-chat' }],
