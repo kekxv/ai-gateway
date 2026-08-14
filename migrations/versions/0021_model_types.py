@@ -17,7 +17,13 @@ depends_on = None
 def upgrade() -> None:
     op.add_column("models", sa.Column("model_types", sa.JSON(), nullable=True))
     op.execute("UPDATE models SET model_types = JSON_ARRAY(model_type)")
-    op.alter_column("models", "model_types", existing_type=sa.JSON(), nullable=False)
+    op.alter_column(
+        "models",
+        "model_types",
+        existing_type=sa.JSON(),
+        nullable=False,
+        server_default=sa.text("(JSON_ARRAY('text'))"),
+    )
 
 
 def downgrade() -> None:

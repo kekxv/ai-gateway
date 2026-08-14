@@ -16,7 +16,9 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    event,
     func,
+    inspect,
     text,
 )
 from sqlalchemy.dialects.mysql import LONGBLOB
@@ -112,6 +114,7 @@ class Model(Base):
     model_types: Mapped[list[ModelType]] = mapped_column(
         JSON,
         default=lambda: [ModelType.TEXT],
+        server_default=text("(JSON_ARRAY('text'))"),
     )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     input_price_per_million: Mapped[Decimal] = mapped_column(
@@ -171,6 +174,35 @@ class Model(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
+
+def _normalized_model_types(values: list[ModelType] | None) -> list[ModelType]:
+    if not values or len(values) != len(set(values)):
+        raise ValueError("model_types must contain unique values")
+    return [ModelType(value) for value in values]
+
+
+@event.listens_for(Model, "before_insert")
+def synchronize_new_model_types(_mapper: object, _connection: object, target: Model) -> None:
+    model_types_history = inspect(target).attrs.model_types.history
+    if model_types_history.added:
+        target.model_types = _normalized_model_types(target.model_types)
+        target.model_type = target.model_types[0]
+    else:
+        target.model_types = [target.model_type or ModelType.TEXT]
+
+
+@event.listens_for(Model, "before_update")
+def synchronize_updated_model_types(_mapper: object, _connection: object, target: Model) -> None:
+    state = inspect(target)
+    model_types_history = state.attrs.model_types.history
+    if model_types_history.has_changes():
+        target.model_types = _normalized_model_types(target.model_types)
+        target.model_type = target.model_types[0]
+    elif state.attrs.model_type.history.has_changes():
+        target.model_types = [target.model_type]
+    else:
+        target.model_types = _normalized_model_types(target.model_types)
 
 
 class ModelPriceTier(Base):

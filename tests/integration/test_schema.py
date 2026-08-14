@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from ai_gateway.core.enums import (
     ApiKeyScope,
     LedgerKind,
+    ModelType,
     Protocol,
     RequestStatus,
     RouteRuntimeState,
@@ -372,6 +373,37 @@ async def test_model_route_is_unique_per_model_provider(session) -> None:
 
     with pytest.raises(IntegrityError):
         await session.commit()
+
+
+async def test_scalar_model_type_persists_as_a_single_model_type(session) -> None:
+    model = Model(
+        canonical_name="scalar-image-model",
+        display_name="Scalar Image Model",
+        model_type=ModelType.IMAGE,
+    )
+    session.add(model)
+
+    await session.flush()
+
+    assert model.model_type is ModelType.IMAGE
+    assert model.model_types == [ModelType.IMAGE]
+
+
+@pytest.mark.parametrize("model_types", [[], [ModelType.TEXT, ModelType.TEXT]])
+async def test_model_types_reject_empty_or_duplicate_direct_persistence(
+    session,
+    model_types: list[ModelType],
+) -> None:
+    session.add(
+        Model(
+            canonical_name=f"invalid-direct-model-types-{'-'.join(model_types) or 'empty'}",
+            display_name="Invalid Direct Model Types",
+            model_types=model_types,
+        )
+    )
+
+    with pytest.raises(ValueError, match="model_types must contain unique values"):
+        await session.flush()
 
 
 async def test_money_columns_are_decimal(session) -> None:
