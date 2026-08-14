@@ -918,6 +918,10 @@ function submitForm(): void {
   border-left-color: var(--el-checkbox-button-checked-border-color);
 }
 
+.model-type-checkboxes :deep(.el-checkbox-button.is-disabled:not(:first-child) .el-checkbox-button__inner) {
+  border-left-color: var(--el-button-disabled-border-color, var(--el-border-color-light));
+}
+
 .switch-row,
 .section-heading,
 .alias-row,
