@@ -3,6 +3,62 @@ import { describe, expect, it } from 'vitest'
 import { buildDeepSeekHarnessFiles } from '@/lib/deepseekHarness'
 
 describe('DeepSeek Harness configuration serializer', () => {
+  it('exports every selected supported input modality', () => {
+    const files = buildDeepSeekHarnessFiles({
+      providerId: 'gateway',
+      displayName: 'Gateway',
+      baseUrl: 'https://gateway.example/v1',
+      apiKeyEnv: 'GATEWAY_API_KEY',
+      apiKey: 'sk-gw-test',
+      defaultModel: 'vision-chat',
+      models: [{ canonical_name: 'vision-chat', model_types: ['text', 'image'], enabled: true }],
+    })
+
+    expect(files.settingsYaml).toContain('input: [text, image]')
+  })
+
+  it('exports image-only selections without adding text', () => {
+    const files = buildDeepSeekHarnessFiles({
+      providerId: 'gateway',
+      displayName: 'Gateway',
+      baseUrl: 'https://gateway.example/v1',
+      apiKeyEnv: 'GATEWAY_API_KEY',
+      apiKey: 'sk-gw-test',
+      defaultModel: 'image-only',
+      models: [{ canonical_name: 'image-only', model_types: ['image'], enabled: true }],
+    })
+
+    expect(files.settingsYaml).toContain('input: [image]')
+  })
+
+  it('falls back to text when selections contain no Harness input modality', () => {
+    const files = buildDeepSeekHarnessFiles({
+      providerId: 'gateway',
+      displayName: 'Gateway',
+      baseUrl: 'https://gateway.example/v1',
+      apiKeyEnv: 'GATEWAY_API_KEY',
+      apiKey: 'sk-gw-test',
+      defaultModel: 'image-generator',
+      models: [{ canonical_name: 'image-generator', model_types: ['text_to_image'], enabled: true }],
+    })
+
+    expect(files.settingsYaml).toContain('input: [text]')
+  })
+
+  it('uses the legacy scalar model type when selected types are absent', () => {
+    const files = buildDeepSeekHarnessFiles({
+      providerId: 'gateway',
+      displayName: 'Gateway',
+      baseUrl: 'https://gateway.example/v1',
+      apiKeyEnv: 'GATEWAY_API_KEY',
+      apiKey: 'sk-gw-test',
+      defaultModel: 'legacy-vision',
+      models: [{ canonical_name: 'legacy-vision', model_type: 'image', enabled: true }],
+    })
+
+    expect(files.settingsYaml).toContain('input: [image]')
+  })
+
   it('serializes enabled models in canonical order with their supported inputs', () => {
     const files = buildDeepSeekHarnessFiles({
       providerId: 'kekxv',
@@ -25,7 +81,7 @@ describe('DeepSeek Harness configuration serializer', () => {
     expect(files.settingsYaml).toContain('apiKeyEnv: KEKXV_API_KEY')
     expect(files.settingsYaml).toContain('agent-default-model:\n  provider: kekxv\n  model: chat')
     expect(files.settingsYaml).toContain('      - id: chat\n        name: chat\n        input: [text]')
-    expect(files.settingsYaml).toContain('      - id: vision\n        name: vision\n        input: [text, image]')
+    expect(files.settingsYaml).toContain('      - id: vision\n        name: vision\n        input: [image]')
     expect(files.settingsYaml.indexOf('- id: chat')).toBeLessThan(files.settingsYaml.indexOf('- id: vision'))
     expect(files.settingsYaml).not.toContain('disabled')
     expect(files.settingsYaml).not.toContain('sk-gw-test')

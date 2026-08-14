@@ -99,8 +99,9 @@ const harnessFiles = computed(() => buildDeepSeekHarnessFiles({
   defaultModel: harnessDefaultModel.value.trim(),
   models: harnessModels.value.map((model) => ({
     canonical_name: model.canonical_name,
-    model_type: model.model_type ?? 'text',
     enabled: model.enabled,
+    ...(model.model_types === undefined ? {} : { model_types: model.model_types }),
+    ...(model.model_type === undefined ? {} : { model_type: model.model_type }),
   })),
 }))
 const harnessEnabledModelNames = computed(() => new Set(

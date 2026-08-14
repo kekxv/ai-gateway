@@ -100,7 +100,7 @@ const harnessModelsFixture: ModelResponse[] = [
     id: 102,
     canonical_name: 'vision-model',
     display_name: 'Vision model',
-    model_type: 'image',
+    model_types: ['text', 'image'],
     input_price_per_million: '0',
     output_price_per_million: '0',
     cache_read_price_per_million: '0',

@@ -1,6 +1,9 @@
+import type { ModelType } from '@/api/types'
+
 export interface DeepSeekHarnessModel {
   canonical_name: string
-  model_type: string
+  model_types?: ModelType[]
+  model_type?: ModelType
   enabled: boolean
 }
 
@@ -26,6 +29,13 @@ function quoteYamlScalar(value: string): string {
   return plainScalar.test(value) && !yamlKeywords.test(value) ? value : JSON.stringify(value)
 }
 
+function harnessInputs(model: DeepSeekHarnessModel): ('text' | 'image')[] {
+  const types = model.model_types?.length ? model.model_types : [model.model_type ?? 'text']
+  const supportedInputs: ('text' | 'image')[] = ['text', 'image']
+  const inputs = supportedInputs.filter((type) => types.includes(type))
+  return inputs.length === 0 ? ['text'] : inputs
+}
+
 export function buildDeepSeekHarnessFiles(options: DeepSeekHarnessOptions): DeepSeekHarnessFiles {
   const models = options.models
     .filter((model) => model.enabled)
@@ -40,7 +50,7 @@ export function buildDeepSeekHarnessFiles(options: DeepSeekHarnessOptions): Deep
   const modelYaml = models.map((model) => [
     `      - id: ${quoteYamlScalar(model.canonical_name)}`,
     `        name: ${quoteYamlScalar(model.canonical_name)}`,
-    `        input: [${model.model_type === 'image' ? 'text, image' : 'text'}]`,
+    `        input: [${harnessInputs(model).join(', ')}]`,
   ].join('\n')).join('\n')
 
   const settingsYaml = [
