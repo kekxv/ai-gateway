@@ -80,7 +80,7 @@ const signedScientificZeroPattern = /^[+-]?0+(?:\.0+)?[eE][+-]?\d+$/
 const scientificDecimalPattern = /^\+?(\d+)(?:\.(\d+))?[eE]([+-]?)(\d+)$/
 const canonicalName = ref('')
 const displayName = ref('')
-const modelType = ref<ModelType>('text')
+const modelTypes = ref<ModelType[]>(['text'])
 const inputPrice = ref('0')
 const outputPrice = ref('0')
 const cacheReadPrice = ref('0')
@@ -92,6 +92,7 @@ const priceTiers = ref<PriceTierRow[]>([])
 const timePriceRules = ref<TimePriceRuleRow[]>([])
 const canonicalNameError = ref('')
 const displayNameError = ref('')
+const modelTypesError = ref('')
 const inputPriceError = ref('')
 const outputPriceError = ref('')
 const cacheReadPriceError = ref('')
@@ -104,6 +105,10 @@ const weekdayLabels = ['周一', '周二', '周三', '周四', '周五', '周六
 
 const editing = computed(() => props.model !== null)
 const drawerTitle = computed(() => (editing.value ? '编辑模型' : '新建模型'))
+
+function responseModelTypes(model: ModelResponse): ModelType[] {
+  return model.model_types?.length ? model.model_types : [model.model_type ?? 'text']
+}
 
 function tierLimitState(maxInputTokens: number | null): {
   value: number | null
@@ -198,6 +203,7 @@ function normalizeDecimalInput(value: string): string {
 function resetErrors(): void {
   canonicalNameError.value = ''
   displayNameError.value = ''
+  modelTypesError.value = ''
   inputPriceError.value = ''
   outputPriceError.value = ''
   cacheReadPriceError.value = ''
@@ -210,7 +216,7 @@ function resetErrors(): void {
 function clearDraft(): void {
   canonicalName.value = ''
   displayName.value = ''
-  modelType.value = 'text'
+  modelTypes.value = ['text']
   inputPrice.value = '0'
   outputPrice.value = '0'
   cacheReadPrice.value = '0'
@@ -227,7 +233,7 @@ function resetForm(): void {
   const model = props.model
   canonicalName.value = model?.canonical_name ?? ''
   displayName.value = model?.display_name ?? ''
-  modelType.value = model?.model_type ?? 'text'
+  modelTypes.value = model === null ? ['text'] : responseModelTypes(model)
   inputPrice.value = normalizeDecimalInput(model?.input_price_per_million ?? '0')
   outputPrice.value = normalizeDecimalInput(model?.output_price_per_million ?? '0')
   cacheReadPrice.value = normalizeDecimalInput(model?.cache_read_price_per_million ?? '0')
@@ -435,6 +441,7 @@ function validate(): string | null {
   const canonical = canonicalName.value.trim()
   if (canonical === '') canonicalNameError.value = '请输入规范模型名'
   if (displayName.value.trim() === '') displayNameError.value = '请输入显示名称'
+  if (modelTypes.value.length === 0) modelTypesError.value = '请至少选择一种模型类型'
   if (!decimalPattern.test(inputPrice.value)) {
     inputPriceError.value = '请输入非负价格，最多 12 位整数和 8 位小数'
   }
@@ -486,6 +493,7 @@ function validate(): string | null {
 
   if (canonicalNameError.value !== '') return '[data-validation="model-canonical-name"] input'
   if (displayNameError.value !== '') return '[data-validation="model-display-name"] input'
+  if (modelTypesError.value !== '') return '[data-validation="model-types"] input'
   if (inputPriceError.value !== '') return '[data-validation="model-input-price"] input'
   if (outputPriceError.value !== '') return '[data-validation="model-output-price"] input'
   if (cacheReadPriceError.value !== '') {
@@ -522,7 +530,7 @@ function submitForm(): void {
     emit('submit', {
       canonical_name: canonical,
       display_name: display,
-      model_type: modelType.value,
+      model_types: modelTypes.value,
       input_price_per_million: inputPrice.value,
       output_price_per_million: outputPrice.value,
       cache_read_price_per_million: cacheReadPrice.value,
@@ -542,7 +550,9 @@ function submitForm(): void {
   const payload: ModelUpdate = {}
   if (canonical !== model.canonical_name) payload.canonical_name = canonical
   if (display !== model.display_name) payload.display_name = display
-  if (modelType.value !== (model.model_type ?? 'text')) payload.model_type = modelType.value
+  if (modelTypes.value.join(',') !== responseModelTypes(model).join(',')) {
+    payload.model_types = modelTypes.value
+  }
   if (inputPrice.value !== normalizeDecimalInput(model.input_price_per_million)) {
     payload.input_price_per_million = inputPrice.value
   }
@@ -594,15 +604,15 @@ function submitForm(): void {
           >
             <ElInput v-model="canonicalName" data-test="model-canonical-name" maxlength="255" />
           </ElFormItem>
-          <ElFormItem label="模型类型">
-            <select v-model="modelType" data-test="model-type" class="tier-limit-unit">
-              <option value="text">文本</option>
-              <option value="image">图像理解</option>
-              <option value="text_to_image">文生图</option>
-              <option value="audio">音频</option>
-              <option value="video">视频</option>
-              <option value="embedding">向量嵌入</option>
-            </select>
+          <ElFormItem data-validation="model-types" label="模型类型" :error="modelTypesError">
+            <div class="weekday-checkboxes">
+              <label><input v-model="modelTypes" type="checkbox" value="text" data-test="model-type-text" />文本</label>
+              <label><input v-model="modelTypes" type="checkbox" value="image" data-test="model-type-image" />图像理解</label>
+              <label><input v-model="modelTypes" type="checkbox" value="text_to_image" data-test="model-type-text_to_image" />文生图</label>
+              <label><input v-model="modelTypes" type="checkbox" value="audio" data-test="model-type-audio" />音频</label>
+              <label><input v-model="modelTypes" type="checkbox" value="video" data-test="model-type-video" />视频</label>
+              <label><input v-model="modelTypes" type="checkbox" value="embedding" data-test="model-type-embedding" />向量嵌入</label>
+            </div>
           </ElFormItem>
           <ElFormItem
             data-validation="model-display-name"

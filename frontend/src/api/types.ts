@@ -383,6 +383,7 @@ export interface PublicModelPriceTierResponse {
 export interface ModelCreate {
   canonical_name: string
   display_name: string
+  model_types?: ModelType[]
   model_type?: ModelType
   input_price_per_million?: string
   output_price_per_million?: string
@@ -399,6 +400,7 @@ export interface ModelCreate {
 export interface ModelUpdate {
   canonical_name?: string | null
   display_name?: string | null
+  model_types?: ModelType[] | null
   model_type?: ModelType | null
   input_price_per_million?: string | null
   output_price_per_million?: string | null
@@ -422,6 +424,7 @@ export interface ModelResponse {
   id: number
   canonical_name: string
   display_name: string
+  model_types?: ModelType[]
   model_type?: ModelType
   input_price_per_million: string
   output_price_per_million: string

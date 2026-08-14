@@ -333,7 +333,7 @@ describe('模型与别名管理', () => {
     expect(onSubmit).toHaveBeenCalledWith({
       canonical_name: 'gpt-4.1',
       display_name: 'GPT 4.1',
-      model_type: 'text',
+      model_types: ['text'],
       input_price_per_million: '2.00000000',
       output_price_per_million: '8.00000000',
       cache_read_price_per_million: '0.50000000',
@@ -348,7 +348,7 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
-  it('提交模型类型与按星期选择的时段价格规则', async () => {
+  it('提交多个模型类型与按星期选择的时段价格规则', async () => {
     const onSubmit = vi.fn()
     const wrapper = mount(ModelFormDrawer, {
       props: { modelValue: true, model: null, submitting: false, onSubmit },
@@ -358,16 +358,16 @@ describe('模型与别名管理', () => {
 
     await wrapper.get('[data-test="model-canonical-name"]').setValue('image-generator')
     await wrapper.get('[data-test="model-display-name"]').setValue('Image Generator')
-    await wrapper.get('[data-test="model-type"]').setValue('text_to_image')
+    await wrapper.get('[data-test="model-type-image"]').setValue(true)
     await wrapper.get('[data-test="add-model-time-price-rule"]').trigger('click')
     await wrapper.get('[data-test="model-time-rule-day-0-5"]').trigger('click')
     await wrapper.get('[data-test="model-time-rule-start-0"]').setValue('14:00:00')
     await wrapper.get('[data-test="model-time-rule-end-0"]').setValue('18:00:00')
-    await wrapper.get('[data-test="model-submit"]').trigger('click')
+    await wrapper.get('form').trigger('submit')
 
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({
-        model_type: 'text_to_image',
+        model_types: ['text', 'image'],
         time_price_rules: [
           {
             weekdays: [0, 1, 2, 3, 4, 5],
@@ -382,6 +382,25 @@ describe('模型与别名管理', () => {
         ],
       }),
     )
+    wrapper.unmount()
+  })
+
+  it('要求至少选择一种模型类型', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ModelFormDrawer, {
+      props: { modelValue: true, model: null, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="model-canonical-name"]').setValue('image-only')
+    await wrapper.get('[data-test="model-display-name"]').setValue('Image Only')
+    await wrapper.get('[data-test="model-type-text"]').setValue(false)
+    await wrapper.get('form').trigger('submit')
+    await waitForFormErrors()
+
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-validation="model-types"]').text()).toContain('请至少选择一种模型类型')
     wrapper.unmount()
   })
 
@@ -445,6 +464,55 @@ describe('模型与别名管理', () => {
       ['缓存写入', '¥3.75000000'],
     ])
     wrapper.unmount()
+  })
+
+  it('在基础价格和分段价格模型卡片展示全部类型并复制规范名称', async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue()
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    const baseCard = mount(ModelCard, {
+      props: {
+        model: { ...modelFixture, model_types: ['text', 'image'] },
+        routes: [],
+        providers: [],
+      },
+    })
+    const tieredCard = mount(ModelCard, {
+      props: {
+        model: {
+          ...modelFixture,
+          model_types: ['text', 'image'],
+          price_tiers: [
+            {
+              id: 301,
+              max_input_tokens: null,
+              input_price_per_million: '3.00000000',
+              output_price_per_million: '15.00000000',
+              cache_read_price_per_million: '0.30000000',
+              cache_write_price_per_million: '3.75000000',
+            },
+          ],
+        },
+        routes: [],
+        providers: [],
+      },
+    })
+
+    for (const card of [baseCard, tieredCard]) {
+      expect(card.text()).toContain('文本')
+      expect(card.text()).toContain('图像理解')
+      expect(card.get('[data-test="copy-model-canonical-1"]').attributes('aria-label')).toBe(
+        '复制规范名称 gpt-4.1',
+      )
+    }
+    await tieredCard.get('[data-test="copy-model-canonical-1"]').trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledWith('gpt-4.1')
+
+    baseCard.unmount()
+    tieredCard.unmount()
   })
 
   it('勾选多个模型后按模型分段对比价格范围，并排除不可用的价格来源', async () => {

@@ -5,6 +5,7 @@ import { ElButton, ElCheckbox, ElIcon, ElTag } from 'element-plus'
 import type {
   ModelResponse,
   ModelRouteResponse,
+  ModelType,
   Protocol,
   ProviderResponse,
   RouteRuntimeState,
@@ -59,7 +60,7 @@ const sourceLabels: Readonly<Record<RouteSource, string>> = {
   discovered: '自动发现',
 }
 
-const modelTypeLabels: Readonly<Record<NonNullable<ModelResponse['model_type']>, string>> = {
+const modelTypeLabels: Readonly<Record<ModelType, string>> = {
   text: '文本',
   image: '图像理解',
   text_to_image: '文生图',
@@ -142,6 +143,10 @@ function formatPriceRange(minimum: string, maximum: string): string {
   return minimum === maximum
     ? formatMoney(minimum)
     : `${formatMoney(minimum)} – ${formatMoney(maximum)}`
+}
+
+function responseModelTypes(model: ModelResponse): ModelType[] {
+  return model.model_types?.length ? model.model_types : [model.model_type ?? 'text']
 }
 
 const routeStats = computed(() => {
@@ -255,10 +260,21 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
     </div>
 
     <div class="card-body">
-      <div class="info-item"><span class="label">模型类型：</span>{{ modelTypeLabels[model.model_type ?? 'text'] }}</div>
-      <div v-if="(model.price_tiers?.length ?? 0) > 0 || (model.public_price_tiers?.length ?? 0) > 0" class="info-item">
+      <div class="info-item"><span class="label">模型类型：</span><ElTag v-for="type in responseModelTypes(model)" :key="type" size="small" effect="plain">{{ modelTypeLabels[type] }}</ElTag></div>
+      <div class="info-item canonical-info">
         <span class="label">规范名称：</span>
-        <code>{{ model.canonical_name }}</code>
+        <button
+          class="copyable-code"
+          :class="{ 'is-copied': copiedField === 'canonical' }"
+          :data-test="`copy-model-canonical-${String(model.id)}`"
+          :aria-label="`复制规范名称 ${model.canonical_name}`"
+          :title="`点击复制: ${model.canonical_name}`"
+          @click="copyToClipboard(model.canonical_name, 'canonical')"
+        >
+          <code>{{ model.canonical_name }}</code>
+          <ElIcon v-if="copiedField === 'canonical'" class="copy-icon"><Check /></ElIcon>
+          <ElIcon v-else class="copy-icon"><CopyDocument /></ElIcon>
+        </button>
       </div>
       <div v-if="hasPriceTiers" class="price-summary">
         <span>{{ priceTierSummary }}</span>
@@ -335,19 +351,6 @@ async function copyToClipboard(text: string, field: string): Promise<void> {
         </div>
       </div>
       <div v-else-if="!hasPriceTiers" class="basic-info">
-        <div class="info-item canonical-info">
-          <span class="label">规范名称：</span>
-          <button
-            class="copyable-code"
-            :class="{ 'is-copied': copiedField === 'canonical' }"
-            :title="`点击复制: ${model.canonical_name}`"
-            @click="copyToClipboard(model.canonical_name, 'canonical')"
-          >
-            <code>{{ model.canonical_name }}</code>
-            <ElIcon v-if="copiedField === 'canonical'" class="copy-icon"><Check /></ElIcon>
-            <ElIcon v-else class="copy-icon"><CopyDocument /></ElIcon>
-          </button>
-        </div>
         <div class="info-item">
           <span class="label">输入价格：</span>
           <span class="value">{{ formatMoney(model.input_price_per_million) }}</span>
