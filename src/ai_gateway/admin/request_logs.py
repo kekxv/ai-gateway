@@ -17,6 +17,7 @@ from ai_gateway.audit.codec import gunzip_json
 from ai_gateway.auth.dependencies import admin_user
 from ai_gateway.auth.service import raise_auth_error
 from ai_gateway.core.config import Settings, get_settings
+from ai_gateway.core.datetime import UtcDatetime
 from ai_gateway.core.enums import Protocol, RequestStatus, UsageSource
 from ai_gateway.db.models import ApiKey, Model, ModelRoute, Provider, RequestLog, User
 from ai_gateway.db.models import RequestLogDetail as RequestLogDetailRecord
@@ -60,8 +61,8 @@ class RequestLogSummary(BaseModel):
     latency_ms: int | None
     first_token_ms: int | None
     error_code: str | None
-    created_at: datetime
-    completed_at: datetime | None
+    created_at: UtcDatetime
+    completed_at: UtcDatetime | None
 
 
 class RequestLogListResponse(BaseModel):

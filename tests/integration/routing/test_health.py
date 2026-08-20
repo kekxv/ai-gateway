@@ -5,7 +5,7 @@ import random
 import socket
 import ssl
 from collections.abc import AsyncIterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import httpx
@@ -27,7 +27,7 @@ from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFail
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def caused_by(exception: BaseException, cause: BaseException) -> BaseException:

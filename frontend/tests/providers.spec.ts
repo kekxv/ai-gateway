@@ -32,6 +32,7 @@ const providerFixture: ProviderResponse = {
   id: 1,
   name: 'OpenAI 主线路',
   has_credential: true,
+  proxy: { mode: 'inherit', url: null, auth_type: null, has_auth: false },
   enabled: true,
   auto_load_models: true,
   model_sync_interval_seconds: 3600,
@@ -511,6 +512,84 @@ describe('供应商与协议管理', () => {
       public_multiplier: 1,
     })
     expect(payload).not.toHaveProperty('credential')
+    wrapper.unmount()
+  })
+
+  it('创建供应商时提交带用户名密码的专用代理', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: null, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-name"]').setValue('代理供应商')
+    await wrapper.get('[data-test="protocol-base-url-0"]').setValue('https://api.example.com/v1')
+    await wrapper.get('[data-test="provider-proxy-mode"]').setValue('custom')
+    await wrapper.get('[data-test="provider-proxy-url"]').setValue('http://proxy.internal:8080')
+    await wrapper.get('[data-test="provider-proxy-auth-type"]').setValue('basic')
+    await wrapper.get('[data-test="provider-proxy-username"]').setValue('proxy-user')
+    await wrapper.get('[data-test="provider-proxy-password"]').setValue('proxy-password')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proxy: {
+          mode: 'custom',
+          url: 'http://proxy.internal:8080',
+          auth: { type: 'basic', username: 'proxy-user', password: 'proxy-password' },
+        },
+      }),
+    )
+    wrapper.unmount()
+  })
+
+  it('编辑供应商切换为继承全局代理时提交 null', async () => {
+    const onSubmit = vi.fn()
+    const proxiedProvider: ProviderResponse = {
+      ...providerFixture,
+      proxy: {
+        mode: 'custom',
+        url: 'http://proxy.internal:8080',
+        auth_type: 'basic',
+        has_auth: true,
+      },
+    }
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: proxiedProvider, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-proxy-mode"]').setValue('inherit')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+
+    expect(onSubmit).toHaveBeenCalledWith({ proxy: null })
+    wrapper.unmount()
+  })
+
+  it('自定义代理鉴权请求头不允许与 WebSocket 入口同时提交', async () => {
+    const onSubmit = vi.fn()
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: null, submitting: false, onSubmit },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-name"]').setValue('实时代理供应商')
+    await wrapper.get('[data-test="protocol-base-url-0"]').setValue('https://api.example.com/v1')
+    await wrapper.get('[data-test="protocol-websocket-url-0"]').setValue('wss://api.example.com/ws')
+    await wrapper.get('[data-test="provider-proxy-mode"]').setValue('custom')
+    await wrapper.get('[data-test="provider-proxy-url"]').setValue('http://proxy.internal:8080')
+    await wrapper.get('[data-test="provider-proxy-auth-type"]').setValue('headers')
+    await wrapper
+      .get('[data-test="provider-proxy-headers"]')
+      .setValue('{"Proxy-Authorization":"Bearer secret"}')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+    await waitForFormErrors()
+
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('WebSocket')
     wrapper.unmount()
   })
 
@@ -1204,7 +1283,7 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
-  it('取消时立即清除凭据和额外请求头草稿', async () => {
+  it('取消时立即清除凭据、代理密码和请求头草稿', async () => {
     const wrapper = mount(ProviderFormDrawer, {
       props: { modelValue: true, provider: null, submitting: false },
       attachTo: document.body,
@@ -1213,13 +1292,21 @@ describe('供应商与协议管理', () => {
 
     const credential = wrapper.get('[data-test="provider-credential"]')
     const headers = wrapper.get('[data-test="protocol-extra-headers-0"]')
+    await wrapper.get('[data-test="provider-proxy-mode"]').setValue('custom')
+    await wrapper.get('[data-test="provider-proxy-auth-type"]').setValue('basic')
+    const proxyUsername = wrapper.get('[data-test="provider-proxy-username"]')
+    const proxyPassword = wrapper.get('[data-test="provider-proxy-password"]')
     await credential.setValue('{"api_key":"never-retain"}')
     await headers.setValue('{"Authorization":"never-retain"}')
+    await proxyUsername.setValue('never-retain-user')
+    await proxyPassword.setValue('never-retain-password')
     await wrapper.get('[data-test="provider-cancel"]').trigger('click')
     await flushPromises()
 
     expect(credential.element).toHaveProperty('value', '')
     expect(headers.element).toHaveProperty('value', '')
+    expect(proxyUsername.element).toHaveProperty('value', '')
+    expect(proxyPassword.element).toHaveProperty('value', '')
     wrapper.unmount()
   })
 

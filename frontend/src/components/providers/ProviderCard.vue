@@ -119,6 +119,18 @@ function formatMultiplier(value: number | string): string {
           <span class="label">上次同步：</span>
           <span class="value">{{ formatSyncTime(provider.last_model_sync_at) }}</span>
         </div>
+        <div class="info-row" data-test="provider-proxy-summary">
+          <span class="label">出站代理：</span>
+          <span class="value">
+            {{
+              provider.proxy.mode === 'custom'
+                ? `${provider.proxy.url ?? '已配置'}${provider.proxy.has_auth ? '（已鉴权）' : ''}`
+                : provider.proxy.mode === 'direct'
+                  ? '强制直连'
+                  : '继承全局'
+            }}
+          </span>
+        </div>
         <div class="info-row">
           <span class="label">成本倍率：</span>
           <ElTag type="info" size="small">{{ formatMultiplier(provider.cost_multiplier) }}x</ElTag>

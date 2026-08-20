@@ -80,6 +80,7 @@ const providerFixture: ProviderResponse = {
   id: 11,
   name: 'OpenAI 主线路',
   has_credential: true,
+  proxy: { mode: 'inherit', url: null, auth_type: null, has_auth: false },
   enabled: true,
   auto_load_models: false,
   model_sync_interval_seconds: 3600,

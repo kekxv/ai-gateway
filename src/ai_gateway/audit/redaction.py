@@ -22,6 +22,7 @@ SENSITIVE_JSON_KEYS = frozenset(
         "access_token",
         "refresh_token",
         "password",
+        "proxy",
         "secret",
         "credential",
     }

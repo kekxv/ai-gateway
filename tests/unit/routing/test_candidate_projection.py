@@ -20,6 +20,7 @@ def test_route_candidate_preserves_explicit_responses_capability() -> None:
             "runtime_state": RouteRuntimeState.CLOSED.value,
             "disabled_until": None,
             "provider_credential_encrypted": b"secret",
+            "provider_proxy_config_encrypted": b"proxy-secret",
             "provider_public_multiplier": "1.50",
             "extra_headers_encrypted": None,
         }
@@ -27,3 +28,4 @@ def test_route_candidate_preserves_explicit_responses_capability() -> None:
 
     assert candidate.supports_responses is False
     assert candidate.provider_public_multiplier == Decimal("1.50")
+    assert candidate.proxy_config_encrypted == b"proxy-secret"

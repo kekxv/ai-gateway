@@ -50,6 +50,7 @@ def test_engine_forwards_explicit_pool_limits(monkeypatch: pytest.MonkeyPatch) -
         return sentinel
 
     monkeypatch.setattr(session_module, "create_async_engine", create_engine)
+    monkeypatch.setattr(session_module, "configure_database_timezone", lambda engine: engine)
 
     engine = session_module.get_engine_for_url(
         "mysql+asyncmy://gateway:gateway@mysql/gateway",

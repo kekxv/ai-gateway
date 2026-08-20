@@ -90,7 +90,13 @@ class RecordingRouter:
 
 
 class UnusedHttpClients:
-    async def client_for(self, _: str | httpx.URL) -> httpx.AsyncClient:
+    async def client_for(
+        self,
+        _: str | httpx.URL,
+        *,
+        provider_id: int | None = None,
+        proxy_config_encrypted: bytes | None = None,
+    ) -> httpx.AsyncClient:
         raise AssertionError("direct stream lifecycle test must not send a request")
 
 

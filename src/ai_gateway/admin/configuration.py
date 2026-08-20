@@ -43,6 +43,12 @@ from ai_gateway.db.models import (
     User,
 )
 from ai_gateway.db.session import get_session
+from ai_gateway.transport.provider_proxy import (
+    ProviderProxyConfig,
+    decrypt_provider_proxy,
+    encrypt_provider_proxy,
+    validate_proxy_websocket_compatibility,
+)
 
 router = APIRouter(prefix="/admin/configuration", tags=["admin-configuration"])
 
@@ -68,6 +74,11 @@ class CatalogProvider(BaseModel):
 
     name: CatalogName
     credential: ProviderCredentialObject | None = None
+    proxy: ProviderProxyConfig | None = Field(
+        default=None,
+        discriminator="mode",
+        exclude_if=lambda value: value is None,
+    )
     enabled: bool = True
     auto_load_models: bool = False
     model_sync_interval_seconds: int = Field(ge=1)
@@ -262,6 +273,18 @@ async def _validate_import_bundle(session: AsyncSession, bundle: CatalogBundle) 
     providers_with_protocols.update(
         provider.name for provider in bundle.providers if provider.protocols
     )
+    for provider in bundle.providers:
+        if provider.proxy is None:
+            continue
+        try:
+            validate_proxy_websocket_compatibility(
+                provider.proxy,
+                [protocol.websocket_url for protocol in provider.protocols],
+            )
+        except ValueError:
+            _raise_catalog_import_validation(
+                "Proxy authentication is not compatible with WebSocket endpoints"
+            )
     for model in bundle.models:
         route_keys: set[str] = set()
         for route in model.routes:
@@ -297,6 +320,11 @@ async def _merge_catalog_bundle(
             provider = Provider(
                 name=provider_payload.name,
                 credential_encrypted=_encrypt_json(provider_payload.credential or {}, settings),
+                proxy_config_encrypted=(
+                    encrypt_provider_proxy(provider_payload.proxy, settings=settings)
+                    if provider_payload.proxy is not None
+                    else None
+                ),
             )
             session.add(provider)
             providers[provider_payload.name] = provider
@@ -305,6 +333,11 @@ async def _merge_catalog_bundle(
             providers_updated += 1
             if provider_payload.credential is not None:
                 provider.credential_encrypted = _encrypt_json(provider_payload.credential, settings)
+            if provider_payload.proxy is not None:
+                provider.proxy_config_encrypted = encrypt_provider_proxy(
+                    provider_payload.proxy,
+                    settings=settings,
+                )
         provider.enabled = provider_payload.enabled
         provider.auto_load_models = provider_payload.auto_load_models
         provider.model_sync_interval_seconds = provider_payload.model_sync_interval_seconds
@@ -527,6 +560,11 @@ def _catalog_provider(
         credential=(
             orjson.loads(decrypt_secret(provider.credential_encrypted, settings=settings))
             if include_secrets
+            else None
+        ),
+        proxy=(
+            decrypt_provider_proxy(provider.proxy_config_encrypted, settings=settings)
+            if include_secrets and provider.proxy_config_encrypted is not None
             else None
         ),
         enabled=provider.enabled,

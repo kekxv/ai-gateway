@@ -35,12 +35,6 @@ def _utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
-def _now_plus8() -> datetime:
-    from datetime import timedelta, timezone
-
-    return datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
-
-
 def choose_weighted_route(
     candidates: Sequence[RouteCandidate],
     rng: random.Random,
@@ -66,7 +60,7 @@ class Router:
         session: AsyncSession,
         *,
         rng: random.Random | None = None,
-        clock: Clock = _now_plus8,
+        clock: Clock = _utcnow,
         mutation_session_factory: MutationSessionFactory | None = None,
         failure_threshold: int = 10,
         cooldown: timedelta = timedelta(seconds=60),
@@ -327,7 +321,7 @@ async def select_route(
     *,
     preferred_protocol: Protocol | str | None = None,
     rng: random.Random | None = None,
-    clock: Clock = _now_plus8,
+    clock: Clock = _utcnow,
     requested_model: str | None = None,
     mutation_session_factory: MutationSessionFactory | None = None,
     excluded_route_ids: frozenset[int] | set[int] = frozenset(),
@@ -472,6 +466,7 @@ def _candidate_query(
             ModelRoute.runtime_state,
             ModelRoute.disabled_until,
             Provider.credential_encrypted.label("provider_credential_encrypted"),
+            Provider.proxy_config_encrypted.label("provider_proxy_config_encrypted"),
             Provider.public_multiplier.label("provider_public_multiplier"),
             ProviderProtocol.extra_headers_encrypted,
         )
@@ -541,6 +536,7 @@ def _candidate_from_row(row: Any) -> RouteCandidate:
         runtime_state=RouteRuntimeState(row["runtime_state"]),
         disabled_until=cast(datetime | None, row["disabled_until"]),
         provider_credential_encrypted=cast(bytes, row["provider_credential_encrypted"]),
+        proxy_config_encrypted=cast(bytes | None, row["provider_proxy_config_encrypted"]),
         extra_headers_encrypted=cast(bytes | None, row["extra_headers_encrypted"]),
     )
 

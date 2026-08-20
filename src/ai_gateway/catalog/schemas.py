@@ -16,8 +16,14 @@ from pydantic import (
 )
 
 from ai_gateway.catalog.credentials import validate_provider_credential
+from ai_gateway.core.datetime import UtcDatetime
 from ai_gateway.core.enums import ModelType, Protocol, RouteRuntimeState, RouteSource
 from ai_gateway.core.limits import MODEL_SELECTOR_MAX_LENGTH
+from ai_gateway.transport.provider_proxy import (
+    ProviderProxyConfig,
+    ProviderProxyInherit,
+    ProviderProxySummary,
+)
 
 CatalogName = Annotated[
     str,
@@ -79,6 +85,7 @@ class ProviderCreate(BaseModel):
 
     name: CatalogName
     credential: ProviderCredentialObject = Field(default_factory=dict)
+    proxy: ProviderProxyConfig = Field(default_factory=ProviderProxyInherit, discriminator="mode")
     enabled: bool = True
     auto_load_models: bool = False
     model_sync_interval_seconds: int | None = Field(default=None, ge=1)
@@ -97,6 +104,7 @@ class ProviderUpdate(BaseModel):
 
     name: CatalogName | None = None
     credential: ProviderCredentialObject | None = None
+    proxy: ProviderProxyConfig | None = Field(default=None, discriminator="mode")
     enabled: bool | None = None
     auto_load_models: bool | None = None
     model_sync_interval_seconds: int | None = Field(default=None, ge=1)
@@ -124,10 +132,13 @@ class ProviderResponse(BaseModel):
     id: int
     name: str
     has_credential: bool
+    proxy: ProviderProxySummary = Field(
+        default_factory=lambda: ProviderProxySummary(mode="inherit")
+    )
     enabled: bool
     auto_load_models: bool
     model_sync_interval_seconds: int
-    last_model_sync_at: datetime | None
+    last_model_sync_at: UtcDatetime | None
     protocols: list[ProviderProtocolResponse]
     cost_multiplier: Decimal
     public_multiplier: Decimal
@@ -180,6 +191,7 @@ class ModelTimePriceRuleInput(BaseModel):
 
 class ModelTimePriceRuleResponse(ModelTimePriceRuleInput):
     id: int
+    effective_at: UtcDatetime | None = None
 
 
 class PublicModelPriceTierResponse(BaseModel):
@@ -275,8 +287,8 @@ class ModelResponse(BaseModel):
     enabled: bool
     aliases: list[ModelAliasResponse]
     routing_strategy: RoutingStrategy
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
     price_multiplier: Decimal
     price_tiers: list[ModelPriceTierResponse]
     time_price_rules: list[ModelTimePriceRuleResponse] = Field(default_factory=list)
@@ -296,8 +308,8 @@ class UserModelResponse(BaseModel):
     enabled: bool
     aliases: list[ModelAliasResponse]
     routing_strategy: RoutingStrategy
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
     public_price_tiers: list[PublicModelPriceTierResponse]
 
 
@@ -331,9 +343,9 @@ class ModelRouteResponse(BaseModel):
     source: RouteSource
     runtime_state: RouteRuntimeState
     consecutive_failures: int
-    disabled_until: datetime | None
+    disabled_until: UtcDatetime | None
     last_error_code: str | None
-    last_error_at: datetime | None
+    last_error_at: UtcDatetime | None
 
 
 def alias_values(aliases: list[AliasInput]) -> list[ModelAliasInput]:

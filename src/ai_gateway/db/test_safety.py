@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from ai_gateway.db.base import Base
+from ai_gateway.db.session import configure_database_timezone
 
 
 class UnsafeTestDatabaseError(RuntimeError):
@@ -65,7 +66,9 @@ def validate_test_database_url(database_url: str, application_url: str | None) -
 
 def create_test_engine(database_url: str, application_url: str | None) -> AsyncEngine:
     url, _ = _validated_test_database_target(database_url, application_url)
-    return create_async_engine(url, pool_pre_ping=True, poolclass=NullPool)
+    return configure_database_timezone(
+        create_async_engine(url, pool_pre_ping=True, poolclass=NullPool)
+    )
 
 
 async def assert_test_database_is_disposable(engine: AsyncEngine) -> None:

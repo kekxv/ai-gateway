@@ -32,6 +32,8 @@ async def test_admin_can_create_user_and_account_atomically(
     assert body["is_active"] is True
     assert Decimal(body["balance"]) == Decimal("12.34000000")
     assert Decimal(body["total_spent"]) == Decimal("0")
+    assert body["created_at"].endswith("+00:00")
+    assert body["updated_at"].endswith("+00:00")
     assert "password" not in body
     user = await session.scalar(select(User).where(User.id == body["id"]))
     assert user is not None

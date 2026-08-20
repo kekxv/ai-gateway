@@ -26,12 +26,6 @@ def _utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
-def _now_plus8() -> datetime:
-    from datetime import timedelta, timezone
-
-    return datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
-
-
 def _status_code(failure: object) -> int | None:
     if isinstance(failure, bool):
         return None
@@ -131,7 +125,7 @@ class RouteHealth:
         *,
         failure_threshold: int = 10,
         cooldown: timedelta = timedelta(seconds=60),
-        clock: Clock = _now_plus8,
+        clock: Clock = _utcnow,
         mutation_session_factory: MutationSessionFactory | None = None,
     ) -> None:
         if failure_threshold < 1:

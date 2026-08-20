@@ -23,6 +23,7 @@ class RouteCandidate:
     runtime_state: RouteRuntimeState = RouteRuntimeState.CLOSED
     disabled_until: datetime | None = None
     provider_credential_encrypted: bytes = b""
+    proxy_config_encrypted: bytes | None = None
     extra_headers_encrypted: bytes | None = None
     provider_public_multiplier: Decimal = Decimal("1.00")
 

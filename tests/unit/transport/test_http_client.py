@@ -11,6 +11,13 @@ import pytest
 
 from ai_gateway.core.config import Settings
 from ai_gateway.transport.http import HttpClientFactory
+from ai_gateway.transport.provider_proxy import (
+    ProviderProxyBasicAuth,
+    ProviderProxyCustom,
+    ProviderProxyDirect,
+    ProviderProxyHeaderAuth,
+    encrypt_provider_proxy,
+)
 
 
 class FakeAsyncClient:
@@ -42,7 +49,7 @@ def proxy_settings(
         environment="test",
         database_url="mysql+asyncmy://gateway:gateway@127.0.0.1:3306/gateway",
         jwt_secret="http-client-test-jwt-secret-at-least-32-bytes",
-        encryption_key="http-client-test-encryption-key",
+        encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         http_proxy=http_proxy,
         https_proxy=https_proxy,
         no_proxy=no_proxy,
@@ -75,6 +82,76 @@ async def test_https_falls_back_to_the_http_proxy_client() -> None:
 
     assert await factory.client_for("https://provider.example") is http_client
     assert len(FakeAsyncClient.created) == 2
+
+
+@pytest.mark.asyncio
+async def test_provider_custom_proxy_overrides_global_proxy_and_no_proxy() -> None:
+    settings = proxy_settings(
+        http_proxy="http://global-proxy.internal:8080",
+        no_proxy="provider.example",
+    )
+    factory = HttpClientFactory(settings)
+    encrypted = encrypt_provider_proxy(
+        ProviderProxyCustom(
+            mode="custom",
+            url="http://provider-proxy.internal:9090",
+            auth=ProviderProxyBasicAuth(
+                type="basic", username="proxy-user", password="proxy-password"
+            ),
+        ),
+        settings=settings,
+    )
+
+    client = await factory.client_for(
+        "https://provider.example/v1", provider_id=7, proxy_config_encrypted=encrypted
+    )
+
+    assert client is FakeAsyncClient.created[2]
+    proxy = client.kwargs["proxy"]
+    assert str(proxy.url) == "http://provider-proxy.internal:9090"
+    assert proxy.auth == ("proxy-user", "proxy-password")
+
+
+@pytest.mark.asyncio
+async def test_provider_direct_mode_bypasses_global_proxy() -> None:
+    settings = proxy_settings(http_proxy="http://global-proxy.internal:8080")
+    factory = HttpClientFactory(settings)
+    encrypted = encrypt_provider_proxy(ProviderProxyDirect(mode="direct"), settings=settings)
+
+    client = await factory.client_for(
+        "https://provider.example/v1", provider_id=8, proxy_config_encrypted=encrypted
+    )
+
+    assert client is FakeAsyncClient.created[0]
+    assert len(FakeAsyncClient.created) == 2
+
+
+@pytest.mark.asyncio
+async def test_provider_custom_header_proxy_pool_is_reused() -> None:
+    settings = proxy_settings()
+    factory = HttpClientFactory(settings)
+    encrypted = encrypt_provider_proxy(
+        ProviderProxyCustom(
+            mode="custom",
+            url="https://provider-proxy.internal:9443",
+            auth=ProviderProxyHeaderAuth(
+                type="headers",
+                headers={"Proxy-Authorization": "Bearer proxy-token"},
+            ),
+        ),
+        settings=settings,
+    )
+
+    first = await factory.client_for(
+        "https://provider.example/v1", provider_id=9, proxy_config_encrypted=encrypted
+    )
+    second = await factory.client_for(
+        "https://other.example/v1", provider_id=9, proxy_config_encrypted=encrypted
+    )
+
+    assert first is second
+    assert len(FakeAsyncClient.created) == 2
+    assert first.kwargs["proxy"].headers["Proxy-Authorization"] == "Bearer proxy-token"
 
 
 @pytest.mark.asyncio

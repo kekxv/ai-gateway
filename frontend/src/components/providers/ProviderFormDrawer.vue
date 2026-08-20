@@ -24,6 +24,7 @@ import type {
   JsonObject,
   Protocol,
   ProviderCreate,
+  ProviderProxyInput,
   ProviderProtocolInput,
   ProviderResponse,
   ProviderUpdate,
@@ -44,6 +45,8 @@ interface ProtocolRow {
 
 type AuthScheme = 'protocol-default' | 'bearer' | 'apikey' | 'none'
 type AuthHeader = 'protocol-default' | 'authorization' | 'x-api-key' | 'custom'
+type ProxyMode = 'inherit' | 'direct' | 'custom'
+type ProxyAuthType = 'none' | 'basic' | 'headers'
 
 const props = defineProps<{
   modelValue: boolean
@@ -62,6 +65,12 @@ const advancedCredentialText = ref('')
 const authScheme = ref<AuthScheme>('protocol-default')
 const authHeader = ref<AuthHeader>('protocol-default')
 const customAuthHeader = ref('')
+const proxyMode = ref<ProxyMode>('inherit')
+const proxyUrl = ref('')
+const proxyAuthType = ref<ProxyAuthType>('none')
+const proxyUsername = ref('')
+const proxyPassword = ref('')
+const proxyHeadersText = ref('')
 const enabled = ref(true)
 const autoLoadModels = ref(false)
 const syncInterval = ref<number | null>(3600)
@@ -71,6 +80,7 @@ const protocols = ref<ProtocolRow[]>([])
 const nameError = ref('')
 const advancedCredentialError = ref('')
 const authHeaderError = ref('')
+const proxyError = ref('')
 const syncIntervalError = ref('')
 const formContent = ref<HTMLElement | null>(null)
 let nextProtocolKey = 1
@@ -118,6 +128,12 @@ function resetForm(): void {
   authScheme.value = 'protocol-default'
   authHeader.value = 'protocol-default'
   customAuthHeader.value = ''
+  proxyMode.value = provider?.proxy.mode ?? 'inherit'
+  proxyUrl.value = provider?.proxy.url ?? ''
+  proxyAuthType.value = provider?.proxy.auth_type ?? 'none'
+  proxyUsername.value = ''
+  proxyPassword.value = ''
+  proxyHeadersText.value = ''
   enabled.value = provider?.enabled ?? true
   autoLoadModels.value = provider?.auto_load_models ?? false
   syncInterval.value = provider?.model_sync_interval_seconds ?? 3600
@@ -145,12 +161,16 @@ function resetForm(): void {
   nameError.value = ''
   advancedCredentialError.value = ''
   authHeaderError.value = ''
+  proxyError.value = ''
   syncIntervalError.value = ''
 }
 
 function clearSensitiveState(): void {
   apiKey.value = ''
   advancedCredentialText.value = ''
+  proxyUsername.value = ''
+  proxyPassword.value = ''
+  proxyHeadersText.value = ''
   for (const row of protocols.value) row.extraHeadersText = ''
 }
 
@@ -240,6 +260,92 @@ function buildCredential(): JsonObject | undefined {
   }
 
   return credential
+}
+
+function validProxyUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value)
+    return (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      parsed.hostname !== '' &&
+      parsed.username === '' &&
+      parsed.password === '' &&
+      (parsed.pathname === '' || parsed.pathname === '/') &&
+      parsed.search === '' &&
+      parsed.hash === ''
+    )
+  } catch {
+    return false
+  }
+}
+
+function parseProxyHeaders(): Record<string, string> | undefined {
+  try {
+    const value: unknown = JSON.parse(proxyHeadersText.value)
+    if (!isJsonObject(value) || Object.keys(value).length === 0) return undefined
+    const headers: Record<string, string> = {}
+    for (const [name, headerValue] of Object.entries(value)) {
+      if (typeof headerValue !== 'string') return undefined
+      headers[name] = headerValue
+    }
+    return headers
+  } catch {
+    return undefined
+  }
+}
+
+function buildProxy(protocolPayload: ProviderProtocolInput[]): ProviderProxyInput | null | undefined {
+  const provider = props.provider
+  const original = provider?.proxy
+  if (proxyMode.value === 'inherit') {
+    return original !== undefined && original.mode !== 'inherit' ? null : undefined
+  }
+  if (proxyMode.value === 'direct') {
+    return original?.mode === 'direct' ? undefined : { mode: 'direct' }
+  }
+
+  const url = proxyUrl.value.trim()
+  const originalAuthType = original?.auth_type ?? 'none'
+  const secretsUntouched =
+    proxyUsername.value === '' && proxyPassword.value === '' && proxyHeadersText.value === ''
+  if (
+    original?.mode === 'custom' &&
+    url === original.url &&
+    proxyAuthType.value === originalAuthType &&
+    secretsUntouched
+  ) {
+    return undefined
+  }
+  if (!validProxyUrl(url)) {
+    proxyError.value = '请输入不含路径、查询参数或帐号密码的 HTTP(S) 代理地址'
+    return undefined
+  }
+  if (proxyAuthType.value === 'none') return { mode: 'custom', url }
+  if (proxyAuthType.value === 'basic') {
+    if (proxyUsername.value === '' || proxyPassword.value === '') {
+      proxyError.value = '请完整填写代理帐号和密码'
+      return undefined
+    }
+    return {
+      mode: 'custom',
+      url,
+      auth: {
+        type: 'basic',
+        username: proxyUsername.value,
+        password: proxyPassword.value,
+      },
+    }
+  }
+  const headers = parseProxyHeaders()
+  if (headers === undefined) {
+    proxyError.value = '自定义代理鉴权必须是非空的字符串 Header JSON 对象'
+    return undefined
+  }
+  if (protocolPayload.some((protocol) => protocol.websocket_url !== null)) {
+    proxyError.value = '自定义代理鉴权请求头不支持 WebSocket 入口'
+    return undefined
+  }
+  return { mode: 'custom', url, auth: { type: 'headers', headers } }
 }
 
 function addProtocol(): void {
@@ -334,6 +440,7 @@ function submitForm(): void {
   nameError.value = ''
   advancedCredentialError.value = ''
   authHeaderError.value = ''
+  proxyError.value = ''
   syncIntervalError.value = ''
   if (name.value.trim() === '') nameError.value = '请输入供应商名称'
   const interval = syncInterval.value
@@ -343,10 +450,12 @@ function submitForm(): void {
 
   const protocolPayload = buildProtocols()
   const credential = buildCredential()
+  const proxy = protocolPayload === undefined ? undefined : buildProxy(protocolPayload)
   if (
     nameError.value !== '' ||
     advancedCredentialError.value !== '' ||
     authHeaderError.value !== '' ||
+    proxyError.value !== '' ||
     syncIntervalError.value !== '' ||
     protocolPayload === undefined
   ) {
@@ -396,6 +505,7 @@ function submitForm(): void {
       public_multiplier: publicMultiplier.value,
     }
     if (credential !== undefined) payload.credential = credential
+    if (proxy !== undefined && proxy !== null) payload.proxy = proxy
     emit('submit', payload)
     return
   }
@@ -405,6 +515,7 @@ function submitForm(): void {
   const payload: ProviderUpdate = {}
   if (name.value.trim() !== provider.name) payload.name = name.value.trim()
   if (credential !== undefined) payload.credential = credential
+  if (proxy !== undefined) payload.proxy = proxy
   if (enabled.value !== provider.enabled) payload.enabled = enabled.value
   if (autoLoadModels.value !== provider.auto_load_models) {
     payload.auto_load_models = autoLoadModels.value
@@ -571,6 +682,72 @@ function submitForm(): void {
               placeholder="例如：X-API-Key"
             />
           </ElFormItem>
+        </div>
+
+        <div class="credential-section proxy-section">
+          <h3 class="credential-section__title">HTTP(S) 出站代理</h3>
+          <div class="credential-options">
+            <ElFormItem label="代理模式" :error="proxyError" data-validation="proxy">
+              <select v-model="proxyMode" data-test="provider-proxy-mode">
+                <option value="inherit">继承全局配置</option>
+                <option value="direct">强制直连</option>
+                <option value="custom">供应商专用代理</option>
+              </select>
+            </ElFormItem>
+            <ElFormItem v-if="proxyMode === 'custom'" label="代理鉴权">
+              <select v-model="proxyAuthType" data-test="provider-proxy-auth-type">
+                <option value="none">无</option>
+                <option value="basic">帐号密码</option>
+                <option value="headers">自定义请求头</option>
+              </select>
+            </ElFormItem>
+          </div>
+          <template v-if="proxyMode === 'custom'">
+            <ElFormItem label="代理地址">
+              <ElInput
+                v-model="proxyUrl"
+                data-test="provider-proxy-url"
+                spellcheck="false"
+                placeholder="http://proxy.example.com:8080"
+              />
+            </ElFormItem>
+            <div v-if="proxyAuthType === 'basic'" class="credential-options">
+              <ElFormItem :label="editing && props.provider?.proxy.has_auth ? '代理帐号（重新配置时必填）' : '代理帐号'">
+                <ElInput
+                  v-model="proxyUsername"
+                  data-test="provider-proxy-username"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </ElFormItem>
+              <ElFormItem :label="editing && props.provider?.proxy.has_auth ? '代理密码（重新配置时必填）' : '代理密码'">
+                <ElInput
+                  v-model="proxyPassword"
+                  data-test="provider-proxy-password"
+                  type="password"
+                  show-password
+                  autocomplete="new-password"
+                  spellcheck="false"
+                />
+              </ElFormItem>
+            </div>
+            <ElFormItem
+              v-if="proxyAuthType === 'headers'"
+              label="代理鉴权请求头 JSON"
+            >
+              <ElInput
+                v-model="proxyHeadersText"
+                data-test="provider-proxy-headers"
+                type="textarea"
+                :rows="3"
+                spellcheck="false"
+                placeholder='例如：{"Proxy-Authorization":"Bearer token"}'
+              />
+              <p class="form-help">自定义请求头不能与 WebSocket 入口同时使用。</p>
+            </ElFormItem>
+          </template>
+          <p v-else-if="proxyMode === 'direct'" class="form-help">忽略全局代理并直接连接该供应商。</p>
+          <p v-else class="form-help">沿用服务端全局 HTTP_PROXY、HTTPS_PROXY 与 NO_PROXY。</p>
         </div>
 
         <div class="switch-row">

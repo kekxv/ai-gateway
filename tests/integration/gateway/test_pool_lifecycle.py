@@ -60,7 +60,13 @@ class _FakeHttpClients:
     def __init__(self, client: httpx.AsyncClient) -> None:
         self._client = client
 
-    async def client_for(self, _: str | httpx.URL) -> httpx.AsyncClient:
+    async def client_for(
+        self,
+        _: str | httpx.URL,
+        *,
+        provider_id: int | None = None,
+        proxy_config_encrypted: bytes | None = None,
+    ) -> httpx.AsyncClient:
         return self._client
 
 

@@ -1,4 +1,3 @@
-from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -12,6 +11,7 @@ from sqlalchemy.orm import joinedload
 from ai_gateway.auth.dependencies import admin_user
 from ai_gateway.auth.service import raise_auth_error, reset_user_password, verify_admin_totp
 from ai_gateway.core.config import Settings, get_settings
+from ai_gateway.core.datetime import UtcDatetime
 from ai_gateway.core.security import hash_password
 from ai_gateway.db.models import Account, LedgerEntry, RequestLog, User
 from ai_gateway.db.session import get_session
@@ -54,8 +54,8 @@ class UserResponse(BaseModel):
     is_active: bool
     balance: Decimal
     total_spent: Decimal
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
 
 
 @router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)

@@ -107,7 +107,13 @@ _NATIVE_OPENAI_OPERATIONS = frozenset(
 
 
 class HttpClientProvider(TypingProtocol):
-    async def client_for(self, url: str | httpx.URL) -> httpx.AsyncClient: ...
+    async def client_for(
+        self,
+        url: str | httpx.URL,
+        *,
+        provider_id: int | None = None,
+        proxy_config_encrypted: bytes | None = None,
+    ) -> httpx.AsyncClient: ...
 
 
 class RouteSelector(TypingProtocol):
@@ -1239,7 +1245,11 @@ class GatewayService:
                     attempts=tuple(attempts),
                 ) from exc
             try:
-                client = await self._http_clients.client_for(url)
+                client = await self._http_clients.client_for(
+                    url,
+                    provider_id=route.provider_id,
+                    proxy_config_encrypted=route.proxy_config_encrypted,
+                )
                 upstream = await client.send(
                     upstream_request,
                     stream=prepared.canonical.stream,

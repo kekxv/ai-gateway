@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from ai_gateway.auth.dependencies import admin_user, current_user
 from ai_gateway.auth.service import raise_auth_error
+from ai_gateway.core.datetime import UtcDatetime
 from ai_gateway.core.enums import ApiKeyScope
 from ai_gateway.db.models import ApiKey, ApiKeyModel, ApiKeyProvider, Model, Provider, User
 from ai_gateway.db.session import get_session
@@ -56,9 +57,9 @@ class ApiKeyResponse(BaseModel):
     key_prefix: str
     scope: ApiKeyScope
     is_active: bool
-    expires_at: datetime | None
-    last_used_at: datetime | None
-    created_at: datetime
+    expires_at: UtcDatetime | None
+    last_used_at: UtcDatetime | None
+    created_at: UtcDatetime
     provider_ids: list[int]
     model_ids: list[int]
 

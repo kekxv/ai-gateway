@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from ai_gateway.db.models import User
@@ -21,6 +22,13 @@ def test_database_guard_accepts_configured_gateway_test_schema(test_engine: Asyn
         )
         == "gateway_test"
     )
+
+
+async def test_database_sessions_use_utc(test_engine: AsyncEngine) -> None:
+    async with test_engine.connect() as connection:
+        timezone = await connection.scalar(text("SELECT @@session.time_zone"))
+
+    assert timezone == "+00:00"
 
 
 async def test_database_guard_rejects_preexisting_rows(test_engine: AsyncEngine) -> None:

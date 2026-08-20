@@ -30,6 +30,13 @@ from ai_gateway.db.models import (
     User,
 )
 from ai_gateway.db.session import get_session
+from ai_gateway.transport.provider_proxy import (
+    ProviderProxyConfig,
+    decrypt_provider_proxy,
+    encrypt_provider_proxy,
+    proxy_summary,
+    validate_proxy_websocket_compatibility,
+)
 
 router = APIRouter(prefix="/admin/providers", tags=["admin-providers"])
 
@@ -46,9 +53,11 @@ async def create_provider(
     settings: AppSettings,
 ) -> ProviderResponse:
     _validate_protocol_payloads(payload.protocols, creating=True)
+    _validate_proxy_protocols(payload.proxy, payload.protocols)
     provider = Provider(
         name=payload.name,
         credential_encrypted=_encrypt_json(payload.credential, settings),
+        proxy_config_encrypted=encrypt_provider_proxy(payload.proxy, settings=settings),
         enabled=payload.enabled,
         auto_load_models=payload.auto_load_models,
         model_sync_interval_seconds=(
@@ -107,6 +116,27 @@ async def update_provider(
     provider = await _get_provider(session, provider_id)
     old_cost_multiplier = provider.cost_multiplier
     old_public_multiplier = provider.public_multiplier
+    active_proxy = (
+        payload.proxy
+        if "proxy" in payload.model_fields_set and payload.proxy is not None
+        else decrypt_provider_proxy(provider.proxy_config_encrypted, settings=settings)
+    )
+    active_protocols = (
+        payload.protocols
+        if payload.protocols is not None
+        else [
+            ProviderProtocolInput(
+                id=item.id,
+                protocol=item.protocol,
+                base_url=item.base_url,
+                websocket_url=item.websocket_url,
+                supports_responses=item.supports_responses,
+                enabled=item.enabled,
+            )
+            for item in provider.protocols
+        ]
+    )
+    _validate_proxy_protocols(active_proxy, active_protocols)
     if payload.name is not None:
         provider.name = payload.name
     if "credential" in payload.model_fields_set:
@@ -117,6 +147,12 @@ async def update_provider(
                 "Provider credentials cannot be cleared",
             )
         provider.credential_encrypted = _encrypt_json(payload.credential, settings)
+    if "proxy" in payload.model_fields_set:
+        provider.proxy_config_encrypted = (
+            None
+            if payload.proxy is None
+            else encrypt_provider_proxy(payload.proxy, settings=settings)
+        )
     if payload.enabled is not None:
         provider.enabled = payload.enabled
     if payload.auto_load_models is not None:
@@ -289,6 +325,23 @@ def _validate_protocol_payloads(
         )
 
 
+def _validate_proxy_protocols(
+    proxy: ProviderProxyConfig,
+    protocols: list[ProviderProtocolInput],
+) -> None:
+    try:
+        validate_proxy_websocket_compatibility(
+            proxy,
+            [protocol.websocket_url for protocol in protocols],
+        )
+    except ValueError:
+        raise_auth_error(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "invalid_provider_proxy",
+            "Proxy authentication is not compatible with WebSocket endpoints",
+        )
+
+
 def _provider_response(provider: Provider, settings: Settings) -> ProviderResponse:
     protocols = sorted(provider.protocols, key=lambda item: item.id)
     return ProviderResponse(
@@ -298,6 +351,9 @@ def _provider_response(provider: Provider, settings: Settings) -> ProviderRespon
             decrypt_secret(provider.credential_encrypted, settings=settings)
         )
         != {},
+        proxy=proxy_summary(
+            decrypt_provider_proxy(provider.proxy_config_encrypted, settings=settings)
+        ),
         enabled=provider.enabled,
         auto_load_models=provider.auto_load_models,
         model_sync_interval_seconds=provider.model_sync_interval_seconds,

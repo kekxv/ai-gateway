@@ -19,6 +19,14 @@ from websockets.exceptions import ConnectionClosed
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import Protocol
 from ai_gateway.routing.types import RouteCandidate, RouteFailure
+from ai_gateway.transport.provider_proxy import (
+    ProviderProxyBasicAuth,
+    ProviderProxyCustom,
+    ProviderProxyDirect,
+    ProviderProxyHeaderAuth,
+    decrypt_provider_proxy,
+    validate_proxy_websocket_compatibility,
+)
 from ai_gateway.transport.proxy import NoProxyMatcher
 from ai_gateway.transport.upstream import build_upstream_headers
 
@@ -247,7 +255,11 @@ async def relay_websocket(
         raise ValueError("Route does not support WebSocket transport")
     active_settings = settings or get_settings()
     url = rewrite_upstream_url(route.websocket_url, query_string, route.upstream_model)
-    proxy = await websocket_proxy_for(url, active_settings)
+    proxy = await websocket_proxy_for(
+        url,
+        active_settings,
+        proxy_config_encrypted=route.proxy_config_encrypted,
+    )
     upstream_headers = build_upstream_headers(route, client_ws.headers, settings=active_settings)
     additional_headers = [
         (name, value)
@@ -524,10 +536,30 @@ def rewrite_initial_request(frame: Frame, protocol: Protocol, upstream_model: st
     return encoded if isinstance(frame, bytes) else encoded.decode()
 
 
-async def websocket_proxy_for(url: str, settings: Settings) -> str | None:
+async def websocket_proxy_for(
+    url: str,
+    settings: Settings,
+    *,
+    proxy_config_encrypted: bytes | None = None,
+) -> str | None:
     parsed = urlsplit(url)
     if parsed.scheme not in {"ws", "wss"} or parsed.hostname is None:
         raise ValueError("Outbound WebSocket URL must use ws or wss and include a host")
+    if proxy_config_encrypted is not None:
+        config = decrypt_provider_proxy(proxy_config_encrypted, settings=settings)
+        if isinstance(config, ProviderProxyDirect):
+            return None
+        if isinstance(config, ProviderProxyCustom):
+            validate_proxy_websocket_compatibility(config, [url])
+            if isinstance(config.auth, ProviderProxyHeaderAuth):
+                raise ValueError("WebSocket proxy does not support custom authentication headers")
+            if isinstance(config.auth, ProviderProxyBasicAuth):
+                return _proxy_url_with_basic_auth(
+                    config.url,
+                    config.auth.username,
+                    config.auth.password,
+                )
+            return config.url
     proxy = settings.http_proxy if parsed.scheme == "ws" else settings.https_proxy
     if proxy is None and parsed.scheme == "wss":
         proxy = settings.http_proxy
@@ -544,6 +576,16 @@ async def websocket_proxy_for(url: str, settings: Settings) -> str | None:
         if matcher.matches(matcher_host, await _resolve_host(parsed.hostname)):
             return None
     return proxy
+
+
+def _proxy_url_with_basic_auth(url: str, username: str, password: str) -> str:
+    parsed = urlsplit(url)
+    if parsed.hostname is None:
+        raise ValueError("Proxy URL must include a host")
+    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    userinfo = f"{username}:{password}@"
+    return urlunsplit((parsed.scheme, f"{userinfo}{host}{port}", "", "", ""))
 
 
 async def _resolve_host(host: str) -> tuple[str, ...]:

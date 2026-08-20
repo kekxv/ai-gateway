@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import random
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from typing import Any
@@ -106,7 +106,13 @@ class FakeHttpClients:
     def __init__(self, client: httpx.AsyncClient) -> None:
         self.client = client
 
-    async def client_for(self, _: str | httpx.URL) -> httpx.AsyncClient:
+    async def client_for(
+        self,
+        _: str | httpx.URL,
+        *,
+        provider_id: int | None = None,
+        proxy_config_encrypted: bytes | None = None,
+    ) -> httpx.AsyncClient:
         return self.client
 
 
@@ -381,7 +387,7 @@ async def test_pre_reservation_failure_releases_selected_half_open_probe(
 
     suffix = uuid4().hex
     raw_key = f"sk-gw-setup-failure-{suffix}"
-    now = datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
     settings = Settings(
         _env_file=None,
         environment="test",
@@ -479,9 +485,7 @@ async def test_pre_reservation_failure_releases_selected_half_open_probe(
         assert route is not None
         assert route.runtime_state is RouteRuntimeState.OPEN
         assert route.disabled_until is not None
-        assert route.disabled_until <= datetime.now(timezone(timedelta(hours=8))).replace(
-            tzinfo=None
-        )
+        assert route.disabled_until <= datetime.now(UTC).replace(tzinfo=None)
         assert route.consecutive_failures == 3
         assert route.last_error_code == "connect_timeout"
 
@@ -499,7 +503,7 @@ async def test_retry_selected_half_open_probe_is_released_when_cancelled(
 
     suffix = uuid4().hex
     raw_key = f"sk-gw-retry-half-open-{suffix}"
-    now = datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
     settings = Settings(
         _env_file=None,
         environment="test",
@@ -688,9 +692,7 @@ async def test_retry_selected_half_open_probe_is_released_when_cancelled(
         assert released_route is not None
         assert released_route.runtime_state is RouteRuntimeState.OPEN
         assert released_route.disabled_until is not None
-        assert released_route.disabled_until <= datetime.now(timezone(timedelta(hours=8))).replace(
-            tzinfo=None
-        )
+        assert released_route.disabled_until <= datetime.now(UTC).replace(tzinfo=None)
         assert released_route.consecutive_failures == 3
         assert released_route.last_error_code == "connect_timeout"
 

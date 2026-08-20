@@ -112,6 +112,7 @@ def test_safe_test_engine_receives_the_validated_database_target(
     expected_engine = Mock()
     engine_factory = Mock(return_value=expected_engine)
     monkeypatch.setattr(test_safety, "create_async_engine", engine_factory)
+    monkeypatch.setattr(test_safety, "configure_database_timezone", lambda engine: engine)
 
     engine = test_safety.create_test_engine(
         "mysql+asyncmy://gateway:gateway@127.0.0.1:3306/gateway_test_worker_42",

@@ -38,7 +38,13 @@ _MAX_UPSTREAM_ERROR_CHARS = 2048
 
 
 class HttpClientProvider(TypingProtocol):
-    async def client_for(self, url: str | httpx.URL) -> httpx.AsyncClient: ...
+    async def client_for(
+        self,
+        url: str | httpx.URL,
+        *,
+        provider_id: int | None = None,
+        proxy_config_encrypted: bytes | None = None,
+    ) -> httpx.AsyncClient: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +60,7 @@ class ModelSyncResult:
 @dataclass(frozen=True, slots=True)
 class _DiscoveryProviderSnapshot:
     credential_encrypted: bytes
+    proxy_config_encrypted: bytes | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,7 +202,11 @@ async def discover_provider_models(
     if release_connection_before_discovery:
         await session.commit()
     url = discovery_url(discovery_protocol)
-    client = await http_client_factory.client_for(url)
+    client = await http_client_factory.client_for(
+        url,
+        provider_id=provider_id,
+        proxy_config_encrypted=discovery_protocol.provider.proxy_config_encrypted,
+    )
     models = await discover_models(
         discovery_protocol,
         client=client,
@@ -232,7 +243,11 @@ async def sync_provider_models(
         if release_connection_before_discovery:
             await session.commit()
         url = discovery_url(discovery_protocol)
-        client = await http_client_factory.client_for(url)
+        client = await http_client_factory.client_for(
+            url,
+            provider_id=provider_id,
+            proxy_config_encrypted=discovery_protocol.provider.proxy_config_encrypted,
+        )
         discovered = await discover_models(
             discovery_protocol,
             client=client,
@@ -278,7 +293,12 @@ def _discovery_snapshot(provider_protocol: ProviderProtocol) -> _DiscoveryProtoc
         base_url=provider_protocol.base_url,
         extra_headers_encrypted=provider_protocol.extra_headers_encrypted,
         provider=_DiscoveryProviderSnapshot(
-            credential_encrypted=bytes(provider_protocol.provider.credential_encrypted)
+            credential_encrypted=bytes(provider_protocol.provider.credential_encrypted),
+            proxy_config_encrypted=(
+                bytes(provider_protocol.provider.proxy_config_encrypted)
+                if provider_protocol.provider.proxy_config_encrypted is not None
+                else None
+            ),
         ),
     )
 

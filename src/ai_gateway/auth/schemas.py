@@ -1,6 +1,6 @@
-from datetime import datetime
-
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
+
+from ai_gateway.core.datetime import UtcDatetime
 
 
 class RegisterRequest(BaseModel):
@@ -55,8 +55,8 @@ class CurrentUserResponse(BaseModel):
     role: str
     is_active: bool
     totp_enabled: bool
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
 
 
 class TotpSetupResponse(BaseModel):

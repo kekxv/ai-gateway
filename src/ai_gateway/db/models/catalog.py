@@ -37,6 +37,7 @@ class Provider(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), unique=True)
     credential_encrypted: Mapped[bytes] = mapped_column(LONGBLOB)
+    proxy_config_encrypted: Mapped[bytes | None] = mapped_column(LONGBLOB, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     auto_load_models: Mapped[bool] = mapped_column(
         Boolean,

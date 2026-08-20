@@ -269,9 +269,26 @@ export interface ProviderProtocolInput {
   enabled?: boolean
 }
 
+export type ProviderProxyAuth =
+  | { type: 'basic'; username: string; password: string }
+  | { type: 'headers'; headers: Record<string, string> }
+
+export type ProviderProxyInput =
+  | { mode: 'inherit' }
+  | { mode: 'direct' }
+  | { mode: 'custom'; url: string; auth?: ProviderProxyAuth | null }
+
+export interface ProviderProxySummary {
+  mode: 'inherit' | 'direct' | 'custom'
+  url: string | null
+  auth_type: 'basic' | 'headers' | null
+  has_auth: boolean
+}
+
 export interface ProviderCreate {
   name: string
   credential?: JsonObject
+  proxy?: ProviderProxyInput | null
   enabled?: boolean
   auto_load_models?: boolean
   model_sync_interval_seconds?: number | null
@@ -283,6 +300,7 @@ export interface ProviderCreate {
 export interface ProviderUpdate {
   name?: string | null
   credential?: JsonObject | null
+  proxy?: ProviderProxyInput | null
   enabled?: boolean | null
   auto_load_models?: boolean | null
   model_sync_interval_seconds?: number | null
@@ -305,6 +323,7 @@ export interface ProviderResponse {
   id: number
   name: string
   has_credential: boolean
+  proxy: ProviderProxySummary
   enabled: boolean
   auto_load_models: boolean
   model_sync_interval_seconds: number

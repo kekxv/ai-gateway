@@ -281,6 +281,8 @@ Node.js 或 npm。镜像默认使用生产模式，因此启动时必须提供�
 | `GATEWAY_AUDIT_BODY_LIMIT_BYTES` | 审计详情保留的请求/响应正文大小上限 |
 | `GATEWAY_BILLING_DEFAULT_MAX_OUTPUT_TOKENS` | 请求未指定输出上限时的预留回退值 |
 
+管理员还可为单个供应商选择继承全局代理、强制直连或供应商专用 HTTP(S) 代理。专用代理支持帐号密码和自定义鉴权请求头；自定义请求头暂不支持 WebSocket CONNECT。详细规则见 [供应商管理](docs/admin/providers.md)。
+
 每个网关进程最多打开 `GATEWAY_DATABASE_POOL_SIZE + GATEWAY_DATABASE_MAX_OVERFLOW` 条应用连接。
 MySQL `max_connections` 应高于该数值乘以网关进程数后的结果，并为迁移、运维和其他客户端预留余量。
 连接池签出超时表示本进程连接需求过高或存在长事务，与无法连接 MySQL 是两类不同故障。

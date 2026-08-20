@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from datetime import UTC
 
 import pytest
 import pytest_asyncio
@@ -77,8 +78,8 @@ async def test_get_me_returns_authenticated_user(
         "role": "admin",
         "is_active": True,
         "totp_enabled": False,
-        "created_at": admin_user.created_at.isoformat(),
-        "updated_at": admin_user.updated_at.isoformat(),
+        "created_at": admin_user.created_at.replace(tzinfo=UTC).isoformat(),
+        "updated_at": admin_user.updated_at.replace(tzinfo=UTC).isoformat(),
     }
 
 

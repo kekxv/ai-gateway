@@ -1,4 +1,3 @@
-from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Any
 
@@ -10,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ai_gateway.auth.dependencies import admin_user, current_user
 from ai_gateway.auth.service import raise_auth_error
 from ai_gateway.billing.service import BillingError, BillingService, get_billing_service
+from ai_gateway.core.datetime import UtcDatetime
 from ai_gateway.core.enums import LedgerKind
 from ai_gateway.db.models import Account, LedgerEntry, User
 from ai_gateway.db.session import get_session
@@ -60,7 +60,7 @@ class LedgerEntryResponse(BaseModel):
     amount: Decimal
     balance_after: Decimal
     metadata: dict[str, Any]
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 @router.get("/admin/users/{user_id}/ledger", response_model=list[LedgerEntryResponse])

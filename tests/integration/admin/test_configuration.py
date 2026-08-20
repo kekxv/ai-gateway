@@ -11,6 +11,11 @@ from ai_gateway.admin.model_sync import sync_provider_models
 from ai_gateway.core.enums import ModelType, Protocol, RouteRuntimeState, RouteSource
 from ai_gateway.core.security import decrypt_secret, encrypt_secret
 from ai_gateway.db.models import Model, ModelAlias, ModelRoute, Provider, ProviderProtocol
+from ai_gateway.transport.provider_proxy import (
+    ProviderProxyBasicAuth,
+    ProviderProxyCustom,
+    encrypt_provider_proxy,
+)
 
 
 async def test_admin_exports_deterministic_redacted_catalog_bundle(
@@ -191,6 +196,18 @@ async def test_admin_exports_catalog_secrets_only_when_explicitly_requested(
         credential_encrypted=encrypt_secret(
             '{"api_key":"literal-upstream-secret"}', settings=admin_settings
         ),
+        proxy_config_encrypted=encrypt_provider_proxy(
+            ProviderProxyCustom(
+                mode="custom",
+                url="http://proxy.internal:8080",
+                auth=ProviderProxyBasicAuth(
+                    type="basic",
+                    username="literal-proxy-user",
+                    password="literal-proxy-password",
+                ),
+            ),
+            settings=admin_settings,
+        ),
     )
     provider.protocols = [
         ProviderProtocol(
@@ -211,6 +228,15 @@ async def test_admin_exports_catalog_secrets_only_when_explicitly_requested(
         {
             "name": "secret-provider",
             "credential": {"api_key": "literal-upstream-secret"},
+            "proxy": {
+                "mode": "custom",
+                "url": "http://proxy.internal:8080",
+                "auth": {
+                    "type": "basic",
+                    "username": "literal-proxy-user",
+                    "password": "literal-proxy-password",
+                },
+            },
             "enabled": True,
             "auto_load_models": False,
             "model_sync_interval_seconds": 3600,
@@ -535,7 +561,13 @@ async def test_admin_import_claims_discovered_route_and_preserves_health_through
         def __init__(self, client: httpx.AsyncClient) -> None:
             self.client = client
 
-        async def client_for(self, url: str | httpx.URL) -> httpx.AsyncClient:
+        async def client_for(
+            self,
+            url: str | httpx.URL,
+            *,
+            provider_id: int | None = None,
+            proxy_config_encrypted: bytes | None = None,
+        ) -> httpx.AsyncClient:
             return self.client
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as upstream_client:

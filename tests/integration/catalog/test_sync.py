@@ -43,7 +43,13 @@ class FakeHttpClientFactory:
         self.client = client
         self.urls: list[str] = []
 
-    async def client_for(self, url: str | httpx.URL) -> httpx.AsyncClient:
+    async def client_for(
+        self,
+        url: str | httpx.URL,
+        *,
+        provider_id: int | None = None,
+        proxy_config_encrypted: bytes | None = None,
+    ) -> httpx.AsyncClient:
         self.urls.append(str(url))
         return self.client
 
@@ -716,7 +722,13 @@ async def test_custom_app_scopes_endpoint_and_scheduler_dependencies(
             )
             factory_instances.append(self)
 
-        async def client_for(self, url: str | httpx.URL) -> httpx.AsyncClient:
+        async def client_for(
+            self,
+            url: str | httpx.URL,
+            *,
+            provider_id: int | None = None,
+            proxy_config_encrypted: bytes | None = None,
+        ) -> httpx.AsyncClient:
             self.urls.append(str(url))
             return self.client
 

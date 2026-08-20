@@ -70,6 +70,7 @@ def test_schema_contains_exact_tables_and_columns() -> None:
             "id",
             "name",
             "credential_encrypted",
+            "proxy_config_encrypted",
             "enabled",
             "auto_load_models",
             "model_sync_interval_seconds",

@@ -327,6 +327,8 @@ and the [operations runbook](docs/operations.md). The most important settings ar
 | `GATEWAY_AUDIT_BODY_LIMIT_BYTES` | Maximum request/response body size retained for audit detail |
 | `GATEWAY_BILLING_DEFAULT_MAX_OUTPUT_TOKENS` | Reservation fallback when a request omits an output limit |
 
+Administrators can also select inherited global proxying, forced direct connections, or a dedicated HTTP(S) proxy per provider. Dedicated proxies support Basic credentials and custom authentication headers; custom headers aren't supported for WebSocket CONNECT. See [provider administration](docs/admin/providers.md).
+
 Each gateway process can open at most `GATEWAY_DATABASE_POOL_SIZE +
 GATEWAY_DATABASE_MAX_OVERFLOW` application connections. Size MySQL `max_connections` above that
 sum multiplied by the number of gateway processes, plus capacity for migrations, operators, and

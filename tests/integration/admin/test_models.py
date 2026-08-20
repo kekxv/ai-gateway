@@ -303,10 +303,16 @@ async def test_model_type_and_time_price_rules_round_trip_and_partial_updates(
     body = created.json()
     assert body["model_type"] == "text_to_image"
     assert body["model_types"] == ["text_to_image"]
+    expected_rules = [
+        {
+            **rules[0],
+            "effective_at": "2026-08-16T16:00:00+00:00",
+        }
+    ]
     assert [
         {key: value for key, value in rule.items() if key != "id"}
         for rule in body["time_price_rules"]
-    ] == rules
+    ] == expected_rules
 
     unchanged = await admin_client.patch(
         f"/admin/models/{body['id']}",

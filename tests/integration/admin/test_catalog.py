@@ -132,6 +132,116 @@ async def test_provider_create_without_credential_persists_empty_encrypted_objec
     assert detail.json() == body
 
 
+async def test_provider_proxy_is_encrypted_redacted_and_uses_patch_tri_state(
+    admin_client: AsyncClient,
+    admin_settings,
+    session: AsyncSession,
+) -> None:
+    response = await admin_client.post(
+        "/admin/providers",
+        json={
+            "name": f"proxied-{uuid4().hex}",
+            "proxy": {
+                "mode": "custom",
+                "url": "http://proxy.internal:8080",
+                "auth": {
+                    "type": "basic",
+                    "username": "proxy-user",
+                    "password": "proxy-password",
+                },
+            },
+            "protocols": [],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["proxy"] == {
+        "mode": "custom",
+        "url": "http://proxy.internal:8080",
+        "auth_type": "basic",
+        "has_auth": True,
+    }
+    assert "proxy-user" not in response.text
+    assert "proxy-password" not in response.text
+    provider = await session.get(Provider, body["id"])
+    assert provider is not None
+    encrypted = provider.proxy_config_encrypted
+    assert encrypted is not None
+    assert b"proxy-user" not in encrypted
+    assert b"proxy-password" not in encrypted
+
+    preserved = await admin_client.patch(f"/admin/providers/{body['id']}", json={"enabled": False})
+    assert preserved.status_code == 200
+    assert preserved.json()["proxy"] == body["proxy"]
+    await session.refresh(provider)
+    assert provider.proxy_config_encrypted == encrypted
+
+    cleared = await admin_client.patch(f"/admin/providers/{body['id']}", json={"proxy": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["proxy"] == {
+        "mode": "inherit",
+        "url": None,
+        "auth_type": None,
+        "has_auth": False,
+    }
+    await session.refresh(provider)
+    assert provider.proxy_config_encrypted is None
+
+
+async def test_provider_rejects_custom_proxy_headers_with_websocket_endpoint(
+    admin_client: AsyncClient,
+) -> None:
+    response = await admin_client.post(
+        "/admin/providers",
+        json={
+            "name": f"proxy-websocket-{uuid4().hex}",
+            "proxy": {
+                "mode": "custom",
+                "url": "http://proxy.internal:8080",
+                "auth": {"type": "headers", "headers": {"X-Proxy-Token": "secret"}},
+            },
+            "protocols": [
+                {
+                    "protocol": "openai",
+                    "base_url": "https://api.example.com/v1",
+                    "websocket_url": "wss://api.example.com/realtime",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "secret" not in response.text
+
+
+async def test_provider_rejects_incompatible_basic_proxy_auth_with_websocket_endpoint(
+    admin_client: AsyncClient,
+) -> None:
+    response = await admin_client.post(
+        "/admin/providers",
+        json={
+            "name": f"proxy-websocket-basic-{uuid4().hex}",
+            "proxy": {
+                "mode": "custom",
+                "url": "http://proxy.internal:8080",
+                "auth": {"type": "basic", "username": "user:name", "password": "secret"},
+            },
+            "protocols": [
+                {
+                    "protocol": "openai",
+                    "base_url": "https://api.example.com/v1",
+                    "websocket_url": "wss://api.example.com/realtime",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_provider_proxy"
+    assert "secret" not in response.text
+
+
 @pytest.mark.parametrize(
     "credential",
     [

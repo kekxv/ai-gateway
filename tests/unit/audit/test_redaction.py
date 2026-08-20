@@ -22,6 +22,10 @@ def test_sensitive_headers_are_removed_case_insensitively() -> None:
 def test_json_credentials_are_redacted_recursively_without_changing_messages() -> None:
     value = {
         "api_key": "top-level-key",
+        "proxy": {
+            "url": "http://proxy.internal:8080",
+            "auth": {"headers": {"X-Proxy-Token": "must-not-leak"}},
+        },
         "messages": [
             {
                 "role": "user",
@@ -44,6 +48,7 @@ def test_json_credentials_are_redacted_recursively_without_changing_messages() -
 
     assert redact_json(value) == {
         "api_key": REDACTED,
+        "proxy": REDACTED,
         "messages": [
             {
                 "role": "user",

@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import logging
 import socket
-from typing import Protocol
 
 import httpx
 
+from ai_gateway.core.config import Settings
+from ai_gateway.transport.provider_proxy import (
+    ProviderProxyCustom,
+    ProviderProxyDirect,
+    decrypt_provider_proxy,
+    to_httpx_proxy,
+)
 from ai_gateway.transport.proxy import NoProxyMatcher
 
 logger = logging.getLogger(__name__)
@@ -21,19 +28,15 @@ _CLIENT_LIMITS = httpx.Limits(
 )
 
 
-class ProxySettings(Protocol):
-    http_proxy: str | None
-    https_proxy: str | None
-    no_proxy: str
-
-
 class HttpClientFactory:
     """Owns reusable direct and proxy-specific ``httpx`` client pools."""
 
-    def __init__(self, settings: ProxySettings) -> None:
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
         self._no_proxy = NoProxyMatcher.from_string(settings.no_proxy)
         self._closed = False
         self._clients: list[httpx.AsyncClient] = []
+        self._provider_clients: dict[tuple[int, str], httpx.AsyncClient] = {}
 
         http_proxy, self._http_proxy_label = _parse_proxy(settings.http_proxy, label="HTTP")
         https_proxy, self._https_proxy_label = _parse_proxy(settings.https_proxy, label="HTTPS")
@@ -56,7 +59,13 @@ class HttpClientFactory:
             f"https={https_target!r}, closed={self._closed!r})"
         )
 
-    async def client_for(self, url: str | httpx.URL) -> httpx.AsyncClient:
+    async def client_for(
+        self,
+        url: str | httpx.URL,
+        *,
+        provider_id: int | None = None,
+        proxy_config_encrypted: bytes | None = None,
+    ) -> httpx.AsyncClient:
         """Return the existing client pool selected for an outbound URL."""
 
         if self._closed:
@@ -65,6 +74,29 @@ class HttpClientFactory:
         parsed_url = _parse_outbound_url(url)
         if not parsed_url.host:
             raise ValueError("Outbound HTTP URL must include a host")
+
+        if proxy_config_encrypted is not None:
+            config = decrypt_provider_proxy(
+                proxy_config_encrypted,
+                settings=self._settings,
+            )
+            if isinstance(config, ProviderProxyDirect):
+                return self._direct_client
+            if isinstance(config, ProviderProxyCustom):
+                if provider_id is None:
+                    raise ValueError("Provider ID is required for a custom proxy")
+                fingerprint = hashlib.sha256(proxy_config_encrypted).hexdigest()
+                key = (provider_id, fingerprint)
+                client = self._provider_clients.get(key)
+                if client is None:
+                    client = self._new_client(proxy=to_httpx_proxy(config))
+                    self._provider_clients[key] = client
+                    logger.debug(
+                        "Configured provider outbound HTTP client: provider_id=%d proxy=%s",
+                        provider_id,
+                        config.url,
+                    )
+                return client
 
         proxy_client = self._proxy_client_for_scheme(parsed_url.scheme)
         if proxy_client is None:

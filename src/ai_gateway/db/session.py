@@ -1,6 +1,8 @@
 from collections.abc import AsyncIterator
+from typing import Any
 
 import anyio
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -10,6 +12,20 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 from ai_gateway.core.config import get_settings
+
+
+def configure_database_timezone(engine: AsyncEngine) -> AsyncEngine:
+    """Ensure MySQL DATETIME defaults and functions use UTC on every connection."""
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def set_utc_timezone(dbapi_connection: Any, _: object) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("SET time_zone = '+00:00'")
+        finally:
+            cursor.close()
+
+    return engine
 
 
 def get_engine() -> AsyncEngine:
@@ -36,13 +52,15 @@ def get_engine_for_url(
     Engines deliberately are not cached by URL: pooled async connections are bound to
     the event loop that opened them and must be disposed by their application owner.
     """
-    return create_async_engine(
-        database_url,
-        pool_pre_ping=True,
-        pool_size=pool_size,
-        max_overflow=max_overflow,
-        pool_timeout=pool_timeout,
-        pool_recycle=pool_recycle,
+    return configure_database_timezone(
+        create_async_engine(
+            database_url,
+            pool_pre_ping=True,
+            pool_size=pool_size,
+            max_overflow=max_overflow,
+            pool_timeout=pool_timeout,
+            pool_recycle=pool_recycle,
+        )
     )
 
 
@@ -53,7 +71,9 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 def get_session_factory_for_url(database_url: str) -> async_sessionmaker[AsyncSession]:
     # This compatibility helper has no async owner that can dispose a pooled engine.
     # NullPool makes every session close its connection instead of leaking a hidden pool.
-    engine = create_async_engine(database_url, pool_pre_ping=True, poolclass=NullPool)
+    engine = configure_database_timezone(
+        create_async_engine(database_url, pool_pre_ping=True, poolclass=NullPool)
+    )
     return async_sessionmaker(engine, expire_on_commit=False)
 
 
