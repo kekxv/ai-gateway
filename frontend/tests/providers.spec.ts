@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ModelResponse, ProviderResponse } from '@/api/types'
+import type { ProviderResponse } from '@/api/types'
 import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
 import ModelSyncDialog from '@/components/providers/ModelSyncDialog.vue'
 import { routes } from '@/router'
@@ -80,57 +80,6 @@ const geminiFixture: ProviderResponse = {
   ],
 }
 
-const harnessModelsFixture: ModelResponse[] = [
-  {
-    id: 101,
-    canonical_name: 'chat-model',
-    display_name: 'Chat model',
-    model_type: 'text',
-    input_price_per_million: '0',
-    output_price_per_million: '0',
-    cache_read_price_per_million: '0',
-    cache_write_price_per_million: '0',
-    price_multiplier: 1,
-    enabled: true,
-    aliases: [],
-    routing_strategy: 'weighted_random',
-    created_at: '2026-08-14T00:00:00Z',
-    updated_at: '2026-08-14T00:00:00Z',
-  },
-  {
-    id: 102,
-    canonical_name: 'vision-model',
-    display_name: 'Vision model',
-    model_types: ['text', 'image'],
-    input_price_per_million: '0',
-    output_price_per_million: '0',
-    cache_read_price_per_million: '0',
-    cache_write_price_per_million: '0',
-    price_multiplier: 1,
-    enabled: true,
-    aliases: [],
-    routing_strategy: 'weighted_random',
-    created_at: '2026-08-14T00:00:00Z',
-    updated_at: '2026-08-14T00:00:00Z',
-  },
-  {
-    id: 103,
-    canonical_name: 'disabled-model',
-    display_name: 'Disabled model',
-    model_type: 'text',
-    input_price_per_million: '0',
-    output_price_per_million: '0',
-    cache_read_price_per_million: '0',
-    cache_write_price_per_million: '0',
-    price_multiplier: 1,
-    enabled: false,
-    aliases: [],
-    routing_strategy: 'weighted_random',
-    created_at: '2026-08-14T00:00:00Z',
-    updated_at: '2026-08-14T00:00:00Z',
-  },
-]
-
 const server = setupServer()
 
 beforeAll(() => {
@@ -186,76 +135,11 @@ async function confirmSelectedModels(wrapper: VueWrapper): Promise<void> {
 }
 
 describe('供应商与协议管理', () => {
-  it('生成 DeepSeek Harness 配置时仅导出启用模型', async () => {
-    server.use(http.get('/admin/models', () => HttpResponse.json(harnessModelsFixture)))
+  it('不在供应商管理页提供 DeepSeek Harness 配置生成入口', async () => {
     const wrapper = await mountProviders()
 
-    await wrapper.get('[data-test="generate-deepseek-harness-config"]').trigger('click')
-    await flushPromises()
-
-    const settings = wrapper.get('[data-test="deepseek-harness-settings"]').text()
-    expect(settings).toContain('api: openai-responses')
-    expect(settings).toContain('id: chat-model')
-    expect(settings).toContain('id: vision-model')
-    expect(settings).toContain('input: [text, image]')
-    expect(settings).not.toContain('disabled-model')
-    wrapper.unmount()
-  })
-
-  it('重新加载 Harness 模型时清除过期默认模型并禁用导出', async () => {
-    const reloadedModels = deferred<Response>()
-    let modelRequests = 0
-    server.use(http.get('/admin/models', () => {
-      modelRequests += 1
-      return modelRequests === 1 ? HttpResponse.json(harnessModelsFixture) : reloadedModels.promise
-    }))
-    const wrapper = await mountProviders()
-
-    await wrapper.get('[data-test="generate-deepseek-harness-config"]').trigger('click')
-    await flushPromises()
-    await wrapper.get('#harness-default-model').setValue('chat-model')
-    await wrapper.get('[data-test="deepseek-harness-close"]').trigger('click')
-    await wrapper.get('[data-test="generate-deepseek-harness-config"]').trigger('click')
-    await wrapper.get('[data-test="deepseek-harness-api-key"]').setValue('sk-gw-secret')
-
-    expect(wrapper.get<HTMLSelectElement>('#harness-default-model').element.value).toBe('')
-    expect(wrapper.get('[data-test="deepseek-harness-download-settings"]').attributes('aria-disabled')).toBe('true')
-
-    reloadedModels.resolve(HttpResponse.json([
-      { ...harnessModelsFixture[0], enabled: false },
-      harnessModelsFixture[1],
-    ]))
-    await flushPromises()
-
-    expect(wrapper.get<HTMLSelectElement>('#harness-default-model').element.value).toBe('')
-    expect(wrapper.get('[data-test="deepseek-harness-download-settings"]').attributes('aria-disabled')).toBe('true')
-    wrapper.unmount()
-  })
-
-  it('忽略过期 Harness 模型加载响应', async () => {
-    const staleResponse = deferred<Response>()
-    const currentResponse = deferred<Response>()
-    let modelRequests = 0
-    server.use(http.get('/admin/models', () => {
-      modelRequests += 1
-      if (modelRequests === 1) return HttpResponse.json(harnessModelsFixture)
-      return modelRequests === 2 ? staleResponse.promise : currentResponse.promise
-    }))
-    const wrapper = await mountProviders()
-
-    await wrapper.get('[data-test="generate-deepseek-harness-config"]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test="deepseek-harness-close"]').trigger('click')
-    await wrapper.get('[data-test="generate-deepseek-harness-config"]').trigger('click')
-    await wrapper.get('[data-test="generate-deepseek-harness-config"]').trigger('click')
-    currentResponse.resolve(HttpResponse.json([harnessModelsFixture[1]]))
-    await flushPromises()
-    staleResponse.resolve(HttpResponse.json([harnessModelsFixture[0]]))
-    await flushPromises()
-
-    const optionValues = wrapper.findAll('#harness-default-model option').map((option) => option.attributes('value'))
-    expect(optionValues).toContain('vision-model')
-    expect(optionValues).not.toContain('chat-model')
+    expect(wrapper.find('[data-test="generate-deepseek-harness-config"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('生成 DeepSeek Harness 配置')
     wrapper.unmount()
   })
 

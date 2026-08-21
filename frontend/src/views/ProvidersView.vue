@@ -4,7 +4,6 @@ import { Plus, Search } from '@element-plus/icons-vue'
 import {
   ElAlert,
   ElButton,
-  ElDialog,
   ElEmpty,
   ElIcon,
   ElInput,
@@ -26,7 +25,6 @@ import 'element-plus/theme-chalk/el-skeleton-item.css'
 
 import { ApiError } from '@/api/client'
 import { exportCatalog, importCatalog } from '@/api/configuration'
-import { listModels } from '@/api/models'
 import {
   createProvider,
   deleteProvider,
@@ -36,13 +34,11 @@ import {
   updateProvider,
 } from '@/api/providers'
 import type {
-  ModelResponse,
   Protocol,
   ProviderCreate,
   ProviderResponse,
   ProviderUpdate,
 } from '@/api/types'
-import { buildDeepSeekHarnessFiles } from '@/lib/deepseekHarness'
 import PageHeader from '@/components/common/PageHeader.vue'
 import ResourceStatusGroup from '@/components/common/ResourceStatusGroup.vue'
 import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
@@ -70,17 +66,6 @@ const submitting = ref(false)
 const catalogExporting = ref(false)
 const catalogImporting = ref(false)
 const catalogFileInput = ref<HTMLInputElement | null>(null)
-const harnessDialogOpen = ref(false)
-const harnessProviderId = ref('ai-gateway')
-const harnessDisplayName = ref('AI Gateway')
-const harnessApi = ref<'openai-responses' | 'openai-completions'>('openai-responses')
-const harnessBaseUrl = ref(`${window.location.origin}/v1`)
-const harnessApiKeyEnv = ref('AI_GATEWAY_API_KEY')
-const harnessApiKey = ref('')
-const harnessDefaultModel = ref('')
-const harnessModels = ref<ModelResponse[]>([])
-const harnessLoadingModels = ref(false)
-const harnessModelLoadError = ref('')
 const providerOperations = ref(new Map<number, ProviderOperation>())
 const nonDeletableIds = ref(new Set<number>())
 const deletedIds = new Set<number>()
@@ -89,41 +74,11 @@ const syncDialogOpen = computed(() => syncSession.value !== null)
 const syncTargetProvider = computed(() => syncSession.value?.provider ?? null)
 const syncSubmitting = computed(() => syncSession.value?.submitting === true)
 const catalogOperationActive = computed(() => catalogExporting.value || catalogImporting.value)
-const harnessFiles = computed(() => buildDeepSeekHarnessFiles({
-  providerId: harnessProviderId.value.trim(),
-  displayName: harnessDisplayName.value.trim(),
-  api: harnessApi.value,
-  baseUrl: harnessBaseUrl.value.trim(),
-  apiKeyEnv: harnessApiKeyEnv.value.trim(),
-  apiKey: harnessApiKey.value,
-  defaultModel: harnessDefaultModel.value.trim(),
-  models: harnessModels.value.map((model) => ({
-    canonical_name: model.canonical_name,
-    enabled: model.enabled,
-    ...(model.model_types === undefined ? {} : { model_types: model.model_types }),
-    ...(model.model_type === undefined ? {} : { model_type: model.model_type }),
-  })),
-}))
-const harnessEnabledModelNames = computed(() => new Set(
-  harnessModels.value
-    .filter((model) => model.enabled)
-    .map((model) => model.canonical_name),
-))
-const harnessReady = computed(() => !harnessLoadingModels.value && harnessModelLoadError.value === '' && [
-  harnessProviderId.value,
-  harnessDisplayName.value,
-  harnessBaseUrl.value,
-  harnessApiKeyEnv.value,
-  harnessApiKey.value,
-  harnessDefaultModel.value,
-].every((value) => value.trim() !== '') &&
-  harnessEnabledModelNames.value.has(harnessDefaultModel.value.trim()))
 let requestController: AbortController | undefined
 let saveController: AbortController | undefined
 const operationControllers = new Set<AbortController>()
 let mounted = true
 let loadGeneration = 0
-let harnessLoadGeneration = 0
 let stateRevision = 0
 let drawerSessionGeneration = 0
 let activeSaveToken: symbol | undefined
@@ -172,69 +127,6 @@ function downloadCatalog(blob: Blob): void {
   } finally {
     anchor.remove()
     URL.revokeObjectURL(objectUrl)
-  }
-}
-
-async function loadHarnessModels(): Promise<void> {
-  const generation = ++harnessLoadGeneration
-  const previousDefaultModel = harnessDefaultModel.value
-  harnessLoadingModels.value = true
-  harnessModelLoadError.value = ''
-  harnessModels.value = []
-  harnessDefaultModel.value = ''
-  try {
-    const models = await listModels()
-    if (!mounted || generation !== harnessLoadGeneration || !harnessDialogOpen.value) return
-    harnessModels.value = models
-    if (models.some((model) => model.enabled && model.canonical_name === previousDefaultModel)) {
-      harnessDefaultModel.value = previousDefaultModel
-    }
-  } catch (error: unknown) {
-    if (!mounted || generation !== harnessLoadGeneration || !harnessDialogOpen.value) return
-    harnessModelLoadError.value = errorText(error, '模型列表加载失败')
-  } finally {
-    if (mounted && generation === harnessLoadGeneration) harnessLoadingModels.value = false
-  }
-}
-
-function openHarnessDialog(): void {
-  harnessDialogOpen.value = true
-  void loadHarnessModels()
-}
-
-function closeHarnessDialog(): void {
-  harnessLoadGeneration += 1
-  harnessApiKey.value = ''
-  harnessDefaultModel.value = ''
-  harnessModels.value = []
-  harnessModelLoadError.value = ''
-  harnessLoadingModels.value = false
-  harnessDialogOpen.value = false
-}
-
-async function copyHarnessFile(content: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(content)
-    notice.value = { type: 'success', text: '配置已复制到剪贴板。' }
-  } catch {
-    notice.value = { type: 'error', text: '复制失败，请手动复制配置内容。' }
-  }
-}
-
-function downloadHarnessFile(filename: string, content: string): void {
-  let objectUrl: string | null = null
-  let anchor: HTMLAnchorElement | null = null
-  try {
-    objectUrl = URL.createObjectURL(new Blob([content], { type: 'text/yaml;charset=utf-8' }))
-    anchor = document.createElement('a')
-    anchor.href = objectUrl
-    anchor.download = filename
-    anchor.rel = 'noopener'
-    document.body.append(anchor)
-    anchor.click()
-  } finally {
-    anchor?.remove()
-    if (objectUrl !== null) URL.revokeObjectURL(objectUrl)
   }
 }
 
@@ -629,7 +521,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   mounted = false
   loadGeneration += 1
-  harnessLoadGeneration += 1
   drawerSessionGeneration += 1
   requestController?.abort()
   saveController?.abort()
@@ -665,9 +556,6 @@ onBeforeUnmount(() => {
           @click="exportCatalogBackup"
         >
           导出备份
-        </ElButton>
-        <ElButton data-test="generate-deepseek-harness-config" @click="openHarnessDialog">
-          生成 DeepSeek Harness 配置
         </ElButton>
         <ElButton data-test="create-provider" type="primary" @click="openCreate">
           <ElIcon><Plus /></ElIcon>
@@ -794,122 +682,6 @@ onBeforeUnmount(() => {
       @confirm="confirmSyncModels"
     />
 
-    <ElDialog
-      :model-value="harnessDialogOpen"
-      width="min(94vw, 52rem)"
-      :close-on-click-modal="false"
-      @update:model-value="(value) => { if (!value) closeHarnessDialog() }"
-    >
-      <template #header>
-        <div>
-          <h2 class="dialog-heading">生成 DeepSeek Harness 配置</h2>
-          <p class="dialog-description">下载凭据和设置文件后，分别合并到 Harness 配置目录。</p>
-        </div>
-      </template>
-
-      <ElAlert
-        title="凭据文件包含真实接口密钥，请勿提交到版本库或分享给他人。"
-        type="warning"
-        :closable="false"
-        show-icon
-      />
-
-      <div class="harness-form">
-        <label for="harness-provider-id">供应商 ID</label>
-        <ElInput id="harness-provider-id" v-model="harnessProviderId" required />
-        <label for="harness-display-name">显示名称</label>
-        <ElInput id="harness-display-name" v-model="harnessDisplayName" required />
-        <label for="harness-base-url">基础地址</label>
-        <ElInput id="harness-base-url" v-model="harnessBaseUrl" required />
-        <label for="harness-api-key-env">环境变量名称</label>
-        <ElInput id="harness-api-key-env" v-model="harnessApiKeyEnv" required />
-        <label for="harness-api-key">API 密钥</label>
-        <ElInput
-          id="harness-api-key"
-          v-model="harnessApiKey"
-          data-test="deepseek-harness-api-key"
-          type="password"
-          show-password
-          autocomplete="off"
-          required
-        />
-        <fieldset class="harness-api" aria-label="OpenAI API 类型">
-          <legend>OpenAI API 类型</legend>
-          <label>
-            <input v-model="harnessApi" name="harness-api" type="radio" value="openai-responses">
-            Responses
-          </label>
-          <label>
-            <input v-model="harnessApi" name="harness-api" type="radio" value="openai-completions">
-            Chat Completions
-          </label>
-        </fieldset>
-        <label for="harness-default-model">默认模型</label>
-        <select id="harness-default-model" v-model="harnessDefaultModel" required>
-          <option value="" disabled>选择默认模型</option>
-          <option
-            v-for="model in harnessModels.filter((item) => item.enabled)"
-            :key="model.id"
-            :value="model.canonical_name"
-          >
-            {{ model.canonical_name }}
-          </option>
-        </select>
-        <p v-if="harnessLoadingModels" class="muted">正在加载模型…</p>
-        <p v-else-if="harnessModelLoadError" class="harness-error" role="alert">
-          {{ harnessModelLoadError }}
-        </p>
-      </div>
-
-      <section class="harness-file" aria-labelledby="harness-credentials-heading">
-        <div class="harness-file-header">
-          <h3 id="harness-credentials-heading">.credentials.yaml</h3>
-          <div>
-            <ElButton
-              data-test="deepseek-harness-copy-credentials"
-              :disabled="!harnessReady"
-              @click="copyHarnessFile(harnessFiles.credentialsYaml)"
-            >
-              复制
-            </ElButton>
-            <ElButton
-              data-test="deepseek-harness-download-credentials"
-              :disabled="!harnessReady"
-              @click="downloadHarnessFile('.credentials.yaml', harnessFiles.credentialsYaml)"
-            >
-              下载
-            </ElButton>
-          </div>
-        </div>
-        <pre data-test="deepseek-harness-credentials">{{ harnessFiles.credentialsYaml }}</pre>
-      </section>
-      <section class="harness-file" aria-labelledby="harness-settings-heading">
-        <div class="harness-file-header">
-          <h3 id="harness-settings-heading">settings.yaml</h3>
-          <div>
-            <ElButton
-              data-test="deepseek-harness-copy-settings"
-              :disabled="!harnessReady"
-              @click="copyHarnessFile(harnessFiles.settingsYaml)"
-            >
-              复制
-            </ElButton>
-            <ElButton
-              data-test="deepseek-harness-download-settings"
-              :disabled="!harnessReady"
-              @click="downloadHarnessFile('settings.yaml', harnessFiles.settingsYaml)"
-            >
-              下载
-            </ElButton>
-          </div>
-        </div>
-        <pre data-test="deepseek-harness-settings">{{ harnessFiles.settingsYaml }}</pre>
-      </section>
-
-      <template #footer>
-        <ElButton data-test="deepseek-harness-close" @click="closeHarnessDialog">关闭</ElButton>
-      </template>
-    </ElDialog>
   </div>
 </template>
 
@@ -981,82 +753,6 @@ onBeforeUnmount(() => {
 .muted {
   margin-top: 0.35rem;
   color: var(--gateway-muted);
-}
-
-.harness-form {
-  display: grid;
-  gap: 0.4rem;
-  margin-top: 1rem;
-}
-
-.harness-form > label,
-.harness-api legend {
-  color: var(--gateway-text);
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-
-.harness-form select {
-  min-height: 2rem;
-  padding: 0.45rem 0.7rem;
-  color: var(--gateway-text);
-  background: var(--gateway-panel);
-  border: 1px solid var(--el-border-color);
-  border-radius: var(--el-border-radius-base);
-}
-
-.harness-api {
-  display: flex;
-  gap: 1rem;
-  margin: 0.6rem 0;
-  padding: 0.6rem;
-  border: 1px solid var(--gateway-border);
-  border-radius: var(--el-border-radius-base);
-}
-
-.harness-api legend {
-  padding: 0 0.25rem;
-}
-
-.harness-api label {
-  display: flex;
-  gap: 0.35rem;
-  align-items: center;
-}
-
-.harness-error {
-  margin: 0;
-  color: var(--el-color-danger);
-}
-
-.harness-file {
-  margin-top: 1rem;
-}
-
-.harness-file-header {
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.harness-file-header h3 {
-  margin: 0;
-  font-size: 1rem;
-}
-
-.harness-file pre {
-  max-height: 16rem;
-  margin: 0.5rem 0 0;
-  padding: 0.8rem;
-  overflow: auto;
-  background: var(--el-fill-color-light);
-  border: 1px solid var(--el-border-color);
-  border-radius: var(--el-border-radius-base);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.8rem;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
 .providers-grid {
