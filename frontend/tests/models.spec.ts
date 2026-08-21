@@ -663,10 +663,10 @@ describe('模型与别名管理', () => {
       series: Array<{ name: string; type: string; data: Array<number | null> }>
     }
     expect(option.series).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: '输入成本', type: 'bar', data: [1.25, 6, 7.5] }),
-      expect.objectContaining({ name: '输入用户价格', type: 'bar', data: [5, 12, 15] }),
-      expect.objectContaining({ name: '输出成本', type: 'bar', data: [5, 18, 22.5] }),
-      expect.objectContaining({ name: '输出用户价格', type: 'bar', data: [20, 36, 45] }),
+      expect.objectContaining({ name: '输入成本', type: 'line', data: [1.25, 6, 7.5] }),
+      expect.objectContaining({ name: '输入用户价格', type: 'line', data: [5, 12, 15] }),
+      expect.objectContaining({ name: '输出成本', type: 'line', data: [5, 18, 22.5] }),
+      expect.objectContaining({ name: '输出用户价格', type: 'line', data: [20, 36, 45] }),
     ]))
     wrapper.unmount()
   })

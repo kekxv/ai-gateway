@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { BarChart, type BarSeriesOption } from 'echarts/charts'
+import { LineChart, type LineSeriesOption } from 'echarts/charts'
 import {
   AriaComponent,
   type AriaComponentOption,
@@ -22,11 +22,11 @@ import { multiplyDecimals } from '@/utils/decimal'
 import { formatMoney } from '@/utils/format'
 import VChart from 'vue-echarts'
 
-use([AriaComponent, BarChart, CanvasRenderer, GridComponent, TooltipComponent])
+use([AriaComponent, CanvasRenderer, GridComponent, LineChart, TooltipComponent])
 
 type ChartOption = ComposeOption<
   | AriaComponentOption
-  | BarSeriesOption
+  | LineSeriesOption
   | GridComponentOption
   | TooltipComponentOption
 >
@@ -213,7 +213,7 @@ const chartRows = computed(() =>
 const comparisonChart = computed<ChartOption>(() => ({
   aria: {
     enabled: true,
-    description: '比较所选模型每百万 Token 的最低成本和用户输入与输出单价。',
+    description: '以折线比较所选模型每百万 Token 的最低成本和用户输入与输出单价。',
   },
   grid: { left: 58, right: 24, top: 28, bottom: 76 },
   tooltip: {
@@ -229,27 +229,39 @@ const comparisonChart = computed<ChartOption>(() => ({
   series: [
     {
       name: '输入成本',
-      type: 'bar',
+      type: 'line',
       data: chartRows.value.map((row) => row.inputCostMinimum),
-      itemStyle: { color: '#b45309', borderRadius: [5, 5, 0, 0] },
+      symbol: 'circle',
+      symbolSize: 8,
+      itemStyle: { color: '#b45309' },
+      lineStyle: { width: 3 },
     },
     {
       name: '输入用户价格',
-      type: 'bar',
+      type: 'line',
       data: chartRows.value.map((row) => row.inputUserMinimum),
-      itemStyle: { color: '#2563eb', borderRadius: [5, 5, 0, 0] },
+      symbol: 'circle',
+      symbolSize: 8,
+      itemStyle: { color: '#2563eb' },
+      lineStyle: { width: 3 },
     },
     {
       name: '输出成本',
-      type: 'bar',
+      type: 'line',
       data: chartRows.value.map((row) => row.outputCostMinimum),
-      itemStyle: { color: '#c2410c', borderRadius: [5, 5, 0, 0] },
+      symbol: 'circle',
+      symbolSize: 8,
+      itemStyle: { color: '#c2410c' },
+      lineStyle: { width: 3 },
     },
     {
       name: '输出用户价格',
-      type: 'bar',
+      type: 'line',
       data: chartRows.value.map((row) => row.outputUserMinimum),
-      itemStyle: { color: '#0f766e', borderRadius: [5, 5, 0, 0] },
+      symbol: 'circle',
+      symbolSize: 8,
+      itemStyle: { color: '#0f766e' },
+      lineStyle: { width: 3 },
     },
   ],
 }))
@@ -322,7 +334,7 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
       <section class="comparison-chart" data-test="model-comparison-chart">
         <div class="comparison-chart__heading">
           <div>
-            <h3>最低成本与用户价格</h3>
+            <h3>最低成本与用户价格走势</h3>
             <p>每百万 Tokens；已计入模型和供应商倍率，仅统计可用供应商路由。</p>
           </div>
           <div class="chart-legend" aria-label="图例">

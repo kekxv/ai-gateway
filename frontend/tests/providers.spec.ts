@@ -823,6 +823,35 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('筛选发现的模型时保留被隐藏模型的已选状态', async () => {
+    server.use(
+      http.get('/admin/providers/1/discover-models', () =>
+        HttpResponse.json({
+          openai: ['gpt-4.1'],
+          claude: ['claude-sonnet', 'claude-haiku'],
+        }),
+      ),
+    )
+    const wrapper = mount(ModelSyncDialog, {
+      props: {
+        modelValue: true,
+        providerId: 1,
+        providerName: '筛选线路',
+        submitting: false,
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="model-sync-filter"]').setValue('claude')
+
+    expect(wrapper.text()).toContain('claude-sonnet')
+    expect(wrapper.text()).toContain('claude-haiku')
+    expect(wrapper.text()).not.toContain('gpt-4.1')
+    expect(wrapper.text()).toContain('同步选中的模型 (3)')
+    wrapper.unmount()
+  })
+
   it('供应商已有历史记录时保留列表项并引导改为停用', async () => {
     let deleteRequests = 0
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({

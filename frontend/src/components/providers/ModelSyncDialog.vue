@@ -5,6 +5,7 @@ import {
   ElCheckbox,
   ElDialog,
   ElEmpty,
+  ElInput,
   ElResult,
   ElSkeleton,
   ElSkeletonItem,
@@ -13,6 +14,7 @@ import 'element-plus/theme-chalk/el-button.css'
 import 'element-plus/theme-chalk/el-checkbox.css'
 import 'element-plus/theme-chalk/el-dialog.css'
 import 'element-plus/theme-chalk/el-empty.css'
+import 'element-plus/theme-chalk/el-input.css'
 import 'element-plus/theme-chalk/el-overlay.css'
 import 'element-plus/theme-chalk/el-skeleton.css'
 import 'element-plus/theme-chalk/el-skeleton-item.css'
@@ -35,6 +37,7 @@ const loading = ref(false)
 const error = ref('')
 const modelsByProtocol = ref<Record<string, string[]>>({})
 const selectedModels = ref<Set<string>>(new Set())
+const filterQuery = ref('')
 let discoverController: AbortController | undefined
 
 const allModels = computed(() => {
@@ -46,6 +49,20 @@ const allModels = computed(() => {
 })
 
 const totalModels = computed(() => allModels.value.length)
+const visibleModelsByProtocol = computed(() => {
+  const query = filterQuery.value.trim().toLocaleLowerCase('en-US')
+  if (query === '') return modelsByProtocol.value
+  return Object.entries(modelsByProtocol.value).reduce<Record<string, string[]>>(
+    (visible, [protocol, models]) => {
+      const matchingModels = models.filter((model) =>
+        model.toLocaleLowerCase('en-US').includes(query),
+      )
+      if (matchingModels.length > 0) visible[protocol] = matchingModels
+      return visible
+    },
+    {},
+  )
+})
 const busy = computed(() => loading.value || props.submitting)
 const selectedCount = computed(() => selectedModels.value.size)
 const allSelected = computed(
@@ -59,6 +76,7 @@ async function loadModels(): Promise<void> {
   if (props.providerId === null) return
   loading.value = true
   error.value = ''
+  filterQuery.value = ''
   modelsByProtocol.value = {}
   selectedModels.value = new Set()
 
@@ -159,6 +177,14 @@ onBeforeUnmount(() => {
 
     <div v-else class="model-list-container">
       <div class="model-list-toolbar">
+        <ElInput
+          v-model="filterQuery"
+          data-test="model-sync-filter"
+          clearable
+          placeholder="筛选模型名称"
+          :disabled="submitting"
+          aria-label="筛选模型名称"
+        />
         <ElCheckbox
           :model-value="allSelected"
           :indeterminate="someSelected"
@@ -170,7 +196,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div
-        v-for="(models, protocol) in modelsByProtocol"
+        v-for="(models, protocol) in visibleModelsByProtocol"
         :key="protocol"
         class="protocol-group"
       >
@@ -227,6 +253,8 @@ onBeforeUnmount(() => {
   position: sticky;
   top: 0;
   z-index: 10;
+  display: grid;
+  gap: 0.75rem;
   padding: 0.75rem 0.5rem;
   background: var(--gateway-panel);
   border-bottom: 1px solid var(--gateway-border);
