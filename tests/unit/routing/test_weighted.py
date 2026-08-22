@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -13,7 +14,7 @@ from ai_gateway.catalog.repository import CatalogRepository
 from ai_gateway.catalog.schemas import ResolvedModel
 from ai_gateway.core.enums import ApiKeyScope, Protocol, RouteRuntimeState
 from ai_gateway.db.models import Model, ModelAlias, ModelRoute, Provider, ProviderProtocol
-from ai_gateway.routing.service import Router, choose_weighted_route
+from ai_gateway.routing.service import Router, choose_weighted_route, lowest_cost_candidates
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate
 
 
@@ -55,6 +56,19 @@ def test_weighted_choice_is_seeded_and_proportional() -> None:
     )
 
     assert 0.73 <= second_route_count / 40_000 <= 0.77
+
+
+def test_lowest_cost_candidates_exclude_more_expensive_routes_before_weighting() -> None:
+    routes = [
+        candidate(1, 10_000),
+        candidate(2, 1),
+        candidate(3, 100),
+    ]
+    routes[0] = replace(routes[0], provider_cost_multiplier=Decimal("2.00"))
+    routes[1] = replace(routes[1], provider_cost_multiplier=Decimal("0.80"))
+    routes[2] = replace(routes[2], provider_cost_multiplier=Decimal("0.80"))
+
+    assert [item.route_id for item in lowest_cost_candidates(routes)] == [2, 3]
 
 
 async def _add_route(
@@ -170,6 +184,58 @@ async def test_shared_alias_weights_routes_across_all_target_models(
         model_b_count += selected.model_id == route_b.model_id
 
     assert 0.70 <= model_b_count / 400 <= 0.80
+
+
+async def test_router_selects_lowest_cost_before_applying_route_weight(
+    session: AsyncSession,
+) -> None:
+    resolved, route_a, route_b = await _add_shared_alias_routes(session)
+    expensive_provider = await session.get(Provider, route_b.provider_id)
+    cheap_provider = await session.get(Provider, route_a.provider_id)
+    assert expensive_provider is not None
+    assert cheap_provider is not None
+    expensive_provider.cost_multiplier = Decimal("2.00")
+    cheap_provider.cost_multiplier = Decimal("0.80")
+    await session.flush()
+
+    selected = await Router(session, rng=random.Random(20260822)).select_route(
+        resolved,
+        principal(),
+        required_protocol=Protocol.OPENAI,
+    )
+
+    assert selected.route_id == route_a.id
+
+
+async def test_router_uses_next_cost_tier_when_lowest_cost_half_open_probe_is_unavailable(
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolved, cheap_route, expensive_route = await _add_shared_alias_routes(session)
+    cheap_provider = await session.get(Provider, cheap_route.provider_id)
+    expensive_provider = await session.get(Provider, expensive_route.provider_id)
+    assert cheap_provider is not None
+    assert expensive_provider is not None
+    cheap_provider.cost_multiplier = Decimal("0.80")
+    expensive_provider.cost_multiplier = Decimal("2.00")
+    cheap_route.runtime_state = RouteRuntimeState.OPEN
+    cheap_route.disabled_until = datetime.now() - timedelta(seconds=1)
+    await session.flush()
+
+    router = Router(session, rng=random.Random(20260822))
+
+    async def cannot_claim_probe(_: int, __: datetime) -> bool:
+        return False
+
+    monkeypatch.setattr(router, "_claim_half_open_cancellation_safe", cannot_claim_probe)
+
+    selected = await router.select_route(
+        resolved,
+        principal(),
+        required_protocol=Protocol.OPENAI,
+    )
+
+    assert selected.route_id == expensive_route.id
 
 
 async def test_shared_alias_honors_model_scope_across_candidates_and_diagnostics(

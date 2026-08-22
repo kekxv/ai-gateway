@@ -1276,6 +1276,40 @@ class GatewayService:
                     raise health_failure
                 continue
 
+            if upstream.status_code == 403:
+                await upstream.aread()
+            if is_provider_quota_exhausted_response(upstream):
+                attempts.append(
+                    _attempt_summary(
+                        route,
+                        len(attempts) + 1,
+                        status_code=upstream.status_code,
+                    )
+                )
+                last_failure = upstream
+                health_failure = await _record_health_auxiliary(
+                    "record_failure",
+                    router.record_failure(
+                        route.route_id,
+                        RouteFailure(
+                            status_code=upstream.status_code,
+                            error_code="insufficient_user_quota",
+                        ),
+                    ),
+                    route,
+                    tuple(attempts),
+                )
+                close_failure = await _close_response_auxiliary(
+                    upstream,
+                    route,
+                    tuple(attempts),
+                )
+                if health_failure is not None:
+                    raise health_failure
+                if close_failure is not None:
+                    raise close_failure
+                continue
+
             if is_retryable_failure(status_code=upstream.status_code):
                 attempts.append(
                     _attempt_summary(
@@ -1628,6 +1662,19 @@ def is_retryable_failure(
     if status_code is not None:
         return status_code in {408, 429} or 500 <= status_code <= 599
     return isinstance(exception, (httpx.NetworkError, httpx.TimeoutException, ConnectionError))
+
+
+def is_provider_quota_exhausted_response(response: httpx.Response) -> bool:
+    if response.status_code != 403:
+        return False
+    try:
+        payload = orjson.loads(response.content)
+    except orjson.JSONDecodeError:
+        return False
+    if not is_object(payload):
+        return False
+    error = payload.get("error")
+    return is_object(error) and error.get("code") == "insufficient_user_quota"
 
 
 def _request_payload(

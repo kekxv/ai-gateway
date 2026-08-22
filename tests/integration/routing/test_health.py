@@ -106,6 +106,30 @@ def test_client_http_failures_do_not_penalize_route(status_code: int) -> None:
     assert health_failure_code(status_code) == f"http_{status_code}"
 
 
+def test_insufficient_user_quota_403_penalizes_route() -> None:
+    assert (
+        is_health_failure(RouteFailure(status_code=403, error_code="insufficient_user_quota"))
+        is True
+    )
+
+
+async def test_insufficient_user_quota_opens_route_without_waiting_for_threshold(
+    test_engine: AsyncEngine,
+    committed_route: tuple[ResolvedModel, int],
+) -> None:
+    _, route_id = committed_route
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        await RouteHealth(session, failure_threshold=10).record_failure(
+            route_id,
+            RouteFailure(status_code=403, error_code="insufficient_user_quota"),
+        )
+        route = await _load_route(session, route_id)
+
+    assert route.runtime_state is RouteRuntimeState.OPEN
+    assert route.consecutive_failures == 1
+    assert route.disabled_until is not None
+
+
 @pytest.mark.parametrize("status_code", [408, 429, 500, 502, 503, 504])
 def test_retryable_http_failures_penalize_route(status_code: int) -> None:
     assert is_health_failure(status_code) is True

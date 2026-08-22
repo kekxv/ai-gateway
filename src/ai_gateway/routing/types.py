@@ -26,6 +26,7 @@ class RouteCandidate:
     proxy_config_encrypted: bytes | None = None
     extra_headers_encrypted: bytes | None = None
     provider_public_multiplier: Decimal = Decimal("1.00")
+    provider_cost_multiplier: Decimal = Decimal("1.00")
 
     @property
     def id(self) -> int:

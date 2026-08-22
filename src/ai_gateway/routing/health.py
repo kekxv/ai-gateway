@@ -20,6 +20,7 @@ from ai_gateway.routing.types import RouteFailure
 Clock = Callable[[], datetime]
 PENALIZING_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 PENALIZING_WEBSOCKET_CLOSE_CODES = frozenset({1002, 1006, 1011, 1012, 1013, 1014, 1015})
+QUOTA_EXHAUSTED_ERROR_CODE = "insufficient_user_quota"
 
 
 def _utcnow() -> datetime:
@@ -61,6 +62,8 @@ def _dns_or_tls_error_code(exception: BaseException) -> str | None:
 
 
 def is_health_failure(failure: object) -> bool:
+    if isinstance(failure, RouteFailure) and failure.error_code == QUOTA_EXHAUSTED_ERROR_CODE:
+        return True
     status_code = _status_code(failure)
     if status_code is not None:
         return status_code in PENALIZING_HTTP_STATUSES
@@ -226,7 +229,11 @@ class RouteHealth:
                 else:
                     next_failure_count = route.consecutive_failures + 1
                     opens_route = (
-                        route.runtime_state is RouteRuntimeState.HALF_OPEN
+                        (
+                            isinstance(failure, RouteFailure)
+                            and failure.error_code == QUOTA_EXHAUSTED_ERROR_CODE
+                        )
+                        or route.runtime_state is RouteRuntimeState.HALF_OPEN
                         or next_failure_count >= self._failure_threshold
                     )
                     other_closed_route_exists = any(

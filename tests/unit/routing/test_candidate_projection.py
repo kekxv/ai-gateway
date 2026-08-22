@@ -22,10 +22,12 @@ def test_route_candidate_preserves_explicit_responses_capability() -> None:
             "provider_credential_encrypted": b"secret",
             "provider_proxy_config_encrypted": b"proxy-secret",
             "provider_public_multiplier": "1.50",
+            "provider_cost_multiplier": "0.80",
             "extra_headers_encrypted": None,
         }
     )
 
     assert candidate.supports_responses is False
     assert candidate.provider_public_multiplier == Decimal("1.50")
+    assert candidate.provider_cost_multiplier == Decimal("0.80")
     assert candidate.proxy_config_encrypted == b"proxy-secret"

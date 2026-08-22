@@ -54,6 +54,15 @@ def choose_weighted_route(
     return candidates[-1]
 
 
+def lowest_cost_candidates(candidates: Sequence[RouteCandidate]) -> list[RouteCandidate]:
+    if not candidates:
+        return []
+    lowest_cost = min(candidate.provider_cost_multiplier for candidate in candidates)
+    return [
+        candidate for candidate in candidates if candidate.provider_cost_multiplier == lowest_cost
+    ]
+
+
 class Router:
     def __init__(
         self,
@@ -130,17 +139,21 @@ class Router:
         )
         for pool in pools:
             while pool:
-                candidate = choose_weighted_route(pool, self._rng)
-                pool.remove(candidate)
-                if candidate.runtime_state is RouteRuntimeState.CLOSED:
-                    return candidate
-                if await self._claim_half_open_cancellation_safe(candidate.route_id, now):
-                    return replace(
-                        candidate,
-                        runtime_state=RouteRuntimeState.HALF_OPEN,
-                        disabled_until=None,
-                    )
-                removed_by_health = True
+                cost_tier = lowest_cost_candidates(pool)
+                for candidate in cost_tier:
+                    pool.remove(candidate)
+                while cost_tier:
+                    candidate = choose_weighted_route(cost_tier, self._rng)
+                    cost_tier.remove(candidate)
+                    if candidate.runtime_state is RouteRuntimeState.CLOSED:
+                        return candidate
+                    if await self._claim_half_open_cancellation_safe(candidate.route_id, now):
+                        return replace(
+                            candidate,
+                            runtime_state=RouteRuntimeState.HALF_OPEN,
+                            disabled_until=None,
+                        )
+                    removed_by_health = True
 
         raise NoRouteAvailable(
             requested_name,
@@ -467,6 +480,7 @@ def _candidate_query(
             ModelRoute.disabled_until,
             Provider.credential_encrypted.label("provider_credential_encrypted"),
             Provider.proxy_config_encrypted.label("provider_proxy_config_encrypted"),
+            Provider.cost_multiplier.label("provider_cost_multiplier"),
             Provider.public_multiplier.label("provider_public_multiplier"),
             ProviderProtocol.extra_headers_encrypted,
         )
@@ -533,6 +547,7 @@ def _candidate_from_row(row: Any) -> RouteCandidate:
         upstream_model=cast(str, row["upstream_model"]),
         weight=cast(int, row["weight"]),
         provider_public_multiplier=Decimal(str(row["provider_public_multiplier"])),
+        provider_cost_multiplier=Decimal(str(row["provider_cost_multiplier"])),
         runtime_state=RouteRuntimeState(row["runtime_state"]),
         disabled_until=cast(datetime | None, row["disabled_until"]),
         provider_credential_encrypted=cast(bytes, row["provider_credential_encrypted"]),

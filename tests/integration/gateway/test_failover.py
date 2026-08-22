@@ -49,7 +49,11 @@ from ai_gateway.db.models import (
 )
 from ai_gateway.gateway.dependencies import get_gateway_service
 from ai_gateway.gateway.openai import router as openai_router
-from ai_gateway.gateway.service import GatewayService, is_retryable_failure
+from ai_gateway.gateway.service import (
+    GatewayService,
+    is_provider_quota_exhausted_response,
+    is_retryable_failure,
+)
 from ai_gateway.routing.service import Router
 from ai_gateway.routing.types import RouteCandidate
 
@@ -131,8 +135,29 @@ def test_failover_retries_only_intended_statuses_and_transport_failures() -> Non
     assert not is_retryable_failure(exception=ValueError("bad request"))
 
 
+def test_insufficient_user_quota_response_is_classified_for_failover() -> None:
+    response = httpx.Response(
+        403,
+        json={"error": {"code": "insufficient_user_quota"}},
+    )
+
+    assert is_provider_quota_exhausted_response(response) is True
+    assert is_provider_quota_exhausted_response(httpx.Response(403, json={"error": {}})) is False
+    assert is_provider_quota_exhausted_response(httpx.Response(403, content=b"not-json")) is False
+
+
+@pytest.mark.parametrize(
+    ("first_status", "first_error", "expected_error_code"),
+    [
+        (503, {"message": "temporary"}, "http_503"),
+        (403, {"code": "insufficient_user_quota"}, "http_403"),
+    ],
+)
 async def test_mysql_backed_failover_uses_each_route_once_and_audits_attempt_order(
     test_engine: AsyncEngine,
+    first_status: int,
+    first_error: dict[str, str],
+    expected_error_code: str,
 ) -> None:
     suffix = uuid4().hex
     raw_key = f"sk-gw-failover-{suffix}"
@@ -204,7 +229,7 @@ async def test_mysql_backed_failover_uses_each_route_once_and_audits_attempt_ord
         payload = orjson.loads(request.content)
         seen_models.append(payload["model"])
         if request.url.host and request.url.host.startswith("first-"):
-            return httpx.Response(503, json={"error": {"message": "temporary"}})
+            return httpx.Response(first_status, json={"error": first_error})
         return httpx.Response(
             200,
             json={
@@ -263,7 +288,7 @@ async def test_mysql_backed_failover_uses_each_route_once_and_audits_attempt_ord
         assert refreshed_first is not None
         assert refreshed_second is not None
         assert refreshed_first.consecutive_failures == 1
-        assert refreshed_first.last_error_code == "http_503"
+        assert refreshed_first.last_error_code == expected_error_code
         assert refreshed_second.consecutive_failures == 0
 
 
