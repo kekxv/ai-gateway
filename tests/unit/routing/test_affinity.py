@@ -12,6 +12,11 @@ from ai_gateway.routing.affinity import client_session_affinity_hash, session_af
         ({"session-id": "codex-session", "thread-id": "thread"}, {}, "codex-session"),
         ({"thread-id": "codex-thread"}, {}, "codex-thread"),
         ({"x-opencode-session": "opencode-session"}, {}, "opencode-session"),
+        (
+            {"x-deepseek-harness-session-id": "be408c87-4336-4700-8af9-2ef1983b9205"},
+            {},
+            "be408c87-4336-4700-8af9-2ef1983b9205",
+        ),
         ({}, {"prompt_cache_key": "prompt-session"}, "prompt-session"),
         (
             {"x-codex-turn-metadata": '{"session_id":"metadata-session"}'},

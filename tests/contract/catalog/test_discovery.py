@@ -150,6 +150,25 @@ def test_build_upstream_request_strips_hop_headers_and_merges_configured_headers
     assert request.url.host == "provider.example"
 
 
+def test_build_upstream_request_forwards_deepseek_harness_identity_headers(
+    settings: Settings,
+) -> None:
+    request = build_upstream_request(
+        _route(Protocol.OPENAI, settings),
+        {
+            "X-DeepSeek-Harness-Session-ID": "be408c87-4336-4700-8af9-2ef1983b9205",
+            "X-DeepSeek-Harness-User-ID": "654a8af7-7eda-4b3c-8770-0c8b6b390ddd",
+        },
+        b'{"model":"provider-model"}',
+        settings=settings,
+    )
+
+    assert (
+        request.headers["x-deepseek-harness-session-id"] == "be408c87-4336-4700-8af9-2ef1983b9205"
+    )
+    assert request.headers["x-deepseek-harness-user-id"] == "654a8af7-7eda-4b3c-8770-0c8b6b390ddd"
+
+
 @pytest.mark.parametrize(
     ("auth_scheme", "expected_value"),
     [("Bearer", "Bearer provider-secret"), ("ApiKey", "provider-secret")],

@@ -18,6 +18,7 @@ _SESSION_HEADERS = (
     "session-id",
     "thread-id",
     "x-opencode-session",
+    "x-deepseek-harness-session-id",
 )
 _SESSION_BODY_FIELDS = ("prompt_cache_key", "conversation")
 _SUPPORTED_CLIENT_MARKERS = ("claude", "codex", "opencode", "pi-coding-agent")
