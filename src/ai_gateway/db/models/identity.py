@@ -108,6 +108,22 @@ class ApiKey(Base):
     )
 
 
+class SessionRouteAffinity(Base):
+    __tablename__ = "session_route_affinities"
+
+    api_key_id: Mapped[int] = mapped_column(
+        ForeignKey("api_keys.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    affinity_hash: Mapped[bytes] = mapped_column(BINARY(32), primary_key=True)
+    provider_id: Mapped[int] = mapped_column(
+        ForeignKey("providers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DATETIME_FSP6, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME_FSP6)
+
+
 class ApiKeyProvider(Base):
     __tablename__ = "api_key_providers"
 

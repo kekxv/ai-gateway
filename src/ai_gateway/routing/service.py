@@ -95,6 +95,7 @@ class Router:
         requested_model: str | None = None,
         excluded_route_ids: frozenset[int] | set[int] = frozenset(),
         require_websocket: bool = False,
+        preferred_provider_id: int | None = None,
     ) -> RouteCandidate:
         model_ids, requested_name = _model_identity(model, requested_model)
         protocol = Protocol(required_protocol) if required_protocol is not None else None
@@ -124,19 +125,30 @@ class Router:
         removed_by_transport = bool(first_row["removed_by_transport"])
         removed_by_health = bool(first_row["removed_by_health"])
 
+        affinity_candidates = [
+            candidate
+            for candidate in candidates
+            if preferred_provider_id is not None and candidate.provider_id == preferred_provider_id
+        ]
+        remaining_candidates = [
+            candidate for candidate in candidates if candidate not in affinity_candidates
+        ]
         preferred_candidates = (
-            [candidate for candidate in candidates if candidate.protocol is preferred]
+            [candidate for candidate in remaining_candidates if candidate.protocol is preferred]
             if preferred is not None
             else []
         )
         fallback_candidates = (
-            [candidate for candidate in candidates if candidate.protocol is not preferred]
+            [candidate for candidate in remaining_candidates if candidate.protocol is not preferred]
             if preferred_candidates
-            else candidates
+            else remaining_candidates
         )
-        pools = (
-            [preferred_candidates, fallback_candidates] if preferred_candidates else [candidates]
+        protocol_pools = (
+            [preferred_candidates, fallback_candidates]
+            if preferred_candidates
+            else [remaining_candidates]
         )
+        pools = ([affinity_candidates] if affinity_candidates else []) + protocol_pools
         for pool in pools:
             while pool:
                 cost_tier = lowest_cost_candidates(pool)
@@ -339,6 +351,7 @@ async def select_route(
     mutation_session_factory: MutationSessionFactory | None = None,
     excluded_route_ids: frozenset[int] | set[int] = frozenset(),
     require_websocket: bool = False,
+    preferred_provider_id: int | None = None,
 ) -> RouteCandidate:
     return await Router(
         session,
@@ -353,6 +366,7 @@ async def select_route(
         requested_model=requested_model,
         excluded_route_ids=excluded_route_ids,
         require_websocket=require_websocket,
+        preferred_provider_id=preferred_provider_id,
     )
 
 

@@ -131,6 +131,7 @@ class FakeRouter:
         self.selections: list[ResolvedModel | int] = []
         self.eligibility_checks: list[ResolvedModel | int] = []
         self.multiplier_model_ids: list[int] = []
+        self.preferred_provider_ids: list[int | None] = []
 
     async def select_route(
         self,
@@ -141,13 +142,21 @@ class FakeRouter:
         preferred_protocol: Protocol | str | None = None,
         requested_model: str | None = None,
         excluded_route_ids: frozenset[int] | set[int] = frozenset(),
+        preferred_provider_id: int | None = None,
     ) -> RouteCandidate:
         del required_protocol, preferred_protocol
         self.selections.append(model)
+        self.preferred_provider_ids.append(preferred_provider_id)
         model_ids = model.model_ids if isinstance(model, ResolvedModel) else (model,)
-        for route in self.routes:
-            if route.model_id in model_ids and route.route_id not in excluded_route_ids:
-                return route
+        candidates = [
+            route
+            for route in self.routes
+            if route.model_id in model_ids and route.route_id not in excluded_route_ids
+        ]
+        if preferred_provider_id is not None:
+            candidates.sort(key=lambda route: route.provider_id != preferred_provider_id)
+        for route in candidates:
+            return route
         requested_name = (
             model.requested_name if isinstance(model, ResolvedModel) else requested_model
         )
@@ -196,6 +205,27 @@ class FakeHttpClients:
         proxy_config_encrypted: bytes | None = None,
     ) -> httpx.AsyncClient:
         return self.client
+
+
+@dataclass
+class FakeAffinityStore:
+    provider_id: int | None = None
+    resolves: list[tuple[int, bytes]] = field(default_factory=list)
+    binds: list[tuple[int, bytes, int]] = field(default_factory=list)
+    resolve_error: Exception | None = None
+    bind_error: Exception | None = None
+
+    async def resolve(self, api_key_id: int, affinity_hash: bytes) -> int | None:
+        self.resolves.append((api_key_id, affinity_hash))
+        if self.resolve_error is not None:
+            raise self.resolve_error
+        return self.provider_id
+
+    async def bind(self, api_key_id: int, affinity_hash: bytes, provider_id: int) -> None:
+        self.binds.append((api_key_id, affinity_hash, provider_id))
+        if self.bind_error is not None:
+            raise self.bind_error
+        self.provider_id = provider_id
 
 
 def _settings() -> Settings:
@@ -518,6 +548,234 @@ async def test_all_protocol_pairs_bind_alias_to_selected_upstream_model(
     assert audit.completed.cache_read_tokens == 1
     assert audit.completed.cache_write_tokens == (0 if outbound is Protocol.GEMINI else 1)
     assert billing.settlements == 1
+
+
+async def test_claude_session_binds_successful_provider(session: AsyncSession) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    route = RouteCandidate(
+        route_id=181,
+        model_id=model.id,
+        provider_id=281,
+        provider_protocol_id=381,
+        protocol=Protocol.CLAUDE,
+        base_url="https://claude-session.example",
+        websocket_url=None,
+        upstream_model="claude-native",
+        weight=100,
+        provider_credential_encrypted=encrypt_secret("{}", settings=settings),
+    )
+    upstream_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json=_response(Protocol.CLAUDE, "claude-native"))
+        )
+    )
+    affinity = FakeAffinityStore()
+    router = FakeRouter([route])
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: router,
+        affinity_store=affinity,
+    )
+    path, body = _request(Protocol.CLAUDE, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={
+            "x-api-key": RAW_KEY,
+            "anthropic-version": "2023-06-01",
+            "x-claude-code-session-id": "d0c4fa18-d59e-4912-a259-f10eaaae04de",
+        },
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200, response.text
+    assert len(affinity.resolves) == 1
+    assert affinity.binds == [(affinity.resolves[0][0], affinity.resolves[0][1], route.provider_id)]
+    assert router.preferred_provider_ids == [None]
+
+
+async def test_codex_session_rebinds_after_failover_and_stays_on_replacement(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    encrypted = encrypt_secret("{}", settings=settings)
+    old_route = RouteCandidate(
+        route_id=182,
+        model_id=model.id,
+        provider_id=282,
+        provider_protocol_id=382,
+        protocol=Protocol.OPENAI,
+        base_url="https://old-session.example/v1",
+        websocket_url=None,
+        upstream_model="old-native",
+        weight=100,
+        provider_credential_encrypted=encrypted,
+    )
+    replacement_route = RouteCandidate(
+        route_id=183,
+        model_id=model.id,
+        provider_id=283,
+        provider_protocol_id=383,
+        protocol=Protocol.OPENAI,
+        base_url="https://replacement-session.example/v1",
+        websocket_url=None,
+        upstream_model="replacement-native",
+        weight=100,
+        provider_credential_encrypted=encrypted,
+    )
+    old_calls = 0
+    seen_hosts: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal old_calls
+        seen_hosts.append(request.url.host)
+        if request.url.host == "old-session.example":
+            old_calls += 1
+            if old_calls == 1:
+                return httpx.Response(503)
+            return httpx.Response(200, json=_response(Protocol.OPENAI, "old-native"))
+        return httpx.Response(200, json=_response(Protocol.OPENAI, "replacement-native"))
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    affinity = FakeAffinityStore(provider_id=old_route.provider_id)
+    router = FakeRouter([old_route, replacement_route])
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: router,
+        affinity_store=affinity,
+    )
+    path, body = _request(Protocol.OPENAI, model.aliases[0].alias)
+    body["prompt_cache_key"] = "01a013c8-ab2d-7243-85ec-07733e2c105a"
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={
+            "authorization": f"Bearer {RAW_KEY}",
+            "session-id": "01a013c8-ab2d-7243-85ec-07733e2c105a",
+        },
+    ) as client:
+        first = await client.post(path, json=body)
+        second = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert seen_hosts == [
+        "old-session.example",
+        "replacement-session.example",
+        "replacement-session.example",
+    ]
+    assert [provider_id for _, _, provider_id in affinity.binds] == [283, 283]
+    assert router.preferred_provider_ids == [282, 282, 283]
+
+
+async def test_affinity_store_failures_do_not_fail_successful_request(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    route = RouteCandidate(
+        route_id=184,
+        model_id=model.id,
+        provider_id=284,
+        provider_protocol_id=384,
+        protocol=Protocol.OPENAI,
+        base_url="https://affinity-error.example/v1",
+        websocket_url=None,
+        upstream_model="native",
+        weight=100,
+        provider_credential_encrypted=encrypt_secret("{}", settings=settings),
+    )
+    upstream_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json=_response(Protocol.OPENAI, "native"))
+        )
+    )
+    affinity = FakeAffinityStore(
+        resolve_error=RuntimeError("resolve failed"),
+        bind_error=RuntimeError("bind failed"),
+    )
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([route]),
+        affinity_store=affinity,
+    )
+    path, body = _request(Protocol.OPENAI, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={
+            "authorization": f"Bearer {RAW_KEY}",
+            "thread-id": "01a013c8-ab2d-7243-85ec-07733e2c105a",
+        },
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 200, response.text
+    assert len(affinity.resolves) == 1
+    assert len(affinity.binds) == 1
+
+
+async def test_failed_upstream_does_not_replace_session_binding(
+    session: AsyncSession,
+) -> None:
+    settings = _settings()
+    model = await _catalog(session)
+    route = RouteCandidate(
+        route_id=185,
+        model_id=model.id,
+        provider_id=285,
+        provider_protocol_id=385,
+        protocol=Protocol.OPENAI,
+        base_url="https://failed-session.example/v1",
+        websocket_url=None,
+        upstream_model="native",
+        weight=100,
+        provider_credential_encrypted=encrypt_secret("{}", settings=settings),
+    )
+    upstream_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(403))
+    )
+    affinity = FakeAffinityStore(provider_id=route.provider_id)
+    service = GatewayService(
+        session=session,
+        settings=settings,
+        billing_service=FakeBilling(),  # type: ignore[arg-type]
+        audit_service=FakeAudit(),  # type: ignore[arg-type]
+        http_client_factory=FakeHttpClients(upstream_client),
+        router_factory=lambda _: FakeRouter([route]),
+        affinity_store=affinity,
+    )
+    path, body = _request(Protocol.OPENAI, model.aliases[0].alias)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(service)),
+        base_url="http://test",
+        headers={
+            "authorization": f"Bearer {RAW_KEY}",
+            "thread-id": "01a013c8-ab2d-7243-85ec-07733e2c105a",
+        },
+    ) as client:
+        response = await client.post(path, json=body)
+    await upstream_client.aclose()
+
+    assert response.status_code == 403
+    assert affinity.binds == []
 
 
 async def test_shared_alias_selected_model_controls_http_lifecycle_and_retries(

@@ -30,6 +30,7 @@ from ai_gateway.db.models import (
     ProviderProtocol,
     RequestLog,
     RequestLogDetail,
+    SessionRouteAffinity,
     User,
 )
 
@@ -66,6 +67,13 @@ def test_schema_contains_exact_tables_and_columns() -> None:
         },
         "api_key_providers": {"api_key_id", "provider_id"},
         "api_key_models": {"api_key_id", "model_id"},
+        "session_route_affinities": {
+            "api_key_id",
+            "affinity_hash",
+            "provider_id",
+            "expires_at",
+            "updated_at",
+        },
         "providers": {
             "id",
             "name",
@@ -336,6 +344,10 @@ def test_required_unique_constraints_and_indexes_are_declared() -> None:
     assert {column.name for column in inspect(ApiKeyModel).primary_key} == {
         "api_key_id",
         "model_id",
+    }
+    assert {column.name for column in inspect(SessionRouteAffinity).primary_key} == {
+        "api_key_id",
+        "affinity_hash",
     }
 
 

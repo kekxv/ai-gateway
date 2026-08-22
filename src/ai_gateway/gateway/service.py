@@ -69,6 +69,7 @@ from ai_gateway.protocols.types import (
     CanonicalUsage,
     TextPart,
 )
+from ai_gateway.routing.affinity import SessionAffinityStore, client_session_affinity_hash
 from ai_gateway.routing.service import router_for_settings
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFailure
 from ai_gateway.transport.sse import GatewayContext, stream_gateway_response
@@ -126,6 +127,7 @@ class RouteSelector(TypingProtocol):
         preferred_protocol: Protocol | str | None = None,
         requested_model: str | None = None,
         excluded_route_ids: frozenset[int] | set[int] = frozenset(),
+        preferred_provider_id: int | None = None,
     ) -> RouteCandidate: ...
 
     async def record_success(self, route_id: int) -> bool: ...
@@ -149,6 +151,17 @@ class RouteSelector(TypingProtocol):
         *,
         require_websocket: bool = False,
     ) -> Decimal | None: ...
+
+
+class AffinityStore(TypingProtocol):
+    async def resolve(self, api_key_id: int, affinity_hash: bytes) -> int | None: ...
+
+    async def bind(
+        self,
+        api_key_id: int,
+        affinity_hash: bytes,
+        provider_id: int,
+    ) -> None: ...
 
 
 class InvalidRequestError(GatewayError):
@@ -274,6 +287,7 @@ class GatewayService:
         audit_service: AuditService,
         http_client_factory: HttpClientProvider,
         router_factory: Callable[[AsyncSession], RouteSelector] | None = None,
+        affinity_store: AffinityStore | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
@@ -283,6 +297,7 @@ class GatewayService:
         self._router_factory = router_factory or (
             lambda active_session: router_for_settings(active_session, settings)
         )
+        self._affinity_store = affinity_store
 
     async def count_claude_tokens(self, request: Request) -> GatewayOutput:
         principal = await authenticate_api_key(extract_api_key(request), self._session)
@@ -382,15 +397,34 @@ class GatewayService:
             content_type,
         )
 
+        await _release_read_session(self._session)
+        affinity_hash = client_session_affinity_hash(request.headers, payload)
+        affinity_store = self._affinity_store
+        preferred_provider_id: int | None = None
+        if affinity_hash is not None:
+            try:
+                if affinity_store is None:
+                    affinity_store = SessionAffinityStore(
+                        self._session,
+                        ttl=timedelta(seconds=self._settings.route_affinity_ttl_seconds),
+                    )
+                preferred_provider_id = await affinity_store.resolve(
+                    principal.api_key_id,
+                    affinity_hash,
+                )
+            except Exception:
+                logger.warning("session affinity lookup failed", exc_info=True)
+
         route_router = self._router_factory(self._session)
         try:
-            initial_route = await route_router.select_route(
-                resolved,
-                principal,
-                required_protocol=required_protocol,
-                preferred_protocol=inbound_protocol,
-                requested_model=requested_model,
-            )
+            route_kwargs: dict[str, Any] = {
+                "required_protocol": required_protocol,
+                "preferred_protocol": inbound_protocol,
+                "requested_model": requested_model,
+            }
+            if preferred_provider_id is not None:
+                route_kwargs["preferred_provider_id"] = preferred_provider_id
+            initial_route = await route_router.select_route(resolved, principal, **route_kwargs)
         except NoRouteAvailable as exc:
             await _release_read_session(self._session)
             correlation_id = _audit_correlation_id(request)
@@ -574,6 +608,7 @@ class GatewayService:
                     inbound_protocol=inbound_protocol,
                     estimated_input_tokens=estimated_input_tokens,
                     started_at=started_at,
+                    preferred_provider_id=preferred_provider_id,
                 )
                 if stream_context is not None:
                     prefetched_usage = _stream_usage_result(
@@ -609,6 +644,7 @@ class GatewayService:
                     model_id=selected_model_id,
                     router=route_router,
                     initial_route=initial_route,
+                    preferred_provider_id=preferred_provider_id,
                 )
             route = attempt_response.route
             upstream = attempt_response.response
@@ -647,6 +683,16 @@ class GatewayService:
                     return output
                 await upstream.aclose()
                 raise UpstreamError("The upstream provider rejected the request")
+
+            if affinity_hash is not None and affinity_store is not None:
+                try:
+                    await affinity_store.bind(
+                        principal.api_key_id,
+                        affinity_hash,
+                        route.provider_id,
+                    )
+                except Exception:
+                    logger.warning("session affinity update failed", exc_info=True)
 
             if canonical.stream:
                 if stream_context is None or stream_iterator is None or prefetched_frame is None:
@@ -793,6 +839,7 @@ class GatewayService:
         inbound_protocol: Protocol,
         estimated_input_tokens: int,
         started_at: float,
+        preferred_provider_id: int | None = None,
     ) -> tuple[
         _AttemptResponse,
         GatewayContext | None,
@@ -816,6 +863,7 @@ class GatewayService:
                     initial_route=selected_route,
                     attempted_route_ids=attempted_route_ids,
                     attempts=attempts,
+                    preferred_provider_id=preferred_provider_id,
                 )
             except (UpstreamError, UpstreamTimeout) as exc:
                 if last_attempt is not None:
@@ -1158,6 +1206,7 @@ class GatewayService:
         initial_route: RouteCandidate | None = None,
         attempted_route_ids: set[int] | None = None,
         attempts: list[dict[str, Any]] | None = None,
+        preferred_provider_id: int | None = None,
     ) -> _AttemptResponse:
         router = router or self._router_factory(self._session)
         attempted_route_ids = attempted_route_ids if attempted_route_ids is not None else set()
@@ -1171,14 +1220,15 @@ class GatewayService:
                 initial_route = None
             else:
                 try:
-                    route = await router.select_route(
-                        model_id,
-                        principal,
-                        required_protocol=prepared.required_protocol,
-                        preferred_protocol=prepared.inbound_protocol,
-                        requested_model=prepared.requested_model,
-                        excluded_route_ids=attempted_route_ids,
-                    )
+                    route_kwargs: dict[str, Any] = {
+                        "required_protocol": prepared.required_protocol,
+                        "preferred_protocol": prepared.inbound_protocol,
+                        "requested_model": prepared.requested_model,
+                        "excluded_route_ids": attempted_route_ids,
+                    }
+                    if preferred_provider_id is not None:
+                        route_kwargs["preferred_provider_id"] = preferred_provider_id
+                    route = await router.select_route(model_id, principal, **route_kwargs)
                 except NoRouteAvailable:
                     await _release_read_session(self._session)
                     if not attempts:

@@ -15,6 +15,7 @@ from ai_gateway.db.models.identity import (
     ApiKeyProvider,
     AuthRateLimit,
     RegistrationLock,
+    SessionRouteAffinity,
     User,
 )
 
@@ -36,5 +37,6 @@ __all__ = [
     "RegistrationLock",
     "RequestLog",
     "RequestLogDetail",
+    "SessionRouteAffinity",
     "User",
 ]

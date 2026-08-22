@@ -207,6 +207,46 @@ async def test_router_selects_lowest_cost_before_applying_route_weight(
     assert selected.route_id == route_a.id
 
 
+async def test_router_prefers_bound_provider_over_lower_cost_provider(
+    session: AsyncSession,
+) -> None:
+    resolved, cheap_route, bound_route = await _add_shared_alias_routes(session)
+    cheap_provider = await session.get(Provider, cheap_route.provider_id)
+    bound_provider = await session.get(Provider, bound_route.provider_id)
+    assert cheap_provider is not None
+    assert bound_provider is not None
+    cheap_provider.cost_multiplier = Decimal("0.80")
+    bound_provider.cost_multiplier = Decimal("2.00")
+    await session.flush()
+
+    selected = await Router(session, rng=random.Random(20260822)).select_route(
+        resolved,
+        principal(),
+        required_protocol=Protocol.OPENAI,
+        preferred_provider_id=bound_route.provider_id,
+    )
+
+    assert selected.route_id == bound_route.id
+
+
+async def test_router_reassigns_when_bound_provider_is_dynamically_disabled(
+    session: AsyncSession,
+) -> None:
+    resolved, replacement_route, bound_route = await _add_shared_alias_routes(session)
+    bound_route.runtime_state = RouteRuntimeState.OPEN
+    bound_route.disabled_until = datetime.now() + timedelta(minutes=5)
+    await session.flush()
+
+    selected = await Router(session, rng=random.Random(20260822)).select_route(
+        resolved,
+        principal(),
+        required_protocol=Protocol.OPENAI,
+        preferred_provider_id=bound_route.provider_id,
+    )
+
+    assert selected.route_id == replacement_route.id
+
+
 async def test_router_uses_next_cost_tier_when_lowest_cost_half_open_probe_is_unavailable(
     session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
