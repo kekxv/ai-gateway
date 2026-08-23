@@ -738,6 +738,189 @@ async def test_only_route_for_model_is_not_disabled_even_after_threshold_failure
     assert route.last_error_at is not None
 
 
+async def test_only_enabled_provider_route_is_not_disabled_after_failure(
+    test_engine: AsyncEngine,
+) -> None:
+    """A manually disabled provider must not count as a healthy standby route."""
+    suffix = uuid4().hex
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as setup_session:
+        model = Model(
+            canonical_name=f"provider-disabled-model-{suffix}",
+            display_name="Provider Disabled Model",
+            enabled=True,
+        )
+        active_provider = Provider(
+            name=f"active-provider-{suffix}",
+            credential_encrypted=b"active-secret",
+            enabled=True,
+        )
+        active_protocol = ProviderProtocol(
+            provider=active_provider,
+            protocol=Protocol.OPENAI,
+            base_url="https://active.provider.invalid/v1",
+            enabled=True,
+        )
+        active_route = ModelRoute(
+            model=model,
+            provider=active_provider,
+            upstream_model="active-upstream",
+            weight=100,
+            enabled=True,
+        )
+        disabled_provider = Provider(
+            name=f"disabled-provider-{suffix}",
+            credential_encrypted=b"disabled-secret",
+            enabled=False,
+        )
+        disabled_protocol = ProviderProtocol(
+            provider=disabled_provider,
+            protocol=Protocol.OPENAI,
+            base_url="https://disabled.provider.invalid/v1",
+            enabled=True,
+        )
+        disabled_route = ModelRoute(
+            model=model,
+            provider=disabled_provider,
+            upstream_model="disabled-upstream",
+            weight=100,
+            enabled=True,
+        )
+        setup_session.add_all([
+            active_protocol,
+            active_route,
+            disabled_protocol,
+            disabled_route,
+        ])
+        await setup_session.commit()
+        active_route_id = active_route.id
+
+    async with session_factory() as session:
+        await RouteHealth(session, failure_threshold=1).record_failure(active_route_id, 503)
+
+    async with session_factory() as session:
+        route = await _load_route(session, active_route_id)
+
+    assert route.consecutive_failures == 1
+    assert route.runtime_state is RouteRuntimeState.CLOSED
+    assert route.disabled_until is None
+    assert route.last_error_code == "http_503"
+
+
+async def test_only_enabled_protocol_route_is_not_disabled_after_failure(
+    test_engine: AsyncEngine,
+) -> None:
+    """A manually disabled provider protocol must not count as a standby route."""
+    suffix = uuid4().hex
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as setup_session:
+        model = Model(
+            canonical_name=f"protocol-disabled-model-{suffix}",
+            display_name="Protocol Disabled Model",
+            enabled=True,
+        )
+        active_provider = Provider(
+            name=f"protocol-active-provider-{suffix}",
+            credential_encrypted=b"active-secret",
+            enabled=True,
+        )
+        active_protocol = ProviderProtocol(
+            provider=active_provider,
+            protocol=Protocol.OPENAI,
+            base_url="https://protocol-active.provider.invalid/v1",
+            enabled=True,
+        )
+        active_route = ModelRoute(
+            model=model,
+            provider=active_provider,
+            upstream_model="active-upstream",
+            weight=100,
+            enabled=True,
+        )
+        disabled_provider = Provider(
+            name=f"protocol-disabled-provider-{suffix}",
+            credential_encrypted=b"disabled-secret",
+            enabled=True,
+        )
+        disabled_protocol = ProviderProtocol(
+            provider=disabled_provider,
+            protocol=Protocol.OPENAI,
+            base_url="https://protocol-disabled.provider.invalid/v1",
+            enabled=False,
+        )
+        disabled_route = ModelRoute(
+            model=model,
+            provider=disabled_provider,
+            upstream_model="disabled-upstream",
+            weight=100,
+            enabled=True,
+        )
+        setup_session.add_all([
+            active_protocol,
+            active_route,
+            disabled_protocol,
+            disabled_route,
+        ])
+        await setup_session.commit()
+        active_route_id = active_route.id
+
+    async with session_factory() as session:
+        await RouteHealth(session, failure_threshold=1).record_failure(active_route_id, 503)
+
+    async with session_factory() as session:
+        route = await _load_route(session, active_route_id)
+
+    assert route.consecutive_failures == 1
+    assert route.runtime_state is RouteRuntimeState.CLOSED
+    assert route.disabled_until is None
+    assert route.last_error_code == "http_503"
+
+
+async def test_disabled_model_routes_are_not_counted_as_standby_routes(
+    test_engine: AsyncEngine,
+) -> None:
+    """A manually disabled model must not make a route appear to have a standby."""
+    suffix = uuid4().hex
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_factory() as setup_session:
+        model = Model(
+            canonical_name=f"model-disabled-health-{suffix}",
+            display_name="Model Disabled Health",
+            enabled=False,
+        )
+        provider = Provider(
+            name=f"model-disabled-health-provider-{suffix}",
+            credential_encrypted=b"secret",
+            enabled=True,
+        )
+        protocol = ProviderProtocol(
+            provider=provider,
+            protocol=Protocol.OPENAI,
+            base_url="https://model-disabled-health.provider.invalid/v1",
+            enabled=True,
+        )
+        route = ModelRoute(
+            model=model,
+            provider=provider,
+            upstream_model="disabled-model-upstream",
+            weight=100,
+            enabled=True,
+        )
+        setup_session.add_all([protocol, route])
+        await setup_session.commit()
+        route_id = route.id
+
+    async with session_factory() as session:
+        await RouteHealth(session, failure_threshold=1).record_failure(route_id, 503)
+
+    async with session_factory() as session:
+        route = await _load_route(session, route_id)
+
+    assert route.consecutive_failures == 1
+    assert route.runtime_state is RouteRuntimeState.CLOSED
+    assert route.disabled_until is None
+
+
 async def test_failure_of_last_healthy_route_recovers_all_model_routes(
     test_engine: AsyncEngine,
     committed_route: tuple[ResolvedModel, int],

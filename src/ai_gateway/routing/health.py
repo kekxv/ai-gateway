@@ -13,7 +13,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_gateway.core.enums import RouteRuntimeState
-from ai_gateway.db.models import ModelRoute
+from ai_gateway.db.models import Model, ModelRoute, Provider, ProviderProtocol
 from ai_gateway.routing.sessions import MutationSessionFactory, mutation_session_factory_for
 from ai_gateway.routing.types import RouteFailure
 
@@ -195,8 +195,13 @@ class RouteHealth:
                         select(ModelRoute)
                         .where(
                             ModelRoute.model_id == model_id,
+                            ModelRoute.model.has(Model.enabled.is_(True)),
                             ModelRoute.enabled.is_(True),
                             ModelRoute.weight > 0,
+                            ModelRoute.provider.has(Provider.enabled.is_(True)),
+                            ModelRoute.provider.has(
+                                Provider.protocols.any(ProviderProtocol.enabled.is_(True))
+                            ),
                         )
                         .order_by(ModelRoute.id)
                         .with_for_update()
