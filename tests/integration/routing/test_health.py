@@ -786,12 +786,14 @@ async def test_only_enabled_provider_route_is_not_disabled_after_failure(
             weight=100,
             enabled=True,
         )
-        setup_session.add_all([
-            active_protocol,
-            active_route,
-            disabled_protocol,
-            disabled_route,
-        ])
+        setup_session.add_all(
+            [
+                active_protocol,
+                active_route,
+                disabled_protocol,
+                disabled_route,
+            ]
+        )
         await setup_session.commit()
         active_route_id = active_route.id
 
@@ -855,12 +857,14 @@ async def test_only_enabled_protocol_route_is_not_disabled_after_failure(
             weight=100,
             enabled=True,
         )
-        setup_session.add_all([
-            active_protocol,
-            active_route,
-            disabled_protocol,
-            disabled_route,
-        ])
+        setup_session.add_all(
+            [
+                active_protocol,
+                active_route,
+                disabled_protocol,
+                disabled_route,
+            ]
+        )
         await setup_session.commit()
         active_route_id = active_route.id
 
