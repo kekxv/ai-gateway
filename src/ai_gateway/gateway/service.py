@@ -1724,7 +1724,11 @@ def is_provider_quota_exhausted_response(response: httpx.Response) -> bool:
     if not is_object(payload):
         return False
     error = payload.get("error")
-    return is_object(error) and error.get("code") == "insufficient_user_quota"
+    if not is_object(error):
+        return False
+    return error.get("code") == "insufficient_user_quota" or (
+        error.get("type") == "billing_error" and error.get("message") == "insufficient balance"
+    )
 
 
 def _request_payload(

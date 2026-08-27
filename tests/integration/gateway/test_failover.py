@@ -146,6 +146,15 @@ def test_insufficient_user_quota_response_is_classified_for_failover() -> None:
     assert is_provider_quota_exhausted_response(httpx.Response(403, content=b"not-json")) is False
 
 
+def test_insufficient_balance_billing_error_is_classified_for_failover() -> None:
+    response = httpx.Response(
+        403,
+        json={"error": {"message": "insufficient balance", "type": "billing_error"}},
+    )
+
+    assert is_provider_quota_exhausted_response(response) is True
+
+
 @pytest.mark.parametrize(
     ("first_status", "first_error", "expected_error_code"),
     [
