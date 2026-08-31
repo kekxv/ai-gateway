@@ -36,6 +36,53 @@ function assembleOpenAiStream(events: SseEvent[]): AssembledAssistant {
     const d = evt.data
     if (d === '[DONE]' || !d || typeof d !== 'object') continue
     const data = d as Record<string, unknown>
+
+    // OpenAI Responses streaming events.
+    const eventType = typeof data.type === 'string' ? data.type : ''
+    if (eventType === 'response.output_text.delta' && typeof data.delta === 'string') {
+      content += data.delta
+      continue
+    }
+    if (eventType === 'response.content_part.delta' && data.delta && typeof data.delta === 'object') {
+      const delta = data.delta as Record<string, unknown>
+      if (typeof delta.text === 'string') content += delta.text
+      continue
+    }
+    if (eventType === 'response.output_item.done' && data.item && typeof data.item === 'object') {
+      const item = data.item as Record<string, unknown>
+      if (item.type === 'message') {
+        if (!content) {
+          for (const block of parseOpenAiContent(item.content)) {
+            if (block.type === 'text') content += block.text
+          }
+        }
+      } else if (item.type === 'function_call') {
+        const id = typeof item.call_id === 'string' ? item.call_id : (typeof item.id === 'string' ? item.id : '')
+        const existing = toolCalls.find((entry) => entry.id === id)
+        if (existing) {
+          existing.name = typeof item.name === 'string' ? item.name : existing.name
+          if (typeof item.arguments === 'string' && !existing.arguments) existing.arguments = item.arguments
+        } else {
+          toolCalls.push({
+            id,
+            name: typeof item.name === 'string' ? item.name : '',
+            arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments ?? ''),
+          })
+        }
+      }
+      continue
+    }
+    if (eventType === 'response.function_call_arguments.delta' && typeof data.delta === 'string') {
+      const id = typeof data.item_id === 'string' ? data.item_id : ''
+      let call = toolCalls.find((entry) => entry.id === id)
+      if (!call) {
+        call = { id, name: '', arguments: '' }
+        toolCalls.push(call)
+      }
+      call.arguments += data.delta
+      continue
+    }
+
     const choices = data.choices
     if (!Array.isArray(choices) || choices.length === 0) continue
     const delta = choices[0] as Record<string, unknown>
@@ -78,7 +125,9 @@ function assembleClaudeStream(events: SseEvent[]): AssembledAssistant {
   const blocks: ClaudeBlockAccum[] = []
 
   for (const evt of events) {
-    if (evt.event === 'content_block_start') {
+    const eventData = evt.data && typeof evt.data === 'object' ? evt.data as Record<string, unknown> : null
+    const eventType = evt.event ?? (typeof eventData?.type === 'string' ? eventData.type : undefined)
+    if (eventType === 'content_block_start') {
       const d = (evt.data ?? {}) as Record<string, unknown>
       const cb = d.content_block as Record<string, unknown> | undefined
       if (!cb) continue
@@ -93,7 +142,7 @@ function assembleClaudeStream(events: SseEvent[]): AssembledAssistant {
           inputJson: '',
         })
       }
-    } else if (evt.event === 'content_block_delta') {
+    } else if (eventType === 'content_block_delta') {
       const d = (evt.data ?? {}) as Record<string, unknown>
       const delta = d.delta as Record<string, unknown> | undefined
       if (!delta) continue
@@ -184,7 +233,7 @@ function parseOpenAiContent(content: unknown): ChatBlock[] {
   for (const part of content) {
     if (!part || typeof part !== 'object') continue
     const p = part as Record<string, unknown>
-    if (p.type === 'text' && typeof p.text === 'string') {
+    if ((p.type === 'text' || p.type === 'input_text' || p.type === 'output_text') && typeof p.text === 'string') {
       if (p.text) blocks.push({ type: 'text', text: p.text })
     } else if (p.type === 'image_url' && p.image_url && typeof p.image_url === 'object') {
       const url = (p.image_url as Record<string, unknown>).url
@@ -194,6 +243,8 @@ function parseOpenAiContent(content: unknown): ChatBlock[] {
     } else if (p.type === 'input_image' && typeof p.image === 'string') {
       // OpenAI Responses format
       blocks.push({ type: 'image', url: p.image, mediaType: undefined })
+    } else if (p.type === 'input_image' && typeof p.image_url === 'string') {
+      blocks.push({ type: 'image', url: p.image_url, mediaType: undefined })
     }
   }
   return blocks
@@ -212,6 +263,11 @@ function parseOpenAiMessages(
   } else if (Array.isArray(sysField)) {
     const blocks = parseOpenAiContent(sysField)
     if (blocks.length > 0) messages.push({ role: 'system', blocks })
+  }
+
+  const instructions = requestBody.instructions
+  if (typeof instructions === 'string' && instructions) {
+    messages.push({ role: 'system', blocks: [{ type: 'text', text: instructions }] })
   }
 
   const reqMessages = requestBody.messages
@@ -267,6 +323,39 @@ function parseOpenAiMessages(
         })
         continue
       }
+    }
+  }
+
+  // OpenAI Responses API uses `input` instead of `messages`.
+  const input = requestBody.input
+  if (typeof input === 'string' && input) {
+    messages.push({ role: 'user', blocks: [{ type: 'text', text: input }] })
+  } else if (Array.isArray(input)) {
+    for (const item of input) {
+      if (!item || typeof item !== 'object') continue
+      const entry = item as Record<string, unknown>
+      if (entry.type === 'function_call_output') {
+        const output = entry.output
+        messages.push({
+          role: 'tool',
+          blocks: [{
+            type: 'tool-result',
+            id: typeof entry.call_id === 'string' ? entry.call_id : '',
+            name: undefined,
+            content: output !== undefined ? (typeof output === 'string' ? output : JSON.stringify(output)) : '',
+          }],
+        })
+        continue
+      }
+      const role = typeof entry.role === 'string' ? entry.role : 'user'
+      const blocks = parseOpenAiContent(entry.content)
+      if (blocks.length === 0 && typeof entry.content === 'string' && entry.content) {
+        blocks.push({ type: 'text', text: entry.content })
+      }
+      if (blocks.length === 0) continue
+      if (role === 'system' || role === 'developer') messages.push({ role: 'system', blocks })
+      else if (role === 'assistant') messages.push({ role: 'assistant', blocks })
+      else messages.push({ role: 'user', blocks })
     }
   }
 
@@ -523,9 +612,36 @@ function addResponseAssistant(
         }
       }
     }
+  }
+
+  if (protocol === 'openai' && !Array.isArray(responseBody.choices)) {
+    // OpenAI Responses API returns output items rather than choices.
+    const output = responseBody.output
+    if (Array.isArray(output)) {
+      for (const item of output) {
+        if (!item || typeof item !== 'object') continue
+        const entry = item as Record<string, unknown>
+        if (entry.type === 'function_call') {
+          toolCalls.push({
+            type: 'tool-use',
+            id: typeof entry.call_id === 'string' ? entry.call_id : (typeof entry.id === 'string' ? entry.id : ''),
+            name: typeof entry.name === 'string' ? entry.name : '',
+            input: typeof entry.arguments === 'string' ? entry.arguments : JSON.stringify(entry.arguments ?? ''),
+          })
+        } else if (entry.type === 'message' || entry.role === 'assistant') {
+          for (const block of parseOpenAiContent(entry.content)) {
+            if (block.type === 'text') content += block.text
+            else toolCalls.push(block)
+          }
+        }
+      }
+    }
+    if (!content && typeof responseBody.output_text === 'string') content = responseBody.output_text
   } else if (protocol === 'claude') {
     const contentArr = responseBody.content
-    if (Array.isArray(contentArr)) {
+    if (typeof contentArr === 'string' && contentArr) {
+      content += contentArr
+    } else if (Array.isArray(contentArr)) {
       for (const block of contentArr) {
         if (!block || typeof block !== 'object') continue
         const b = block as Record<string, unknown>

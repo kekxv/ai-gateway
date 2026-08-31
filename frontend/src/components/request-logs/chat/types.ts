@@ -43,6 +43,7 @@ export function isChatConvertible(detail: Record<string, unknown> | null, protoc
 
   switch (protocol) {
     case 'openai':
+      return Array.isArray(bodyObj.messages) || Array.isArray(bodyObj.input) || typeof bodyObj.input === 'string'
     case 'claude':
       return Array.isArray(bodyObj.messages)
     case 'gemini':
