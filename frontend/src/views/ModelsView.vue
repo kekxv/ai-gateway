@@ -136,7 +136,11 @@ const filteredModels = computed(() => {
     )
     result = result.filter((model) => modelIdsWithRoutes.has(model.id))
   }
-  return result
+  return [...result].sort(
+    (left, right) =>
+      left.display_name.localeCompare(right.display_name, 'zh-CN') ||
+      left.canonical_name.localeCompare(right.canonical_name, 'zh-CN'),
+  )
 })
 
 const enabledModels = computed(() => filteredModels.value.filter((model) => model.enabled))

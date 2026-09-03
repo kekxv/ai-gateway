@@ -281,6 +281,43 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
+  it('按名称升序显示模型', async () => {
+    const alpha = {
+      ...scientificZeroFixture,
+      id: 3,
+      canonical_name: 'alpha',
+      display_name: 'Alpha',
+      enabled: false,
+    }
+    const bravo = {
+      ...scientificZeroFixture,
+      id: 4,
+      canonical_name: 'bravo',
+      display_name: 'Bravo',
+      enabled: false,
+    }
+    const zulu = {
+      ...scientificZeroFixture,
+      id: 2,
+      canonical_name: 'zulu',
+      display_name: 'Zulu',
+      enabled: false,
+    }
+    useCatalog([zulu, alpha, bravo], [])
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    const cards = wrapper
+      .get('[data-test="disabled-model-group"]')
+      .findAll('[data-test^="model-card-"]')
+    expect(cards.map((card) => card.attributes('data-test'))).toEqual([
+      'model-card-3',
+      'model-card-4',
+      'model-card-2',
+    ])
+    wrapper.unmount()
+  })
+
   it('通过快捷操作停用模型并将它移入已停用分区', async () => {
     const patchBodies: unknown[] = []
     useCatalog()
