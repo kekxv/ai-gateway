@@ -17,8 +17,9 @@ import {
   type PiModelSelection,
   type PiApi,
 } from '@/utils/clientConfig'
+import { listAvailableModels } from '@/api/models'
 import { buildDeepSeekHarnessFiles, type DeepSeekHarnessModel } from '@/lib/deepseekHarness'
-import type { ModelType } from '@/api/types'
+import type { ModelResponse, ModelType } from '@/api/types'
 
 type DialogTarget = ClientConfigTarget | 'deepseek-harness'
 type LoadedModel = Pick<DeepSeekHarnessModel, 'model_types' | 'model_type'> & {
@@ -213,10 +214,11 @@ function nonNegativeNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
 }
 
-function extractModels(payload: unknown): LoadedModel[] {
+function extractModels(payload: unknown, catalogModels: ModelResponse[] = []): LoadedModel[] {
   if (typeof payload !== 'object' || payload === null || !('data' in payload)) return []
   const data = payload.data
   if (!Array.isArray(data)) return []
+  const catalogByCanonicalName = new Map(catalogModels.map((model) => [model.canonical_name, model]))
   const models = new Map<string, LoadedModel>()
   data.forEach((item) => {
     if (typeof item !== 'object' || item === null || !('id' in item)) return
@@ -225,10 +227,6 @@ function extractModels(payload: unknown): LoadedModel[] {
       metadata,
       model_types,
       model_type,
-      input_price_per_million,
-      output_price_per_million,
-      cache_read_price_per_million,
-      cache_write_price_per_million,
     } = item as Record<string, unknown>
     if (typeof id !== 'string' || id.trim() === '' || models.has(id)) return
     const canonicalModel = typeof metadata === 'object' && metadata !== null
@@ -238,15 +236,19 @@ function extractModels(payload: unknown): LoadedModel[] {
       ? canonicalModel.trim()
       : id.trim()
     if (canonicalName === '' || models.has(canonicalName)) return
-    const modelTypes = Array.isArray(model_types) ? model_types.filter(isModelType) : undefined
-    const inputPrice = nonNegativeNumber(input_price_per_million)
-    const outputPrice = nonNegativeNumber(output_price_per_million)
-    const cacheReadPrice = nonNegativeNumber(cache_read_price_per_million)
-    const cacheWritePrice = nonNegativeNumber(cache_write_price_per_million)
+    const catalogModel = catalogByCanonicalName.get(canonicalName)
+    const modelTypes = catalogModel?.model_types ?? (
+      Array.isArray(model_types) ? model_types.filter(isModelType) : undefined
+    )
+    const resolvedModelType = catalogModel?.model_type ?? model_type
+    const inputPrice = nonNegativeNumber(catalogModel?.input_price_per_million)
+    const outputPrice = nonNegativeNumber(catalogModel?.output_price_per_million)
+    const cacheReadPrice = nonNegativeNumber(catalogModel?.cache_read_price_per_million)
+    const cacheWritePrice = nonNegativeNumber(catalogModel?.cache_write_price_per_million)
     models.set(canonicalName, {
       id: canonicalName,
       ...(modelTypes === undefined ? {} : { model_types: modelTypes }),
-      ...(isModelType(model_type) ? { model_type } : {}),
+      ...(isModelType(resolvedModelType) ? { model_type: resolvedModelType } : {}),
       ...(inputPrice === undefined ? {} : { inputPricePerMillion: inputPrice }),
       ...(outputPrice === undefined ? {} : { outputPricePerMillion: outputPrice }),
       ...(cacheReadPrice === undefined ? {} : { cacheReadPricePerMillion: cacheReadPrice }),
@@ -265,6 +267,9 @@ async function verifyAndLoadModels(): Promise<void> {
     apiKey: effectiveApiKey.value.trim(),
     baseUrl: baseUrl.value,
   }
+  const catalogModelsPromise = request.target === 'pi'
+    ? listAvailableModels().catch((): ModelResponse[] => [])
+    : Promise.resolve<ModelResponse[]>([])
   loadingModels.value = true
   modelLoadError.value = ''
   const isCurrentRequest = (): boolean => (
@@ -284,7 +289,7 @@ async function verifyAndLoadModels(): Promise<void> {
         : `加载可用模型失败：HTTP ${String(response.status)}`
       return
     }
-    const models = extractModels(await response.json())
+    const models = extractModels(await response.json(), await catalogModelsPromise)
     if (!isCurrentRequest()) return
     availableModels.value = models
     if (availableModelIds.value.length === 0) {

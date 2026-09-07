@@ -1,7 +1,11 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { listAvailableModels } from '@/api/models'
+import type { ModelResponse } from '@/api/types'
 import ClientConfigDialog from '@/components/api-keys/ClientConfigDialog.vue'
+
+vi.mock('@/api/models', () => ({ listAvailableModels: vi.fn() }))
 
 function mountDialog() {
   return mount(ClientConfigDialog, {
@@ -14,6 +18,10 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   document.body.innerHTML = ''
+})
+
+beforeEach(() => {
+  vi.mocked(listAvailableModels).mockResolvedValue([])
 })
 
 describe('客户端配置对话框', () => {
@@ -131,15 +139,28 @@ describe('客户端配置对话框', () => {
   })
 
   it('为 Pi 选择多个可切换模型', async () => {
+    vi.mocked(listAvailableModels).mockResolvedValue([{
+      id: 1,
+      canonical_name: 'pi-fast',
+      display_name: 'Pi Fast',
+      model_types: ['text'],
+      model_type: 'text',
+      input_price_per_million: '2',
+      output_price_per_million: '8',
+      cache_read_price_per_million: '0.5',
+      cache_write_price_per_million: '2.5',
+      price_multiplier: 1,
+      enabled: true,
+      aliases: [],
+      routing_strategy: 'weighted_random',
+      created_at: '2026-09-07T00:00:00Z',
+      updated_at: '2026-09-07T00:00:00Z',
+    }] satisfies ModelResponse[])
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: [{
         id: 'pi-fast-alias',
         metadata: { canonical_model: 'pi-fast' },
         model_types: ['text'],
-        input_price_per_million: '2',
-        output_price_per_million: '8',
-        cache_read_price_per_million: '0.5',
-        cache_write_price_per_million: '2.5',
       }, { id: 'pi-deep', model_types: ['text'] }],
     }), { status: 200 }))
     vi.stubGlobal('fetch', fetch)
@@ -149,6 +170,7 @@ describe('客户端配置对话框', () => {
     await wrapper.get('[data-test="client-config-target-pi"]').trigger('click')
     await wrapper.get('[data-test="client-config-verify"]').trigger('click')
     await flushPromises()
+    expect(listAvailableModels).toHaveBeenCalledOnce()
     await wrapper.get('[data-test="client-config-pi-models"]').setValue(['pi-fast', 'pi-deep'])
 
     expect(JSON.parse(wrapper.get('[data-test="client-config-preview"]').text())).toMatchObject({
