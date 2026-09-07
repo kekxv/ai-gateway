@@ -153,7 +153,11 @@ wire_api = "responses"
       }],
     })
 
-    expect(JSON.parse(file.content).providers.gateway.models[0]).toMatchObject({
+    const piConfig = JSON.parse(file.content) as {
+      providers: { gateway: { models: Array<Record<string, unknown>> } }
+    }
+
+    expect(piConfig.providers.gateway.models[0]).toMatchObject({
       id: 'gpt-4.1', name: 'gpt-4.1', contextWindow: 128000,
       maxTokens: 16384, input: ['text'], reasoning: false,
       cost: { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 2.5 },
