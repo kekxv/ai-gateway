@@ -281,6 +281,23 @@ describe('模型与别名管理', () => {
     wrapper.unmount()
   })
 
+  it('用状态页签、原生供应商筛选和紧凑卡片组织模型目录', async () => {
+    const disabledModel = { ...scientificZeroFixture, enabled: false }
+    useCatalog([modelFixture, disabledModel])
+    const wrapper = mount(ModelsView, { attachTo: document.body })
+    await flushPromises()
+
+    const statusTabs = wrapper.get('[data-test="model-status-tabs"]')
+    expect(statusTabs.text()).toContain('全部模型 2')
+    expect(statusTabs.text()).toContain('已启用 1')
+    expect(statusTabs.text()).toContain('已停用 1')
+    expect(wrapper.get('[data-test="provider-filter"]').element.tagName).toBe('SELECT')
+    expect(wrapper.get('[data-test="model-card-1"] [data-test="model-fee-panel"]')).toBeTruthy()
+    expect(wrapper.get('[data-test="model-card-1"] [data-test="model-route-footer"]')).toBeTruthy()
+
+    wrapper.unmount()
+  })
+
   it('按名称升序显示模型', async () => {
     const alpha = {
       ...scientificZeroFixture,
@@ -695,6 +712,11 @@ describe('模型与别名管理', () => {
     expect(comparison?.querySelector('[data-test="model-comparison-chart"]')).not.toBeNull()
     expect(comparison?.textContent).toContain('已选模型')
     expect(comparison?.textContent).toContain('最低输入用户价')
+    expect(comparison?.textContent).toContain('分段价格与费率明细表')
+    expect(comparison?.querySelector('[data-test="comparison-add-model"]')).not.toBeNull()
+    expect(comparison?.querySelector('[data-test="comparison-remove-model-1"]')).not.toBeNull()
+    expect(comparison?.querySelector('[data-test="comparison-chart-controls"]')?.textContent).toContain('输入价格')
+    expect(comparison?.querySelector('[data-test="comparison-chart-controls"]')?.textContent).toContain('输出价格')
     const chart = wrapper.getComponent({ name: 'VChartStub' })
     const option = chart.props('option') as {
       series: Array<{ name: string; type: string; data: Array<number | null> }>

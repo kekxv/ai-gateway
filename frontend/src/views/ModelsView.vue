@@ -56,6 +56,7 @@ import { useAuthStore } from '@/stores/auth'
 type NoticeType = 'success' | 'warning' | 'error'
 type ModelOperation = 'edit' | 'delete' | 'disable' | 'toggle'
 type RouteOperation = 'edit' | 'delete' | 'disable' | 'recover'
+type ModelStatusFilter = 'all' | 'enabled' | 'disabled'
 
 interface Notice {
   type: NoticeType
@@ -78,6 +79,7 @@ const providers = ref<ProviderResponse[]>([])
 const allRoutes = ref<ModelRouteResponse[]>([])
 const searchText = ref('')
 const providerFilter = ref<number | null>(null)
+const modelStatusFilter = ref<ModelStatusFilter>('all')
 const loading = ref(true)
 const catalogReady = ref(false)
 const loadError = ref('')
@@ -145,6 +147,11 @@ const filteredModels = computed(() => {
 
 const enabledModels = computed(() => filteredModels.value.filter((model) => model.enabled))
 const disabledModels = computed(() => filteredModels.value.filter((model) => !model.enabled))
+const visibleModels = computed(() => {
+  if (modelStatusFilter.value === 'enabled') return enabledModels.value
+  if (modelStatusFilter.value === 'disabled') return disabledModels.value
+  return filteredModels.value
+})
 
 const routesByModel = computed(() => {
   const map = new Map<number, ModelRouteResponse[]>()
@@ -165,6 +172,11 @@ function setModelSelected(modelId: number, selected: boolean): void {
   if (selected) next.add(modelId)
   else next.delete(modelId)
   selectedModelIds.value = next
+}
+
+function addComparisonModel(): void {
+  priceComparisonOpen.value = false
+  modelStatusFilter.value = 'all'
 }
 
 function pruneSelectedModels(): void {
@@ -921,6 +933,42 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <div
+        v-if="auth.isAdmin"
+        class="model-status-tabs"
+        data-test="model-status-tabs"
+        role="tablist"
+        aria-label="按模型状态筛选"
+      >
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="modelStatusFilter === 'all'"
+          :class="{ 'is-active': modelStatusFilter === 'all' }"
+          @click="modelStatusFilter = 'all'"
+        >
+          全部模型 <span>{{ filteredModels.length }}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="modelStatusFilter === 'enabled'"
+          :class="{ 'is-active': modelStatusFilter === 'enabled' }"
+          @click="modelStatusFilter = 'enabled'"
+        >
+          已启用 <span>{{ enabledModels.length }}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="modelStatusFilter === 'disabled'"
+          :class="{ 'is-active': modelStatusFilter === 'disabled' }"
+          @click="modelStatusFilter = 'disabled'"
+        >
+          已停用 <span>{{ disabledModels.length }}</span>
+        </button>
+      </div>
+
       <div v-if="loading" class="loading-grid" aria-label="正在加载模型">
         <ElSkeleton v-for="index in 3" :key="index" animated>
           <template #template><ElSkeletonItem variant="rect" class="card-skeleton" /></template>
@@ -931,9 +979,9 @@ onBeforeUnmount(() => {
         <template #extra><ElButton type="primary" @click="load">重新加载</ElButton></template>
       </ElResult>
 
-      <div v-else-if="filteredModels.length > 0" class="resource-groups">
+      <div v-else-if="visibleModels.length > 0" class="resource-groups">
         <ResourceStatusGroup
-          v-if="auth.isAdmin && availableModels.length > 0"
+          v-if="auth.isAdmin && modelStatusFilter !== 'disabled' && availableModels.length > 0"
           data-test="available-model-group"
           status="enabled"
           title="可用"
@@ -969,7 +1017,7 @@ onBeforeUnmount(() => {
           </div>
         </ResourceStatusGroup>
         <ResourceStatusGroup
-          v-if="auth.isAdmin && noUsableRouteModels.length > 0"
+          v-if="auth.isAdmin && modelStatusFilter !== 'disabled' && noUsableRouteModels.length > 0"
           data-test="no-usable-route-model-group"
           status="warning"
           title="无可用路由"
@@ -1005,7 +1053,7 @@ onBeforeUnmount(() => {
           </div>
         </ResourceStatusGroup>
         <ResourceStatusGroup
-          v-if="auth.isAdmin && unhealthyRouteModels.length > 0"
+          v-if="auth.isAdmin && modelStatusFilter !== 'disabled' && unhealthyRouteModels.length > 0"
           data-test="unhealthy-route-model-group"
           status="danger"
           title="无健康路由"
@@ -1041,7 +1089,7 @@ onBeforeUnmount(() => {
           </div>
         </ResourceStatusGroup>
         <ResourceStatusGroup
-          v-if="auth.isAdmin && disabledModels.length > 0"
+          v-if="auth.isAdmin && modelStatusFilter !== 'enabled' && disabledModels.length > 0"
           data-test="disabled-model-group"
           status="disabled"
           title="已停用"
@@ -1101,6 +1149,8 @@ onBeforeUnmount(() => {
       :models="selectedModels"
       :routes="allRoutes"
       :providers="providers"
+      @add-model="addComparisonModel"
+      @remove-model="setModelSelected($event, false)"
     />
 
     <ModelFormDrawer
@@ -1147,6 +1197,58 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   padding: 1rem 1.25rem;
   border-bottom: 1px solid var(--gateway-border);
+}
+
+.model-status-tabs {
+  display: flex;
+  gap: 1.75rem;
+  padding: 0 1.25rem;
+  border-bottom: 1px solid var(--gateway-border);
+}
+
+.model-status-tabs button {
+  position: relative;
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  padding: 0.9rem 0 0.8rem;
+  color: var(--gateway-muted);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.model-status-tabs button::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: transparent;
+  border-radius: 999px 999px 0 0;
+  content: '';
+}
+
+.model-status-tabs button:hover,
+.model-status-tabs button.is-active {
+  color: var(--gateway-brand);
+}
+
+.model-status-tabs button.is-active::after {
+  background: var(--gateway-brand);
+}
+
+.model-status-tabs span {
+  min-width: 1.45rem;
+  padding: 0.1rem 0.38rem;
+  color: #64748b;
+  font-size: 0.75rem;
+  text-align: center;
+  background: #f1f5f9;
+  border-radius: 999px;
 }
 
 .panel-toolbar h2,
@@ -1211,8 +1313,8 @@ onBeforeUnmount(() => {
 
 .models-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
   align-items: start;
 }
 
@@ -1242,7 +1344,13 @@ code,
   width: 12rem;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 1180px) {
+  .models-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
   .panel-toolbar,
   .notice-row {
     align-items: stretch;
@@ -1253,9 +1361,18 @@ code,
     flex-direction: column;
   }
 
-  .provider-filter,
+  .provider-filter-select,
   .model-search {
     width: 100%;
+  }
+
+  .model-status-tabs {
+    gap: 1rem;
+    overflow-x: auto;
+  }
+
+  .model-status-tabs button {
+    flex: 0 0 auto;
   }
 
   .loading-grid,
