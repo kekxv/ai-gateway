@@ -17,6 +17,9 @@ export type PiApi = 'openai-completions' | 'openai-responses'
 export interface PiModelSelection {
   id: string
   modelTypes?: string[]
+  contextWindow?: number | null
+  maxTokens?: number | null
+  reasoning?: boolean | null
   inputPricePerMillion?: number
   outputPricePerMillion?: number
   cacheReadPricePerMillion?: number
@@ -26,10 +29,10 @@ export interface PiModelSelection {
 interface PiModelConfig {
   id: string
   name: string
-  contextWindow: number
-  maxTokens: number
-  input: string[]
-  reasoning: boolean
+  contextWindow?: number
+  maxTokens?: number
+  input?: string[]
+  reasoning?: boolean
   cost: {
     input: number
     output: number
@@ -38,8 +41,6 @@ interface PiModelConfig {
   }
 }
 
-const piDefaultContextWindow = 128000
-const piDefaultMaxTokens = 16384
 const piSupportedInputs = new Set(['text', 'image', 'audio'])
 
 export interface ClaudeModelSelection {
@@ -99,10 +100,10 @@ function piModelConfig(model: PiModelSelection): PiModelConfig {
   return {
     id,
     name: id,
-    contextWindow: piDefaultContextWindow,
-    maxTokens: piDefaultMaxTokens,
-    input: input.length > 0 ? [...new Set(input)] : ['text'],
-    reasoning: false,
+    ...(model.contextWindow == null ? {} : { contextWindow: model.contextWindow }),
+    ...(model.maxTokens == null ? {} : { maxTokens: model.maxTokens }),
+    ...(input.length > 0 ? { input: [...new Set(input)] } : {}),
+    ...(model.reasoning == null ? {} : { reasoning: model.reasoning }),
     cost: {
       input: model.inputPricePerMillion ?? 0,
       output: model.outputPricePerMillion ?? 0,

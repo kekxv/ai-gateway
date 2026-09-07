@@ -85,6 +85,9 @@ const scientificDecimalPattern = /^\+?(\d+)(?:\.(\d+))?[eE]([+-]?)(\d+)$/
 const canonicalName = ref('')
 const displayName = ref('')
 const modelTypes = ref<ModelType[]>(['text'])
+const piContextWindow = ref<number | null>(null)
+const piMaxTokens = ref<number | null>(null)
+const piReasoning = ref<'unset' | 'true' | 'false'>('unset')
 const inputPrice = ref('0')
 const outputPrice = ref('0')
 const cacheReadPrice = ref('0')
@@ -221,6 +224,9 @@ function clearDraft(): void {
   canonicalName.value = ''
   displayName.value = ''
   modelTypes.value = ['text']
+  piContextWindow.value = null
+  piMaxTokens.value = null
+  piReasoning.value = 'unset'
   inputPrice.value = '0'
   outputPrice.value = '0'
   cacheReadPrice.value = '0'
@@ -238,6 +244,10 @@ function resetForm(): void {
   canonicalName.value = model?.canonical_name ?? ''
   displayName.value = model?.display_name ?? ''
   modelTypes.value = model === null ? ['text'] : responseModelTypes(model)
+  piContextWindow.value = model?.pi_context_window ?? null
+  piMaxTokens.value = model?.pi_max_tokens ?? null
+  const modelReasoning = model === null ? null : model.pi_reasoning
+  piReasoning.value = modelReasoning === null || modelReasoning === undefined ? 'unset' : modelReasoning ? 'true' : 'false'
   inputPrice.value = normalizeDecimalInput(model?.input_price_per_million ?? '0')
   outputPrice.value = normalizeDecimalInput(model?.output_price_per_million ?? '0')
   cacheReadPrice.value = normalizeDecimalInput(model?.cache_read_price_per_million ?? '0')
@@ -535,6 +545,9 @@ function submitForm(): void {
       canonical_name: canonical,
       display_name: display,
       model_types: modelTypes.value,
+      ...(piContextWindow.value === null ? {} : { pi_context_window: piContextWindow.value }),
+      ...(piMaxTokens.value === null ? {} : { pi_max_tokens: piMaxTokens.value }),
+      ...(piReasoning.value === 'unset' ? {} : { pi_reasoning: piReasoning.value === 'true' }),
       input_price_per_million: inputPrice.value,
       output_price_per_million: outputPrice.value,
       cache_read_price_per_million: cacheReadPrice.value,
@@ -557,6 +570,10 @@ function submitForm(): void {
   if (modelTypes.value.join(',') !== responseModelTypes(model).join(',')) {
     payload.model_types = modelTypes.value
   }
+  if (piContextWindow.value !== (model.pi_context_window ?? null)) payload.pi_context_window = piContextWindow.value
+  if (piMaxTokens.value !== (model.pi_max_tokens ?? null)) payload.pi_max_tokens = piMaxTokens.value
+  const reasoning = piReasoning.value === 'unset' ? null : piReasoning.value === 'true'
+  if (reasoning !== (model.pi_reasoning ?? null)) payload.pi_reasoning = reasoning
   if (inputPrice.value !== normalizeDecimalInput(model.input_price_per_million)) {
     payload.input_price_per_million = inputPrice.value
   }
@@ -694,6 +711,14 @@ function submitForm(): void {
           </ElFormItem>
         </div>
 
+        <section class="pi-settings" aria-labelledby="pi-settings-heading">
+          <h3 id="pi-settings-heading">Pi 模型参数（可选）</h3>
+          <div class="form-grid">
+            <ElFormItem label="上下文窗口（Tokens）"><ElInputNumber v-model="piContextWindow" data-test="model-pi-context-window" :min="1" :controls="false" placeholder="留空则省略" /></ElFormItem>
+            <ElFormItem label="最大输出 Tokens"><ElInputNumber v-model="piMaxTokens" data-test="model-pi-max-tokens" :min="1" :controls="false" placeholder="留空则省略" /></ElFormItem>
+            <ElFormItem label="推理模式"><select v-model="piReasoning" data-test="model-pi-reasoning"><option value="unset">未配置</option><option value="true">启用</option><option value="false">关闭</option></select></ElFormItem>
+          </div>
+        </section>
         <section class="tier-section" aria-labelledby="model-tier-heading">
           <div class="section-heading">
             <div>

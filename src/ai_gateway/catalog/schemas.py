@@ -213,6 +213,9 @@ class ModelCreate(BaseModel):
     display_name: CatalogName
     model_type: ModelType = ModelType.TEXT
     model_types: list[ModelType] = Field(default_factory=list)
+    pi_context_window: int | None = Field(default=None, ge=1)
+    pi_max_tokens: int | None = Field(default=None, ge=1)
+    pi_reasoning: bool | None = None
     input_price_per_million: Price = Decimal("0")
     output_price_per_million: Price = Decimal("0")
     cache_read_price_per_million: Price = Decimal("0")
@@ -243,6 +246,9 @@ class ModelUpdate(BaseModel):
     display_name: CatalogName | None = None
     model_type: ModelType | None = None
     model_types: list[ModelType] | None = None
+    pi_context_window: int | None = Field(default=None, ge=1)
+    pi_max_tokens: int | None = Field(default=None, ge=1)
+    pi_reasoning: bool | None = None
     input_price_per_million: Price | None = None
     output_price_per_million: Price | None = None
     cache_read_price_per_million: Price | None = None
@@ -280,6 +286,9 @@ class ModelResponse(BaseModel):
     display_name: str
     model_type: ModelType = ModelType.TEXT
     model_types: list[ModelType] = Field(default_factory=lambda: [ModelType.TEXT])
+    pi_context_window: int | None = None
+    pi_max_tokens: int | None = None
+    pi_reasoning: bool | None = None
     input_price_per_million: Decimal
     output_price_per_million: Decimal
     cache_read_price_per_million: Decimal
@@ -300,6 +309,9 @@ class UserModelResponse(BaseModel):
     display_name: str
     model_type: ModelType
     model_types: list[ModelType]
+    pi_context_window: int | None = None
+    pi_max_tokens: int | None = None
+    pi_reasoning: bool | None = None
     input_price_per_million: Decimal
     output_price_per_million: Decimal
     cache_read_price_per_million: Decimal

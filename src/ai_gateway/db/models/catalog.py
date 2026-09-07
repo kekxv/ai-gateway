@@ -117,6 +117,9 @@ class Model(Base):
         default=lambda: [ModelType.TEXT],
         server_default=text("(JSON_ARRAY(model_type))"),
     )
+    pi_context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pi_max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pi_reasoning: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     input_price_per_million: Mapped[Decimal] = mapped_column(
         Numeric(20, 8),

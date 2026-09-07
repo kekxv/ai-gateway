@@ -403,6 +403,9 @@ export interface ModelCreate {
   canonical_name: string
   display_name: string
   model_types?: ModelType[]
+  pi_context_window?: number | null
+  pi_max_tokens?: number | null
+  pi_reasoning?: boolean | null
   model_type?: ModelType
   input_price_per_million?: string
   output_price_per_million?: string
@@ -420,6 +423,9 @@ export interface ModelUpdate {
   canonical_name?: string | null
   display_name?: string | null
   model_types?: ModelType[] | null
+  pi_context_window?: number | null
+  pi_max_tokens?: number | null
+  pi_reasoning?: boolean | null
   model_type?: ModelType | null
   input_price_per_million?: string | null
   output_price_per_million?: string | null
@@ -444,6 +450,9 @@ export interface ModelResponse {
   canonical_name: string
   display_name: string
   model_types?: ModelType[]
+  pi_context_window?: number | null
+  pi_max_tokens?: number | null
+  pi_reasoning?: boolean | null
   model_type?: ModelType
   input_price_per_million: string
   output_price_per_million: string

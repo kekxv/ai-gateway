@@ -245,6 +245,8 @@ function extractModels(payload: unknown, catalogModels: ModelResponse[] = []): L
     const outputPrice = nonNegativeNumber(catalogModel?.output_price_per_million)
     const cacheReadPrice = nonNegativeNumber(catalogModel?.cache_read_price_per_million)
     const cacheWritePrice = nonNegativeNumber(catalogModel?.cache_write_price_per_million)
+    const contextWindow = catalogModel?.pi_context_window
+    const maxTokens = catalogModel?.pi_max_tokens
     models.set(canonicalName, {
       id: canonicalName,
       ...(modelTypes === undefined ? {} : { model_types: modelTypes }),
@@ -253,6 +255,9 @@ function extractModels(payload: unknown, catalogModels: ModelResponse[] = []): L
       ...(outputPrice === undefined ? {} : { outputPricePerMillion: outputPrice }),
       ...(cacheReadPrice === undefined ? {} : { cacheReadPricePerMillion: cacheReadPrice }),
       ...(cacheWritePrice === undefined ? {} : { cacheWritePricePerMillion: cacheWritePrice }),
+      ...(contextWindow == null ? {} : { contextWindow }),
+      ...(maxTokens == null ? {} : { maxTokens }),
+      ...(catalogModel?.pi_reasoning == null ? {} : { reasoning: catalogModel.pi_reasoning }),
     })
   })
   return [...models.values()]

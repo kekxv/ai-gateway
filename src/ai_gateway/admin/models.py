@@ -67,6 +67,9 @@ async def create_model(payload: ModelCreate, session: Session, _: AdminUser) -> 
         display_name=payload.display_name,
         model_type=payload.model_type,
         model_types=payload.model_types,
+        pi_context_window=payload.pi_context_window,
+        pi_max_tokens=payload.pi_max_tokens,
+        pi_reasoning=payload.pi_reasoning,
         input_price_per_million=payload.input_price_per_million,
         output_price_per_million=payload.output_price_per_million,
         cache_read_price_per_million=payload.cache_read_price_per_million,
@@ -176,6 +179,12 @@ async def update_model(
     if payload.model_types is not None:
         model.model_types = payload.model_types
         model.model_type = payload.model_types[0]
+    if "pi_context_window" in payload.model_fields_set:
+        model.pi_context_window = payload.pi_context_window
+    if "pi_max_tokens" in payload.model_fields_set:
+        model.pi_max_tokens = payload.pi_max_tokens
+    if "pi_reasoning" in payload.model_fields_set:
+        model.pi_reasoning = payload.pi_reasoning
     if payload.input_price_per_million is not None:
         model.input_price_per_million = payload.input_price_per_million
     if payload.output_price_per_million is not None:
@@ -440,6 +449,9 @@ def _model_response(model: Model, *, enabled_aliases_only: bool = False) -> Mode
         display_name=model.display_name,
         model_type=model.model_type,
         model_types=model.model_types,
+        pi_context_window=model.pi_context_window,
+        pi_max_tokens=model.pi_max_tokens,
+        pi_reasoning=model.pi_reasoning,
         input_price_per_million=model.input_price_per_million,
         output_price_per_million=model.output_price_per_million,
         cache_read_price_per_million=model.cache_read_price_per_million,
@@ -526,6 +538,9 @@ def _user_model_response(
         display_name=model.display_name,
         model_type=model.model_type,
         model_types=model.model_types,
+        pi_context_window=model.pi_context_window,
+        pi_max_tokens=model.pi_max_tokens,
+        pi_reasoning=model.pi_reasoning,
         input_price_per_million=(
             public_tiers[0].input_price_per_million_min if public_tiers else Decimal("0")
         ),

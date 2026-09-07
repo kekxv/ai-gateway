@@ -158,10 +158,19 @@ wire_api = "responses"
     }
 
     expect(piConfig.providers.gateway.models[0]).toMatchObject({
-      id: 'gpt-4.1', name: 'gpt-4.1', contextWindow: 128000,
-      maxTokens: 16384, input: ['text'], reasoning: false,
+      id: 'gpt-4.1', name: 'gpt-4.1', input: ['text'],
       cost: { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 2.5 },
     })
+  })
+
+  it('Pi 未配置能力参数时省略对应字段，并保留已配置值', () => {
+    const file = buildClientConfig('pi', {
+      ...input,
+      piModels: [{ id: 'model-a', contextWindow: 64000, maxTokens: 4096, reasoning: true }],
+    })
+    const model = (JSON.parse(file.content) as { providers: { gateway: { models: Array<Record<string, unknown>> } } }).providers.gateway.models[0]
+    expect(model).toMatchObject({ contextWindow: 64000, maxTokens: 4096, reasoning: true })
+    expect(model).not.toHaveProperty('input')
   })
 
   it('Pi 未传入选定模型时回退到默认模型 ID', () => {
