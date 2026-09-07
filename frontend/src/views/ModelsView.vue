@@ -937,13 +937,12 @@ onBeforeUnmount(() => {
         v-if="auth.isAdmin"
         class="model-status-tabs"
         data-test="model-status-tabs"
-        role="tablist"
+        role="group"
         aria-label="按模型状态筛选"
       >
         <button
           type="button"
-          role="tab"
-          :aria-selected="modelStatusFilter === 'all'"
+          :aria-pressed="modelStatusFilter === 'all'"
           :class="{ 'is-active': modelStatusFilter === 'all' }"
           @click="modelStatusFilter = 'all'"
         >
@@ -951,8 +950,7 @@ onBeforeUnmount(() => {
         </button>
         <button
           type="button"
-          role="tab"
-          :aria-selected="modelStatusFilter === 'enabled'"
+          :aria-pressed="modelStatusFilter === 'enabled'"
           :class="{ 'is-active': modelStatusFilter === 'enabled' }"
           @click="modelStatusFilter = 'enabled'"
         >
@@ -960,8 +958,7 @@ onBeforeUnmount(() => {
         </button>
         <button
           type="button"
-          role="tab"
-          :aria-selected="modelStatusFilter === 'disabled'"
+          :aria-pressed="modelStatusFilter === 'disabled'"
           :class="{ 'is-active': modelStatusFilter === 'disabled' }"
           @click="modelStatusFilter = 'disabled'"
         >

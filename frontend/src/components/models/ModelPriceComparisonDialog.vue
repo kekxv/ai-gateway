@@ -350,11 +350,18 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
             :key="model.id"
             effect="plain"
             round
-            closable
-            :data-test="`comparison-remove-model-${String(model.id)}`"
-            @close="emit('removeModel', model.id)"
+            class="selected-model-chip"
           >
             {{ model.display_name }}
+            <button
+              type="button"
+              class="selected-model-chip__remove"
+              :data-test="`comparison-remove-model-${String(model.id)}`"
+              :aria-label="`移除模型 ${model.display_name}`"
+              @click="emit('removeModel', model.id)"
+            >
+              <span aria-hidden="true">×</span>
+            </button>
           </ElTag>
           <ElButton data-test="comparison-add-model" size="small" plain @click="emit('addModel')">
             + 添加模型
@@ -369,16 +376,16 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
             <p>每百万 Tokens；已计入模型和供应商倍率，仅统计可用供应商路由。</p>
           </div>
           <div class="chart-controls" data-test="comparison-chart-controls" aria-label="价格图指标">
-            <button :class="{ 'is-active': chartMetric === 'all' }" type="button" @click="chartMetric = 'all'">全部</button>
-            <button :class="{ 'is-active': chartMetric === 'input' }" type="button" @click="chartMetric = 'input'">输入价格</button>
-            <button :class="{ 'is-active': chartMetric === 'output' }" type="button" @click="chartMetric = 'output'">输出价格</button>
+            <button :class="{ 'is-active': chartMetric === 'all' }" :aria-pressed="chartMetric === 'all'" type="button" @click="chartMetric = 'all'">全部</button>
+            <button :class="{ 'is-active': chartMetric === 'input' }" :aria-pressed="chartMetric === 'input'" type="button" @click="chartMetric = 'input'">输入价格</button>
+            <button :class="{ 'is-active': chartMetric === 'output' }" :aria-pressed="chartMetric === 'output'" type="button" @click="chartMetric = 'output'">输出价格</button>
           </div>
         </div>
         <div class="chart-legend" aria-label="图例">
-          <span class="legend-swatch legend-swatch--input-cost" />输入成本
-          <span class="legend-swatch legend-swatch--input" />输入用户价
-          <span class="legend-swatch legend-swatch--output-cost" />输出成本
-          <span class="legend-swatch legend-swatch--output" />输出用户价
+          <span v-if="chartMetric !== 'output'" class="legend-item"><span class="legend-swatch legend-swatch--input-cost" />输入成本</span>
+          <span v-if="chartMetric !== 'output'" class="legend-item"><span class="legend-swatch legend-swatch--input" />输入用户价</span>
+          <span v-if="chartMetric !== 'input'" class="legend-item"><span class="legend-swatch legend-swatch--output-cost" />输出成本</span>
+          <span v-if="chartMetric !== 'input'" class="legend-item"><span class="legend-swatch legend-swatch--output" />输出用户价</span>
         </div>
         <VChart v-if="chartRows.length > 0" :option="comparisonChart" autoresize />
         <p v-else class="chart-empty">所选模型暂无可用供应商路由，无法生成价格图表。</p>
@@ -488,6 +495,36 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
   color: var(--gateway-muted);
 }
 
+.selected-model-chip :deep(.el-tag__content) {
+  display: inline-flex;
+  gap: .35rem;
+  align-items: center;
+}
+
+.selected-model-chip__remove {
+  display: inline-grid;
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  color: currentcolor;
+  font: inherit;
+  line-height: 1;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  opacity: .7;
+  place-items: center;
+}
+
+.selected-model-chip__remove:hover,
+.selected-model-chip__remove:focus-visible {
+  color: #fff;
+  background: var(--gateway-brand);
+  opacity: 1;
+  outline: none;
+}
+
 .comparison-chart,
 .comparison-table-section {
   padding: 1rem;
@@ -537,6 +574,7 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
 .chart-empty { min-height: 10rem; display: grid; place-items: center; text-align: center; }
 
 .chart-legend { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .75rem; color: var(--gateway-muted); font-size: .8125rem; }
+.legend-item { display: inline-flex; gap: .3rem; align-items: center; }
 .legend-swatch { width: .7rem; height: .7rem; border-radius: .2rem; }
 .legend-swatch--input-cost { background: #b45309; }
 .legend-swatch--input { background: #2563eb; }

@@ -291,9 +291,25 @@ describe('模型与别名管理', () => {
     expect(statusTabs.text()).toContain('全部模型 2')
     expect(statusTabs.text()).toContain('已启用 1')
     expect(statusTabs.text()).toContain('已停用 1')
+    expect(statusTabs.attributes('role')).toBe('group')
+    const statusFilters = statusTabs.findAll('button')
+    expect(statusFilters.map((button) => button.attributes('aria-pressed'))).toEqual([
+      'true',
+      'false',
+      'false',
+    ])
     expect(wrapper.get('[data-test="provider-filter"]').element.tagName).toBe('SELECT')
     expect(wrapper.get('[data-test="model-card-1"] [data-test="model-fee-panel"]')).toBeTruthy()
     expect(wrapper.get('[data-test="model-card-1"] [data-test="model-route-footer"]')).toBeTruthy()
+
+    await statusFilters[2]?.trigger('click')
+    expect(wrapper.find('[data-test="available-model-group"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="disabled-model-group"] [data-test="model-card-2"]')).toBeTruthy()
+    expect(statusFilters.map((button) => button.attributes('aria-pressed'))).toEqual([
+      'false',
+      'false',
+      'true',
+    ])
 
     wrapper.unmount()
   })
@@ -714,9 +730,17 @@ describe('模型与别名管理', () => {
     expect(comparison?.textContent).toContain('最低输入用户价')
     expect(comparison?.textContent).toContain('分段价格与费率明细表')
     expect(comparison?.querySelector('[data-test="comparison-add-model"]')).not.toBeNull()
-    expect(comparison?.querySelector('[data-test="comparison-remove-model-1"]')).not.toBeNull()
-    expect(comparison?.querySelector('[data-test="comparison-chart-controls"]')?.textContent).toContain('输入价格')
-    expect(comparison?.querySelector('[data-test="comparison-chart-controls"]')?.textContent).toContain('输出价格')
+    const firstModelRemove = comparison?.querySelector('[data-test="comparison-remove-model-1"]')
+    expect(firstModelRemove?.getAttribute('aria-label')).toBe('移除模型 GPT 4.1')
+    const chartControls = comparison?.querySelector('[data-test="comparison-chart-controls"]')
+    expect(chartControls?.textContent).toContain('输入价格')
+    expect(chartControls?.textContent).toContain('输出价格')
+    const chartMetricButtons = Array.from(chartControls?.querySelectorAll('button') ?? [])
+    expect(chartMetricButtons.map((button) => button.getAttribute('aria-pressed'))).toEqual([
+      'true',
+      'false',
+      'false',
+    ])
     const chart = wrapper.getComponent({ name: 'VChartStub' })
     const option = chart.props('option') as {
       series: Array<{ name: string; type: string; data: Array<number | null> }>
@@ -727,6 +751,20 @@ describe('模型与别名管理', () => {
       expect.objectContaining({ name: '输出成本', type: 'line', data: [5, 18, 22.5] }),
       expect.objectContaining({ name: '输出用户价格', type: 'line', data: [20, 36, 45] }),
     ]))
+
+    chartMetricButtons[2]?.click()
+    await flushPromises()
+    expect(chartMetricButtons.map((button) => button.getAttribute('aria-pressed'))).toEqual([
+      'false',
+      'false',
+      'true',
+    ])
+    expect(comparison?.querySelector('.chart-legend')?.textContent).not.toContain('输入成本')
+    expect(comparison?.querySelector('.chart-legend')?.textContent).toContain('输出成本')
+    expect((chart.props('option') as { series: Array<{ name: string }> }).series.map((series) => series.name)).toEqual([
+      '输出成本',
+      '输出用户价格',
+    ])
     wrapper.unmount()
   })
 
