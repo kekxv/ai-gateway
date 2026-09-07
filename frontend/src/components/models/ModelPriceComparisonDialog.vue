@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { LineChart, type LineSeriesOption } from 'echarts/charts'
 import {
   AriaComponent,
@@ -11,7 +11,8 @@ import {
 } from 'echarts/components'
 import { type ComposeOption, use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { ElDialog, ElTable, ElTableColumn, ElTag } from 'element-plus'
+import { ElButton, ElDialog, ElTable, ElTableColumn, ElTag } from 'element-plus'
+import 'element-plus/theme-chalk/el-button.css'
 import 'element-plus/theme-chalk/el-dialog.css'
 import 'element-plus/theme-chalk/el-overlay.css'
 import 'element-plus/theme-chalk/el-table.css'
@@ -40,7 +41,13 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [open: boolean]
+  addModel: []
+  removeModel: [modelId: number]
 }>()
+
+type ChartMetric = 'all' | 'input' | 'output'
+
+const chartMetric = ref<ChartMetric>('all')
 
 type PriceTier = {
   id: number | 'base'
@@ -210,23 +217,8 @@ const chartRows = computed(() =>
   ),
 )
 
-const comparisonChart = computed<ChartOption>(() => ({
-  aria: {
-    enabled: true,
-    description: '以折线比较所选模型每百万 Token 的最低成本和用户输入与输出单价。',
-  },
-  grid: { left: 58, right: 24, top: 28, bottom: 76 },
-  tooltip: {
-    trigger: 'axis',
-    valueFormatter: (value: unknown) => formatMoney(Number(value).toFixed(8)),
-  },
-  xAxis: {
-    type: 'category',
-    data: chartRows.value.map((row) => `${row.modelName} · ${row.tier}`),
-    axisLabel: { rotate: 26, interval: 0 },
-  },
-  yAxis: { type: 'value', name: '¥ / 百万 Tokens' },
-  series: [
+const comparisonChart = computed<ChartOption>(() => {
+  const series: LineSeriesOption[] = [
     {
       name: '输入成本',
       type: 'line',
@@ -263,8 +255,29 @@ const comparisonChart = computed<ChartOption>(() => ({
       itemStyle: { color: '#0f766e' },
       lineStyle: { width: 3 },
     },
-  ],
-}))
+  ]
+  return {
+    aria: {
+      enabled: true,
+      description: '以折线比较所选模型每百万 Token 的最低成本和用户输入与输出单价。',
+    },
+    grid: { left: 58, right: 24, top: 28, bottom: 76 },
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: (value: unknown) => formatMoney(Number(value).toFixed(8)),
+    },
+    xAxis: {
+      type: 'category',
+      data: chartRows.value.map((row) => `${row.modelName} · ${row.tier}`),
+      axisLabel: { rotate: 26, interval: 0 },
+    },
+    yAxis: { type: 'value', name: '¥ / 百万 Tokens' },
+    series: series.filter((item) => {
+      if (chartMetric.value === 'all') return true
+      return typeof item.name === 'string' && item.name.startsWith(chartMetric.value === 'input' ? '输入' : '输出')
+    }),
+  }
+})
 
 const selectedModelNames = computed(() => props.models.map((model) => model.display_name))
 const eligibleProviderCount = computed(() =>
@@ -327,8 +340,33 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
       </div>
 
       <div class="selected-models" aria-label="已选模型">
-        <span>已选模型</span>
-        <ElTag v-for="modelName in selectedModelNames" :key="modelName" effect="plain" round>{{ modelName }}</ElTag>
+        <div class="selected-models__heading">
+          <span>已选模型</span>
+          <small>移除标签可立即更新对比</small>
+        </div>
+        <div class="selected-models__chips">
+          <ElTag
+            v-for="model in models"
+            :key="model.id"
+            effect="plain"
+            round
+            class="selected-model-chip"
+          >
+            {{ model.display_name }}
+            <button
+              type="button"
+              class="selected-model-chip__remove"
+              :data-test="`comparison-remove-model-${String(model.id)}`"
+              :aria-label="`移除模型 ${model.display_name}`"
+              @click="emit('removeModel', model.id)"
+            >
+              <span aria-hidden="true">×</span>
+            </button>
+          </ElTag>
+          <ElButton data-test="comparison-add-model" size="small" plain @click="emit('addModel')">
+            + 添加模型
+          </ElButton>
+        </div>
       </div>
 
       <section class="comparison-chart" data-test="model-comparison-chart">
@@ -337,12 +375,17 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
             <h3>最低成本与用户价格走势</h3>
             <p>每百万 Tokens；已计入模型和供应商倍率，仅统计可用供应商路由。</p>
           </div>
-          <div class="chart-legend" aria-label="图例">
-            <span class="legend-swatch legend-swatch--input-cost" />输入成本
-            <span class="legend-swatch legend-swatch--input" />输入用户价
-            <span class="legend-swatch legend-swatch--output-cost" />输出成本
-            <span class="legend-swatch legend-swatch--output" />输出用户价
+          <div class="chart-controls" data-test="comparison-chart-controls" aria-label="价格图指标">
+            <button :class="{ 'is-active': chartMetric === 'all' }" :aria-pressed="chartMetric === 'all'" type="button" @click="chartMetric = 'all'">全部</button>
+            <button :class="{ 'is-active': chartMetric === 'input' }" :aria-pressed="chartMetric === 'input'" type="button" @click="chartMetric = 'input'">输入价格</button>
+            <button :class="{ 'is-active': chartMetric === 'output' }" :aria-pressed="chartMetric === 'output'" type="button" @click="chartMetric = 'output'">输出价格</button>
           </div>
+        </div>
+        <div class="chart-legend" aria-label="图例">
+          <span v-if="chartMetric !== 'output'" class="legend-item"><span class="legend-swatch legend-swatch--input-cost" />输入成本</span>
+          <span v-if="chartMetric !== 'output'" class="legend-item"><span class="legend-swatch legend-swatch--input" />输入用户价</span>
+          <span v-if="chartMetric !== 'input'" class="legend-item"><span class="legend-swatch legend-swatch--output-cost" />输出成本</span>
+          <span v-if="chartMetric !== 'input'" class="legend-item"><span class="legend-swatch legend-swatch--output" />输出用户价</span>
         </div>
         <VChart v-if="chartRows.length > 0" :option="comparisonChart" autoresize />
         <p v-else class="chart-empty">所选模型暂无可用供应商路由，无法生成价格图表。</p>
@@ -350,7 +393,7 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
     </section>
 
     <section class="comparison-table-section">
-      <div><h3>分段价格明细</h3><p>完整价格范围保留，便于核对成本与用户价格。</p></div>
+      <div><h3>分段价格与费率明细表</h3><p>完整价格范围保留，便于核对成本与用户价格。</p></div>
       <div class="comparison-table-wrap">
         <ElTable :data="rows" row-key="key" border class="comparison-table">
           <ElTableColumn label="模型" min-width="180" fixed>
@@ -422,13 +465,65 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
 .summary-card strong { overflow-wrap: anywhere; font-size: 1.05rem; }
 
 .selected-models {
+  display: grid;
+  gap: .7rem;
+  padding: .85rem 1rem;
+  background: #f8fafc;
+  border: 1px solid var(--gateway-border);
+  border-radius: .7rem;
+}
+
+.selected-models__heading,
+.selected-models__chips {
   display: flex;
   flex-wrap: wrap;
   gap: .45rem;
   align-items: center;
 }
 
-.selected-models > span { margin-right: .15rem; font-size: .875rem; }
+.selected-models__heading {
+  justify-content: space-between;
+}
+
+.selected-models__heading span {
+  color: var(--gateway-text);
+  font-size: .875rem;
+  font-weight: 700;
+}
+
+.selected-models__heading small {
+  color: var(--gateway-muted);
+}
+
+.selected-model-chip :deep(.el-tag__content) {
+  display: inline-flex;
+  gap: .35rem;
+  align-items: center;
+}
+
+.selected-model-chip__remove {
+  display: inline-grid;
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  color: currentcolor;
+  font: inherit;
+  line-height: 1;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  opacity: .7;
+  place-items: center;
+}
+
+.selected-model-chip__remove:hover,
+.selected-model-chip__remove:focus-visible {
+  color: #fff;
+  background: var(--gateway-brand);
+  opacity: 1;
+  outline: none;
+}
 
 .comparison-chart,
 .comparison-table-section {
@@ -445,6 +540,32 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
   justify-content: space-between;
 }
 
+.chart-controls {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: .2rem;
+  background: #eef2f7;
+  border-radius: .55rem;
+}
+
+.chart-controls button {
+  padding: .38rem .7rem;
+  color: #64748b;
+  font: inherit;
+  font-size: .75rem;
+  font-weight: 600;
+  background: transparent;
+  border: 0;
+  border-radius: .4rem;
+  cursor: pointer;
+}
+
+.chart-controls button.is-active {
+  color: var(--gateway-brand);
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(15 23 42 / .12);
+}
+
 .comparison-chart h3,
 .comparison-table-section h3 { margin: 0; font-size: 1rem; }
 .comparison-chart p,
@@ -452,7 +573,8 @@ function priceLabel(row: ComparisonRow | null, field: 'inputUserMinimum' | 'outp
 .comparison-chart :deep(.echarts) { width: 100%; height: 20rem; }
 .chart-empty { min-height: 10rem; display: grid; place-items: center; text-align: center; }
 
-.chart-legend { display: flex; gap: .4rem; align-items: center; color: var(--gateway-muted); font-size: .8125rem; white-space: nowrap; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .75rem; color: var(--gateway-muted); font-size: .8125rem; }
+.legend-item { display: inline-flex; gap: .3rem; align-items: center; }
 .legend-swatch { width: .7rem; height: .7rem; border-radius: .2rem; }
 .legend-swatch--input-cost { background: #b45309; }
 .legend-swatch--input { background: #2563eb; }

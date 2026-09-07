@@ -124,7 +124,7 @@ wire_api = "responses"
 
     expect(file.filename).toBe('models.json')
     expect(file.location).toBe('~/.pi/agent/models.json')
-    expect(JSON.parse(file.content)).toEqual({
+    expect(JSON.parse(file.content)).toMatchObject({
       providers: {
         gateway: {
           baseUrl: 'https://gateway.example/v1',
@@ -136,6 +136,27 @@ wire_api = "responses"
           ],
         },
       },
+    })
+  })
+
+  it('为 Pi 模型序列化完整的客户端元数据', () => {
+    const file = buildClientConfig('pi', {
+      ...input,
+      modelId: 'gpt-4.1',
+      piModels: [{
+        id: 'gpt-4.1',
+        modelTypes: ['text'],
+        inputPricePerMillion: 2,
+        outputPricePerMillion: 8,
+        cacheReadPricePerMillion: 0.5,
+        cacheWritePricePerMillion: 2.5,
+      }],
+    })
+
+    expect(JSON.parse(file.content).providers.gateway.models[0]).toMatchObject({
+      id: 'gpt-4.1', name: 'gpt-4.1', contextWindow: 128000,
+      maxTokens: 16384, input: ['text'], reasoning: false,
+      cost: { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 2.5 },
     })
   })
 

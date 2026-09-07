@@ -8,10 +8,39 @@ export interface ClientConfigInput {
   codexModels?: Partial<CodexModelSelection>
   openCodeModels?: Partial<OpenCodeModelSelection>
   piModelIds?: string[]
+  piModels?: PiModelSelection[]
   piApi?: PiApi
 }
 
 export type PiApi = 'openai-completions' | 'openai-responses'
+
+export interface PiModelSelection {
+  id: string
+  modelTypes?: string[]
+  inputPricePerMillion?: number
+  outputPricePerMillion?: number
+  cacheReadPricePerMillion?: number
+  cacheWritePricePerMillion?: number
+}
+
+interface PiModelConfig {
+  id: string
+  name: string
+  contextWindow: number
+  maxTokens: number
+  input: string[]
+  reasoning: boolean
+  cost: {
+    input: number
+    output: number
+    cacheRead: number
+    cacheWrite: number
+  }
+}
+
+const piDefaultContextWindow = 128000
+const piDefaultMaxTokens = 16384
+const piSupportedInputs = new Set(['text', 'image', 'audio'])
 
 export interface ClaudeModelSelection {
   primary: string
@@ -62,6 +91,25 @@ function tomlString(value: string): string {
 
 function selectedModel(value: string | undefined, fallback: string): string {
   return value?.trim() || fallback
+}
+
+function piModelConfig(model: PiModelSelection): PiModelConfig {
+  const id = required(model.id, 'Pi model ID')
+  const input = (model.modelTypes ?? []).filter((type) => piSupportedInputs.has(type))
+  return {
+    id,
+    name: id,
+    contextWindow: piDefaultContextWindow,
+    maxTokens: piDefaultMaxTokens,
+    input: input.length > 0 ? [...new Set(input)] : ['text'],
+    reasoning: false,
+    cost: {
+      input: model.inputPricePerMillion ?? 0,
+      output: model.outputPricePerMillion ?? 0,
+      cacheRead: model.cacheReadPricePerMillion ?? 0,
+      cacheWrite: model.cacheWritePricePerMillion ?? 0,
+    },
+  }
 }
 
 export function buildClientConfig(
@@ -159,8 +207,11 @@ wire_api = "responses"
     }
   }
 
-  const selectedPiModelIds = [...new Set((input.piModelIds ?? []).map((id) => id.trim()).filter(Boolean))]
-  const piModelIds = selectedPiModelIds.length > 0 ? selectedPiModelIds : [modelId]
+  const selectedPiModels = (input.piModels ?? input.piModelIds?.map((id) => ({ id })) ?? [])
+    .map((model) => ({ ...model, id: model.id.trim() }))
+    .filter((model) => model.id !== '')
+  const piModels = [...new Map(selectedPiModels.map((model) => [model.id, model])).values()]
+  if (piModels.length === 0) piModels.push({ id: modelId })
   const piApi = input.piApi ?? 'openai-completions'
   return {
     filename: 'models.json',
@@ -171,7 +222,7 @@ wire_api = "responses"
           baseUrl: openAiBaseUrl,
           api: piApi,
           apiKey,
-          models: piModelIds.map((id) => ({ id, name: id })),
+          models: piModels.map(piModelConfig),
         },
       },
     }, null, 2)}\n`,

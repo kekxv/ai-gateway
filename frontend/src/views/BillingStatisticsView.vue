@@ -92,9 +92,11 @@ const FilterSelect = ElSelect as unknown as Component
 const FilterOption = ElOption as unknown as Component
 
 const auth = useAuthStore()
-const end = new Date()
-const start = new Date(end)
-start.setDate(start.getDate() - 29)
+const now = new Date()
+const start = new Date(now)
+const end = new Date(now)
+start.setHours(0, 0, 0, 0)
+end.setHours(23, 59, 59, 999)
 const selectedRange = ref<[Date, Date]>([start, end])
 const selectedProviderIds = ref<number[]>([])
 const selectedModelIds = ref<number[]>([])

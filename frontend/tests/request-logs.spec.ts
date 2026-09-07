@@ -457,6 +457,45 @@ describe('请求日志搜索与详情检查', () => {
     wrapper.unmount()
   })
 
+  it('管理员汇总当前页的用户费用和内部成本，保留精确小数', async () => {
+    const wrapper = await mountLogs([
+      { ...firstLog, cost: '9007199254740993.12345678', cost_amount: '0.10000000' },
+      { ...secondLog, cost: '0.87654322', cost_amount: '0.20000000' },
+    ])
+
+    expect(wrapper.get('[data-test="log-summary-user-cost"]').text()).toContain(
+      '¥9007199254740994.00000000',
+    )
+    expect(wrapper.get('[data-test="log-summary-internal-cost"]').text()).toContain(
+      '¥0.30000000',
+    )
+    wrapper.unmount()
+  })
+
+  it('普通用户仅看到当前页用户费用汇总，不渲染内部成本', async () => {
+    server.use(
+      http.get('/user/request-logs', () =>
+        HttpResponse.json({
+          items: [
+            { ...userLog, cost: '9007199254740993.12345678' },
+            { ...userLog, id: secondLog.id, cost: '0.87654322' },
+          ],
+          next_cursor: null,
+        }),
+      ),
+      http.get('/user/request-logs/:requestId', () => HttpResponse.json(userLog)),
+    )
+
+    const wrapper = mountRequestLogs(memberUser)
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="log-summary-user-cost"]').text()).toContain(
+      '¥9007199254740994.00000000',
+    )
+    expect(wrapper.find('[data-test="log-summary-internal-cost"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('将模型解析和上游路由信息合并为紧凑的元数据行', async () => {
     const wrapper = await mountLogs()
     const row = wrapper.get(`[data-test="request-log-${firstLog.id}"]`)

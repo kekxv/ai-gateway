@@ -14,13 +14,21 @@ import {
   type ClientConfigFile,
   type ClientConfigTarget,
   type OpenCodeModelSelection,
+  type PiModelSelection,
   type PiApi,
 } from '@/utils/clientConfig'
+import { listAvailableModels } from '@/api/models'
 import { buildDeepSeekHarnessFiles, type DeepSeekHarnessModel } from '@/lib/deepseekHarness'
-import type { ModelType } from '@/api/types'
+import type { ModelResponse, ModelType } from '@/api/types'
 
 type DialogTarget = ClientConfigTarget | 'deepseek-harness'
-type LoadedModel = Pick<DeepSeekHarnessModel, 'model_types' | 'model_type'> & { id: string }
+type LoadedModel = Pick<DeepSeekHarnessModel, 'model_types' | 'model_type'> & {
+  id: string
+  inputPricePerMillion?: number
+  outputPricePerMillion?: number
+  cacheReadPricePerMillion?: number
+  cacheWritePricePerMillion?: number
+}
 
 const modelTypeValues = new Set<ModelType>(['text', 'image', 'text_to_image', 'audio', 'video', 'embedding'])
 
@@ -130,7 +138,20 @@ const configuration = computed<ClientConfigFile | null>(() => {
     ...(isClaude.value ? { claudeModels: claudeModels.value } : {}),
     ...(isCodex.value ? { codexModels: codexModels.value } : {}),
     ...(isOpenCode.value ? { openCodeModels: openCodeModels.value } : {}),
-    ...(isPi.value ? { piModelIds: piModelIds.value, piApi: piApi.value } : {}),
+    ...(isPi.value ? {
+      piModels: piModelIds.value.map((id): PiModelSelection => {
+        const model = availableModels.value.find((candidate) => candidate.id === id)
+        return {
+          id,
+          ...(model?.model_types === undefined ? {} : { modelTypes: model.model_types }),
+          ...(model?.inputPricePerMillion === undefined ? {} : { inputPricePerMillion: model.inputPricePerMillion }),
+          ...(model?.outputPricePerMillion === undefined ? {} : { outputPricePerMillion: model.outputPricePerMillion }),
+          ...(model?.cacheReadPricePerMillion === undefined ? {} : { cacheReadPricePerMillion: model.cacheReadPricePerMillion }),
+          ...(model?.cacheWritePricePerMillion === undefined ? {} : { cacheWritePricePerMillion: model.cacheWritePricePerMillion }),
+        }
+      }),
+      piApi: piApi.value,
+    } : {}),
   })
 })
 
@@ -188,20 +209,50 @@ function isModelType(value: unknown): value is ModelType {
   return typeof value === 'string' && modelTypeValues.has(value as ModelType)
 }
 
-function extractModels(payload: unknown): LoadedModel[] {
+function nonNegativeNumber(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
+}
+
+function extractModels(payload: unknown, catalogModels: ModelResponse[] = []): LoadedModel[] {
   if (typeof payload !== 'object' || payload === null || !('data' in payload)) return []
   const data = payload.data
   if (!Array.isArray(data)) return []
+  const catalogByCanonicalName = new Map(catalogModels.map((model) => [model.canonical_name, model]))
   const models = new Map<string, LoadedModel>()
   data.forEach((item) => {
     if (typeof item !== 'object' || item === null || !('id' in item)) return
-    const { id, model_types, model_type } = item as Record<string, unknown>
-    if (typeof id !== 'string' || id.trim() === '' || models.has(id)) return
-    const modelTypes = Array.isArray(model_types) ? model_types.filter(isModelType) : undefined
-    models.set(id, {
+    const {
       id,
+      metadata,
+      model_types,
+      model_type,
+    } = item as Record<string, unknown>
+    if (typeof id !== 'string' || id.trim() === '' || models.has(id)) return
+    const canonicalModel = typeof metadata === 'object' && metadata !== null
+      ? (metadata as Record<string, unknown>).canonical_model
+      : undefined
+    const canonicalName = typeof canonicalModel === 'string'
+      ? canonicalModel.trim()
+      : id.trim()
+    if (canonicalName === '' || models.has(canonicalName)) return
+    const catalogModel = catalogByCanonicalName.get(canonicalName)
+    const modelTypes = catalogModel?.model_types ?? (
+      Array.isArray(model_types) ? model_types.filter(isModelType) : undefined
+    )
+    const resolvedModelType = catalogModel?.model_type ?? model_type
+    const inputPrice = nonNegativeNumber(catalogModel?.input_price_per_million)
+    const outputPrice = nonNegativeNumber(catalogModel?.output_price_per_million)
+    const cacheReadPrice = nonNegativeNumber(catalogModel?.cache_read_price_per_million)
+    const cacheWritePrice = nonNegativeNumber(catalogModel?.cache_write_price_per_million)
+    models.set(canonicalName, {
+      id: canonicalName,
       ...(modelTypes === undefined ? {} : { model_types: modelTypes }),
-      ...(isModelType(model_type) ? { model_type } : {}),
+      ...(isModelType(resolvedModelType) ? { model_type: resolvedModelType } : {}),
+      ...(inputPrice === undefined ? {} : { inputPricePerMillion: inputPrice }),
+      ...(outputPrice === undefined ? {} : { outputPricePerMillion: outputPrice }),
+      ...(cacheReadPrice === undefined ? {} : { cacheReadPricePerMillion: cacheReadPrice }),
+      ...(cacheWritePrice === undefined ? {} : { cacheWritePricePerMillion: cacheWritePrice }),
     })
   })
   return [...models.values()]
@@ -216,6 +267,9 @@ async function verifyAndLoadModels(): Promise<void> {
     apiKey: effectiveApiKey.value.trim(),
     baseUrl: baseUrl.value,
   }
+  const catalogModelsPromise = request.target === 'pi'
+    ? listAvailableModels().catch((): ModelResponse[] => [])
+    : Promise.resolve<ModelResponse[]>([])
   loadingModels.value = true
   modelLoadError.value = ''
   const isCurrentRequest = (): boolean => (
@@ -235,7 +289,7 @@ async function verifyAndLoadModels(): Promise<void> {
         : `加载可用模型失败：HTTP ${String(response.status)}`
       return
     }
-    const models = extractModels(await response.json())
+    const models = extractModels(await response.json(), await catalogModelsPromise)
     if (!isCurrentRequest()) return
     availableModels.value = models
     if (availableModelIds.value.length === 0) {
