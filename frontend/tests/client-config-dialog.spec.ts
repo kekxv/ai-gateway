@@ -132,7 +132,15 @@ describe('客户端配置对话框', () => {
 
   it('为 Pi 选择多个可切换模型', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      data: [{ id: 'pi-fast' }, { id: 'pi-deep' }],
+      data: [{
+        id: 'pi-fast-alias',
+        metadata: { canonical_model: 'pi-fast' },
+        model_types: ['text'],
+        input_price_per_million: '2',
+        output_price_per_million: '8',
+        cache_read_price_per_million: '0.5',
+        cache_write_price_per_million: '2.5',
+      }, { id: 'pi-deep', model_types: ['text'] }],
     }), { status: 200 }))
     vi.stubGlobal('fetch', fetch)
     const wrapper = mountDialog()
@@ -148,7 +156,10 @@ describe('客户端配置对话框', () => {
         gateway: {
           api: 'openai-completions',
           models: [
-            { id: 'pi-fast', name: 'pi-fast' },
+            {
+              id: 'pi-fast', name: 'pi-fast', input: ['text'],
+              cost: { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 2.5 },
+            },
             { id: 'pi-deep', name: 'pi-deep' },
           ],
         },

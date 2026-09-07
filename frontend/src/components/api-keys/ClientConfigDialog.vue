@@ -14,13 +14,20 @@ import {
   type ClientConfigFile,
   type ClientConfigTarget,
   type OpenCodeModelSelection,
+  type PiModelSelection,
   type PiApi,
 } from '@/utils/clientConfig'
 import { buildDeepSeekHarnessFiles, type DeepSeekHarnessModel } from '@/lib/deepseekHarness'
 import type { ModelType } from '@/api/types'
 
 type DialogTarget = ClientConfigTarget | 'deepseek-harness'
-type LoadedModel = Pick<DeepSeekHarnessModel, 'model_types' | 'model_type'> & { id: string }
+type LoadedModel = Pick<DeepSeekHarnessModel, 'model_types' | 'model_type'> & {
+  id: string
+  inputPricePerMillion?: number
+  outputPricePerMillion?: number
+  cacheReadPricePerMillion?: number
+  cacheWritePricePerMillion?: number
+}
 
 const modelTypeValues = new Set<ModelType>(['text', 'image', 'text_to_image', 'audio', 'video', 'embedding'])
 
@@ -130,7 +137,20 @@ const configuration = computed<ClientConfigFile | null>(() => {
     ...(isClaude.value ? { claudeModels: claudeModels.value } : {}),
     ...(isCodex.value ? { codexModels: codexModels.value } : {}),
     ...(isOpenCode.value ? { openCodeModels: openCodeModels.value } : {}),
-    ...(isPi.value ? { piModelIds: piModelIds.value, piApi: piApi.value } : {}),
+    ...(isPi.value ? {
+      piModels: piModelIds.value.map((id): PiModelSelection => {
+        const model = availableModels.value.find((candidate) => candidate.id === id)
+        return {
+          id,
+          ...(model?.model_types === undefined ? {} : { modelTypes: model.model_types }),
+          ...(model?.inputPricePerMillion === undefined ? {} : { inputPricePerMillion: model.inputPricePerMillion }),
+          ...(model?.outputPricePerMillion === undefined ? {} : { outputPricePerMillion: model.outputPricePerMillion }),
+          ...(model?.cacheReadPricePerMillion === undefined ? {} : { cacheReadPricePerMillion: model.cacheReadPricePerMillion }),
+          ...(model?.cacheWritePricePerMillion === undefined ? {} : { cacheWritePricePerMillion: model.cacheWritePricePerMillion }),
+        }
+      }),
+      piApi: piApi.value,
+    } : {}),
   })
 })
 
@@ -188,6 +208,11 @@ function isModelType(value: unknown): value is ModelType {
   return typeof value === 'string' && modelTypeValues.has(value as ModelType)
 }
 
+function nonNegativeNumber(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
+}
+
 function extractModels(payload: unknown): LoadedModel[] {
   if (typeof payload !== 'object' || payload === null || !('data' in payload)) return []
   const data = payload.data
@@ -195,13 +220,37 @@ function extractModels(payload: unknown): LoadedModel[] {
   const models = new Map<string, LoadedModel>()
   data.forEach((item) => {
     if (typeof item !== 'object' || item === null || !('id' in item)) return
-    const { id, model_types, model_type } = item as Record<string, unknown>
-    if (typeof id !== 'string' || id.trim() === '' || models.has(id)) return
-    const modelTypes = Array.isArray(model_types) ? model_types.filter(isModelType) : undefined
-    models.set(id, {
+    const {
       id,
+      metadata,
+      model_types,
+      model_type,
+      input_price_per_million,
+      output_price_per_million,
+      cache_read_price_per_million,
+      cache_write_price_per_million,
+    } = item as Record<string, unknown>
+    if (typeof id !== 'string' || id.trim() === '' || models.has(id)) return
+    const canonicalModel = typeof metadata === 'object' && metadata !== null
+      ? (metadata as Record<string, unknown>).canonical_model
+      : undefined
+    const canonicalName = typeof canonicalModel === 'string'
+      ? canonicalModel.trim()
+      : id.trim()
+    if (canonicalName === '' || models.has(canonicalName)) return
+    const modelTypes = Array.isArray(model_types) ? model_types.filter(isModelType) : undefined
+    const inputPrice = nonNegativeNumber(input_price_per_million)
+    const outputPrice = nonNegativeNumber(output_price_per_million)
+    const cacheReadPrice = nonNegativeNumber(cache_read_price_per_million)
+    const cacheWritePrice = nonNegativeNumber(cache_write_price_per_million)
+    models.set(canonicalName, {
+      id: canonicalName,
       ...(modelTypes === undefined ? {} : { model_types: modelTypes }),
       ...(isModelType(model_type) ? { model_type } : {}),
+      ...(inputPrice === undefined ? {} : { inputPricePerMillion: inputPrice }),
+      ...(outputPrice === undefined ? {} : { outputPricePerMillion: outputPrice }),
+      ...(cacheReadPrice === undefined ? {} : { cacheReadPricePerMillion: cacheReadPrice }),
+      ...(cacheWritePrice === undefined ? {} : { cacheWritePricePerMillion: cacheWritePrice }),
     })
   })
   return [...models.values()]
