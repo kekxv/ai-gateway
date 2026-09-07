@@ -90,6 +90,17 @@ function mountPage(user: CurrentUser) {
 afterEach(() => vi.restoreAllMocks())
 
 describe('账单统计', () => {
+  it('初始请求默认查询当前本地日的完整范围', async () => {
+    const adminRequest = vi.spyOn(statisticsApi, 'getAdminBillingStatistics').mockResolvedValue(adminResponse)
+    mountPage({ ...regularUser, role: 'admin' })
+    await flushPromises()
+
+    const query = adminRequest.mock.calls[0]?.[0]
+    expect(query).toBeDefined()
+    expect(new Date(query?.startAt ?? '').getHours()).toBe(0)
+    expect(new Date(query?.startAt ?? '').getDate()).toBe(new Date(query?.endAt ?? '').getDate())
+  })
+
   it('普通用户仅加载自己的统计，隐藏供应商与内部财务，并且密钥不显示邮箱或 ID', async () => {
     const userRequest = vi.spyOn(statisticsApi, 'getUserBillingStatistics').mockResolvedValue(userResponse)
     const adminRequest = vi.spyOn(statisticsApi, 'getAdminBillingStatistics').mockResolvedValue(adminResponse)
