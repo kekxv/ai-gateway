@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { Refresh, Search, View } from '@element-plus/icons-vue'
 import {
   ElAlert,
@@ -41,6 +41,7 @@ import { listUsers } from '@/api/users'
 import PageHeader from '@/components/common/PageHeader.vue'
 import RequestLogDetailDrawer from '@/components/request-logs/RequestLogDetailDrawer.vue'
 import { useAuthStore } from '@/stores/auth'
+import { sumDecimals } from '@/utils/decimal'
 import { formatDateTime, formatDuration, formatMoney } from '@/utils/format'
 
 interface FilterDraft {
@@ -86,6 +87,12 @@ const apiKeys = ref<ApiKeyResponse[]>([])
 const models = ref<ModelResponse[]>([])
 const providers = ref<ProviderResponse[]>([])
 const filterOptionsLoading = ref(true)
+
+const userCostTotal = computed(() => sumDecimals(...logs.value.map((log) => log.cost)))
+const internalCostTotal = computed(() => {
+  if (!auth.isAdmin) return null
+  return sumDecimals(...logs.value.map((log) => (log as RequestLogSummary).cost_amount ?? '0'))
+})
 
 let loadController: AbortController | undefined
 let filterOptionsController: AbortController | undefined
@@ -409,6 +416,10 @@ onBeforeUnmount(() => {
         <div>
           <h2 id="request-log-list-title">日志列表</h2>
           <p>当前页 {{ logs.length }} 条；列表接口不提供总数。</p>
+          <div class="log-summary" aria-label="当前页费用汇总">
+            <span data-test="log-summary-user-cost">当前页用户费用 {{ formatMoney(userCostTotal) }}</span>
+            <span v-if="auth.isAdmin" data-test="log-summary-internal-cost">当前页内部成本 {{ formatMoney(internalCostTotal ?? '0') }}</span>
+          </div>
         </div>
         <div class="pagination" aria-label="请求日志分页">
           <ElButton data-test="logs-previous" :disabled="loading || cursorStack.length === 0" @click="previousPage">上一页</ElButton>
@@ -556,6 +567,15 @@ onBeforeUnmount(() => {
 
 .list-heading p {
   margin-top: 0.2rem;
+  color: var(--gateway-muted);
+  font-size: 0.8rem;
+}
+
+.log-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  margin-top: 0.35rem;
   color: var(--gateway-muted);
   font-size: 0.8rem;
 }
