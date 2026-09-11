@@ -28,7 +28,7 @@ from ai_gateway.transport.provider_proxy import (
     validate_proxy_websocket_compatibility,
 )
 from ai_gateway.transport.proxy import NoProxyMatcher
-from ai_gateway.transport.upstream import build_upstream_headers
+from ai_gateway.transport.upstream import build_upstream_headers, merge_upstream_query
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,6 @@ FrameCommitter = Callable[[str, Frame], Awaitable[None]]
 IntervalCallback = Callable[[], Awaitable[None]]
 Connector = Callable[..., Any]
 
-_CLIENT_CREDENTIAL_QUERY_KEYS = frozenset({"access_token", "api_key", "key"})
 _HANDSHAKE_HEADERS = frozenset(
     {
         "host",
@@ -483,20 +482,16 @@ def select_websocket_subprotocols(
 
 
 def rewrite_upstream_url(base_url: str, query_string: str, upstream_model: str) -> str:
-    parsed = urlsplit(base_url)
-    provider_query = parse_qsl(parsed.query, keep_blank_values=True)
     inbound_query = parse_qsl(query_string, keep_blank_values=True)
     had_model = any(name == "model" for name, _ in inbound_query)
-    combined = [
-        (name, value) for name, value in provider_query if not (had_model and name == "model")
-    ]
-    combined.extend(
-        (name, value)
-        for name, value in inbound_query
-        if name not in _CLIENT_CREDENTIAL_QUERY_KEYS and name != "model"
-    )
-    if had_model:
-        combined.insert(0, ("model", upstream_model))
+    filtered_query = [(name, value) for name, value in inbound_query if name != "model"]
+    url = merge_upstream_query(base_url, filtered_query)
+    if not had_model:
+        return url
+    parsed = urlsplit(url)
+    provider_query = parse_qsl(parsed.query, keep_blank_values=True)
+    combined = [(name, value) for name, value in provider_query if name != "model"]
+    combined.insert(0, ("model", upstream_model))
     return urlunsplit(
         (parsed.scheme, parsed.netloc, parsed.path, urlencode(combined), parsed.fragment)
     )
