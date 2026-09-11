@@ -19,10 +19,73 @@ _PASSWORD_HASHER = PasswordHasher(type=Type.ID)
 _JWT_ALGORITHM = "HS256"
 _TOTP_SECRET_PATTERN = re.compile(r"[A-Z2-7]+")
 _TOTP_SECRET_IGNORED_CHARACTERS = " \t\n\r\v\f-"
+_FERNET_KEY_PATTERN = re.compile(r"[A-Za-z0-9_-]{43}=")
+_KNOWN_WEAK_SECRET_NAMES = {
+    "changeme",
+    "changethissecret",
+    "development",
+    "example",
+    "password",
+    "replacewithalongrandomsecret",
+    "replacewithafernetkey",
+    "secret",
+    "yourjwtsecret",
+}
 
 
 class InvalidTokenTypeError(jwt.InvalidTokenError):
     pass
+
+
+def validate_jwt_secret_strength(secret: str) -> None:
+    """Validate production JWT secret shape using conservative heuristics.
+
+    This check enforces a minimum key size and rejects values that are clearly
+    placeholders or generated from a short repeating pattern. It cannot prove
+    that an operator supplied cryptographically random material.
+    """
+
+    if any(character.isspace() for character in secret):
+        raise ValueError("must not contain whitespace")
+    try:
+        encoded = secret.encode("utf-8")
+    except UnicodeError as exc:  # pragma: no cover - str.encode normally succeeds
+        raise ValueError("must be valid UTF-8") from exc
+    if len(encoded) < 32:
+        raise ValueError("must contain at least 32 UTF-8 bytes")
+    normalized = re.sub(r"[^a-z0-9]", "", secret.casefold())
+    if normalized in _KNOWN_WEAK_SECRET_NAMES:
+        raise ValueError("must not use a known placeholder")
+    if _is_obviously_repeated(secret):
+        raise ValueError("must not use an obviously repeated value")
+
+
+def validate_fernet_key_strength(secret: str) -> None:
+    """Validate a production Fernet key's encoding and obvious weak patterns."""
+
+    if any(character.isspace() for character in secret):
+        raise ValueError("must not contain whitespace")
+    if _FERNET_KEY_PATTERN.fullmatch(secret) is None:
+        raise ValueError("must be a URL-safe Base64 key encoding 32 bytes")
+    try:
+        decoded = base64.b64decode(secret.encode("ascii"), altchars=b"-_", validate=True)
+    except (UnicodeEncodeError, binascii.Error, ValueError) as exc:
+        raise ValueError("must be a URL-safe Base64 key encoding 32 bytes") from exc
+    if len(decoded) != 32 or base64.urlsafe_b64encode(decoded).decode("ascii") != secret:
+        raise ValueError("must be a canonical URL-safe Base64 key encoding 32 bytes")
+    if _is_obviously_repeated(decoded):
+        raise ValueError("must not decode to an obviously repeated value")
+
+
+def _is_obviously_repeated(value: str | bytes) -> bool:
+    if not value:
+        return True
+    if len(set(value)) <= 3:
+        return True
+    for period in range(1, min(16, len(value) // 2) + 1):
+        if len(value) % period == 0 and value == value[:period] * (len(value) // period):
+            return True
+    return False
 
 
 def validate_totp_secret(secret: str) -> str:

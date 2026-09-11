@@ -28,6 +28,24 @@ SENSITIVE_JSON_KEYS = frozenset(
     }
 )
 
+# Normalize case, underscores, and hyphens before matching. Keep this set
+# limited to complete credential field names so ordinary text and token counts
+# remain visible.
+_NORMALIZED_SENSITIVE_JSON_KEYS = frozenset(
+    key.casefold().replace("_", "").replace("-", "")
+    for key in SENSITIVE_JSON_KEYS
+) | frozenset(
+    {
+        "apikey",
+        "accesstoken",
+        "refreshtoken",
+        "clientsecret",
+        "authtoken",
+        "privatekey",
+        "credentials",
+    }
+)
+
 
 def redact_headers(headers: Mapping[str, str]) -> dict[str, str]:
     """Return non-sensitive headers without changing their names or values."""
@@ -43,10 +61,16 @@ def redact_json(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {
             str(key): (
-                REDACTED if str(key).casefold() in SENSITIVE_JSON_KEYS else redact_json(item)
+                REDACTED
+                if _normalize_json_key(key) in _NORMALIZED_SENSITIVE_JSON_KEYS
+                else redact_json(item)
             )
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple)):
         return [redact_json(item) for item in value]
     return value
+
+
+def _normalize_json_key(key: object) -> str:
+    return str(key).casefold().replace("_", "").replace("-", "")

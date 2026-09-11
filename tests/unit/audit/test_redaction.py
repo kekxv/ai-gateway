@@ -68,3 +68,37 @@ def test_json_credentials_are_redacted_recursively_without_changing_messages() -
             },
         ],
     }
+
+
+def test_json_credential_key_normalization_covers_case_hyphen_and_nested_sequences() -> None:
+    value = {
+        "apiKey": "api-key",
+        "API-KEY": "api-key-2",
+        "accessToken": "access-token",
+        "refresh-token": "refresh-token",
+        "clientSecret": "client-secret",
+        "auth-token": "auth-token",
+        "privateKey": "private-key",
+        "credentials": {"password": "nested-password"},
+        "items": [{"CLIENT-SECRET": "list-secret"}],
+        "model": "gpt-4o",
+        "max_tokens": 128,
+        "token_count": 3,
+        "message": "token appears in ordinary content",
+    }
+
+    assert redact_json(value) == {
+        "apiKey": REDACTED,
+        "API-KEY": REDACTED,
+        "accessToken": REDACTED,
+        "refresh-token": REDACTED,
+        "clientSecret": REDACTED,
+        "auth-token": REDACTED,
+        "privateKey": REDACTED,
+        "credentials": REDACTED,
+        "items": [{"CLIENT-SECRET": REDACTED}],
+        "model": "gpt-4o",
+        "max_tokens": 128,
+        "token_count": 3,
+        "message": "token appears in ordinary content",
+    }

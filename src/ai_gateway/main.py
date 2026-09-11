@@ -46,6 +46,7 @@ from ai_gateway.core.errors import (
 )
 from ai_gateway.core.logging import configure_logging
 from ai_gateway.core.middleware import correlation_middleware
+from ai_gateway.core.security import validate_fernet_key_strength, validate_jwt_secret_strength
 from ai_gateway.db.session import (
     close_session_shielded,
     get_engine_for_url,
@@ -63,20 +64,24 @@ from ai_gateway.user.dashboard import router as user_dashboard_router
 from ai_gateway.user.request_logs import router as user_request_logs_router
 
 REQUIRED_MIGRATION_HEAD = "0024"
-_EXAMPLE_JWT_SECRET = "replace-with-a-long-random-secret"
-_EXAMPLE_ENCRYPTION_KEY = "replace-with-a-fernet-key"
 
 
 def validate_runtime_settings(settings: Settings) -> None:
     if getattr(settings, "environment", "development") != "production":
         return
-    example_fields = {
-        "jwt_secret": (settings.jwt_secret.get_secret_value(), _EXAMPLE_JWT_SECRET),
-        "encryption_key": (settings.encryption_key.get_secret_value(), _EXAMPLE_ENCRYPTION_KEY),
+    validators = {
+        "jwt_secret": (settings.jwt_secret.get_secret_value(), validate_jwt_secret_strength),
+        "encryption_key": (
+            settings.encryption_key.get_secret_value(),
+            validate_fernet_key_strength,
+        ),
     }
-    for field, (value, example) in example_fields.items():
-        if value == example:
-            raise RuntimeError(f"Production {field} must not use the example value")
+    for field, (value, validator) in validators.items():
+        try:
+            validator(value)
+        except ValueError as exc:
+            # Validators intentionally never include the secret value in errors.
+            raise RuntimeError(f"Production {field} is invalid: {exc}") from None
 
 
 async def verify_database(
