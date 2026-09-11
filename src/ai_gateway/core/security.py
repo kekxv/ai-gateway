@@ -82,10 +82,9 @@ def _is_obviously_repeated(value: str | bytes) -> bool:
         return True
     if len(set(value)) <= 3:
         return True
-    for period in range(1, min(16, len(value) // 2) + 1):
-        if len(value) % period == 0 and value == value[:period] * (len(value) // period):
-            return True
-    return False
+    # Searching the doubled value finds every possible period (including
+    # periods longer than 16) in linear time without an unbounded loop.
+    return len(value) > 1 and (value + value).find(value, 1) != len(value)
 
 
 def validate_totp_secret(secret: str) -> str:

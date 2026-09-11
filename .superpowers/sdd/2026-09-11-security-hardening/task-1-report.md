@@ -33,3 +33,26 @@ All checks passed!
 ## Concerns and limitations
 
 Secret validation is a heuristic for obvious weak material; it cannot certify that an operator chose cryptographically random input. Existing strong keys remain usable. Redaction intentionally matches complete normalized field names and does not redact arbitrary text containing the word “token.”
+
+## Review follow-up: repeat periods above 16
+
+The regression test for a 17-character unit repeated twice failed before the fix:
+
+```text
+uv run pytest -q tests/unit/auth/test_security.py::test_production_rejects_weak_jwt_secrets_without_echoing_input
+1 failed, 5 passed in 0.09s
+```
+
+After changing repeat detection to cover every possible period, the focused rejection and strong-key acceptance tests passed:
+
+```text
+uv run pytest -q tests/unit/auth/test_security.py::test_production_rejects_weak_jwt_secrets_without_echoing_input tests/unit/auth/test_security.py::test_production_accepts_random_urlsafe_jwt_secret tests/unit/auth/test_security.py::test_production_accepts_generated_fernet_key
+8 passed in 0.02s
+```
+
+The changed implementation and test also passed lint:
+
+```text
+uv run ruff check src/ai_gateway/core/security.py tests/unit/auth/test_security.py
+All checks passed!
+```

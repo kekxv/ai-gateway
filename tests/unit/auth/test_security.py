@@ -174,6 +174,7 @@ def test_secret_encryption_round_trip(settings: Settings) -> None:
         "replace-with-a-long-random-secret",
         "a" * 64,
         "abab" * 16,
+        "abcdefghijklmnopq" * 2,
         "contains whitespace that is long enough",
     ],
 )
