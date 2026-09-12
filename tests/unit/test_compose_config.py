@@ -12,6 +12,17 @@ BOOTSTRAP_NAMES = (
     "GATEWAY_BOOTSTRAP_ADMIN_PASSWORD",
     "GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET",
 )
+COMPOSE_REQUIRED_VARIABLES = {
+    "MYSQL_DATABASE": "gateway",
+    "MYSQL_TEST_DATABASE": "gateway_test",
+    "MYSQL_USER": "gateway",
+    "MYSQL_PASSWORD": "gateway-password",
+    "MYSQL_ROOT_PASSWORD": "gateway-root-password",
+    "GATEWAY_JWT_SECRET": "unit-test-jwt-secret",
+    # A syntactically valid 32-byte Fernet key for config rendering tests.
+    "GATEWAY_ENCRYPTION_KEY": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "GATEWAY_ENVIRONMENT": "development",
+}
 
 
 def compose_config(
@@ -22,8 +33,9 @@ def compose_config(
     empty_env = tmp_path / "compose.env"
     empty_env.write_text("", encoding="utf-8")
     environment = os.environ.copy()
-    for name in BOOTSTRAP_NAMES:
+    for name in (*BOOTSTRAP_NAMES, *COMPOSE_REQUIRED_VARIABLES):
         environment.pop(name, None)
+    environment.update(COMPOSE_REQUIRED_VARIABLES)
     environment.update(variables or {})
     result = subprocess.run(
         [
@@ -58,6 +70,25 @@ def test_root_compose_isolates_gateway_bootstrap_secrets(tmp_path: Path) -> None
     )
     services = config["services"]
 
+    assert services["mysql"]["ports"] == [
+        {
+            "mode": "ingress",
+            "host_ip": "127.0.0.1",
+            "target": 3306,
+            "published": "3306",
+            "protocol": "tcp",
+        }
+    ]
+    assert services["gateway"]["ports"][0]["host_ip"] == "127.0.0.1"
+    for service in ("setup", "gateway"):
+        assert services[service]["environment"]["GATEWAY_JWT_SECRET"] == COMPOSE_REQUIRED_VARIABLES[
+            "GATEWAY_JWT_SECRET"
+        ]
+        assert (
+            services[service]["environment"]["GATEWAY_ENCRYPTION_KEY"]
+            == COMPOSE_REQUIRED_VARIABLES["GATEWAY_ENCRYPTION_KEY"]
+        )
+
     assert services["gateway"]["depends_on"]["setup"]["condition"] == (
         "service_completed_successfully"
     )
@@ -87,6 +118,9 @@ def test_example_compose_runs_migrations_without_bootstrap_credentials(tmp_path:
     services = compose_config("example/compose.yaml", tmp_path)["services"]
     setup_command = services["setup"]["command"][-1]
 
+    assert services["gateway"]["ports"][0]["host_ip"] == "127.0.0.1"
+    for name in ("GATEWAY_JWT_SECRET", "GATEWAY_ENCRYPTION_KEY"):
+        assert services["gateway"]["environment"][name] == COMPOSE_REQUIRED_VARIABLES[name]
     assert setup_command.strip() == "alembic upgrade head"
     assert all(name not in services["setup"]["environment"] for name in BOOTSTRAP_NAMES)
     assert all(name not in services["gateway"]["environment"] for name in BOOTSTRAP_NAMES)
