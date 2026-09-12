@@ -1,0 +1,21 @@
+services:
+  caddy:
+    image: caddy:2.10.0
+    environment:
+      GATEWAY_DOMAIN: ${GATEWAY_DOMAIN:?GATEWAY_DOMAIN is required (public DNS name)}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

@@ -19,7 +19,7 @@
 
 
 # ---------- Stage 1: compile the Vue admin console ----------
-FROM node:22-alpine AS frontend-builder
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS frontend-builder
 
 WORKDIR /frontend
 
@@ -33,9 +33,9 @@ RUN npm run build
 
 
 # ---------- Stage 2: install Python runtime dependencies ----------
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:0.11.30 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.11.30@sha256:93b61e21202b1dab861092748e46bbd6e0e41dd84f59b9174efd2353186e1b47 /uv /usr/local/bin/uv
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -51,7 +51,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 
 # ---------- Stage 3: slim runtime image ----------
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS runtime
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONPATH="/app/src" \

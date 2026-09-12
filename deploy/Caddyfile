@@ -1,0 +1,21 @@
+{
+	# Caddy obtains and renews certificates through ACME for the configured host.
+	# Set GATEWAY_DOMAIN in the environment passed to compose.https.yaml.
+	auto_https disable_redirects
+}
+
+http://{$GATEWAY_DOMAIN} {
+	redir https://{host}{uri} permanent
+}
+
+https://{$GATEWAY_DOMAIN} {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# reverse_proxy preserves HTTP streaming and WebSocket upgrades by default.
+	reverse_proxy gateway:8000
+}

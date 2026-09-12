@@ -131,11 +131,10 @@ print("GATEWAY_ENCRYPTION_KEY=" + Fernet.generate_key().decode())
 PY
 ```
 
-Paste the generated values into `.env`. Never commit `.env`. Compose reads `MYSQL_DATABASE`,
-`MYSQL_USER`, `MYSQL_PASSWORD`, and `MYSQL_ROOT_PASSWORD` from that file and uses the same values
-for the gateway database URL. The checked-in values are local-development defaults only; replace
-both MySQL passwords before the first `docker compose up` that initializes a non-disposable
-volume. MySQL initialization variables do not change passwords in an existing volume. To rotate
+Paste the generated values into `.env`. Never commit `.env`. Compose requires explicit values for
+`MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `GATEWAY_JWT_SECRET`, and `GATEWAY_ENCRYPTION_KEY`; it
+uses the MySQL values for the gateway database URL. MySQL initialization variables do not change
+passwords in an existing volume. To rotate
 an existing deployment, authenticate with the old credential, run `ALTER USER`, then update the
 environment and roll the gateway; see the operations runbook. Because Compose embeds
 `MYSQL_PASSWORD` in a SQLAlchemy URL, use URL-safe password characters (`A-Z`, `a-z`, `0-9`, `.`,
@@ -246,9 +245,9 @@ secret handling, and rollback limitations.
 
 ## Docker deployment
 
-For container deployment, set `GATEWAY_ENVIRONMENT=production` in `.env`, use non-example JWT,
-Fernet, and MySQL secrets, and leave the database hostname to the `compose.yaml` override
-(`mysql`). All administrator bootstrap variables may remain absent: after startup, register the
+For container deployment, use unique JWT, Fernet, and MySQL secrets, and leave the database
+hostname to the `compose.yaml` override (`mysql`). All administrator bootstrap variables may
+remain absent: after startup, register the
 first account at `/console/register`. The first committed registration becomes administrator and
 later registrations become regular users.
 
@@ -280,9 +279,13 @@ secret) from `.env` or the backing secret source, then remove the exited setup c
 variables to empty values, so they are not retained in its container environment. Subsequent
 Compose starts recreate setup with empty bootstrap values, migrate, and start the gateway normally.
 
-Both the runtime container and the setup container run as the non-root `gateway` user. Compose
-makes their root filesystems read-only, mounts `/tmp` as tmpfs, drops every Linux capability, and
-enables `no-new-privileges`. In Kubernetes or another orchestrator, run `alembic upgrade head` and
+The runtime container uses a dedicated MySQL account with only SELECT/INSERT/UPDATE/DELETE on the
+application schema. The one-shot setup job connects as root for migrations and bootstrap. The
+initialization grant runs only when the MySQL volume is first created; existing volumes need a
+manual `REVOKE`/`GRANT` rotation (see the operations runbook). Both runtime and setup containers
+run as the non-root `gateway` user. Compose makes their root filesystems read-only, mounts `/tmp`
+as tmpfs, drops every Linux capability, and enables `no-new-privileges`. In Kubernetes or another
+orchestrator, run `alembic upgrade head` and
 the optional `scripts/create_admin.py` invocation in a separate serialized release job before
 starting the matching gateway image.
 

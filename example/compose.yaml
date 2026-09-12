@@ -7,10 +7,10 @@ x-gateway-service: &gateway-service
     dockerfile: Dockerfile
   environment: &gateway-environment
     GATEWAY_DATABASE_URL: >-
-      mysql+asyncmy://${MYSQL_USER:-gateway}:${MYSQL_PASSWORD:-gateway}@mysql:3306/${MYSQL_DATABASE:-gateway}
-    GATEWAY_ENCRYPTION_KEY: ${GATEWAY_ENCRYPTION_KEY:-MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=}
-    GATEWAY_ENVIRONMENT: development
-    GATEWAY_JWT_SECRET: ${GATEWAY_JWT_SECRET:-local-example-jwt-secret-change-before-production}
+      mysql+asyncmy://${MYSQL_USER:?MYSQL_USER is required}:${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}@mysql:3306/${MYSQL_DATABASE:?MYSQL_DATABASE is required}
+    GATEWAY_ENCRYPTION_KEY: ${GATEWAY_ENCRYPTION_KEY:?GATEWAY_ENCRYPTION_KEY is required}
+    GATEWAY_ENVIRONMENT: ${GATEWAY_ENVIRONMENT:?GATEWAY_ENVIRONMENT is required (development or production)}
+    GATEWAY_JWT_SECRET: ${GATEWAY_JWT_SECRET:?GATEWAY_JWT_SECRET is required}
     GATEWAY_LOG_LEVEL: INFO
     GATEWAY_NO_PROXY: 127.0.0.1,localhost,mysql
   read_only: true
@@ -23,12 +23,12 @@ x-gateway-service: &gateway-service
 
 services:
   mysql:
-    image: mysql:8.4
+    image: mysql:8.4@sha256:3466ba4a4828aa8d46fb7c3bc16b67b781c98413cf4ea0fac6feaa6e881faa26
     environment:
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-gateway}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gateway}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-gateway-root}
-      MYSQL_USER: ${MYSQL_USER:-gateway}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:?MYSQL_DATABASE is required}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+      MYSQL_USER: ${MYSQL_USER:?MYSQL_USER is required}
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
@@ -47,6 +47,10 @@ services:
 
   setup:
     <<: *gateway-service
+    environment:
+      <<: *gateway-environment
+      GATEWAY_DATABASE_URL: >-
+        mysql+asyncmy://root:${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}@mysql:3306/${MYSQL_DATABASE:?MYSQL_DATABASE is required}
     depends_on:
       mysql:
         condition: service_healthy
@@ -64,7 +68,7 @@ services:
       setup:
         condition: service_completed_successfully
     ports:
-      - "0.0.0.0:${GATEWAY_PORT:-8000}:8000"
+      - "127.0.0.1:${GATEWAY_PORT:-8000}:8000"
     healthcheck:
       test:
         - CMD
