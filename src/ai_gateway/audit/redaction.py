@@ -32,8 +32,7 @@ SENSITIVE_JSON_KEYS = frozenset(
 # limited to complete credential field names so ordinary text and token counts
 # remain visible.
 _NORMALIZED_SENSITIVE_JSON_KEYS = frozenset(
-    key.casefold().replace("_", "").replace("-", "")
-    for key in SENSITIVE_JSON_KEYS
+    key.casefold().replace("_", "").replace("-", "") for key in SENSITIVE_JSON_KEYS
 ) | frozenset(
     {
         "apikey",

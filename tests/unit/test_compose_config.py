@@ -81,9 +81,10 @@ def test_root_compose_isolates_gateway_bootstrap_secrets(tmp_path: Path) -> None
     ]
     assert services["gateway"]["ports"][0]["host_ip"] == "127.0.0.1"
     for service in ("setup", "gateway"):
-        assert services[service]["environment"]["GATEWAY_JWT_SECRET"] == COMPOSE_REQUIRED_VARIABLES[
-            "GATEWAY_JWT_SECRET"
-        ]
+        assert (
+            services[service]["environment"]["GATEWAY_JWT_SECRET"]
+            == COMPOSE_REQUIRED_VARIABLES["GATEWAY_JWT_SECRET"]
+        )
         assert (
             services[service]["environment"]["GATEWAY_ENCRYPTION_KEY"]
             == COMPOSE_REQUIRED_VARIABLES["GATEWAY_ENCRYPTION_KEY"]

@@ -43,10 +43,21 @@ from ai_gateway.transport.websocket import (
 )
 
 
-@pytest.mark.parametrize("name", [
-    "key", "api_key", "apiKey", "access_token", "authToken", "authorization",
-    "password", "client_secret", "clientSecret", "API%5FKEY",
-])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "key",
+        "api_key",
+        "apiKey",
+        "access_token",
+        "authToken",
+        "authorization",
+        "password",
+        "client_secret",
+        "clientSecret",
+        "API%5FKEY",
+    ],
+)
 def test_rewrite_upstream_url_drops_client_credential_query_names(name: str) -> None:
     result = rewrite_upstream_url(
         "wss://provider.example/realtime?tenant=trusted&api_key=provider-secret",
