@@ -37,9 +37,39 @@ from ai_gateway.transport.websocket import (
     UpstreamWebSocketError,
     relay_websocket,
     rewrite_initial_request,
+    rewrite_upstream_url,
     select_websocket_subprotocols,
     websocket_proxy_for,
 )
+
+
+@pytest.mark.parametrize("name", [
+    "key", "api_key", "apiKey", "access_token", "authToken", "authorization",
+    "password", "client_secret", "clientSecret", "API%5FKEY",
+])
+def test_rewrite_upstream_url_drops_client_credential_query_names(name: str) -> None:
+    result = rewrite_upstream_url(
+        "wss://provider.example/realtime?tenant=trusted&api_key=provider-secret",
+        f"{name}=client-secret&feature=on&feature=two",
+        "native-model",
+    )
+
+    assert "client-secret" not in result
+    assert "feature=on" in result and "feature=two" in result
+    assert "tenant=trusted" in result
+    assert "api_key=provider-secret" in result
+
+
+def test_rewrite_upstream_url_preserves_trusted_query_on_collision() -> None:
+    result = rewrite_upstream_url(
+        "wss://provider.example/realtime?alt=sse&beta=true",
+        "alt=json&beta=false&intent=transcription",
+        "native-model",
+    )
+
+    assert "alt=sse" in result and "alt=json" not in result
+    assert "beta=true" in result and "beta=false" not in result
+    assert "intent=transcription" in result
 
 
 class AsyncBarrier:

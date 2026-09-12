@@ -13,14 +13,18 @@
   starting the matching image.
 - Keep `.env`, provider credentials, API keys, JWT secrets, database passwords, and proxy URLs in a
   secret manager; never bake them into the image.
-- `compose.yaml` is the canonical Compose definition. It interpolates `MYSQL_DATABASE`,
-  `MYSQL_USER`, `MYSQL_PASSWORD`, and `MYSQL_ROOT_PASSWORD`; its checked-in fallbacks are only for
-  disposable local development. Use URL-safe characters in `MYSQL_PASSWORD` because the same
-  value is embedded in `GATEWAY_DATABASE_URL` for the gateway container.
+- `compose.yaml` is the canonical Compose definition. It requires explicit `MYSQL_DATABASE`,
+  `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `GATEWAY_JWT_SECRET`, and
+  `GATEWAY_ENCRYPTION_KEY`. Use URL-safe characters in `MYSQL_PASSWORD` because the same value is
+  embedded in `GATEWAY_DATABASE_URL` for the gateway container.
 - Set strong MySQL passwords before the first startup that initializes a durable volume. Changing
   `MYSQL_PASSWORD` or `MYSQL_ROOT_PASSWORD` later does not alter users stored in that volume.
 - The Compose MySQL port is bound only to `127.0.0.1:3306`. Use private networking rather than
   widening that host binding for remote access.
+- The gateway account is granted only `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the application
+  schema. The one-shot `setup` service uses the MySQL root account for migrations and bootstrap.
+  This grant is applied by `scripts/mysql-init.sh` only for a new volume; existing volumes need a
+  manual `REVOKE ALL PRIVILEGES` followed by the four CRUD grants during a maintenance window.
 
 ## MySQL connection-pool sizing
 
@@ -127,6 +131,18 @@ authorization boundary is authoritative. A request for another user's key throug
 returns the same not-found response as an unknown key.
 
 ## Admin console deployment and reverse proxy
+
+For automated HTTPS with certificate renewal, set a DNS A/AAAA record for your public host and run
+the optional Caddy overlay:
+
+```bash
+GATEWAY_DOMAIN=gateway.example.com docker compose -f compose.yaml -f compose.https.yaml up -d --build
+```
+
+Caddy listens on ports 80 and 443, redirects HTTP to HTTPS, forwards to `gateway:8000` over the
+Compose network, and supports streaming responses and WebSocket upgrades. Certificates are obtained
+from ACME after DNS resolves publicly; this repository does not issue or validate a live certificate.
+Keep the gateway's loopback host binding in place so it is not exposed directly.
 
 The public gateway and compiled administrator console share the FastAPI process on port `8000`.
 The console entry point is `/console/`; browser history routes under `/console/*` are served by the

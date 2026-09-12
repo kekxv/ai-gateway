@@ -1,3 +1,5 @@
+import base64
+import secrets
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -17,6 +19,7 @@ from ai_gateway.core.security import (
     issue_refresh_token,
     verify_password,
 )
+from ai_gateway.main import validate_runtime_settings
 
 
 def test_totp_secret_normalizes_formatted_base32_and_preserves_entropy() -> None:
@@ -162,3 +165,80 @@ def test_secret_encryption_round_trip(settings: Settings) -> None:
     assert isinstance(encrypted, bytes)
     assert b"never-store-this-in-plaintext" not in encrypted
     assert decrypt_secret(encrypted, settings=settings) == "never-store-this-in-plaintext"
+
+
+@pytest.mark.parametrize(
+    "jwt_secret",
+    [
+        "short",
+        "replace-with-a-long-random-secret",
+        "a" * 64,
+        "abab" * 16,
+        "abcdefghijklmnopq" * 2,
+        "contains whitespace that is long enough",
+    ],
+)
+def test_production_rejects_weak_jwt_secrets_without_echoing_input(jwt_secret: str) -> None:
+    settings = Settings(
+        environment="production",
+        jwt_secret=jwt_secret,
+        encryption_key=Fernet.generate_key().decode(),
+    )
+
+    with pytest.raises(RuntimeError, match="jwt_secret") as error:
+        validate_runtime_settings(settings)
+
+    assert jwt_secret not in str(error.value)
+
+
+def test_production_accepts_random_urlsafe_jwt_secret() -> None:
+    settings = Settings(
+        environment="production",
+        jwt_secret=secrets.token_urlsafe(32),
+        encryption_key=Fernet.generate_key().decode(),
+    )
+
+    validate_runtime_settings(settings)
+
+
+@pytest.mark.parametrize(
+    "encryption_key",
+    [
+        "replace-with-a-fernet-key",
+        "not-base64",
+        base64.urlsafe_b64encode(b"\x00" * 32).decode(),
+    ],
+)
+def test_production_rejects_weak_or_malformed_fernet_keys_without_echoing_input(
+    encryption_key: str,
+) -> None:
+    settings = Settings(
+        environment="production",
+        jwt_secret=secrets.token_urlsafe(32),
+        encryption_key=encryption_key,
+    )
+
+    with pytest.raises(RuntimeError, match="encryption_key") as error:
+        validate_runtime_settings(settings)
+
+    assert encryption_key not in str(error.value)
+
+
+def test_production_accepts_generated_fernet_key() -> None:
+    settings = Settings(
+        environment="production",
+        jwt_secret=secrets.token_urlsafe(32),
+        encryption_key=Fernet.generate_key().decode(),
+    )
+
+    validate_runtime_settings(settings)
+
+
+def test_non_production_accepts_intentional_fixture_secrets() -> None:
+    settings = Settings(
+        environment="test",
+        jwt_secret="short",
+        encryption_key="replace-with-a-fernet-key",
+    )
+
+    validate_runtime_settings(settings)

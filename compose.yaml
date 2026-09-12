@@ -1,15 +1,16 @@
 services:
   mysql:
-    image: mysql:8.4
+    image: mysql:8.4@sha256:3466ba4a4828aa8d46fb7c3bc16b67b781c98413cf4ea0fac6feaa6e881faa26
     environment:
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-gateway}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gateway}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-gateway-root}
-      MYSQL_USER: ${MYSQL_USER:-gateway}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:?MYSQL_DATABASE is required}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+      MYSQL_USER: ${MYSQL_USER:?MYSQL_USER is required}
     ports:
       - "127.0.0.1:3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
+      - ./scripts/mysql-init.sh:/docker-entrypoint-initdb.d/20-runtime-privileges.sh:ro
     healthcheck:
       test:
         - CMD-SHELL
@@ -35,8 +36,11 @@ services:
       GATEWAY_BOOTSTRAP_ADMIN_EMAIL: ${GATEWAY_BOOTSTRAP_ADMIN_EMAIL:-}
       GATEWAY_BOOTSTRAP_ADMIN_PASSWORD: ${GATEWAY_BOOTSTRAP_ADMIN_PASSWORD:-}
       GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET: ${GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET:-}
+      GATEWAY_ENVIRONMENT: production
+      GATEWAY_JWT_SECRET: ${GATEWAY_JWT_SECRET:?GATEWAY_JWT_SECRET is required}
+      GATEWAY_ENCRYPTION_KEY: ${GATEWAY_ENCRYPTION_KEY:?GATEWAY_ENCRYPTION_KEY is required}
       GATEWAY_DATABASE_URL: >-
-        mysql+asyncmy://${MYSQL_USER:-gateway}:${MYSQL_PASSWORD:-gateway}@mysql:3306/${MYSQL_DATABASE:-gateway}
+        mysql+asyncmy://root:${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}@mysql:3306/${MYSQL_DATABASE:?MYSQL_DATABASE is required}
     depends_on:
       mysql:
         condition: service_healthy
@@ -70,10 +74,13 @@ services:
       GATEWAY_BOOTSTRAP_ADMIN_EMAIL: ""
       GATEWAY_BOOTSTRAP_ADMIN_PASSWORD: ""
       GATEWAY_BOOTSTRAP_ADMIN_TOTP_SECRET: ""
+      GATEWAY_ENVIRONMENT: production
+      GATEWAY_JWT_SECRET: ${GATEWAY_JWT_SECRET:?GATEWAY_JWT_SECRET is required}
+      GATEWAY_ENCRYPTION_KEY: ${GATEWAY_ENCRYPTION_KEY:?GATEWAY_ENCRYPTION_KEY is required}
       GATEWAY_DATABASE_URL: >-
-        mysql+asyncmy://${MYSQL_USER:-gateway}:${MYSQL_PASSWORD:-gateway}@mysql:3306/${MYSQL_DATABASE:-gateway}
+        mysql+asyncmy://${MYSQL_USER:?MYSQL_USER is required}:${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}@mysql:3306/${MYSQL_DATABASE:?MYSQL_DATABASE is required}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${GATEWAY_PORT:-8000}:8000"
     depends_on:
       mysql:
         condition: service_healthy
@@ -103,15 +110,15 @@ services:
     restart: unless-stopped
 
   mysql-test-setup:
-    image: mysql:8.4
+    image: mysql:8.4@sha256:3466ba4a4828aa8d46fb7c3bc16b67b781c98413cf4ea0fac6feaa6e881faa26
     depends_on:
       mysql:
         condition: service_healthy
     environment:
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gateway}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-gateway-root}
-      MYSQL_TEST_DATABASE: ${MYSQL_TEST_DATABASE:-gateway_test}
-      MYSQL_USER: ${MYSQL_USER:-gateway}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+      MYSQL_TEST_DATABASE: ${MYSQL_TEST_DATABASE:?MYSQL_TEST_DATABASE is required}
+      MYSQL_USER: ${MYSQL_USER:?MYSQL_USER is required}
     entrypoint:
       - /bin/sh
       - -ec

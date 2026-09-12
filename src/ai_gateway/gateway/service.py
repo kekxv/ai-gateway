@@ -12,7 +12,7 @@ from hashlib import sha256
 from time import monotonic
 from typing import Any, Literal
 from typing import Protocol as TypingProtocol
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 import httpx
@@ -73,7 +73,7 @@ from ai_gateway.routing.affinity import SessionAffinityStore, client_session_aff
 from ai_gateway.routing.service import router_for_settings
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate, RouteFailure
 from ai_gateway.transport.sse import GatewayContext, stream_gateway_response
-from ai_gateway.transport.upstream import build_upstream_request
+from ai_gateway.transport.upstream import build_upstream_request, merge_upstream_query
 
 logger = logging.getLogger(__name__)
 
@@ -1275,10 +1275,7 @@ class GatewayService:
                     openai_operation=_outbound_openai_operation(prepared, route),
                 )
                 if route.protocol is prepared.inbound_protocol and request.query_params:
-                    passthrough_params = httpx.QueryParams(
-                        tuple(request.query_params.multi_items())
-                    )
-                    url = str(httpx.URL(url).copy_merge_params(passthrough_params))
+                    url = merge_upstream_query(url, tuple(request.query_params.multi_items()))
                 upstream_request = build_upstream_request(
                     route,
                     request.headers,
@@ -1681,7 +1678,8 @@ def upstream_url(
     openai_operation: OpenAIOperation = "chat_completions",
 ) -> str:
     selected = Protocol(protocol)
-    base = base_url.rstrip("/")
+    parsed_base = urlsplit(base_url)
+    base_path = parsed_base.path.rstrip("/")
     if selected is Protocol.OPENAI:
         suffix = {
             "chat_completions": "chat/completions",
@@ -1695,13 +1693,27 @@ def upstream_url(
             "images_edits": "images/edits",
             "images_variations": "images/variations",
         }[openai_operation]
-        return f"{base}/{suffix}" if base.endswith("/v1") else f"{base}/v1/{suffix}"
+        path = f"{base_path}/{suffix}" if base_path.endswith("/v1") else f"{base_path}/v1/{suffix}"
+        return urlunsplit(
+            (parsed_base.scheme, parsed_base.netloc, path, parsed_base.query, parsed_base.fragment)
+        )
     if selected is Protocol.CLAUDE:
-        return f"{base}/messages" if base.endswith("/v1") else f"{base}/v1/messages"
+        path = f"{base_path}/messages" if base_path.endswith("/v1") else f"{base_path}/v1/messages"
+        return urlunsplit(
+            (parsed_base.scheme, parsed_base.netloc, path, parsed_base.query, parsed_base.fragment)
+        )
     encoded_model = quote(upstream_model.removeprefix("models/"), safe="")
-    prefix = base if base.endswith("/v1beta") else f"{base}/v1beta"
+    prefix = base_path if base_path.endswith("/v1beta") else f"{base_path}/v1beta"
     method = "streamGenerateContent?alt=sse" if stream else "generateContent"
-    return f"{prefix}/models/{encoded_model}:{method}"
+    path, generated_query = (
+        f"{prefix}/models/{encoded_model}:{method}".split("?", 1)
+        if "?" in method
+        else (f"{prefix}/models/{encoded_model}:{method}", "")
+    )
+    query = parsed_base.query
+    if generated_query:
+        query = f"{query}&{generated_query}" if query else generated_query
+    return urlunsplit((parsed_base.scheme, parsed_base.netloc, path, query, parsed_base.fragment))
 
 
 def is_retryable_failure(

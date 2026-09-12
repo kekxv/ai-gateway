@@ -6,6 +6,8 @@ compiled console. It contains no built-in administrator email, password, or TOTP
 
 ```bash
 cd example
+cp .env.example .env
+# Fill the required password, JWT, and Fernet values in .env.
 docker compose up
 ```
 
@@ -31,8 +33,9 @@ Override the host port without editing the Compose file:
 GATEWAY_PORT=8080 docker compose up
 ```
 
-The fixed database credentials, JWT secret, and encryption key are for local evaluation only.
-Do not deploy this example to a shared or public environment. Use the root
+The example requires explicit database passwords, JWT secret, and Fernet key; generate unique
+values even for a shared development environment. Do not deploy this example publicly without a
+TLS reverse proxy. Use the root
 [`compose.yaml`](../compose.yaml), [`.env.example`](../.env.example), and
 [operations runbook](../docs/operations.md) for a real deployment. The root deployment retains
 an optional non-interactive administrator bootstrap for automated environments.

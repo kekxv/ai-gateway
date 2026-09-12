@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Protocol as TypingProtocol
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 import orjson
@@ -34,6 +36,20 @@ _INBOUND_ONLY_HEADERS = frozenset(
         "cookie",
         "host",
         "content-length",
+    }
+)
+_CLIENT_CREDENTIAL_QUERY_NAMES = frozenset(
+    {
+        "key",
+        "apikey",
+        "accesstoken",
+        "authtoken",
+        "authorization",
+        "password",
+        "clientsecret",
+        "clientcredential",
+        "token",
+        "secret",
     }
 )
 
@@ -86,6 +102,30 @@ def build_upstream_headers(
     headers.update(ProviderCredential.from_mapping(credentials).auth_headers(route.protocol))
     headers.update(configured_headers)
     return headers
+
+
+def merge_upstream_query(url: str, inbound_query: str | Sequence[tuple[str, str]]) -> str:
+    """Merge untrusted client query parameters without allowing credential overrides."""
+
+    parsed = urlsplit(url)
+    provider_query = parse_qsl(parsed.query, keep_blank_values=True)
+    inbound = (
+        parse_qsl(inbound_query, keep_blank_values=True)
+        if isinstance(inbound_query, str)
+        else list(inbound_query)
+    )
+    trusted_names = {name.casefold() for name, _ in provider_query}
+    combined = list(provider_query)
+    for name, value in inbound:
+        normalized = re.sub(r"[^a-z0-9]", "", name.casefold())
+        if normalized in _CLIENT_CREDENTIAL_QUERY_NAMES:
+            continue
+        if name.casefold() in trusted_names:
+            continue
+        combined.append((name, value))
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(combined), parsed.fragment)
+    )
 
 
 def _sanitize_inbound_headers(
