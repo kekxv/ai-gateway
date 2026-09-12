@@ -117,7 +117,7 @@ services:
     environment:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
-      MYSQL_TEST_DATABASE: ${MYSQL_TEST_DATABASE:?MYSQL_TEST_DATABASE is required}
+      MYSQL_TEST_DATABASE: ${MYSQL_TEST_DATABASE:-gateway_test}
       MYSQL_USER: ${MYSQL_USER:?MYSQL_USER is required}
     entrypoint:
       - /bin/sh
