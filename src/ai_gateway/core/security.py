@@ -84,6 +84,8 @@ def _is_obviously_repeated(value: str | bytes) -> bool:
         return True
     # Searching the doubled value finds every possible period (including
     # periods longer than 16) in linear time without an unbounded loop.
+    if isinstance(value, str):
+        return len(value) > 1 and (value + value).find(value, 1) != len(value)
     return len(value) > 1 and (value + value).find(value, 1) != len(value)
 
 
