@@ -58,6 +58,46 @@ def test_openai_golden_request_decodes_all_contract_fields(load_fixture) -> None
     assert canonical.metadata["vendor_extensions"]["openai"]["service_tier"] == "auto"
 
 
+def test_openai_roundtrip_preserves_assistant_reasoning_content() -> None:
+    payload = {
+        "model": "deepseek-reasoner",
+        "messages": [
+            {"role": "user", "content": "solve this"},
+            {
+                "role": "assistant",
+                "content": "The answer is 42.",
+                "reasoning_content": "I worked through the arithmetic.",
+            },
+            {"role": "user", "content": "thanks"},
+        ],
+        "stream": True,
+    }
+
+    encoded = OpenAIAdapter().encode_request(OpenAIAdapter().decode_request(payload))
+
+    assert (
+        encoded["messages"][1]["reasoning_content"] == payload["messages"][1]["reasoning_content"]
+    )
+
+
+def test_openai_stream_preserves_reasoning_content_delta() -> None:
+    adapter = OpenAIAdapter()
+    event = {
+        "id": "chatcmpl_test",
+        "object": "chat.completion.chunk",
+        "model": "deepseek-reasoner",
+        "choices": [{"index": 0, "delta": {"reasoning_content": "Think first."}}],
+    }
+
+    decoded = adapter.decode_stream_event(event)
+    assert all(item.type != "content_start" for item in decoded)
+    reasoning = next(item for item in decoded if item.reasoning_content is not None)
+    assert reasoning.reasoning_content == "Think first."
+    encoded = adapter.create_stream_encoder().encode(reasoning)
+    _, payload = decode_sse(encoded[0])
+    assert payload["choices"][0]["delta"]["reasoning_content"] == "Think first."
+
+
 def test_openai_canonical_types_are_frozen(load_fixture) -> None:
     canonical = OpenAIAdapter().decode_request(load_fixture("openai", "request.json"))
 

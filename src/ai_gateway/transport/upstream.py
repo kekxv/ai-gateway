@@ -38,6 +38,14 @@ _INBOUND_ONLY_HEADERS = frozenset(
         "content-length",
     }
 )
+_PRIVACY_HEADERS = frozenset(
+    {
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "x-forwarded-proto",
+        "x-real-ip",
+    }
+)
 _CLIENT_CREDENTIAL_QUERY_NAMES = frozenset(
     {
         "key",
@@ -140,7 +148,13 @@ def _sanitize_inbound_headers(
         if token.strip()
     }
     configured_names = {name.lower() for name in configured_headers}
-    blocked = _HOP_BY_HOP_HEADERS | _INBOUND_ONLY_HEADERS | connection_tokens | configured_names
+    blocked = (
+        _HOP_BY_HOP_HEADERS
+        | _INBOUND_ONLY_HEADERS
+        | _PRIVACY_HEADERS
+        | connection_tokens
+        | configured_names
+    )
     sanitized: dict[str, str] = {}
     for name, value in incoming.multi_items():
         if name.lower() not in blocked:

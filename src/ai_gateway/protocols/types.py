@@ -158,6 +158,7 @@ class StreamEvent:
     tool_index: int | None = None
     content_type: StreamContentType | None = None
     text: str | None = None
+    reasoning_content: str | None = None
     role: MessageRole | None = None
     tool_call_id: str | None = None
     tool_name: str | None = None

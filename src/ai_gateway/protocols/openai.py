@@ -570,12 +570,18 @@ class OpenAIAdapter(ProtocolAdapter):
                 "stream_event.choices[0].delta.role", f"unsupported role {role!r}"
             )
         content = delta.get("content")
+        reasoning_content = delta.get("reasoning_content")
+        if reasoning_content is not None and not isinstance(reasoning_content, str):
+            raise UnsupportedFeatureError(
+                "stream_event.choices[0].delta.reasoning_content", "must be a string or null"
+            )
         if isinstance(content, str):
             events.append(
                 StreamEvent(
                     type="content_delta",
                     index=index,
                     text=content,
+                    reasoning_content=reasoning_content,
                     model=model,
                     metadata=event_metadata,
                 )
@@ -583,6 +589,16 @@ class OpenAIAdapter(ProtocolAdapter):
         elif content is not None:
             raise UnsupportedFeatureError(
                 "stream_event.choices[0].delta.content", "must be a string or null"
+            )
+        elif reasoning_content is not None:
+            events.append(
+                StreamEvent(
+                    type="content_delta",
+                    index=index,
+                    reasoning_content=reasoning_content,
+                    model=model,
+                    metadata=event_metadata,
+                )
             )
         tool_calls = delta.get("tool_calls")
         if tool_calls is not None and not isinstance(tool_calls, list):
@@ -665,7 +681,10 @@ class OpenAIAdapter(ProtocolAdapter):
         choice.update({"index": 0, "delta": {}, "finish_reason": None})
         delta_extensions = vendor_scope(self.protocol, event.metadata, "__delta__")
         if event.type == "content_delta":
-            delta_extensions["content"] = event.text or ""
+            if event.text is not None:
+                delta_extensions["content"] = event.text
+            if event.reasoning_content is not None:
+                delta_extensions["reasoning_content"] = event.reasoning_content
             choice["delta"] = delta_extensions
         elif event.type == "tool_call_delta":
             function = vendor_scope(self.protocol, event.metadata, "__stream_function__")
@@ -768,6 +787,9 @@ class _OpenAIStreamDecoder(StreamDecoder):
                         StreamEvent(type="message_start", role="assistant", model=raw.model)
                     )
                     self._message_started = True
+                if raw.text is None and raw.reasoning_content is not None:
+                    events.append(raw)
+                    continue
                 if self._text_index is None:
                     self._text_index = self._next_block_index
                     self._next_block_index += 1

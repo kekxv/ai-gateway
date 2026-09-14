@@ -122,6 +122,10 @@ def test_build_upstream_request_strips_hop_headers_and_merges_configured_headers
             "Upgrade": "websocket",
             "X-Remove-Me": "dynamic-hop-header",
             "X-Configured": "inbound-value",
+            "X-Forwarded-For": "116.7.104.165, 127.0.0.1",
+            "X-Forwarded-Host": "ai.kekxv.com",
+            "X-Forwarded-Proto": "https",
+            "X-Real-IP": "127.0.0.1",
             "X-Preserve": "yes",
         },
         body,
@@ -145,6 +149,10 @@ def test_build_upstream_request_strips_hop_headers_and_merges_configured_headers
         "transfer-encoding",
         "upgrade",
         "x-remove-me",
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "x-forwarded-proto",
+        "x-real-ip",
     ):
         assert stripped not in request.headers
     assert request.url.host == "provider.example"
