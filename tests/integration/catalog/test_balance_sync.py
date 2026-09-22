@@ -203,6 +203,102 @@ async def test_provider_api_round_trips_balance_configuration(
 
 
 @pytest.mark.asyncio
+async def test_provider_create_accepts_explicitly_empty_balance_fields(
+    session: AsyncSession,
+    balance_settings: Settings,
+) -> None:
+    """The console always submits non-secret fields, as null when they are empty."""
+
+    admin = _admin(balance_settings)
+    session.add(admin)
+    await session.flush()
+
+    async with _api(session, balance_settings, admin, _new_api_handler) as (client, _):
+        created = await client.post(
+            "/admin/providers",
+            json={
+                "name": f"balance-nulls-{uuid4().hex}",
+                "credential": {"api_key": "sk-provider"},
+                "protocols": [{"protocol": "openai", "base_url": "https://newapi.example/v1"}],
+                "balance_query_type": "custom",
+                "balance_config": {
+                    "base_url": None,
+                    "user_id": None,
+                    "currency": None,
+                    "divisor": None,
+                    "path": "/api/balance",
+                    "method": "GET",
+                    "amount_path": "data.quota",
+                    "used_path": None,
+                    "available_path": None,
+                },
+            },
+        )
+
+    assert created.status_code == 201, created.text
+    config = created.json()["balance"]["config"]
+    assert config["base_url"] is None
+    assert config["user_id"] is None
+    assert config["currency"] is None
+    assert config["divisor"] is None
+    assert config["path"] == "/api/balance"
+    assert config["amount_path"] == "data.quota"
+
+
+@pytest.mark.asyncio
+async def test_clearing_balance_overrides_restores_defaults(
+    session: AsyncSession,
+    balance_settings: Settings,
+) -> None:
+    admin = _admin(balance_settings)
+    provider = _provider(
+        balance_settings,
+        name=f"balance-clear-{uuid4().hex}",
+        query_type=BalanceQueryType.NEW_API,
+        balance_config={
+            "base_url": "https://override.example",
+            "user_id": "12",
+            "currency": "CNY",
+            "divisor": "1",
+        },
+    )
+    session.add_all([admin, provider])
+    await session.flush()
+
+    async with _api(session, balance_settings, admin, _new_api_handler) as (client, factory):
+        before = await client.post(f"/admin/providers/{provider.id}/balance/sync")
+        assert before.status_code == 200, before.text
+        assert before.json()["amount"] == "1250000.00000000"
+        assert before.json()["currency"] == "CNY"
+        assert factory.urls == ["https://override.example"]
+
+        cleared = await client.patch(
+            f"/admin/providers/{provider.id}",
+            json={
+                "balance_config": {
+                    "base_url": None,
+                    "user_id": None,
+                    "currency": None,
+                    "divisor": None,
+                }
+            },
+        )
+        assert cleared.status_code == 200, cleared.text
+        config = cleared.json()["balance"]["config"]
+        assert config["base_url"] is None
+        assert config["user_id"] is None
+        assert config["currency"] is None
+        assert config["divisor"] is None
+
+        after = await client.post(f"/admin/providers/{provider.id}/balance/sync")
+
+    assert after.status_code == 200, after.text
+    assert after.json()["amount"] == "2.50000000"
+    assert after.json()["currency"] == "USD"
+    assert factory.urls == ["https://override.example", "https://newapi.example/v1"]
+
+
+@pytest.mark.asyncio
 async def test_switching_balance_type_drops_the_stale_snapshot(
     session: AsyncSession,
     balance_settings: Settings,

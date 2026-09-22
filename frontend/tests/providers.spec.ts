@@ -1592,8 +1592,80 @@ describe('供应商上游余额查询', () => {
       balance_query_type: 'openrouter',
       balance_auto_sync: true,
       balance_sync_interval_seconds: 900,
-      balance_config: { api_key: 'or-key', user_id: '7', divisor: 500000 },
+      balance_config: {
+        base_url: null,
+        api_key: 'or-key',
+        user_id: '7',
+        currency: null,
+        divisor: 500000,
+      },
     })
+    wrapper.unmount()
+  })
+
+  it('清空非密钥字段时提交 null 以恢复默认值', async () => {
+    const configured: ProviderResponse = {
+      ...balancedProviderFixture,
+      balance: {
+        ...balancedSnapshot,
+        config: {
+          ...balancedSnapshot.config,
+          base_url: 'https://override.example',
+          currency: 'CNY',
+          divisor: '1000',
+          user_id: '7',
+          has_api_key: true,
+        },
+      },
+    }
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: configured, submitting: false },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-balance-base-url"]').setValue('')
+    await wrapper.get('[data-test="provider-balance-currency"]').setValue('')
+    await wrapper.get('[data-test="provider-balance-divisor"] input').setValue('')
+    await wrapper.get('[data-test="provider-balance-user-id"]').setValue('')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual({
+      balance_query_type: 'new_api',
+      balance_auto_sync: true,
+      balance_sync_interval_seconds: 900,
+      balance_config: {
+        base_url: null,
+        user_id: null,
+        currency: null,
+        divisor: null,
+      },
+    })
+    wrapper.unmount()
+  })
+
+  it('勾选清除后提交 null 删除已存的查询密钥', async () => {
+    const configured: ProviderResponse = {
+      ...balancedProviderFixture,
+      balance: {
+        ...balancedSnapshot,
+        config: { ...balancedSnapshot.config, has_api_key: true, has_headers: true },
+      },
+    }
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: configured, submitting: false },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-balance-clear-api-key"]').trigger('click')
+    await wrapper.get('[data-test="provider-balance-clear-headers"]').trigger('click')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+    await flushPromises()
+
+    const payload = wrapper.emitted('submit')?.[0]?.[0]
+    expect(payload).toMatchObject({ balance_config: { api_key: null, headers: null } })
     wrapper.unmount()
   })
 
@@ -1667,11 +1739,15 @@ describe('供应商上游余额查询', () => {
     expect(wrapper.emitted('submit')?.[0]?.[0]).toMatchObject({
       balance_query_type: 'custom',
       balance_config: {
+        base_url: null,
         user_id: '7',
+        currency: null,
         divisor: 500000,
         path: '/api/balance',
         method: 'GET',
         amount_path: 'data.quota',
+        used_path: null,
+        available_path: null,
       },
     })
     wrapper.unmount()

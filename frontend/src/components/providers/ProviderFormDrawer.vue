@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { Delete, MagicStick, Plus } from '@element-plus/icons-vue'
 import {
   ElButton,
+  ElCheckbox,
   ElDrawer,
   ElForm,
   ElFormItem,
@@ -12,6 +13,7 @@ import {
   ElSwitch,
 } from 'element-plus'
 import 'element-plus/theme-chalk/el-button.css'
+import 'element-plus/theme-chalk/el-checkbox.css'
 import 'element-plus/theme-chalk/el-drawer.css'
 import 'element-plus/theme-chalk/el-form.css'
 import 'element-plus/theme-chalk/el-form-item.css'
@@ -117,6 +119,8 @@ const showCustomHeaderInput = computed(
   () => authScheme.value !== 'none' && authHeader.value === 'custom',
 )
 const balanceConfigured = computed(() => balanceQueryType.value !== 'none')
+const balanceClearApiKey = ref(false)
+const balanceClearHeaders = ref(false)
 const balanceSecretConfigured = computed(
   () => props.provider?.balance?.config.has_api_key === true,
 )
@@ -189,6 +193,8 @@ function resetForm(): void {
   balanceSyncInterval.value = balance?.sync_interval_seconds ?? 3600
   balanceBaseUrl.value = balance?.config.base_url ?? ''
   balanceApiKey.value = ''
+  balanceClearApiKey.value = false
+  balanceClearHeaders.value = false
   balanceUserId.value = balance?.config.user_id ?? ''
   balancePath.value = balance?.config.path ?? ''
   balanceMethod.value = balance?.config.method === 'POST' ? 'POST' : 'GET'
@@ -450,17 +456,25 @@ function buildBalanceConfig(): ProviderBalanceConfigInput | null | undefined {
   balanceError.value = ''
   balanceHeadersError.value = ''
   if (!balanceConfigured.value) return null
-  const config: ProviderBalanceConfigInput = {}
-  if (balanceBaseUrl.value.trim() !== '') config.base_url = balanceBaseUrl.value.trim()
-  if (balanceApiKey.value.trim() !== '') config.api_key = balanceApiKey.value.trim()
-  if (balanceUserId.value.trim() !== '') config.user_id = balanceUserId.value.trim()
-  if (balanceCurrency.value.trim() !== '') config.currency = balanceCurrency.value.trim()
-  if (balanceDivisor.value !== null) {
-    if (!Number.isFinite(balanceDivisor.value) || balanceDivisor.value <= 0) {
-      balanceError.value = '余额除数必须大于 0'
-      return undefined
-    }
-    config.divisor = balanceDivisor.value
+  if (
+    balanceDivisor.value !== null &&
+    (!Number.isFinite(balanceDivisor.value) || balanceDivisor.value <= 0)
+  ) {
+    balanceError.value = '余额除数必须大于 0'
+    return undefined
+  }
+  // Non-secret fields are always submitted, as null when empty, so clearing a field
+  // restores the built-in default instead of silently keeping the stored value.
+  const config: ProviderBalanceConfigInput = {
+    base_url: balanceBaseUrl.value.trim() || null,
+    user_id: balanceUserId.value.trim() || null,
+    currency: balanceCurrency.value.trim() || null,
+    divisor: balanceDivisor.value,
+  }
+  if (balanceApiKey.value.trim() !== '') {
+    config.api_key = balanceApiKey.value.trim()
+  } else if (balanceClearApiKey.value) {
+    config.api_key = null
   }
   if (balanceQueryType.value === 'custom') {
     if (balancePath.value.trim() === '') {
@@ -474,14 +488,16 @@ function buildBalanceConfig(): ProviderBalanceConfigInput | null | undefined {
     config.path = balancePath.value.trim()
     config.method = balanceMethod.value
     config.amount_path = balanceAmountPath.value.trim()
-    if (balanceUsedPath.value.trim() !== '') config.used_path = balanceUsedPath.value.trim()
-    if (balanceAvailablePath.value.trim() !== '') {
-      config.available_path = balanceAvailablePath.value.trim()
-    }
+    config.used_path = balanceUsedPath.value.trim() || null
+    config.available_path = balanceAvailablePath.value.trim() || null
   }
   const headers = parseBalanceHeaders()
   if (balanceHeadersError.value !== '') return undefined
-  if (headers !== undefined) config.headers = headers
+  if (headers !== undefined) {
+    config.headers = headers
+  } else if (balanceClearHeaders.value) {
+    config.headers = null
+  }
   return config
 }
 
@@ -507,8 +523,8 @@ function balanceSectionChanged(): boolean {
   if ((balanceUserId.value.trim() || null) !== snapshot.config.user_id) return true
   if ((balanceCurrency.value.trim() || null) !== snapshot.config.currency) return true
   if ((balanceDivisor.value ?? null) !== storedDivisor) return true
-  if (balanceApiKey.value.trim() !== '') return true
-  if (balanceHeadersText.value.trim() !== '') return true
+  if (balanceApiKey.value.trim() !== '' || balanceClearApiKey.value) return true
+  if (balanceHeadersText.value.trim() !== '' || balanceClearHeaders.value) return true
   if (nextType === 'custom') {
     if (balancePath.value.trim() !== (snapshot.config.path ?? '')) return true
     if (balanceMethod.value !== snapshot.config.method) return true
@@ -992,6 +1008,10 @@ function submitForm(): void {
           <p v-if="!editing" class="form-help">
             保存供应商后可使用“自动检测接口”识别上游类型。
           </p>
+          <p class="form-help">
+            除查询密钥与请求头外，字段留空即恢复默认值（基础地址取供应商协议地址，new-api
+            除数为 500000、其它为 1，币种为 USD）。
+          </p>
           <div class="credential-options">
             <ElFormItem label="上游类型" :error="balanceError" data-validation="balance">
               <select v-model="balanceQueryType" data-test="provider-balance-type">
@@ -1076,6 +1096,13 @@ function submitForm(): void {
                   spellcheck="false"
                   placeholder="new-api 的 access token 等"
                 />
+                <ElCheckbox
+                  v-if="balanceSecretConfigured"
+                  v-model="balanceClearApiKey"
+                  data-test="provider-balance-clear-api-key"
+                >
+                  保存后清除已存的查询密钥
+                </ElCheckbox>
               </ElFormItem>
               <ElFormItem v-if="balanceQueryType === 'new_api'" label="new-api 用户 ID">
                 <ElInput
@@ -1171,6 +1198,13 @@ function submitForm(): void {
                 spellcheck="false"
                 placeholder='例如：{"X-Tenant":"team-a"}'
               />
+              <ElCheckbox
+                v-if="balanceHeadersConfigured"
+                v-model="balanceClearHeaders"
+                data-test="provider-balance-clear-headers"
+              >
+                保存后清除已存的请求头
+              </ElCheckbox>
             </ElFormItem>
           </template>
         </div>
