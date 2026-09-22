@@ -205,6 +205,27 @@ class ProviderBalanceSyncResult(BaseModel):
     synced_at: datetime
 
 
+class ProviderBalanceBatchEntry(BaseModel):
+    provider_id: int
+    name: str
+    enabled: bool
+    query_type: BalanceQueryType
+    status: Literal["synced", "failed"]
+    amount: Decimal | None = None
+    currency: str | None = None
+    used: Decimal | None = None
+    is_available: bool | None = None
+    synced_at: UtcDatetime | None = None
+    error: str | None = None
+
+
+class ProviderBalanceBatchResult(BaseModel):
+    results: list[ProviderBalanceBatchEntry]
+    synced: int
+    failed: int
+    skipped: int
+
+
 class ProviderBalanceCandidate(BaseModel):
     query_type: BalanceQueryType
     amount: Decimal

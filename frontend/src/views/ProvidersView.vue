@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
-import { Plus, Search } from '@element-plus/icons-vue'
+import { Coin, Plus, Search } from '@element-plus/icons-vue'
 import {
   ElAlert,
   ElButton,
@@ -44,6 +44,7 @@ import type {
 } from '@/api/types'
 import PageHeader from '@/components/common/PageHeader.vue'
 import ResourceStatusGroup from '@/components/common/ResourceStatusGroup.vue'
+import BalanceOverviewDialog from '@/components/providers/BalanceOverviewDialog.vue'
 import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
 import ModelSyncDialog from '@/components/providers/ModelSyncDialog.vue'
 import ProviderCard from '@/components/providers/ProviderCard.vue'
@@ -81,6 +82,7 @@ const syncDialogOpen = computed(() => syncSession.value !== null)
 const syncTargetProvider = computed(() => syncSession.value?.provider ?? null)
 const syncSubmitting = computed(() => syncSession.value?.submitting === true)
 const catalogOperationActive = computed(() => catalogExporting.value || catalogImporting.value)
+const balanceOverviewOpen = ref(false)
 let requestController: AbortController | undefined
 let saveController: AbortController | undefined
 const operationControllers = new Set<AbortController>()
@@ -331,6 +333,13 @@ async function detectBalance(): Promise<void> {
       if (mounted) balanceDetecting.value = false
     }
   }
+}
+
+async function loadProvidersAfterBalanceBatch(): Promise<void> {
+  // Batch results were already persisted per provider; refresh the cards without clearing
+  // any notice the administrator is currently reading.
+  stateRevision += 1
+  await load()
 }
 
 async function syncBalance(provider: ProviderResponse): Promise<void> {
@@ -654,6 +663,14 @@ onBeforeUnmount(() => {
         >
           导出备份
         </ElButton>
+        <ElButton
+          data-test="sync-all-balances"
+          :disabled="catalogOperationActive"
+          @click="balanceOverviewOpen = true"
+        >
+          <ElIcon><Coin /></ElIcon>
+          批量查询余额
+        </ElButton>
         <ElButton data-test="create-provider" type="primary" @click="openCreate">
           <ElIcon><Plus /></ElIcon>
           新建供应商
@@ -773,6 +790,11 @@ onBeforeUnmount(() => {
       @update:model-value="setDrawerOpen"
       @submit="saveProvider"
       @detect="detectBalance"
+    />
+
+    <BalanceOverviewDialog
+      v-model="balanceOverviewOpen"
+      @refreshed="loadProvidersAfterBalanceBatch"
     />
 
     <ModelSyncDialog

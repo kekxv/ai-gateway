@@ -339,6 +339,27 @@ export interface ProviderBalanceSyncResult {
   synced_at: string
 }
 
+export interface ProviderBalanceBatchEntry {
+  provider_id: number
+  name: string
+  enabled: boolean
+  query_type: BalanceQueryType
+  status: 'synced' | 'failed'
+  amount: string | null
+  currency: string | null
+  used: string | null
+  is_available: boolean | null
+  synced_at: string | null
+  error: string | null
+}
+
+export interface ProviderBalanceBatchResult {
+  results: ProviderBalanceBatchEntry[]
+  synced: number
+  failed: number
+  skipped: number
+}
+
 export interface ProviderBalanceCandidate {
   query_type: BalanceQueryType
   amount: string

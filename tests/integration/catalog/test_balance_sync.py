@@ -203,6 +203,63 @@ async def test_provider_api_round_trips_balance_configuration(
 
 
 @pytest.mark.asyncio
+async def test_batch_sync_reports_every_configured_provider(
+    session: AsyncSession,
+    balance_settings: Settings,
+) -> None:
+    admin = _admin(balance_settings)
+    healthy = _provider(
+        balance_settings,
+        name=f"batch-ok-{uuid4().hex}",
+        query_type=BalanceQueryType.NEW_API,
+    )
+    healthy.enabled = False
+    failing = _provider(
+        balance_settings,
+        name=f"batch-failing-{uuid4().hex}",
+        base_url="https://broken.example/v1",
+        query_type=BalanceQueryType.NEW_API,
+    )
+    unconfigured = _provider(
+        balance_settings,
+        name=f"batch-skipped-{uuid4().hex}",
+    )
+    session.add_all([admin, healthy, failing, unconfigured])
+    await session.flush()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "broken.example":
+            return httpx.Response(500, json={"message": "boom"}, request=request)
+        return _new_api_handler(request)
+
+    async with _api(session, balance_settings, admin, handler) as (client, _):
+        response = await client.post("/admin/providers/balance/sync")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["synced"] == 1
+    assert payload["failed"] == 1
+    assert payload["skipped"] == 1
+    by_name = {entry["name"]: entry for entry in payload["results"]}
+    assert by_name[healthy.name]["status"] == "synced"
+    assert by_name[healthy.name]["amount"] == "2.50000000"
+    assert by_name[healthy.name]["currency"] == "USD"
+    assert by_name[healthy.name]["enabled"] is False
+    assert by_name[failing.name]["status"] == "failed"
+    assert "500" in by_name[failing.name]["error"]
+    assert by_name[failing.name]["amount"] is None
+    assert unconfigured.name not in by_name
+
+    for provider in (healthy, failing):
+        stored = await session.get(Provider, provider.id)
+        assert stored is not None
+        await session.refresh(stored)
+        assert stored.last_balance_sync_at is not None
+    assert healthy.balance_error is None
+    assert failing.balance_error is not None
+
+
+@pytest.mark.asyncio
 async def test_provider_create_accepts_explicitly_empty_balance_fields(
     session: AsyncSession,
     balance_settings: Settings,

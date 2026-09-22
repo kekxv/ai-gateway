@@ -12,7 +12,7 @@ from typing import Protocol as TypingProtocol
 import httpx
 import orjson
 from fastapi import APIRouter, Depends, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -31,6 +31,8 @@ from ai_gateway.catalog.balance import (
     validate_balance_config,
 )
 from ai_gateway.catalog.schemas import (
+    ProviderBalanceBatchEntry,
+    ProviderBalanceBatchResult,
     ProviderBalanceCandidate,
     ProviderBalanceConfigInput,
     ProviderBalanceConfigResponse,
@@ -92,6 +94,22 @@ class _BalanceRecord:
 
 def _utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+@router.post("/balance/sync", response_model=ProviderBalanceBatchResult)
+async def sync_all_provider_balances_endpoint(
+    request: Request,
+    session: Session,
+    _: AdminUser,
+    settings: AppSettings,
+) -> ProviderBalanceBatchResult:
+    """Refresh the balance of every provider that has a balance query configured."""
+
+    return await sync_all_provider_balances(
+        session=session,
+        http_client_factory=_http_client_factory(request),
+        settings=settings,
+    )
 
 
 @router.post("/{provider_id}/balance/sync", response_model=ProviderBalanceSyncResult)
@@ -202,6 +220,96 @@ async def sync_provider_balance(
         used=result.used,
         is_available=result.is_available,
         synced_at=now,
+    )
+
+
+async def sync_all_provider_balances(
+    *,
+    session: AsyncSession,
+    http_client_factory: HttpClientProvider,
+    settings: Settings,
+    clock: Clock = _utcnow,
+) -> ProviderBalanceBatchResult:
+    """Query configured upstream balances one provider at a time.
+
+    Providers run sequentially on the request session, so each upstream call is preceded by a
+    released connection, and one failing upstream never hides the remaining results.
+    """
+
+    rows = (
+        await session.execute(
+            select(Provider.id, Provider.name, Provider.enabled, Provider.balance_query_type)
+            .where(Provider.balance_query_type.is_not(None))
+            .order_by(Provider.id)
+        )
+    ).all()
+    configured = [
+        (provider_id, name, enabled, query_type)
+        for provider_id, name, enabled, query_type in rows
+        if query_type is not None
+    ]
+    skipped = (
+        await session.scalar(
+            select(func.count()).select_from(Provider).where(Provider.balance_query_type.is_(None))
+        )
+        or 0
+    )
+
+    results: list[ProviderBalanceBatchEntry] = []
+    for provider_id, name, enabled, query_type in configured:
+        try:
+            outcome = await sync_provider_balance(
+                provider_id,
+                session=session,
+                http_client_factory=http_client_factory,
+                settings=settings,
+                clock=clock,
+                release_connection_before_query=True,
+            )
+        except BalanceSyncFailedError as exc:
+            results.append(
+                ProviderBalanceBatchEntry(
+                    provider_id=provider_id,
+                    name=name,
+                    enabled=enabled,
+                    query_type=query_type,
+                    status="failed",
+                    error=str(exc),
+                )
+            )
+            continue
+        except BalanceNotConfiguredError:
+            results.append(
+                ProviderBalanceBatchEntry(
+                    provider_id=provider_id,
+                    name=name,
+                    enabled=enabled,
+                    query_type=query_type,
+                    status="failed",
+                    error="Balance query is not configured",
+                )
+            )
+            continue
+        results.append(
+            ProviderBalanceBatchEntry(
+                provider_id=outcome.provider_id,
+                name=name,
+                enabled=enabled,
+                query_type=outcome.query_type,
+                status="synced",
+                amount=outcome.amount,
+                currency=outcome.currency,
+                used=outcome.used,
+                is_available=outcome.is_available,
+                synced_at=outcome.synced_at,
+            )
+        )
+
+    return ProviderBalanceBatchResult(
+        results=results,
+        synced=sum(1 for entry in results if entry.status == "synced"),
+        failed=sum(1 for entry in results if entry.status == "failed"),
+        skipped=skipped,
     )
 
 

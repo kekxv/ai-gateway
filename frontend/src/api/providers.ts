@@ -1,6 +1,7 @@
 import { apiClient } from './client'
 import type {
   ModelSyncResult,
+  ProviderBalanceBatchResult,
   ProviderBalanceDetectionResult,
   ProviderBalanceSyncResult,
   ProviderCreate,
@@ -88,6 +89,18 @@ export async function syncProviderBalance(
   const config = signal === undefined ? undefined : { signal }
   const { data } = await apiClient.post<ProviderBalanceSyncResult>(
     `/admin/providers/${String(providerId)}/balance/sync`,
+    undefined,
+    config,
+  )
+  return data
+}
+
+export async function syncAllProviderBalances(
+  signal?: AbortSignal,
+): Promise<ProviderBalanceBatchResult> {
+  const config = signal === undefined ? undefined : { signal }
+  const { data } = await apiClient.post<ProviderBalanceBatchResult>(
+    '/admin/providers/balance/sync',
     undefined,
     config,
   )

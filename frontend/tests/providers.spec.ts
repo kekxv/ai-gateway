@@ -5,6 +5,7 @@ import { setupServer } from 'msw/node'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ProviderBalanceSnapshot, ProviderResponse } from '@/api/types'
+import BalanceOverviewDialog from '@/components/providers/BalanceOverviewDialog.vue'
 import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
 import ModelSyncDialog from '@/components/providers/ModelSyncDialog.vue'
 import { routes } from '@/router'
@@ -1848,6 +1849,166 @@ describe('供应商上游余额查询', () => {
 
     expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('请选择')
     expect(drawer.find('[data-test="provider-balance-candidates"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})
+
+describe('批量查询供应商余额', () => {
+  it('点击按钮后打开弹窗并按行展示结果', async () => {
+    const providers: ProviderResponse[] = [
+      balancedProviderFixture,
+      { ...providerFixture, id: 4, name: '未配置供应商' },
+    ]
+    let requests = 0
+    server.use(
+      http.get('/admin/providers', () => HttpResponse.json(providers)),
+      http.post('/admin/providers/balance/sync', () => {
+        requests += 1
+        return HttpResponse.json({
+          results: [
+            {
+              provider_id: 3,
+              name: 'NewAPI 主线路',
+              enabled: true,
+              query_type: 'new_api',
+              status: 'synced',
+              amount: '7.56000000',
+              currency: 'USD',
+              used: '2635.03655400',
+              is_available: null,
+              synced_at: '2026-09-22T12:00:00Z',
+              error: null,
+            },
+            {
+              provider_id: 9,
+              name: '停用的线路',
+              enabled: false,
+              query_type: 'deepseek',
+              status: 'failed',
+              amount: null,
+              currency: null,
+              used: null,
+              is_available: null,
+              synced_at: null,
+              error: 'Upstream provider returned 401 Unauthorized: invalid access token',
+            },
+          ],
+          synced: 1,
+          failed: 1,
+          skipped: 1,
+        })
+      }),
+    )
+    const wrapper = await mountProvidersView()
+
+    expect(wrapper.findComponent(BalanceOverviewDialog).exists()).toBe(true)
+    await wrapper.get('[data-test="sync-all-balances"]').trigger('click')
+    await flushPromises()
+
+    expect(requests).toBe(1)
+    const dialog = wrapper.getComponent(BalanceOverviewDialog)
+    expect(dialog.get('[data-test="balance-batch-summary"]').text()).toContain('成功 1')
+    expect(dialog.get('[data-test="balance-batch-summary"]').text()).toContain('未配置 1')
+    const table = dialog.get('[data-test="balance-batch-table"]')
+    expect(table.text()).toContain('NewAPI 主线路')
+    expect(table.text()).toContain('7.56 USD')
+    expect(table.text()).toContain('停用的线路')
+    expect(table.text()).toContain('已停用')
+    expect(table.text()).toContain('invalid access token')
+
+    await dialog.get('[data-test="balance-batch-refresh"]').trigger('click')
+    await flushPromises()
+    expect(requests).toBe(2)
+
+    await dialog.get('[data-test="balance-batch-close"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.getComponent(BalanceOverviewDialog).props('modelValue')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('批量查询后刷新供应商卡片上的余额', async () => {
+    let listCalls = 0
+    let current: ProviderResponse[] = [balancedProviderFixture]
+    server.use(
+      http.get('/admin/providers', () => {
+        listCalls += 1
+        return HttpResponse.json(current)
+      }),
+      http.post('/admin/providers/balance/sync', () => {
+        current = [
+          {
+            ...balancedProviderFixture,
+            balance: { ...balancedSnapshot, amount: '42.00000000', error: null },
+          },
+        ]
+        return HttpResponse.json({
+          results: [
+            {
+              provider_id: 3,
+              name: 'NewAPI 主线路',
+              enabled: true,
+              query_type: 'new_api',
+              status: 'synced',
+              amount: '42.00000000',
+              currency: 'USD',
+              used: null,
+              is_available: null,
+              synced_at: '2026-09-22T12:00:00Z',
+              error: null,
+            },
+          ],
+          synced: 1,
+          failed: 0,
+          skipped: 0,
+        })
+      }),
+    )
+    const wrapper = await mountProvidersView()
+    expect(wrapper.get('[data-test="provider-balance-amount"]').text()).toContain('12.5 USD')
+
+    await wrapper.get('[data-test="sync-all-balances"]').trigger('click')
+    await flushPromises()
+
+    expect(listCalls).toBe(2)
+    expect(wrapper.get('[data-test="provider-balance-amount"]').text()).toContain('42 USD')
+    wrapper.unmount()
+  })
+
+  it('没有已配置余额查询的供应商时显示空状态', async () => {
+    server.use(
+      http.get('/admin/providers', () => HttpResponse.json([providerFixture])),
+      http.post('/admin/providers/balance/sync', () =>
+        HttpResponse.json({ results: [], synced: 0, failed: 0, skipped: 1 }),
+      ),
+    )
+    const wrapper = await mountProvidersView()
+
+    await wrapper.get('[data-test="sync-all-balances"]').trigger('click')
+    await flushPromises()
+
+    const dialog = wrapper.getComponent(BalanceOverviewDialog)
+    expect(dialog.text()).toContain('没有已配置余额查询的供应商')
+    wrapper.unmount()
+  })
+
+  it('批量查询失败时在弹窗内显示错误', async () => {
+    server.use(
+      http.get('/admin/providers', () => HttpResponse.json([balancedProviderFixture])),
+      http.post('/admin/providers/balance/sync', () =>
+        HttpResponse.json(
+          { detail: { code: 'balance_query_unavailable', message: 'Balance queries are unavailable' } },
+          { status: 503 },
+        ),
+      ),
+    )
+    const wrapper = await mountProvidersView()
+
+    await wrapper.get('[data-test="sync-all-balances"]').trigger('click')
+    await flushPromises()
+
+    const dialog = wrapper.getComponent(BalanceOverviewDialog)
+    expect(dialog.text()).toContain('批量查询余额失败')
+    expect(dialog.text()).toContain('余额查询服务不可用')
     wrapper.unmount()
   })
 })

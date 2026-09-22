@@ -593,6 +593,18 @@ test('creates, verifies, and safely cleans up console records', async ({ page })
       await expect(providerCard.getByTestId('provider-balance-error')).toBeVisible()
       await expect(providerCard.getByTestId('provider-balance-amount')).toContainText('—')
 
+      // The batch dialog queries every configured provider and reports each row.
+      await page.getByTestId('sync-all-balances').click()
+      const balanceDialog = page.getByRole('dialog', { name: '上游余额批量查询' })
+      await expect(balanceDialog.getByTestId('balance-batch-summary')).toContainText('失败 1')
+      const balanceRows = balanceDialog.getByTestId('balance-batch-table').locator('tbody tr')
+      await expect(balanceRows).toHaveCount(1)
+      await expect(balanceRows.first()).toContainText(providerName)
+      await expect(balanceRows.first()).toContainText('自定义接口')
+      await expect(balanceRows.first()).toContainText('失败')
+      await balanceDialog.getByTestId('balance-batch-close').click()
+      await expect(balanceDialog).toBeHidden()
+
       await page.goto('models')
       await page.getByTestId('create-model').click()
       await page.getByTestId('model-canonical-name').fill(modelCanonicalName)
