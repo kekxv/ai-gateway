@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
-  ElAlert,
   ElButton,
   ElDialog,
   ElEmpty,
@@ -10,9 +9,7 @@ import {
   ElSkeletonItem,
   ElTable,
   ElTableColumn,
-  ElTag,
 } from 'element-plus'
-import 'element-plus/theme-chalk/el-alert.css'
 import 'element-plus/theme-chalk/el-button.css'
 import 'element-plus/theme-chalk/el-dialog.css'
 import 'element-plus/theme-chalk/el-empty.css'
@@ -21,11 +18,10 @@ import 'element-plus/theme-chalk/el-result.css'
 import 'element-plus/theme-chalk/el-skeleton.css'
 import 'element-plus/theme-chalk/el-skeleton-item.css'
 import 'element-plus/theme-chalk/el-table.css'
-import 'element-plus/theme-chalk/el-tag.css'
 
 import { syncAllProviderBalances } from '@/api/providers'
-import type { ProviderBalanceBatchEntry, BalanceQueryType } from '@/api/types'
-import { formatBalanceAmount } from '@/utils/format'
+import type { BalanceQueryType, ProviderBalanceBatchEntry } from '@/api/types'
+import { formatBalanceAmount, formatDateTimeShort } from '@/utils/format'
 
 const props = defineProps<{
   modelValue: boolean
@@ -55,17 +51,17 @@ function typeLabel(queryType: BalanceQueryType): string {
 
 const syncedCount = computed(() => entries.value.filter((entry) => entry.status === 'synced').length)
 const failedCount = computed(() => entries.value.length - syncedCount.value)
-const summary = computed(() => {
-  const parts = [`成功 ${String(syncedCount.value)}`, `失败 ${String(failedCount.value)}`]
-  if (skipped.value > 0) parts.push(`未配置 ${String(skipped.value)}`)
-  return parts.join(' · ')
+const stats = computed(() => [
+  { key: 'synced', label: '成功', value: syncedCount.value, tone: 'ok' },
+  { key: 'failed', label: '失败', value: failedCount.value, tone: 'fail' },
+  { key: 'skipped', label: '未配置', value: skipped.value, tone: 'idle' },
+])
+const subtitle = computed(() => {
+  if (loading.value) return '正在查询上游余额…'
+  if (error.value !== '') return '查询未完成'
+  if (entries.value.length === 0) return '没有供应商配置余额查询'
+  return `已查询 ${String(entries.value.length)} 个供应商`
 })
-
-function formatTime(value: string | null): string {
-  if (value === null) return '—'
-  const parsed = new Date(value.endsWith('Z') ? value : `${value}Z`)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString('zh-CN')
-}
 
 async function loadBalances(): Promise<void> {
   loading.value = true
@@ -122,78 +118,93 @@ onBeforeUnmount(() => {
   <ElDialog
     :model-value="modelValue"
     title="上游余额批量查询"
-    width="min(94vw, 60rem)"
+    width="min(94vw, 56rem)"
     :close-on-click-modal="!loading"
     :close-on-press-escape="!loading"
     :show-close="!loading"
     destroy-on-close
     @update:model-value="handleModelValueUpdate"
   >
-    <div v-if="loading" class="dialog-loading" aria-label="正在查询上游余额">
-      <ElSkeleton v-for="index in 4" :key="index" animated>
-        <template #template>
-          <ElSkeletonItem variant="rect" class="skeleton-item" />
-        </template>
-      </ElSkeleton>
-    </div>
-
-    <ElResult v-else-if="error" icon="error" title="批量查询余额失败" :sub-title="error" />
-
-    <ElEmpty v-else-if="entries.length === 0" description="没有已配置余额查询的供应商" />
-
-    <template v-else>
-      <ElAlert
-        data-test="balance-batch-summary"
-        class="batch-summary"
-        :type="failedCount === 0 ? 'success' : 'warning'"
-        :title="summary"
-        :description="`共查询 ${String(entries.length)} 个已配置余额查询的供应商`"
-        show-icon
-      />
-      <ElTable
-        :data="entries"
-        data-test="balance-batch-table"
-        stripe
-        max-height="26rem"
-        style="width: 100%"
-      >
-        <ElTableColumn label="供应商" min-width="180">
-          <template #default="{ row }">
-            <span>{{ row.name }}</span>
-            <ElTag v-if="!row.enabled" size="small" type="info" class="provider-state">已停用</ElTag>
-          </template>
-        </ElTableColumn>
-        <ElTableColumn label="上游类型" min-width="150">
-          <template #default="{ row }">{{ typeLabel(row.query_type) }}</template>
-        </ElTableColumn>
-        <ElTableColumn label="结果" width="90">
-          <template #default="{ row }">
-            <ElTag :type="row.status === 'synced' ? 'success' : 'danger'" size="small">
-              {{ row.status === 'synced' ? '成功' : '失败' }}
-            </ElTag>
-          </template>
-        </ElTableColumn>
-        <ElTableColumn label="余额" min-width="130">
-          <template #default="{ row }">
-            {{ formatBalanceAmount(row.amount, row.currency) }}
-          </template>
-        </ElTableColumn>
-        <ElTableColumn label="已用" min-width="120">
-          <template #default="{ row }">
-            {{ formatBalanceAmount(row.used, row.currency) }}
-          </template>
-        </ElTableColumn>
-        <ElTableColumn label="同步时间" min-width="170">
-          <template #default="{ row }">{{ formatTime(row.synced_at) }}</template>
-        </ElTableColumn>
-        <ElTableColumn label="失败原因" min-width="220">
-          <template #default="{ row }">
-            <span v-if="row.error === null">—</span>
-            <code v-else class="batch-error">{{ row.error }}</code>
-          </template>
-        </ElTableColumn>
-      </ElTable>
+    <template #header>
+      <div class="dialog-heading">
+        <h3>上游余额批量查询</h3>
+        <p>{{ subtitle }}</p>
+      </div>
     </template>
+
+    <div class="balance-body">
+        <div v-if="loading" class="dialog-loading" aria-label="正在查询上游余额">
+        <ElSkeleton v-for="index in 4" :key="index" animated>
+          <template #template>
+            <ElSkeletonItem variant="rect" class="skeleton-item" />
+          </template>
+        </ElSkeleton>
+      </div>
+
+      <ElResult v-else-if="error" icon="error" title="批量查询余额失败" :sub-title="error" />
+
+      <ElEmpty v-else-if="entries.length === 0" description="没有已配置余额查询的供应商" />
+
+      <template v-else>
+        <div class="stats" data-test="balance-batch-summary">
+          <span v-for="stat in stats" :key="stat.key" class="stat">
+            <i class="stat__dot" :class="`stat__dot--${stat.tone}`" aria-hidden="true"></i>
+            {{ stat.label }}
+            <strong>{{ stat.value }}</strong>
+          </span>
+        </div>
+
+        <ElTable
+          :data="entries"
+          data-test="balance-batch-table"
+          class="balance-table"
+          max-height="24rem"
+          style="width: 100%"
+        >
+          <ElTableColumn label="供应商" min-width="180">
+            <template #default="{ row }">
+              <div class="provider">
+                <span class="provider__name">{{ row.name }}</span>
+                <span v-if="!row.enabled" class="chip">已停用</span>
+              </div>
+              <span class="provider__type">{{ typeLabel(row.query_type) }}</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="状态" width="92">
+            <template #default="{ row }">
+              <span class="status" :class="`status--${row.status === 'synced' ? 'ok' : 'fail'}`">
+                <i class="status__dot" aria-hidden="true"></i>
+                {{ row.status === 'synced' ? '成功' : '失败' }}
+              </span>
+              <span v-if="row.is_available === false" class="status__note">余额不可用</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="余额" min-width="120" align="right">
+            <template #default="{ row }">
+              <span class="amount">{{ formatBalanceAmount(row.amount, row.currency) }}</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="已用" min-width="132" align="right">
+            <template #default="{ row }">
+              <span class="muted">{{ formatBalanceAmount(row.used, row.currency) }}</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="同步时间" width="118" align="right">
+            <template #default="{ row }">
+              <span class="muted" :title="row.synced_at ?? undefined">
+                {{ formatDateTimeShort(row.synced_at) }}
+              </span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="失败原因" min-width="220">
+            <template #default="{ row }">
+              <span v-if="row.error === null" class="muted">—</span>
+              <span v-else class="reason" :title="row.error">{{ row.error }}</span>
+            </template>
+          </ElTableColumn>
+        </ElTable>
+      </template>
+    </div>
 
     <template #footer>
       <div class="dialog-actions">
@@ -214,6 +225,19 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.dialog-heading h3 {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--gateway-text);
+}
+
+.dialog-heading p {
+  margin: 0.25rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--gateway-muted);
+}
+
 .dialog-loading {
   display: flex;
   flex-direction: column;
@@ -221,22 +245,156 @@ onBeforeUnmount(() => {
 }
 
 .skeleton-item {
-  height: 2.2rem;
-  border-radius: 0.4rem;
+  height: 2.4rem;
+  border-radius: 8px;
 }
 
-.batch-summary {
-  margin-bottom: 0.75rem;
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  padding-bottom: 0.85rem;
+  margin-bottom: 0.15rem;
+  font-size: 0.8125rem;
+  color: var(--gateway-muted);
+  border-bottom: 1px solid var(--gateway-border);
 }
 
-.provider-state {
-  margin-left: 0.4rem;
+.stat {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
 }
 
-.batch-error {
-  color: var(--el-color-danger);
-  white-space: pre-wrap;
-  word-break: break-word;
+.stat strong {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--gateway-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+}
+
+.stat__dot--ok {
+  background: #16a34a;
+}
+
+.stat__dot--fail {
+  background: #dc2626;
+}
+
+.stat__dot--idle {
+  background: #cbd5e1;
+}
+
+.balance-body :deep(.el-table) {
+  --el-table-border-color: transparent;
+  --el-table-header-bg-color: transparent;
+  --el-table-header-text-color: var(--gateway-muted);
+  --el-table-row-hover-bg-color: #f8fafc;
+  --el-table-text-color: var(--gateway-text);
+  font-size: 0.8125rem;
+}
+
+.balance-body :deep(th.el-table__cell) {
+  padding: 0.55rem 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: transparent;
+}
+
+.balance-body :deep(td.el-table__cell) {
+  padding: 0.65rem 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.balance-body :deep(.el-table .cell) {
+  white-space: nowrap;
+}
+
+.balance-body :deep(.el-table__row:last-child td.el-table__cell) {
+  border-bottom: none;
+}
+
+.balance-body :deep(.el-table__inner-wrapper::before) {
+  display: none;
+}
+
+.provider {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.provider__name {
+  font-weight: 500;
+  color: var(--gateway-text);
+}
+
+.provider__type {
+  font-size: 0.75rem;
+  color: var(--gateway-muted);
+}
+
+.chip {
+  padding: 0.05rem 0.4rem;
+  font-size: 0.6875rem;
+  color: var(--gateway-muted);
+  background: #f1f5f9;
+  border-radius: 999px;
+}
+
+.status {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  font-weight: 500;
+}
+
+.status__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentcolor;
+}
+
+.status--ok {
+  color: #15803d;
+}
+
+.status--fail {
+  color: #b91c1c;
+}
+
+.status__note {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.6875rem;
+  color: #b45309;
+}
+
+.amount {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--gateway-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.reason {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 0.75rem;
+  color: #b91c1c;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .dialog-actions {

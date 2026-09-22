@@ -1915,6 +1915,9 @@ describe('批量查询供应商余额', () => {
     expect(table.text()).toContain('停用的线路')
     expect(table.text()).toContain('已停用')
     expect(table.text()).toContain('invalid access token')
+    // Timestamps render as a compact local value, never as the raw ISO string.
+    expect(table.text()).not.toContain('T12:00:00Z')
+    expect(table.text()).toMatch(/09-22 \d{2}:\d{2}/)
 
     await dialog.get('[data-test="balance-batch-refresh"]').trigger('click')
     await flushPromises()

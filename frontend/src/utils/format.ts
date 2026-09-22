@@ -77,6 +77,35 @@ export function formatDateTime(value: string | null): string {
   return Number.isNaN(date.getTime()) ? '—' : dateTimeFormatter.format(date)
 }
 
+const shortDateTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
+
+const shortDateTimeWithYearFormatter = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
+
+/** Compact local timestamp for dense tables: `09-22 13:33`, with the year only when it differs. */
+export function formatDateTimeShort(value: string | null): string {
+  if (value === null) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  const formatter =
+    date.getFullYear() === new Date().getFullYear()
+      ? shortDateTimeFormatter
+      : shortDateTimeWithYearFormatter
+  return formatter.format(date).replace(/\//g, '-')
+}
+
 export function formatDuration(value: number | null): string {
   return value === null ? '—' : `${formatInteger(Math.round(value))} 毫秒`
 }
