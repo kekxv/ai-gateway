@@ -8,6 +8,7 @@ import type {
   ProviderBalanceSnapshot,
   ProviderModelPriceSyncResult,
   ProviderResponse,
+  ProviderUpstreamPricingPreview,
 } from '@/api/types'
 import BalanceOverviewDialog from '@/components/providers/BalanceOverviewDialog.vue'
 import ModelPriceSyncDialog from '@/components/providers/ModelPriceSyncDialog.vue'
@@ -2088,43 +2089,77 @@ const priceSyncResult: ProviderModelPriceSyncResult = {
   ],
 }
 
+const priceSyncPreview: ProviderUpstreamPricingPreview = {
+  provider_id: 1,
+  detected_group: 'default',
+  detected_group_ratio: '2.5',
+  group_ratios: { default: '2.5', svip: '0.25' },
+  upstream_models: 2,
+  fillable: 1,
+  priced: 1,
+  fixed_price: 1,
+  unlisted: 1,
+}
+
+const priceSyncWithoutMultiplier: ProviderModelPriceSyncResult = {
+  ...priceSyncResult,
+  group: null,
+  group_ratio: null,
+  cost_multiplier: '0.80',
+  cost_multiplier_updated: false,
+}
+
 describe('同步上游模型价格', () => {
-  it('展示补齐结果、已设置跳过与成本倍率变化', async () => {
-    let synced = 0
+  it('列出上游分组，选定分组后同步并展示补齐结果', async () => {
+    const bodies: unknown[] = []
     server.use(
       http.get('/admin/providers', () => HttpResponse.json([providerFixture])),
-      http.get('/admin/providers/1', () =>
-        HttpResponse.json({ ...providerFixture, cost_multiplier: 0.5 }),
-      ),
-      http.post('/admin/providers/1/sync-model-prices', () => {
-        synced += 1
-        return HttpResponse.json(priceSyncResult)
+      http.get('/admin/providers/1/upstream-pricing', () => HttpResponse.json(priceSyncPreview)),
+      http.post('/admin/providers/1/sync-model-prices', async ({ request }) => {
+        bodies.push(await request.json())
+        return HttpResponse.json({ ...priceSyncResult, cost_multiplier: '0.25' })
       }),
+      http.get('/admin/providers/1', () =>
+        HttpResponse.json({ ...providerFixture, cost_multiplier: 0.25 }),
+      ),
     )
     const wrapper = await mountProvidersView()
 
     await wrapper.get('[data-test="sync-prices-1"]').trigger('click')
     await flushPromises()
 
-    expect(synced).toBe(1)
-    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('补齐价格 1 个')
-    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('已设置跳过 1 个')
-    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('成本倍率更新为 0.50')
-    // The refreshed card reflects the multiplier that the upstream group ratio moved.
-    expect(wrapper.text()).toContain('0.50x')
-
     const dialog = wrapper.getComponent(ModelPriceSyncDialog)
     expect(dialog.props('modelValue')).toBe(true)
-    const summary = dialog.get('[data-test="price-sync-summary"]').text()
+    // Nothing is written before the operator confirms.
+    expect(bodies).toEqual([])
+    expect(wrapper.get('[data-test="price-sync-summary"]').text()).toContain('可补齐 1')
+    // The account group is a hint: it is not preselected, because the relay key may sit elsewhere.
+    expect(wrapper.get('[data-test="price-sync-detected"]').text()).toContain('default')
+    expect(wrapper.get('[data-test="price-sync-detected"]').text()).toContain('2.5')
+    const groupSelect = wrapper.get<HTMLSelectElement>('[data-test="price-sync-group"]')
+    expect(groupSelect.element.value).toBe('')
+    const options = [...groupSelect.element.options].map((option) => option.textContent)
+    expect(options.some((label) => label.includes('svip') && label.includes('0.25'))).toBe(true)
+
+    await groupSelect.setValue('svip')
+    await wrapper.get('[data-test="price-sync-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(bodies).toEqual([{ group: 'svip' }])
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('补齐价格 1 个')
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('已设置跳过 1 个')
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('成本倍率更新为 0.25')
+    // The refreshed card reflects the group ratio that was applied.
+    expect(wrapper.text()).toContain('0.25x')
+
+    const summary = wrapper.get('[data-test="price-sync-summary"]').text()
     expect(summary).toContain('已更新 1')
     expect(summary).toContain('已设置 1')
     expect(summary).toContain('按次计费 1')
     expect(summary).toContain('未列出 1')
-    expect(dialog.get('[data-test="price-sync-multiplier"]').text()).toContain(
-      '当前为 0.5',
-    )
+    expect(wrapper.get('[data-test="price-sync-multiplier"]').text()).toContain('当前为 0.25')
 
-    const table = dialog.get('[data-test="price-sync-table"]').text()
+    const table = wrapper.get('[data-test="price-sync-table"]').text()
     expect(table).toContain('gpt-4o')
     expect(table).toContain('2.5 / 10')
     expect(table).toContain('未设置')
@@ -2136,16 +2171,43 @@ describe('同步上游模型价格', () => {
     expect(table).toContain('按次计费 0.04')
     expect(table).toContain('上游未提供倍率')
 
-    await dialog.get('[data-test="price-sync-close"]').trigger('click')
+    await wrapper.get('[data-test="price-sync-close"]').trigger('click')
     await flushPromises()
     expect(wrapper.getComponent(ModelPriceSyncDialog).props('modelValue')).toBe(false)
     wrapper.unmount()
   })
 
-  it('上游不支持价格接口时在通知中说明原因', async () => {
+  it('不选分组时只补价格并保留成本倍率', async () => {
+    const bodies: unknown[] = []
     server.use(
       http.get('/admin/providers', () => HttpResponse.json([providerFixture])),
-      http.post('/admin/providers/1/sync-model-prices', () =>
+      http.get('/admin/providers/1/upstream-pricing', () => HttpResponse.json(priceSyncPreview)),
+      http.post('/admin/providers/1/sync-model-prices', async ({ request }) => {
+        bodies.push(await request.json())
+        return HttpResponse.json(priceSyncWithoutMultiplier)
+      }),
+    )
+    const wrapper = await mountProvidersView()
+
+    await wrapper.get('[data-test="sync-prices-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="price-sync-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(bodies).toEqual([{ group: null }])
+    const notice = wrapper.get('[data-test="provider-notice"]').text()
+    expect(notice).toContain('补齐价格 1 个')
+    expect(notice).toContain('成本倍率保持 0.80')
+    expect(notice).not.toContain('成本倍率更新')
+    expect(wrapper.get('[data-test="price-sync-multiplier"]').text()).toContain('保持 0.8')
+    wrapper.unmount()
+  })
+
+  it('上游不支持价格接口时在弹窗里说明原因', async () => {
+    let synced = 0
+    server.use(
+      http.get('/admin/providers', () => HttpResponse.json([providerFixture])),
+      http.get('/admin/providers/1/upstream-pricing', () =>
         HttpResponse.json(
           {
             detail: {
@@ -2156,14 +2218,19 @@ describe('同步上游模型价格', () => {
           { status: 502 },
         ),
       ),
+      http.post('/admin/providers/1/sync-model-prices', () => {
+        synced += 1
+        return HttpResponse.json(priceSyncResult)
+      }),
     )
     const wrapper = await mountProvidersView()
 
     await wrapper.get('[data-test="sync-prices-1"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('/api/pricing')
-    expect(wrapper.getComponent(ModelPriceSyncDialog).props('modelValue')).toBe(false)
+    expect(synced).toBe(0)
+    expect(wrapper.get('[data-test="price-sync-error"]').text()).toContain('/api/pricing')
+    expect(wrapper.find('[data-test="price-sync-confirm"]').exists()).toBe(false)
     wrapper.unmount()
   })
 

@@ -243,10 +243,19 @@ class ProviderModelPriceRow(BaseModel):
     current_output_price_per_million: Decimal
 
 
+class ProviderModelPriceSyncRequest(BaseModel):
+    """Optional upstream group whose ratio becomes the provider cost multiplier."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    group: str | None = None
+
+
 class ProviderModelPriceSyncResult(BaseModel):
     provider_id: int
-    group: str = "default"
-    group_ratio: Decimal = Decimal("1")
+    #: The group that was applied to the cost multiplier; ``None`` when none was selected.
+    group: str | None = None
+    group_ratio: Decimal | None = None
     cost_multiplier: Decimal | None = None
     cost_multiplier_updated: bool = False
     upstream_models: int = 0
@@ -255,6 +264,21 @@ class ProviderModelPriceSyncResult(BaseModel):
     fixed_price: int = 0
     unlisted: int = 0
     rows: list[ProviderModelPriceRow] = Field(default_factory=list)
+
+
+class ProviderUpstreamPricingPreview(BaseModel):
+    """What a price sync would change, before anything is written."""
+
+    provider_id: int
+    #: Account group reported by /api/user/self, shown as a hint only.
+    detected_group: str | None = None
+    detected_group_ratio: Decimal | None = None
+    group_ratios: dict[str, Decimal] = Field(default_factory=dict)
+    upstream_models: int = 0
+    fillable: int = 0
+    priced: int = 0
+    fixed_price: int = 0
+    unlisted: int = 0
 
 
 class ProviderBalanceCandidate(BaseModel):

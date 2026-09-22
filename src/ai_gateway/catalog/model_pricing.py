@@ -7,9 +7,14 @@ currency: one ratio unit equals two US dollars per million tokens, which is why
 the price of a model is derived from its ratio instead of read directly.
 
 This module keeps the upstream-specific knowledge in one place: fetching the
-payload, understanding its two shapes, resolving the group ratio that applies and
+payload, understanding its two shapes, listing the group ratios it publishes and
 converting ratios into per-million-token prices. Database writes live in
 ``ai_gateway.admin.provider_pricing``.
+
+Group ratios are only ever *listed* here. new-api resolves the effective group of a
+relay request from the token (``token.Group``, falling back to the account group when
+the token has none), while ``GET /api/user/self`` reports the *account* group. The two
+can differ, so nothing in this module picks a group on its own.
 """
 
 from __future__ import annotations
@@ -65,10 +70,14 @@ class UpstreamModelPrice:
 
 @dataclass(frozen=True, slots=True)
 class UpstreamPricing:
-    """The upstream ratio configuration together with the resolved group."""
+    """The upstream ratio configuration.
 
-    group: str
-    group_ratio: Decimal
+    ``group`` and ``group_ratio`` are only filled when the account group was probed,
+    and they stay ``None`` when that probe failed or was not requested.
+    """
+
+    group: str | None
+    group_ratio: Decimal | None
     group_ratios: Mapping[str, Decimal]
     models: Mapping[str, UpstreamModelPrice]
 
@@ -90,8 +99,9 @@ async def fetch_upstream_pricing(
     group_credential: ProviderCredential | None = None,
     user_id: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
+    detect_group: bool = False,
 ) -> UpstreamPricing:
-    """Read the upstream price list and resolve the group ratio that applies to us."""
+    """Read the upstream price list, plus the account group when asked for it."""
 
     url = pricing_url(base_url)
     response = await client.send(
@@ -116,17 +126,21 @@ async def fetch_upstream_pricing(
     payload = _json_object(response, source="pricing")
     group_ratios = parse_group_ratios(payload)
 
-    group = await _resolve_group(
-        base_url=base_url,
-        credential=group_credential if group_credential is not None else credential,
-        protocol=protocol,
-        client=client,
-        user_id=user_id,
-        extra_headers=extra_headers,
-    )
-    selected_group, group_ratio = select_group_ratio(group_ratios, group)
+    group: str | None = None
+    group_ratio: Decimal | None = None
+    if detect_group:
+        group = await _resolve_account_group(
+            base_url=base_url,
+            credential=group_credential if group_credential is not None else credential,
+            protocol=protocol,
+            client=client,
+            user_id=user_id,
+            extra_headers=extra_headers,
+        )
+        if group is not None:
+            group_ratio = group_ratio_for(group_ratios, group)
     return UpstreamPricing(
-        group=selected_group,
+        group=group,
         group_ratio=group_ratio,
         group_ratios=group_ratios,
         models=parse_model_prices(payload),
@@ -147,14 +161,14 @@ def parse_group_ratios(payload: Mapping[str, Any]) -> dict[str, Decimal]:
     return {}
 
 
-def select_group_ratio(group_ratios: Mapping[str, Decimal], group: str) -> tuple[str, Decimal]:
-    """Pick the ratio for ``group``, falling back to the default group and then to 1."""
+def group_ratio_for(group_ratios: Mapping[str, Decimal], group: str) -> Decimal | None:
+    """Return the published ratio of ``group``, or ``None`` when it is not listed.
 
-    if group in group_ratios:
-        return group, group_ratios[group]
-    if DEFAULT_PRICE_GROUP in group_ratios:
-        return DEFAULT_PRICE_GROUP, group_ratios[DEFAULT_PRICE_GROUP]
-    return group, Decimal("1")
+    Callers must treat ``None`` as unknown: guessing another group's ratio would
+    silently rewrite the cost multiplier with a value that does not apply.
+    """
+
+    return group_ratios.get(group)
 
 
 def parse_model_prices(payload: Mapping[str, Any]) -> dict[str, UpstreamModelPrice]:
@@ -251,7 +265,7 @@ def _parse_ratio_map(data: Mapping[str, Any]) -> dict[str, UpstreamModelPrice]:
     return models
 
 
-async def _resolve_group(
+async def _resolve_account_group(
     *,
     base_url: str,
     credential: ProviderCredential,
@@ -259,8 +273,12 @@ async def _resolve_group(
     client: AsyncHttpClient,
     user_id: str | None,
     extra_headers: Mapping[str, str] | None,
-) -> str:
-    """Read the token's own group, tolerating upstreams that reject the probe."""
+) -> str | None:
+    """Read the *account* group from ``/api/user/self``, or ``None`` when unavailable.
+
+    This is a hint for the administrator, never an authoritative answer: new-api bills a
+    relay request with the group of its token, and the account group may differ.
+    """
 
     headers = _request_headers(credential, protocol, extra_headers)
     if user_id:
@@ -270,15 +288,15 @@ async def _resolve_group(
         response.raise_for_status()
         payload = response.json()
     except (httpx.HTTPError, ValueError):
-        return DEFAULT_PRICE_GROUP
+        return None
     if not isinstance(payload, Mapping):
-        return DEFAULT_PRICE_GROUP
+        return None
     data = payload.get("data")
     if not isinstance(data, Mapping):
-        return DEFAULT_PRICE_GROUP
+        return None
     group = data.get("group")
     if not isinstance(group, str) or not group.strip():
-        return DEFAULT_PRICE_GROUP
+        return None
     return group.strip()
 
 

@@ -1,23 +1,60 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { ElButton, ElDialog, ElTable, ElTableColumn } from 'element-plus'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { ElButton, ElDialog, ElSkeleton, ElSkeletonItem, ElTable, ElTableColumn } from 'element-plus'
 import 'element-plus/theme-chalk/el-button.css'
 import 'element-plus/theme-chalk/el-dialog.css'
 import 'element-plus/theme-chalk/el-overlay.css'
+import 'element-plus/theme-chalk/el-skeleton.css'
+import 'element-plus/theme-chalk/el-skeleton-item.css'
 import 'element-plus/theme-chalk/el-table.css'
 
-import type { ModelPriceSyncStatus, ProviderModelPriceRow, ProviderModelPriceSyncResult } from '@/api/types'
+import { getProviderUpstreamPricing, syncProviderModelPrices } from '@/api/providers'
+import type {
+  ModelPriceSyncStatus,
+  ProviderModelPriceRow,
+  ProviderModelPriceSyncResult,
+  ProviderUpstreamPricingPreview,
+} from '@/api/types'
 import { formatPrice } from '@/utils/format'
 
 const props = defineProps<{
   modelValue: boolean
+  providerId: number | null
   providerName: string
-  result: ProviderModelPriceSyncResult | null
 }>()
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
+  applied: [result: ProviderModelPriceSyncResult]
 }>()
+
+const loading = ref(false)
+const submitting = ref(false)
+const error = ref('')
+const preview = ref<ProviderUpstreamPricingPreview | null>(null)
+const result = ref<ProviderModelPriceSyncResult | null>(null)
+// Empty means "leave the cost multiplier alone", which is the safe default: the account group
+// reported by the upstream is not necessarily the group this relay key belongs to.
+const selectedGroup = ref('')
+let priceController: AbortController | undefined
+
+const busy = computed(() => loading.value || submitting.value)
+const groupOptions = computed(() => {
+const entries = Object.entries(preview.value?.group_ratios ?? {})
+  return entries
+    .map(([name, ratio]) => ({ name, label: `${name} · ${formatPrice(ratio)}x`, ratio }))
+    .sort((left, right) => left.name.localeCompare(right.name))
+})
+const detectedNote = computed(() => {
+  const current = preview.value
+  if (current === null) return ''
+  if (current.detected_group === null) {
+    return '未识别到账号分组（/api/user/self 需要余额查询里配置的访问令牌），成本倍率不会自动更新'
+  }
+  const ratio = current.detected_group_ratio
+  const rendered = ratio === null ? '未列出倍率' : `${formatPrice(ratio)}x`
+  return `账号分组 ${current.detected_group} · ${rendered}（来自 /api/user/self，仅供参考：计费用的是令牌分组，可能与账号分组不同）`
+})
 
 const statusLabels: Readonly<Record<ModelPriceSyncStatus, string>> = {
   updated: '已更新',
@@ -34,29 +71,44 @@ const statusTones: Readonly<Record<ModelPriceSyncStatus, string>> = {
 }
 
 const subtitle = computed(() => {
-  const result = props.result
-  if (result === null) return '没有可展示的结果'
-  return `上游分组 ${result.group} · 倍率 ${formatPrice(result.group_ratio)} · 上游共列出 ${String(result.upstream_models)} 个模型`
+  const applied = result.value
+  if (applied === null) return ''
+  const group =
+    applied.group === null
+      ? '未选择上游分组（成本倍率未改动）'
+      : `上游分组 ${applied.group} · 倍率 ${formatPrice(applied.group_ratio)}`
+  return `${group} · 上游共列出 ${String(applied.upstream_models)} 个模型`
+})
+
+const previewStats = computed(() => {
+  const current = preview.value
+  if (current === null) return []
+  return [
+    { key: 'fillable', label: '可补齐', value: current.fillable, tone: 'ok' },
+    { key: 'priced', label: '已设置', value: current.priced, tone: 'idle' },
+    { key: 'fixed', label: '按次计费', value: current.fixed_price, tone: 'idle' },
+    { key: 'unlisted', label: '未列出', value: current.unlisted, tone: 'warn' },
+  ]
 })
 
 const stats = computed(() => {
-  const result = props.result
-  if (result === null) return []
+  const applied = result.value
+  if (applied === null) return []
   return [
-    { key: 'updated', label: '已更新', value: result.updated, tone: 'ok' },
-    { key: 'priced', label: '已设置', value: result.priced, tone: 'idle' },
-    { key: 'fixed', label: '按次计费', value: result.fixed_price, tone: 'idle' },
-    { key: 'unlisted', label: '未列出', value: result.unlisted, tone: 'warn' },
+    { key: 'updated', label: '已更新', value: applied.updated, tone: 'ok' },
+    { key: 'priced', label: '已设置', value: applied.priced, tone: 'idle' },
+    { key: 'fixed', label: '按次计费', value: applied.fixed_price, tone: 'idle' },
+    { key: 'unlisted', label: '未列出', value: applied.unlisted, tone: 'warn' },
   ]
 })
 
 const multiplierNote = computed(() => {
-  const result = props.result
-  if (result === null || result.cost_multiplier === null) return ''
-  if (result.cost_multiplier_updated) {
-    return `已把上游分组倍率写入供应商成本倍率，当前为 ${formatPrice(result.cost_multiplier)}`
+  const applied = result.value
+  if (applied === null || applied.cost_multiplier === null) return ''
+  if (applied.cost_multiplier_updated) {
+    return `已按上游分组倍率更新供应商成本倍率，当前为 ${formatPrice(applied.cost_multiplier)}`
   }
-  return `供应商成本倍率保持 ${formatPrice(result.cost_multiplier)}`
+  return `供应商成本倍率保持 ${formatPrice(applied.cost_multiplier)}`
 })
 
 function statusLabel(row: ProviderModelPriceRow): string {
@@ -93,28 +145,117 @@ function currentPrices(row: ProviderModelPriceRow): string {
   return `${input} / ${output}`
 }
 
+function reset(): void {
+  preview.value = null
+  result.value = null
+  error.value = ''
+  selectedGroup.value = ''
+}
+
+async function loadPreview(): Promise<void> {
+  const providerId = props.providerId
+  if (providerId === null) return
+  reset()
+  loading.value = true
+  priceController?.abort()
+  const controller = new AbortController()
+  priceController = controller
+  try {
+    preview.value = await getProviderUpstreamPricing(providerId, controller.signal)
+  } catch (err: unknown) {
+    if (controller.signal.aborted) return
+    error.value = err instanceof Error ? err.message : '上游价格读取失败'
+  } finally {
+    if (!controller.signal.aborted) loading.value = false
+  }
+}
+
+async function applyPrices(): Promise<void> {
+  const providerId = props.providerId
+  if (providerId === null || busy.value || preview.value === null) return
+  submitting.value = true
+  error.value = ''
+  priceController?.abort()
+  const controller = new AbortController()
+  priceController = controller
+  try {
+    const applied = await syncProviderModelPrices(
+      providerId,
+      selectedGroup.value === '' ? null : selectedGroup.value,
+      controller.signal,
+    )
+    if (controller.signal.aborted) return
+    result.value = applied
+    emit('applied', applied)
+  } catch (err: unknown) {
+    if (controller.signal.aborted) return
+    error.value = err instanceof Error ? err.message : '模型价格同步失败'
+  } finally {
+    if (!controller.signal.aborted) submitting.value = false
+  }
+}
+
 function requestClose(): void {
+  if (busy.value) return
   emit('update:modelValue', false)
 }
+
+function handleModelValueUpdate(value: boolean): void {
+  if (!value && busy.value) return
+  emit('update:modelValue', value)
+}
+
+watch(
+  () => [props.modelValue, props.providerId] as const,
+  ([open]) => {
+    if (open) void loadPreview()
+    else {
+      priceController?.abort()
+      priceController = undefined
+      reset()
+    }
+  },
+  { immediate: true, flush: 'sync' },
+)
+
+onBeforeUnmount(() => {
+  priceController?.abort()
+})
 </script>
 
 <template>
   <ElDialog
     :model-value="modelValue"
-    title="模型价格同步结果"
+    :title="result === null ? '同步上游模型价格' : '模型价格同步结果'"
     width="min(94vw, 56rem)"
+    :close-on-click-modal="!busy"
+    :close-on-press-escape="!busy"
+    :show-close="!busy"
     destroy-on-close
-    @update:model-value="requestClose"
+    data-test="price-sync-dialog"
+    @update:model-value="handleModelValueUpdate"
   >
     <template #header>
       <div class="dialog-heading">
-        <h3>模型价格同步结果</h3>
-        <p>{{ providerName }} · {{ subtitle }}</p>
+        <h3>{{ result === null ? '同步上游模型价格' : '模型价格同步结果' }}</h3>
+        <p>{{ providerName }}<template v-if="subtitle !== ''"> · {{ subtitle }}</template></p>
       </div>
     </template>
 
     <div class="price-body">
-      <template v-if="result !== null">
+      <div v-if="loading" class="dialog-loading" aria-label="正在读取上游价格">
+        <ElSkeleton v-for="index in 3" :key="index" animated>
+          <template #template>
+            <ElSkeletonItem variant="rect" class="skeleton-item" />
+          </template>
+        </ElSkeleton>
+      </div>
+
+      <p v-else-if="error !== ''" class="error" data-test="price-sync-error">
+        {{ error }}
+      </p>
+
+      <template v-else-if="result !== null">
         <div class="stats" data-test="price-sync-summary">
           <span v-for="stat in stats" :key="stat.key" class="stat">
             <i class="stat__dot" :class="`stat__dot--${stat.tone}`" aria-hidden="true"></i>
@@ -169,11 +310,55 @@ function requestClose(): void {
           </ElTableColumn>
         </ElTable>
       </template>
+
+      <template v-else-if="preview !== null">
+        <div class="stats" data-test="price-sync-summary">
+          <span v-for="stat in previewStats" :key="stat.key" class="stat">
+            <i class="stat__dot" :class="`stat__dot--${stat.tone}`" aria-hidden="true"></i>
+            {{ stat.label }}
+            <strong>{{ stat.value }}</strong>
+          </span>
+        </div>
+
+        <div class="group-picker">
+          <label for="price-sync-group">成本倍率分组</label>
+          <select
+            id="price-sync-group"
+            v-model="selectedGroup"
+            data-test="price-sync-group"
+            :disabled="busy"
+          >
+            <option value="">不更新成本倍率</option>
+            <option v-for="option in groupOptions" :key="option.name" :value="option.name">
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
+
+        <p class="note" data-test="price-sync-detected">{{ detectedNote }}</p>
+        <p class="hint">
+          价格与倍率相互独立：模型价格只补齐从未设置过的空价格（上游共列出
+          {{ preview.upstream_models }} 个模型）；成本倍率只在你选定分组后按该分组的倍率覆写，并写入审计日志。
+        </p>
+      </template>
     </div>
 
     <template #footer>
       <div class="dialog-actions">
-        <ElButton data-test="price-sync-close" @click="requestClose">关闭</ElButton>
+        <template v-if="result === null">
+          <ElButton :disabled="busy" @click="requestClose">取消</ElButton>
+          <ElButton
+            v-if="preview !== null && error === ''"
+            type="primary"
+            data-test="price-sync-confirm"
+            :loading="submitting"
+            :disabled="busy"
+            @click="applyPrices"
+          >
+            开始同步
+          </ElButton>
+        </template>
+        <ElButton v-else data-test="price-sync-close" @click="requestClose">关闭</ElButton>
       </div>
     </template>
   </ElDialog>
@@ -338,5 +523,42 @@ function requestClose(): void {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
+}
+
+.dialog-loading {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+}
+
+.skeleton-item {
+  height: 2.25rem;
+}
+
+.error {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+}
+
+.group-picker {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin-top: 0.9rem;
+}
+
+.group-picker label {
+  font-size: 0.8125rem;
+  color: var(--gateway-muted);
+}
+
+.group-picker select {
+  min-width: 16rem;
 }
 </style>

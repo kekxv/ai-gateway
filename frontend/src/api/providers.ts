@@ -8,6 +8,7 @@ import type {
   ProviderModelPriceSyncResult,
   ProviderResponse,
   ProviderUpdate,
+  ProviderUpstreamPricingPreview,
 } from './types'
 
 export async function listProviders(signal?: AbortSignal): Promise<ProviderResponse[]> {
@@ -108,14 +109,27 @@ export async function syncAllProviderBalances(
   return data
 }
 
+export async function getProviderUpstreamPricing(
+  providerId: number,
+  signal?: AbortSignal,
+): Promise<ProviderUpstreamPricingPreview> {
+  const config = signal === undefined ? undefined : { signal }
+  const { data } = await apiClient.get<ProviderUpstreamPricingPreview>(
+    `/admin/providers/${String(providerId)}/upstream-pricing`,
+    config,
+  )
+  return data
+}
+
 export async function syncProviderModelPrices(
   providerId: number,
+  group: string | null,
   signal?: AbortSignal,
 ): Promise<ProviderModelPriceSyncResult> {
   const config = signal === undefined ? undefined : { signal }
   const { data } = await apiClient.post<ProviderModelPriceSyncResult>(
     `/admin/providers/${String(providerId)}/sync-model-prices`,
-    undefined,
+    { group },
     config,
   )
   return data

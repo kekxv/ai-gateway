@@ -207,6 +207,7 @@ const apiErrorMessages: Readonly<Record<string, string>> = {
   invalid_route_reference: '路由引用无效',
   invalid_scope_reference: '作用域引用无效',
   invalid_token: '登录状态已失效',
+  invalid_price_group: '上游没有该分组的倍率，请重新选择',
   invalid_token_type: '令牌类型无效',
   invalid_totp: '双重验证验证码无效',
   model_conflict: '模型配置冲突',

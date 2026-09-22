@@ -721,8 +721,8 @@ test('administrator syncs new-api model ratios without overwriting manual prices
   const providerName = `E2E 价格同步 ${unique}`
   const modelName = `e2e-priced-${unique}`
 
-  // A minimal new-api upstream: it publishes ratios for one model and rejects the group probe,
-  // which makes the gateway fall back to the default group.
+  // A minimal new-api upstream: it publishes ratios for one model and reports the account group,
+  // which may differ from the group of the relay key, so the gateway never applies it on its own.
   const upstream = createServer((request, response) => {
     const url = request.url ?? ''
     response.setHeader('content-type', 'application/json')
@@ -737,13 +737,17 @@ test('administrator syncs new-api model ratios without overwriting manual prices
           data: [
             { model_name: modelName, quota_type: 0, model_ratio: 1.25, completion_ratio: 4 },
           ],
-          group_ratio: { default: 1, svip: 0.25 },
+          group_ratio: { default: 2.5, svip: 0.25 },
         }),
       )
       return
     }
-    response.statusCode = url.startsWith('/api/user/self') ? 401 : 404
-    response.end(JSON.stringify({ success: false, message: 'unauthorized' }))
+    if (url.startsWith('/api/user/self')) {
+      response.end(JSON.stringify({ success: true, data: { group: 'default' } }))
+      return
+    }
+    response.statusCode = 404
+    response.end(JSON.stringify({ success: false, message: 'not found' }))
   })
   await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve))
   const address = upstream.address()
@@ -775,16 +779,30 @@ test('administrator syncs new-api model ratios without overwriting manual prices
 
     modelId = await lookupEntityId(page, '/admin/models', 'canonical_name', modelName)
 
-    // The price is now set, so a second sync must report it as skipped instead of overwriting it.
+    // The price is now set, so the manual sync must report it as skipped instead of overwriting it.
+    // Cost multipliers only move when a group is selected explicitly: the account group is a hint.
     await providerCard.locator('[data-test^="sync-prices-"]').click()
-    const priceDialog = page.getByRole('dialog', { name: '模型价格同步结果' })
+    await expect(page.getByRole('dialog', { name: '同步上游模型价格' })).toBeVisible()
+    const priceDialog = page.getByTestId('price-sync-dialog')
+    await expect(priceDialog.getByTestId('price-sync-summary')).toContainText('可补齐 0')
+    // The account group is a hint: it is shown, but never preselected for the cost multiplier.
+    await expect(priceDialog.getByTestId('price-sync-detected')).toContainText('账号分组 default')
+    await expect(priceDialog.getByTestId('price-sync-group')).toHaveValue('')
+    await priceDialog.getByTestId('price-sync-group').selectOption('svip')
+    await priceDialog.getByTestId('price-sync-confirm').click()
+
+    await expect(page.getByRole('dialog', { name: '模型价格同步结果' })).toBeVisible()
     await expect(priceDialog.getByTestId('price-sync-summary')).toContainText('已更新 0')
     await expect(priceDialog.getByTestId('price-sync-summary')).toContainText('已设置 1')
     await expect(priceDialog.getByTestId('price-sync-table')).toContainText(modelName)
     await expect(priceDialog.getByTestId('price-sync-table')).toContainText('2.5 / 10')
     await expect(priceDialog.getByTestId('price-sync-table')).toContainText('已设置')
+    await expect(priceDialog.getByTestId('price-sync-multiplier')).toContainText('0.25')
     await priceDialog.getByTestId('price-sync-close').click()
     await expect(priceDialog).toBeHidden()
+    // The card is refreshed with the ratio of the group that was selected.
+    await expect(page.getByTestId('provider-notice')).toContainText('成本倍率更新为 0.25')
+    await expect(providerCard).toContainText('0.25x')
   } finally {
     if (modelId !== undefined) {
       await deleteOrDisable(page, `/admin/models/${String(modelId)}`, { enabled: false })

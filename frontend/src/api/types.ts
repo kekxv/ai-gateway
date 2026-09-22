@@ -457,10 +457,24 @@ export interface ProviderModelPriceRow {
   current_output_price_per_million: string
 }
 
+export interface ProviderUpstreamPricingPreview {
+  provider_id: number
+  /** Account group reported by /api/user/self, shown as a hint only. */
+  detected_group: string | null
+  detected_group_ratio: string | null
+  group_ratios: Record<string, string>
+  upstream_models: number
+  fillable: number
+  priced: number
+  fixed_price: number
+  unlisted: number
+}
+
 export interface ProviderModelPriceSyncResult {
   provider_id: number
-  group: string
-  group_ratio: string
+  /** Group whose ratio was applied to the cost multiplier; null when none was selected. */
+  group: string | null
+  group_ratio: string | null
   cost_multiplier: string | null
   cost_multiplier_updated: boolean
   upstream_models: number

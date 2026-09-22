@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -67,11 +68,13 @@ def _provider(
     name: str,
     base_url: str = "https://newapi.example/v1",
     balance_config: dict[str, object] | None = None,
+    cost_multiplier: str = "1",
 ) -> Provider:
     return Provider(
         name=name,
         credential_encrypted=_encrypted_json({"api_key": "sk-provider"}, settings),
         enabled=True,
+        cost_multiplier=Decimal(cost_multiplier),
         auto_load_models=False,
         model_sync_interval_seconds=60,
         balance_query_type=(BalanceQueryType.NEW_API if balance_config is not None else None),
@@ -148,7 +151,7 @@ def _new_api_pricing_handler(request: httpx.Request) -> httpx.Response:
     if request.url.path == "/api/user/self":
         return httpx.Response(
             200,
-            json={"success": True, "data": {"group": "svip"}},
+            json={"success": True, "data": {"group": "default"}},
             request=request,
         )
     if request.url.path == "/api/pricing":
@@ -169,7 +172,7 @@ def _new_api_pricing_handler(request: httpx.Request) -> httpx.Response:
                         "model_price": 0.04,
                     },
                 ],
-                "group_ratio": {"default": 1, "svip": 0.5},
+                "group_ratio": {"default": 2.5, "svip": 0.25},
             },
             request=request,
         )
@@ -206,14 +209,17 @@ async def test_price_sync_fills_empty_prices_and_updates_cost_multiplier(
     await session.flush()
 
     async with _api(session, price_settings, admin, _new_api_pricing_handler) as (client, _factory):
-        response = await client.post(f"/admin/providers/{provider.id}/sync-model-prices")
+        response = await client.post(
+            f"/admin/providers/{provider.id}/sync-model-prices",
+            json={"group": "svip"},
+        )
 
         assert response.status_code == 200, response.text
         body = response.json()
 
         assert body["group"] == "svip"
-        assert body["group_ratio"] == "0.5"
-        assert body["cost_multiplier"] == "0.50"
+        assert body["group_ratio"] == "0.25"
+        assert body["cost_multiplier"] == "0.25"
         assert body["cost_multiplier_updated"] is True
         assert body["upstream_models"] == 2
         assert body["updated"] == 1
@@ -234,7 +240,7 @@ async def test_price_sync_fills_empty_prices_and_updates_cost_multiplier(
         assert Decimal(rows[fixed.id]["upstream_fixed_price"]) == Decimal("0.04")
 
         fetched = await client.get(f"/admin/providers/{provider.id}")
-        assert fetched.json()["cost_multiplier"] == "0.50"
+        assert fetched.json()["cost_multiplier"] == "0.25"
         assert fetched.json()["public_multiplier"] == "1.00"
 
         model = await client.get(f"/admin/models/{fillable.id}")
@@ -287,15 +293,18 @@ async def test_price_sync_reports_models_missing_from_the_upstream_list(
     await session.flush()
 
     async with _api(session, price_settings, admin, _new_api_pricing_handler) as (client, _):
-        response = await client.post(f"/admin/providers/{provider.id}/sync-model-prices")
+        response = await client.post(
+            f"/admin/providers/{provider.id}/sync-model-prices",
+            json={"group": "svip"},
+        )
 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["unlisted"] == 1
     assert body["rows"][0]["status"] == "unlisted"
-    # The group ratio is learnt from the same payload even when no price is filled.
+    # The selected group ratio is applied even when no price is filled.
     assert body["group"] == "svip"
-    assert body["cost_multiplier"] == "0.50"
+    assert body["cost_multiplier"] == "0.25"
     assert body["cost_multiplier_updated"] is True
 
 
@@ -392,3 +401,241 @@ async def test_model_sync_tolerates_upstreams_without_a_pricing_endpoint(
     assert response.status_code == 200, response.text
     assert response.json()["created_models"] == 1
     assert response.json()["prices_filled"] == 0
+
+
+@pytest.mark.asyncio
+async def test_price_sync_writes_only_the_selected_group(
+    session: AsyncSession,
+    price_settings: Settings,
+) -> None:
+    admin = _admin(price_settings)
+    provider = _provider(
+        price_settings,
+        name=f"price-select-{uuid4().hex}",
+        cost_multiplier="0.80",
+    )
+    session.add_all(
+        [
+            admin,
+            provider,
+            _routed_model(provider, name=f"gpt-4o-{uuid4().hex}", upstream_model="gpt-4o"),
+        ]
+    )
+    await session.flush()
+
+    async with _api(session, price_settings, admin, _new_api_pricing_handler) as (client, _):
+        response = await client.post(
+            f"/admin/providers/{provider.id}/sync-model-prices",
+            json={"group": "svip"},
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        # The account group reported by /api/user/self is "default" (2.5x); the relay key sits in
+        # svip, so only the explicitly selected group may reach the cost multiplier.
+        assert body["group"] == "svip"
+        assert body["group_ratio"] == "0.25"
+        assert body["cost_multiplier"] == "0.25"
+        assert body["cost_multiplier_updated"] is True
+        assert body["updated"] == 1
+
+        fetched = await client.get(f"/admin/providers/{provider.id}")
+        assert fetched.json()["cost_multiplier"] == "0.25"
+
+
+@pytest.mark.asyncio
+async def test_price_sync_without_a_selected_group_keeps_the_cost_multiplier(
+    session: AsyncSession,
+    price_settings: Settings,
+) -> None:
+    admin = _admin(price_settings)
+    provider = _provider(
+        price_settings,
+        name=f"price-no-group-{uuid4().hex}",
+        cost_multiplier="0.80",
+    )
+    fillable = _routed_model(provider, name=f"gpt-4o-{uuid4().hex}", upstream_model="gpt-4o")
+    session.add_all([admin, provider, fillable])
+    await session.flush()
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return _new_api_pricing_handler(request)
+
+    async with _api(session, price_settings, admin, handler) as (client, _):
+        response = await client.post(f"/admin/providers/{provider.id}/sync-model-prices")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["group"] is None
+        assert body["group_ratio"] is None
+        assert body["cost_multiplier"] == "0.80"
+        assert body["cost_multiplier_updated"] is False
+        # Prices are group independent, so they are still filled.
+        assert body["updated"] == 1
+
+        fetched = await client.get(f"/admin/providers/{provider.id}")
+        assert fetched.json()["cost_multiplier"] == "0.80"
+
+        model = await client.get(f"/admin/models/{fillable.id}")
+        assert model.json()["input_price_per_million"] == "2.50000000"
+
+    assert paths == ["/api/pricing"]
+
+
+@pytest.mark.asyncio
+async def test_price_sync_without_a_selected_group_does_not_warn(
+    session: AsyncSession,
+    price_settings: Settings,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    admin = _admin(price_settings)
+    provider = _provider(price_settings, name=f"price-quiet-{uuid4().hex}")
+    session.add_all(
+        [
+            admin,
+            provider,
+            _routed_model(provider, name=f"gpt-4o-{uuid4().hex}", upstream_model="gpt-4o"),
+        ]
+    )
+    await session.flush()
+
+    with caplog.at_level(logging.WARNING, logger="uvicorn"):
+        async with _api(session, price_settings, admin, _new_api_pricing_handler) as (client, _):
+            response = await client.post(f"/admin/providers/{provider.id}/sync-model-prices")
+
+    assert response.status_code == 200, response.text
+    # Leaving the cost multiplier alone is a normal outcome, not a rejected ratio.
+    assert "out-of-range" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_price_sync_rejects_groups_the_upstream_does_not_list(
+    session: AsyncSession,
+    price_settings: Settings,
+) -> None:
+    admin = _admin(price_settings)
+    provider = _provider(
+        price_settings,
+        name=f"price-bad-group-{uuid4().hex}",
+        cost_multiplier="0.80",
+    )
+    fillable = _routed_model(provider, name=f"gpt-4o-{uuid4().hex}", upstream_model="gpt-4o")
+    session.add_all([admin, provider, fillable])
+    await session.flush()
+
+    async with _api(session, price_settings, admin, _new_api_pricing_handler) as (client, _):
+        response = await client.post(
+            f"/admin/providers/{provider.id}/sync-model-prices",
+            json={"group": "vip"},
+        )
+
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "invalid_price_group"
+
+        fetched = await client.get(f"/admin/providers/{provider.id}")
+        assert fetched.json()["cost_multiplier"] == "0.80"
+        model = await client.get(f"/admin/models/{fillable.id}")
+        assert Decimal(model.json()["input_price_per_million"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_price_preview_lists_upstream_groups_without_writing(
+    session: AsyncSession,
+    price_settings: Settings,
+) -> None:
+    admin = _admin(price_settings)
+    provider = _provider(
+        price_settings,
+        name=f"price-preview-{uuid4().hex}",
+        cost_multiplier="0.80",
+    )
+    fillable = _routed_model(provider, name=f"gpt-4o-{uuid4().hex}", upstream_model="gpt-4o")
+    configured = _routed_model(
+        provider,
+        name=f"priced-{uuid4().hex}",
+        upstream_model="gpt-4o",
+        input_price="1.5",
+        output_price="6",
+    )
+    fixed = _routed_model(provider, name=f"dall-e-3-{uuid4().hex}", upstream_model="dall-e-3")
+    session.add_all([admin, provider, fillable, configured, fixed])
+    await session.flush()
+
+    async with _api(session, price_settings, admin, _new_api_pricing_handler) as (client, _):
+        response = await client.get(f"/admin/providers/{provider.id}/upstream-pricing")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["provider_id"] == provider.id
+        assert body["group_ratios"] == {"default": "2.5", "svip": "0.25"}
+        # The account group is a hint only: it is not the group the relay key belongs to.
+        assert body["detected_group"] == "default"
+        assert body["detected_group_ratio"] == "2.5"
+        assert body["upstream_models"] == 2
+        assert body["fillable"] == 1
+        assert body["priced"] == 1
+        assert body["fixed_price"] == 1
+        assert body["unlisted"] == 0
+
+        fetched = await client.get(f"/admin/providers/{provider.id}")
+        assert fetched.json()["cost_multiplier"] == "0.80"
+        model = await client.get(f"/admin/models/{fillable.id}")
+        assert Decimal(model.json()["input_price_per_million"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_price_preview_reports_upstreams_without_a_pricing_endpoint(
+    session: AsyncSession,
+    price_settings: Settings,
+) -> None:
+    admin = _admin(price_settings)
+    provider = _provider(
+        price_settings,
+        name=f"price-preview-plain-{uuid4().hex}",
+        base_url="https://openai.example/v1",
+    )
+    session.add_all([admin, provider, _routed_model(provider, name=f"plain-{uuid4().hex}")])
+    await session.flush()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "not found"}, request=request)
+
+    async with _api(session, price_settings, admin, handler) as (client, _):
+        response = await client.get(f"/admin/providers/{provider.id}/upstream-pricing")
+
+    assert response.status_code == 502, response.text
+    assert response.json()["detail"]["code"] == "model_price_sync_failed"
+
+
+@pytest.mark.asyncio
+async def test_model_sync_never_touches_the_cost_multiplier(
+    session: AsyncSession,
+    price_settings: Settings,
+) -> None:
+    admin = _admin(price_settings)
+    provider = _provider(
+        price_settings,
+        name=f"price-model-sync-multiplier-{uuid4().hex}",
+        cost_multiplier="0.80",
+    )
+    session.add_all([admin, provider])
+    await session.flush()
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return _new_api_pricing_handler(request)
+
+    async with _api(session, price_settings, admin, handler) as (client, _):
+        response = await client.post(f"/admin/providers/{provider.id}/sync-models")
+
+        assert response.status_code == 200, response.text
+        assert response.json()["prices_filled"] == 1
+
+        fetched = await client.get(f"/admin/providers/{provider.id}")
+        assert fetched.json()["cost_multiplier"] == "0.80"
+
+    # The automatic path must not probe the account group either: it can only mislead.
+    assert "/api/user/self" not in paths

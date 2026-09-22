@@ -6,9 +6,12 @@ the prices that were never configured: an existing price is never overwritten,
 because a price that an operator set by hand is a deliberate business decision.
 Re-syncing such a model therefore stays a manual edit.
 
-The upstream group ratio that produced the prices is written to the provider's
-``cost_multiplier``, which is the field the platform uses to express what a
-provider actually charges per ratio unit.
+Prices are group independent, so they are filled from the published ratios alone.
+The provider's ``cost_multiplier`` is a different field and only changes when the
+operator selects one of the upstream groups: new-api bills a relay request with the
+group of its *token* (``token.Group``, falling back to the account group), while
+``GET /api/user/self`` reports the *account* group. Those can differ, so a group is
+never guessed -- not from the account probe and not from a default group fallback.
 """
 
 from __future__ import annotations
@@ -35,13 +38,17 @@ from ai_gateway.catalog.credentials import ProviderCredential
 from ai_gateway.catalog.model_pricing import (
     ModelPriceError,
     UpstreamModelPrice,
+    UpstreamPricing,
     fetch_upstream_pricing,
+    group_ratio_for,
     truncate_price_error,
 )
 from ai_gateway.catalog.schemas import (
     ModelPriceSyncStatus,
     ProviderModelPriceRow,
+    ProviderModelPriceSyncRequest,
     ProviderModelPriceSyncResult,
+    ProviderUpstreamPricingPreview,
 )
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.enums import Protocol
@@ -93,6 +100,10 @@ class ModelPriceSyncFailedError(RuntimeError):
     pass
 
 
+class PriceGroupNotFoundError(ValueError):
+    """The selected group is not part of the upstream ratio table."""
+
+
 @dataclass(frozen=True, slots=True)
 class _PriceSyncTarget:
     """A model routed through the provider, with the state needed to decide writes."""
@@ -140,6 +151,7 @@ async def sync_provider_model_prices_endpoint(
     session: Session,
     admin: AdminUser,
     settings: AppSettings,
+    payload: ProviderModelPriceSyncRequest | None = None,
 ) -> ProviderModelPriceSyncResult:
     http_client_factory = getattr(request.app.state, "http_client_factory", None)
     if http_client_factory is None:
@@ -155,6 +167,41 @@ async def sync_provider_model_prices_endpoint(
             http_client_factory=http_client_factory,
             settings=settings,
             actor_id=admin.id,
+            group=payload.group if payload is not None else None,
+            release_connection_before_query=True,
+        )
+    except PriceProviderNotFoundError:
+        raise_auth_error(status.HTTP_404_NOT_FOUND, "provider_not_found", "Provider not found")
+    except PriceGroupNotFoundError as exc:
+        raise_auth_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_price_group", str(exc))
+    except ModelPriceSyncFailedError as exc:
+        raise_auth_error(status.HTTP_502_BAD_GATEWAY, "model_price_sync_failed", str(exc))
+
+
+@router.get(
+    "/{provider_id}/upstream-pricing",
+    response_model=ProviderUpstreamPricingPreview,
+)
+async def preview_provider_upstream_pricing_endpoint(
+    provider_id: int,
+    request: Request,
+    session: Session,
+    admin: AdminUser,
+    settings: AppSettings,
+) -> ProviderUpstreamPricingPreview:
+    http_client_factory = getattr(request.app.state, "http_client_factory", None)
+    if http_client_factory is None:
+        raise_auth_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "model_price_sync_unavailable",
+            "Upstream price sync is unavailable",
+        )
+    try:
+        return await preview_provider_upstream_pricing(
+            provider_id,
+            session=session,
+            http_client_factory=http_client_factory,
+            settings=settings,
             release_connection_before_query=True,
         )
     except PriceProviderNotFoundError:
@@ -170,10 +217,16 @@ async def sync_provider_model_prices(
     http_client_factory: HttpClientProvider,
     settings: Settings,
     actor_id: int | None = None,
+    group: str | None = None,
     release_connection_before_query: bool = False,
     log_failure: bool = True,
 ) -> ProviderModelPriceSyncResult:
-    """Read the upstream price list once and fill in unconfigured model prices."""
+    """Read the upstream price list once and fill in unconfigured model prices.
+
+    ``group`` is only passed by the manual endpoint: it names the upstream group whose
+    ratio becomes the provider cost multiplier. Without it the multiplier is untouched,
+    which is what the automatic model sync relies on.
+    """
 
     context = await _load_context(session, provider_id, settings)
     if not context.targets:
@@ -186,42 +239,23 @@ async def sync_provider_model_prices(
         provider_id=provider_id,
         proxy_config_encrypted=context.proxy_config_encrypted,
     )
-    try:
-        pricing = await fetch_upstream_pricing(
-            base_url=context.base_url,
-            credential=context.credential,
-            group_credential=context.group_credential,
-            protocol=context.protocol,
-            user_id=context.user_id,
-            extra_headers=context.extra_headers,
-            client=client,
-        )
-    except (httpx.HTTPError, ModelPriceError, ValueError) as exc:
-        message = _price_error_message(exc)
-        if log_failure:
-            logger.warning(
-                "Provider price sync failed for provider_id=%d: %s: %s",
-                provider_id,
-                type(exc).__name__,
-                sanitize_log_event(exc),
-            )
-        raise ModelPriceSyncFailedError(message) from exc
-
-    if pricing.group_ratio <= 0:
-        raise ModelPriceSyncFailedError(
-            f"Upstream reported an unusable group ratio for group {pricing.group!r}"
-        )
-
-    cost_multiplier = _quantize_multiplier(pricing.group_ratio)
+    pricing = await _read_upstream_pricing(
+        context,
+        provider_id=provider_id,
+        client=client,
+        log_failure=log_failure,
+        detect_group=False,
+    )
+    group_ratio = _selected_group_ratio(pricing.group_ratios, group)
+    cost_multiplier = None if group_ratio is None else _quantize_multiplier(group_ratio)
     counts, pending = _plan_price_updates(context.targets, pricing.models)
     provider = await session.get(Provider, provider_id)
     if provider is None:
         raise PriceProviderNotFoundError(provider_id)
-    multiplier_updated = await _apply_cost_multiplier(
-        session,
-        provider,
-        cost_multiplier,
-        actor_id=actor_id,
+    multiplier_updated = (
+        await _apply_cost_multiplier(session, provider, cost_multiplier, actor_id=actor_id)
+        if cost_multiplier is not None
+        else False
     )
     stored_multiplier = Decimal(str(provider.cost_multiplier))
     if pending:
@@ -234,8 +268,8 @@ async def sync_provider_model_prices(
 
     return ProviderModelPriceSyncResult(
         provider_id=provider_id,
-        group=pricing.group,
-        group_ratio=pricing.group_ratio,
+        group=group,
+        group_ratio=group_ratio,
         cost_multiplier=stored_multiplier,
         cost_multiplier_updated=multiplier_updated,
         upstream_models=len(pricing.models),
@@ -244,6 +278,52 @@ async def sync_provider_model_prices(
         fixed_price=counts.fixed_price,
         unlisted=counts.unlisted,
         rows=_result_rows(context.targets, pricing.models),
+    )
+
+
+async def preview_provider_upstream_pricing(
+    provider_id: int,
+    *,
+    session: AsyncSession,
+    http_client_factory: HttpClientProvider,
+    settings: Settings,
+    release_connection_before_query: bool = False,
+) -> ProviderUpstreamPricingPreview:
+    """Describe what a price sync would do, without writing anything.
+
+    The account group reported by ``/api/user/self`` is returned as a hint only: the
+    operator picks the group whose ratio should become the cost multiplier.
+    """
+
+    context = await _load_context(session, provider_id, settings)
+    if not context.targets:
+        return ProviderUpstreamPricingPreview(provider_id=provider_id)
+    if release_connection_before_query:
+        await session.commit()
+
+    client = await http_client_factory.client_for(
+        context.base_url,
+        provider_id=provider_id,
+        proxy_config_encrypted=context.proxy_config_encrypted,
+    )
+    pricing = await _read_upstream_pricing(
+        context,
+        provider_id=provider_id,
+        client=client,
+        log_failure=False,
+        detect_group=True,
+    )
+    counts, _pending = _plan_price_updates(context.targets, pricing.models)
+    return ProviderUpstreamPricingPreview(
+        provider_id=provider_id,
+        detected_group=pricing.group,
+        detected_group_ratio=pricing.group_ratio,
+        group_ratios=dict(pricing.group_ratios),
+        upstream_models=len(pricing.models),
+        fillable=counts.updated,
+        priced=counts.priced,
+        fixed_price=counts.fixed_price,
+        unlisted=counts.unlisted,
     )
 
 
@@ -275,6 +355,58 @@ async def fill_missing_model_prices(
             sanitize_log_event(exc),
         )
         return None
+
+
+async def _read_upstream_pricing(
+    context: _PriceSyncContext,
+    *,
+    provider_id: int,
+    client: httpx.AsyncClient,
+    log_failure: bool,
+    detect_group: bool,
+) -> UpstreamPricing:
+    try:
+        return await fetch_upstream_pricing(
+            base_url=context.base_url,
+            credential=context.credential,
+            group_credential=context.group_credential,
+            protocol=context.protocol,
+            user_id=context.user_id,
+            extra_headers=context.extra_headers,
+            detect_group=detect_group,
+            client=client,
+        )
+    except (httpx.HTTPError, ModelPriceError, ValueError) as exc:
+        message = _price_error_message(exc)
+        if log_failure:
+            logger.warning(
+                "Provider price sync failed for provider_id=%d: %s: %s",
+                provider_id,
+                type(exc).__name__,
+                sanitize_log_event(exc),
+            )
+        raise ModelPriceSyncFailedError(message) from exc
+
+
+def _selected_group_ratio(
+    group_ratios: Mapping[str, Decimal],
+    group: str | None,
+) -> Decimal | None:
+    """Return the ratio of the group the operator selected, validating it exists."""
+
+    if group is None:
+        return None
+    ratio = group_ratio_for(group_ratios, group)
+    if ratio is None:
+        listed = ", ".join(sorted(group_ratios)) or "none"
+        raise PriceGroupNotFoundError(
+            f"Upstream does not publish a ratio for group {group!r} (listed groups: {listed})"
+        )
+    if ratio <= 0:
+        raise PriceGroupNotFoundError(
+            f"Upstream reported an unusable ratio for group {group!r}: {ratio}"
+        )
+    return ratio
 
 
 def _plan_price_updates(
@@ -357,6 +489,8 @@ async def _apply_cost_multiplier(
     *,
     actor_id: int | None,
 ) -> bool:
+    """Write the selected group ratio, reporting ratios the provider cannot store."""
+
     if cost_multiplier is None:
         logger.warning(
             "Ignored an out-of-range upstream group ratio for provider_id=%d",

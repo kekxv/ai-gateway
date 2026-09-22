@@ -32,7 +32,6 @@ import {
   getProvider,
   listProviders,
   syncProviderBalance,
-  syncProviderModelPrices,
   syncProviderModels,
   updateProvider,
 } from '@/api/providers'
@@ -87,7 +86,7 @@ const syncSubmitting = computed(() => syncSession.value?.submitting === true)
 const catalogOperationActive = computed(() => catalogExporting.value || catalogImporting.value)
 const balanceOverviewOpen = ref(false)
 const priceSyncOpen = ref(false)
-const priceSyncResult = ref<ProviderModelPriceSyncResult | null>(null)
+const priceSyncProviderId = ref<number | null>(null)
 const priceSyncProviderName = ref('')
 let requestController: AbortController | undefined
 let saveController: AbortController | undefined
@@ -376,32 +375,38 @@ async function syncBalance(provider: ProviderResponse): Promise<void> {
   }
 }
 
-async function syncModelPrices(provider: ProviderResponse): Promise<void> {
-  if (!beginProviderOperation(provider.id, 'prices')) return
+function openPriceSyncDialog(provider: ProviderResponse): void {
+  priceSyncProviderId.value = provider.id
+  priceSyncProviderName.value = provider.name
+  priceSyncOpen.value = true
+}
+
+async function handlePriceApplied(result: ProviderModelPriceSyncResult): Promise<void> {
+  const name = priceSyncProviderName.value
+  notice.value = {
+    type: result.updated > 0 ? 'success' : 'warning',
+    text: priceSyncSummary(name, result),
+  }
+  if (result.provider_id !== priceSyncProviderId.value) {
+    notice.value = { type: 'error', text: '模型价格同步响应供应商不匹配' }
+    return
+  }
+  if (!beginProviderOperation(result.provider_id, 'prices')) return
+  const providerId = result.provider_id
   const controller = operationController()
   try {
-    const result = await syncProviderModelPrices(provider.id, controller.signal)
-    if (!isCurrentProviderOperation(controller, provider.id, 'prices')) return
-    if (result.provider_id !== provider.id) throw new Error('模型价格同步响应供应商不匹配')
-    // The upstream group ratio may have moved the provider's cost multiplier.
-    const refreshed = await getProvider(provider.id, controller.signal)
-    if (!isCurrentProviderOperation(controller, provider.id, 'prices')) return
+    // The selected group ratio may have moved the provider's cost multiplier.
+    const refreshed = await getProvider(providerId, controller.signal)
+    if (!isCurrentProviderOperation(controller, providerId, 'prices')) return
     replaceProvider(refreshed)
-    priceSyncResult.value = result
-    priceSyncProviderName.value = provider.name
-    priceSyncOpen.value = true
-    notice.value = {
-      type: result.updated > 0 ? 'success' : 'warning',
-      text: priceSyncSummary(provider.name, result),
-    }
   } catch (error: unknown) {
-    if (isCurrentProviderOperation(controller, provider.id, 'prices')) {
-      notice.value = { type: 'error', text: errorText(error, '模型价格同步失败') }
+    if (isCurrentProviderOperation(controller, providerId, 'prices')) {
+      notice.value = { type: 'error', text: errorText(error, '供应商刷新失败') }
     }
   } finally {
     operationControllers.delete(controller)
-    if (isCurrentProviderOperation(controller, provider.id, 'prices')) {
-      finishProviderOperation(provider.id, 'prices')
+    if (isCurrentProviderOperation(controller, providerId, 'prices')) {
+      finishProviderOperation(providerId, 'prices')
     }
   }
 }
@@ -413,9 +418,12 @@ function priceSyncSummary(name: string, result: ProviderModelPriceSyncResult): s
   ]
   if (result.fixed_price > 0) parts.push(`按次计费跳过 ${String(result.fixed_price)} 个`)
   if (result.unlisted > 0) parts.push(`上游未列出 ${String(result.unlisted)} 个`)
-  const multiplier = result.cost_multiplier_updated
-    ? `，成本倍率更新为 ${String(result.cost_multiplier)}`
-    : ''
+  let multiplier = ''
+  if (result.cost_multiplier_updated) {
+    multiplier = `，成本倍率更新为 ${String(result.cost_multiplier)}`
+  } else if (result.cost_multiplier !== null) {
+    multiplier = `，成本倍率保持 ${result.cost_multiplier}`
+  }
   return `供应商“${name}”模型价格同步完成：${parts.join('，')}${multiplier}`
 }
 
@@ -795,7 +803,7 @@ onBeforeUnmount(() => {
               @delete="removeProvider"
               @sync="openSyncDialog"
               @balance="syncBalance"
-              @prices="syncModelPrices"
+              @prices="openPriceSyncDialog"
               @toggle="toggleProvider"
             />
           </div>
@@ -819,7 +827,7 @@ onBeforeUnmount(() => {
               @delete="removeProvider"
               @sync="openSyncDialog"
               @balance="syncBalance"
-              @prices="syncModelPrices"
+              @prices="openPriceSyncDialog"
               @toggle="toggleProvider"
             />
           </div>
@@ -850,8 +858,9 @@ onBeforeUnmount(() => {
 
     <ModelPriceSyncDialog
       v-model="priceSyncOpen"
+      :provider-id="priceSyncProviderId"
       :provider-name="priceSyncProviderName"
-      :result="priceSyncResult"
+      @applied="handlePriceApplied"
     />
 
     <ModelSyncDialog

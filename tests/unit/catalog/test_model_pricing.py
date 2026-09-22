@@ -9,10 +9,10 @@ from ai_gateway.catalog.credentials import ProviderCredential
 from ai_gateway.catalog.model_pricing import (
     ModelPriceError,
     fetch_upstream_pricing,
+    group_ratio_for,
     parse_group_ratios,
     parse_model_prices,
     pricing_url,
-    select_group_ratio,
     self_url,
 )
 from ai_gateway.core.enums import Protocol
@@ -145,16 +145,18 @@ def test_parse_group_ratios_reads_both_payload_shapes() -> None:
     assert parse_group_ratios({"data": []}) == {}
 
 
-def test_select_group_ratio_prefers_the_requested_group() -> None:
-    ratios = {"default": Decimal("1"), "svip": Decimal("0.5")}
+def test_group_ratio_for_only_matches_listed_groups() -> None:
+    ratios = {"default": Decimal("2.5"), "svip": Decimal("0.25")}
 
-    assert select_group_ratio(ratios, "svip") == ("svip", Decimal("0.5"))
-    assert select_group_ratio(ratios, "unknown") == ("default", Decimal("1"))
-    assert select_group_ratio({}, "svip") == ("svip", Decimal("1"))
+    assert group_ratio_for(ratios, "svip") == Decimal("0.25")
+    assert group_ratio_for(ratios, "default") == Decimal("2.5")
+    # An unlisted group must never be guessed, not even through a default fallback.
+    assert group_ratio_for(ratios, "unknown") is None
+    assert group_ratio_for({}, "svip") is None
 
 
 @pytest.mark.asyncio
-async def test_fetch_upstream_pricing_uses_the_token_group() -> None:
+async def test_fetch_upstream_pricing_reports_the_account_group_on_request() -> None:
     captured: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -171,6 +173,7 @@ async def test_fetch_upstream_pricing_uses_the_token_group() -> None:
             protocol=Protocol.OPENAI,
             user_id="25",
             extra_headers={"X-Trace": "1"},
+            detect_group=True,
             client=client,
         )
 
@@ -203,6 +206,7 @@ async def test_fetch_upstream_pricing_retries_the_price_list_with_the_console_to
             credential=_credential("sk-relay"),
             group_credential=_credential("access-token"),
             protocol=Protocol.OPENAI,
+            detect_group=True,
             client=client,
         )
 
@@ -215,7 +219,7 @@ async def test_fetch_upstream_pricing_retries_the_price_list_with_the_console_to
 
 
 @pytest.mark.asyncio
-async def test_fetch_upstream_pricing_falls_back_to_the_default_group() -> None:
+async def test_fetch_upstream_pricing_reports_no_group_when_the_probe_fails() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/user/self":
             return httpx.Response(401, json={"success": False, "message": "unauthorized"})
@@ -226,11 +230,37 @@ async def test_fetch_upstream_pricing_falls_back_to_the_default_group() -> None:
             base_url="https://newapi.example.com",
             credential=_credential(),
             protocol=Protocol.OPENAI,
+            detect_group=True,
             client=client,
         )
 
-    assert pricing.group == "default"
-    assert pricing.group_ratio == Decimal("1")
+    # A failed probe must stay unknown: new-api's /api/user/self reports the account group,
+    # which is not necessarily the group the relay key belongs to.
+    assert pricing.group is None
+    assert pricing.group_ratio is None
+    assert pricing.group_ratios == {"default": Decimal("1"), "svip": Decimal("0.5")}
+
+
+@pytest.mark.asyncio
+async def test_fetch_upstream_pricing_skips_group_detection_by_default() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=_pricing_payload())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        pricing = await fetch_upstream_pricing(
+            base_url="https://newapi.example.com/v1",
+            credential=_credential(),
+            protocol=Protocol.OPENAI,
+            client=client,
+        )
+
+    assert [str(request.url) for request in captured] == ["https://newapi.example.com/api/pricing"]
+    assert pricing.group is None
+    assert pricing.group_ratio is None
+    assert pricing.group_ratios == {"default": Decimal("1"), "svip": Decimal("0.5")}
 
 
 @pytest.mark.asyncio
