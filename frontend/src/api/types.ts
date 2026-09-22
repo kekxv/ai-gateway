@@ -438,6 +438,37 @@ export interface ModelSyncResult {
   created_routes: number
   updated_routes: number
   disabled_routes: number
+  prices_filled: number
+}
+
+export type ModelPriceSyncStatus = 'updated' | 'priced' | 'fixed_price' | 'unlisted'
+
+export interface ProviderModelPriceRow {
+  model_id: number
+  model_name: string
+  upstream_model: string
+  status: ModelPriceSyncStatus
+  model_ratio: string | null
+  completion_ratio: string | null
+  upstream_input_price_per_million: string | null
+  upstream_output_price_per_million: string | null
+  upstream_fixed_price: string | null
+  current_input_price_per_million: string
+  current_output_price_per_million: string
+}
+
+export interface ProviderModelPriceSyncResult {
+  provider_id: number
+  group: string
+  group_ratio: string
+  cost_multiplier: string | null
+  cost_multiplier_updated: boolean
+  upstream_models: number
+  updated: number
+  priced: number
+  fixed_price: number
+  unlisted: number
+  rows: ProviderModelPriceRow[]
 }
 
 export interface CatalogImportResult {

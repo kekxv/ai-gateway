@@ -138,3 +138,19 @@ export function formatBalanceAmount(amount: string | null, currency: string | nu
   const rendered = value.toFixed(4).replace(/\.?0+$/, '')
   return currency === null ? rendered : `${rendered} ${currency}`
 }
+
+/**
+ * Renders a stored price (decimal string, per million tokens) without trailing zeros.
+ *
+ * Upstream prices arrive as eight-decimal strings such as ``2.50000000``; the
+ * dialog that compares them with local prices needs the short form, and an
+ * unset price must stay visibly empty rather than turning into ``0``.
+ */
+export function formatPrice(value: string | null): string {
+  if (value === null) return '—'
+  const numeric = Number.parseFloat(value)
+  if (Number.isNaN(numeric)) return value
+  if (numeric === 0) return '0'
+  if (Math.abs(numeric) < 0.000001) return numeric.toExponential(2)
+  return String(Number(numeric.toFixed(6)))
+}

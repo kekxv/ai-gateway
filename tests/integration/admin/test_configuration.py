@@ -566,6 +566,9 @@ async def test_admin_import_claims_discovered_route_and_preserves_health_through
     assert imported.json()["routes_updated"] == 1
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/pricing":
+            # Providers without a new-api style price list simply skip the price fill.
+            return httpx.Response(404, json={"success": False}, request=request)
         assert request.url.path == "/v1/models"
         return httpx.Response(
             200,

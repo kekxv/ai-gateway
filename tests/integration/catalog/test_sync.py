@@ -251,6 +251,9 @@ async def test_sync_does_not_resolve_discovered_model_ids_through_aliases(
     await session.flush()
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/pricing":
+            # Providers without a new-api style price list simply skip the price fill.
+            return httpx.Response(404, json={"success": False}, request=request)
         assert request.url.path == "/v1/models"
         return _json_response(
             request,
@@ -309,7 +312,8 @@ async def test_sync_does_not_resolve_discovered_model_ids_through_aliases(
     assert routes_by_model["manual-model"].enabled is True
     assert routes_by_model["manual-model"].source is RouteSource.MANUAL
     assert provider.last_model_sync_at is not None
-    assert len(factory.urls) == 2
+    discovery_urls = [url for url in factory.urls if url.endswith("/v1/models")]
+    assert discovery_urls == ["https://openai.example/v1/models"] * 2
 
 
 @pytest.mark.asyncio
@@ -326,6 +330,9 @@ async def test_sync_prefers_openai_discovery_when_multiple_protocols_are_enabled
     await session.flush()
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/pricing":
+            # Providers without a new-api style price list simply skip the price fill.
+            return httpx.Response(404, json={"success": False}, request=request)
         assert request.url == "https://openai.example/v1/models"
         return _json_response(
             request,
@@ -345,7 +352,8 @@ async def test_sync_prefers_openai_discovery_when_multiple_protocols_are_enabled
         await session.scalars(select(ModelRoute).where(ModelRoute.provider_id == provider.id))
     )
     assert result.discovered_models == 1
-    assert factory.urls == ["https://openai.example/v1/models"]
+    # Discovery first, then the best-effort probe of the upstream price list.
+    assert factory.urls == ["https://openai.example/v1/models", "https://openai.example/v1"]
     assert len(routes) == 1
     assert routes[0].upstream_model == "openai-discovered"
 
@@ -556,7 +564,8 @@ async def test_sync_endpoint_uses_app_owned_http_factory(
     assert response.status_code == 200, response.text
     assert response.json()["provider_id"] == provider.id
     assert response.json()["discovered_models"] == 1
-    assert factory.urls == ["https://openai.example/v1/models"]
+    # Discovery first, then the best-effort probe of the upstream price list.
+    assert factory.urls == ["https://openai.example/v1/models", "https://openai.example/v1"]
 
 
 @pytest.mark.asyncio

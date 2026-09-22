@@ -1,3 +1,5 @@
+import { createServer } from 'node:http'
+
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 
@@ -710,4 +712,90 @@ test('creates, verifies, and safely cleans up console records', async ({ page })
     } finally {
       await cleanup(page, entities, entityNames)
     }
+})
+
+test('administrator syncs new-api model ratios without overwriting manual prices', async ({
+  page,
+}) => {
+  const unique = `${String(Date.now())}-${String(Math.random()).slice(2, 8)}`
+  const providerName = `E2E 价格同步 ${unique}`
+  const modelName = `e2e-priced-${unique}`
+
+  // A minimal new-api upstream: it publishes ratios for one model and rejects the group probe,
+  // which makes the gateway fall back to the default group.
+  const upstream = createServer((request, response) => {
+    const url = request.url ?? ''
+    response.setHeader('content-type', 'application/json')
+    if (url.startsWith('/v1/models')) {
+      response.end(JSON.stringify({ object: 'list', data: [{ id: modelName, object: 'model' }] }))
+      return
+    }
+    if (url.startsWith('/api/pricing')) {
+      response.end(
+        JSON.stringify({
+          success: true,
+          data: [
+            { model_name: modelName, quota_type: 0, model_ratio: 1.25, completion_ratio: 4 },
+          ],
+          group_ratio: { default: 1, svip: 0.25 },
+        }),
+      )
+      return
+    }
+    response.statusCode = url.startsWith('/api/user/self') ? 401 : 404
+    response.end(JSON.stringify({ success: false, message: 'unauthorized' }))
+  })
+  await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve))
+  const address = upstream.address()
+  if (address === null || typeof address === 'string') throw new Error('Mock upstream did not bind')
+  const upstreamBase = `http://127.0.0.1:${String(address.port)}`
+
+  let providerId: number | undefined
+  let modelId: number | undefined
+  try {
+    await login(page)
+    await page.goto('providers')
+    await page.getByTestId('create-provider').click()
+    await page.getByTestId('provider-name').fill(providerName)
+    await page.getByTestId('provider-credential').fill('{"api_key":"sk-e2e-placeholder"}')
+    await setSwitch(page.getByTestId('provider-enabled'), false)
+    await page.getByTestId('protocol-base-url-0').fill(`${upstreamBase}/v1`)
+    await page.getByTestId('provider-submit').click()
+    await expect(page.getByTestId('provider-notice')).toContainText('供应商已创建')
+    await page.getByTestId('provider-search').fill(providerName)
+    const providerCard = page
+      .locator('[data-test^="provider-card-"]')
+      .filter({ hasText: providerName })
+    providerId = await numericId(providerCard.locator('[data-test^="edit-provider-"]'), 'edit-provider-')
+
+    // Discovery creates the model, and the same sync fills the price the upstream publishes.
+    await providerCard.locator('[data-test^="sync-provider-"]').click()
+    await page.getByRole('button', { name: /同步选中的模型/ }).click()
+    await expect(page.getByTestId('provider-notice')).toContainText('补齐模型价格 1 个')
+
+    modelId = await lookupEntityId(page, '/admin/models', 'canonical_name', modelName)
+
+    // The price is now set, so a second sync must report it as skipped instead of overwriting it.
+    await providerCard.locator('[data-test^="sync-prices-"]').click()
+    const priceDialog = page.getByRole('dialog', { name: '模型价格同步结果' })
+    await expect(priceDialog.getByTestId('price-sync-summary')).toContainText('已更新 0')
+    await expect(priceDialog.getByTestId('price-sync-summary')).toContainText('已设置 1')
+    await expect(priceDialog.getByTestId('price-sync-table')).toContainText(modelName)
+    await expect(priceDialog.getByTestId('price-sync-table')).toContainText('2.5 / 10')
+    await expect(priceDialog.getByTestId('price-sync-table')).toContainText('已设置')
+    await priceDialog.getByTestId('price-sync-close').click()
+    await expect(priceDialog).toBeHidden()
+  } finally {
+    if (modelId !== undefined) {
+      await deleteOrDisable(page, `/admin/models/${String(modelId)}`, { enabled: false })
+    }
+    if (providerId !== undefined) {
+      await deleteOrDisable(page, `/admin/providers/${String(providerId)}`, { enabled: false })
+    }
+    await new Promise<void>((resolve) => {
+      upstream.close(() => {
+        resolve()
+      })
+    })
+  }
 })

@@ -23,6 +23,7 @@ from ai_gateway.admin.dashboard import router as dashboard_router
 from ai_gateway.admin.model_sync import router as model_sync_router
 from ai_gateway.admin.models import models_router, routes_router, user_models_router
 from ai_gateway.admin.provider_balance import router as provider_balance_router
+from ai_gateway.admin.provider_pricing import router as provider_pricing_router
 from ai_gateway.admin.providers import router as providers_router
 from ai_gateway.admin.request_logs import router as request_logs_router
 from ai_gateway.admin.settings import router as settings_router
@@ -296,6 +297,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(providers_router)
     app.include_router(model_sync_router)
     app.include_router(provider_balance_router)
+    app.include_router(provider_pricing_router)
     app.include_router(models_router)
     app.include_router(routes_router)
     app.include_router(user_models_router)

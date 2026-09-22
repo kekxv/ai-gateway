@@ -5,6 +5,7 @@ import type {
   ProviderBalanceDetectionResult,
   ProviderBalanceSyncResult,
   ProviderCreate,
+  ProviderModelPriceSyncResult,
   ProviderResponse,
   ProviderUpdate,
 } from './types'
@@ -101,6 +102,19 @@ export async function syncAllProviderBalances(
   const config = signal === undefined ? undefined : { signal }
   const { data } = await apiClient.post<ProviderBalanceBatchResult>(
     '/admin/providers/balance/sync',
+    undefined,
+    config,
+  )
+  return data
+}
+
+export async function syncProviderModelPrices(
+  providerId: number,
+  signal?: AbortSignal,
+): Promise<ProviderModelPriceSyncResult> {
+  const config = signal === undefined ? undefined : { signal }
+  const { data } = await apiClient.post<ProviderModelPriceSyncResult>(
+    `/admin/providers/${String(providerId)}/sync-model-prices`,
     undefined,
     config,
   )

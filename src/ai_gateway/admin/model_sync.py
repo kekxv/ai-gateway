@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Annotated
 from typing import Protocol as TypingProtocol
@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ai_gateway.admin.provider_pricing import fill_missing_model_prices
 from ai_gateway.audit.redaction import redact_json
 from ai_gateway.auth.dependencies import admin_user
 from ai_gateway.auth.service import raise_auth_error
@@ -55,6 +56,7 @@ class ModelSyncResult:
     created_routes: int
     updated_routes: int
     disabled_routes: int
+    prices_filled: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,20 +260,34 @@ async def sync_provider_models(
             discovered = [m for m in discovered if m in selected_models]
         discovered_by_protocol[discovery_protocol.id] = discovered
 
+    synced: ModelSyncResult | None = None
     for attempt in range(_SYNC_WRITE_ATTEMPTS):
         try:
-            return await _apply_discovered_models(
+            synced = await _apply_discovered_models(
                 provider_id,
                 discovered_by_protocol=discovered_by_protocol,
                 session=session,
                 clock=clock,
                 selected_models=selected_models,
             )
+            break
         except IntegrityError:
             await session.rollback()
             if attempt == _SYNC_WRITE_ATTEMPTS - 1:
                 raise
-    raise AssertionError("unreachable")
+    if synced is None:
+        raise AssertionError("unreachable")
+
+    # Upstreams that publish new-api style ratios also get their empty model prices filled in.
+    # Only prices that were never configured are touched, and a provider without a price list
+    # must not fail the model sync.
+    filled = await fill_missing_model_prices(
+        provider_id,
+        session=session,
+        http_client_factory=http_client_factory,
+        settings=settings,
+    )
+    return replace(synced, prices_filled=filled.updated if filled is not None else 0)
 
 
 def _preferred_discovery_protocol(

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Edit, Delete, Refresh, SwitchButton, Wallet } from '@element-plus/icons-vue'
+import { Edit, Delete, PriceTag, Refresh, SwitchButton, Wallet } from '@element-plus/icons-vue'
 import { ElButton, ElIcon, ElTag } from 'element-plus'
 import type { BalanceQueryType, Protocol, ProviderResponse } from '@/api/types'
 import StatusTag from '@/components/common/StatusTag.vue'
@@ -17,6 +17,7 @@ const emit = defineEmits<{
   delete: [provider: ProviderResponse]
   sync: [provider: ProviderResponse]
   balance: [provider: ProviderResponse]
+  prices: [provider: ProviderResponse]
   toggle: [provider: ProviderResponse]
 }>()
 
@@ -110,6 +111,17 @@ function formatMultiplier(value: number | string): string {
       >
         <ElIcon><Wallet /></ElIcon>
         查余额
+      </ElButton>
+      <ElButton
+        size="small"
+        :data-test="`sync-prices-${String(provider.id)}`"
+        :loading="loading"
+        :disabled="loading"
+        title="读取 new-api / one-api 上游倍率，补齐未设置价格的模型"
+        @click="emit('prices', provider)"
+      >
+        <ElIcon><PriceTag /></ElIcon>
+        同步价格
       </ElButton>
       <ElButton
         size="small"

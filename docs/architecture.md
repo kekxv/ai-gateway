@@ -100,7 +100,7 @@ There is intentionally no transaction spanning a provider network call.
 | Request audit start/finish | Separate short transactions; audit write failure is logged without exposing bodies or credentials |
 | Route success/failure | Separate atomic `UPDATE`; failure count/open timestamp transitions are database expressions |
 | Half-open claim | Conditional atomic update lets only one replica claim an expired open route |
-| Scheduled model sync | MySQL `GET_LOCK('model-sync:<provider_id>', 0)` elects one replica; catalog changes commit together |
+| Scheduled model sync | MySQL `GET_LOCK('model-sync:<provider_id>', 0)` elects one replica; catalog changes commit together, then new-api style upstream prices are read best-effort to fill unset model prices |
 | Scheduled balance sync | MySQL `GET_LOCK('balance-sync:<provider_id>', 0)` elects one replica; the balance snapshot and last error commit together |
 
 These boundaries let a replica fail between stages without holding database locks across slow

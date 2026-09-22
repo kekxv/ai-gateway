@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatDateTimeShort } from '@/utils/format'
+import { formatDateTimeShort, formatPrice } from '@/utils/format'
 
 describe('formatDateTimeShort', () => {
   it('renders a compact local timestamp without the year for the current year', () => {
@@ -23,5 +23,26 @@ describe('formatDateTimeShort', () => {
   it('falls back to a dash for missing or unparseable values', () => {
     expect(formatDateTimeShort(null)).toBe('—')
     expect(formatDateTimeShort('not-a-date')).toBe('—')
+  })
+})
+
+describe('formatPrice', () => {
+  it('trims trailing zeros from stored decimal prices', () => {
+    expect(formatPrice('2.50000000')).toBe('2.5')
+    expect(formatPrice('10.00000000')).toBe('10')
+    expect(formatPrice('0.06660000')).toBe('0.0666')
+  })
+
+  it('treats a zero price as zero instead of hiding it', () => {
+    expect(formatPrice('0.00000000')).toBe('0')
+    expect(formatPrice('0E-8')).toBe('0')
+  })
+
+  it('falls back to a dash for missing prices', () => {
+    expect(formatPrice(null)).toBe('—')
+  })
+
+  it('keeps tiny prices readable', () => {
+    expect(formatPrice('0.00000001')).toBe('1.00e-8')
   })
 })

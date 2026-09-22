@@ -215,6 +215,8 @@ const apiErrorMessages: Readonly<Record<string, string>> = {
   model_has_history: '模型已有请求历史，请改为停用模型以保留审计记录',
   model_name_conflict: '模型名称冲突',
   model_not_found: '模型不存在',
+  model_price_sync_failed: '模型价格同步失败，请确认上游提供 new-api 兼容的价格接口',
+  model_price_sync_unavailable: '模型价格同步服务不可用',
   model_route_conflict: '该模型和供应商的路由已存在',
   model_route_not_found: '模型路由不存在',
   provider_conflict: '供应商配置冲突',
@@ -257,7 +259,12 @@ function validationMessage(errors: ApiValidationError[]): string {
 }
 
 function safeApiMessage(code: string, status: number, serverMessage?: string): string {
-  if (code === 'model_discovery_failed' && serverMessage?.trim()) return serverMessage
+  if (
+    (code === 'model_discovery_failed' || code === 'model_price_sync_failed') &&
+    serverMessage?.trim()
+  ) {
+    return serverMessage
+  }
   const knownMessage = apiErrorMessages[code]
   if (knownMessage !== undefined) return knownMessage
   if (status === 400) return '请求内容无效'

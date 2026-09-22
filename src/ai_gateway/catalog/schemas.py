@@ -226,6 +226,37 @@ class ProviderBalanceBatchResult(BaseModel):
     skipped: int
 
 
+ModelPriceSyncStatus = Literal["updated", "priced", "fixed_price", "unlisted"]
+
+
+class ProviderModelPriceRow(BaseModel):
+    model_id: int
+    model_name: str
+    upstream_model: str
+    status: ModelPriceSyncStatus
+    model_ratio: Decimal | None = None
+    completion_ratio: Decimal | None = None
+    upstream_input_price_per_million: Decimal | None = None
+    upstream_output_price_per_million: Decimal | None = None
+    upstream_fixed_price: Decimal | None = None
+    current_input_price_per_million: Decimal
+    current_output_price_per_million: Decimal
+
+
+class ProviderModelPriceSyncResult(BaseModel):
+    provider_id: int
+    group: str = "default"
+    group_ratio: Decimal = Decimal("1")
+    cost_multiplier: Decimal | None = None
+    cost_multiplier_updated: bool = False
+    upstream_models: int = 0
+    updated: int = 0
+    priced: int = 0
+    fixed_price: int = 0
+    unlisted: int = 0
+    rows: list[ProviderModelPriceRow] = Field(default_factory=list)
+
+
 class ProviderBalanceCandidate(BaseModel):
     query_type: BalanceQueryType
     amount: Decimal

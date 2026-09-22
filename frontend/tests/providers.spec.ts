@@ -4,8 +4,13 @@ import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ProviderBalanceSnapshot, ProviderResponse } from '@/api/types'
+import type {
+  ProviderBalanceSnapshot,
+  ProviderModelPriceSyncResult,
+  ProviderResponse,
+} from '@/api/types'
 import BalanceOverviewDialog from '@/components/providers/BalanceOverviewDialog.vue'
+import ModelPriceSyncDialog from '@/components/providers/ModelPriceSyncDialog.vue'
 import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
 import ModelSyncDialog from '@/components/providers/ModelSyncDialog.vue'
 import { routes } from '@/router'
@@ -2012,6 +2017,181 @@ describe('批量查询供应商余额', () => {
     const dialog = wrapper.getComponent(BalanceOverviewDialog)
     expect(dialog.text()).toContain('批量查询余额失败')
     expect(dialog.text()).toContain('余额查询服务不可用')
+    wrapper.unmount()
+  })
+})
+
+const priceSyncResult: ProviderModelPriceSyncResult = {
+  provider_id: 1,
+  group: 'svip',
+  group_ratio: '0.5',
+  cost_multiplier: '0.50',
+  cost_multiplier_updated: true,
+  upstream_models: 2,
+  updated: 1,
+  priced: 1,
+  fixed_price: 1,
+  unlisted: 1,
+  rows: [
+    {
+      model_id: 101,
+      model_name: 'gpt-4o',
+      upstream_model: 'gpt-4o',
+      status: 'updated',
+      model_ratio: '1.25',
+      completion_ratio: '4',
+      upstream_input_price_per_million: '2.50000000',
+      upstream_output_price_per_million: '10.00000000',
+      upstream_fixed_price: null,
+      current_input_price_per_million: '0.00000000',
+      current_output_price_per_million: '0.00000000',
+    },
+    {
+      model_id: 102,
+      model_name: 'claude-sonnet',
+      upstream_model: 'claude-sonnet-4',
+      status: 'priced',
+      model_ratio: '3',
+      completion_ratio: '5',
+      upstream_input_price_per_million: '6.00000000',
+      upstream_output_price_per_million: '30.00000000',
+      upstream_fixed_price: null,
+      current_input_price_per_million: '9.00000000',
+      current_output_price_per_million: '45.00000000',
+    },
+    {
+      model_id: 103,
+      model_name: 'dall-e-3',
+      upstream_model: 'dall-e-3',
+      status: 'fixed_price',
+      model_ratio: null,
+      completion_ratio: null,
+      upstream_input_price_per_million: null,
+      upstream_output_price_per_million: null,
+      upstream_fixed_price: '0.04000000',
+      current_input_price_per_million: '0.00000000',
+      current_output_price_per_million: '0.00000000',
+    },
+    {
+      model_id: 104,
+      model_name: 'private-model',
+      upstream_model: 'private-model',
+      status: 'unlisted',
+      model_ratio: null,
+      completion_ratio: null,
+      upstream_input_price_per_million: null,
+      upstream_output_price_per_million: null,
+      upstream_fixed_price: null,
+      current_input_price_per_million: '0.00000000',
+      current_output_price_per_million: '0.00000000',
+    },
+  ],
+}
+
+describe('同步上游模型价格', () => {
+  it('展示补齐结果、已设置跳过与成本倍率变化', async () => {
+    let synced = 0
+    server.use(
+      http.get('/admin/providers', () => HttpResponse.json([providerFixture])),
+      http.get('/admin/providers/1', () =>
+        HttpResponse.json({ ...providerFixture, cost_multiplier: 0.5 }),
+      ),
+      http.post('/admin/providers/1/sync-model-prices', () => {
+        synced += 1
+        return HttpResponse.json(priceSyncResult)
+      }),
+    )
+    const wrapper = await mountProvidersView()
+
+    await wrapper.get('[data-test="sync-prices-1"]').trigger('click')
+    await flushPromises()
+
+    expect(synced).toBe(1)
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('补齐价格 1 个')
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('已设置跳过 1 个')
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('成本倍率更新为 0.50')
+    // The refreshed card reflects the multiplier that the upstream group ratio moved.
+    expect(wrapper.text()).toContain('0.50x')
+
+    const dialog = wrapper.getComponent(ModelPriceSyncDialog)
+    expect(dialog.props('modelValue')).toBe(true)
+    const summary = dialog.get('[data-test="price-sync-summary"]').text()
+    expect(summary).toContain('已更新 1')
+    expect(summary).toContain('已设置 1')
+    expect(summary).toContain('按次计费 1')
+    expect(summary).toContain('未列出 1')
+    expect(dialog.get('[data-test="price-sync-multiplier"]').text()).toContain(
+      '当前为 0.5',
+    )
+
+    const table = dialog.get('[data-test="price-sync-table"]').text()
+    expect(table).toContain('gpt-4o')
+    expect(table).toContain('2.5 / 10')
+    expect(table).toContain('未设置')
+    expect(table).toContain('倍率 1.25 × 补全 4')
+    expect(table).toContain('claude-sonnet')
+    expect(table).toContain('上游 claude-sonnet-4')
+    expect(table).toContain('已设置')
+    expect(table).toContain('9 / 45')
+    expect(table).toContain('按次计费 0.04')
+    expect(table).toContain('上游未提供倍率')
+
+    await dialog.get('[data-test="price-sync-close"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.getComponent(ModelPriceSyncDialog).props('modelValue')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('上游不支持价格接口时在通知中说明原因', async () => {
+    server.use(
+      http.get('/admin/providers', () => HttpResponse.json([providerFixture])),
+      http.post('/admin/providers/1/sync-model-prices', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              code: 'model_price_sync_failed',
+              message: 'Upstream has no /api/pricing endpoint',
+            },
+          },
+          { status: 502 },
+        ),
+      ),
+    )
+    const wrapper = await mountProvidersView()
+
+    await wrapper.get('[data-test="sync-prices-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('/api/pricing')
+    expect(wrapper.getComponent(ModelPriceSyncDialog).props('modelValue')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('模型同步完成后在通知中报告补齐的价格数量', async () => {
+    server.use(
+      http.get('/admin/providers', () => HttpResponse.json([providerFixture])),
+      http.get('/admin/providers/1/discover-models', () =>
+        HttpResponse.json({ models: ['gpt-4o'] }),
+      ),
+      http.get('/admin/providers/1', () => HttpResponse.json(providerFixture)),
+      http.post('/admin/providers/1/sync-models', () =>
+        HttpResponse.json({
+          provider_id: 1,
+          discovered_models: 1,
+          created_models: 1,
+          created_routes: 1,
+          updated_routes: 0,
+          disabled_routes: 0,
+          prices_filled: 1,
+        }),
+      ),
+    )
+    const wrapper = await mountProvidersView()
+
+    await wrapper.get('[data-test="sync-provider-1"]').trigger('click')
+    await confirmSelectedModels(wrapper)
+
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('补齐模型价格 1 个')
     wrapper.unmount()
   })
 })
