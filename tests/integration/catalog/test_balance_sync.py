@@ -294,11 +294,13 @@ async def test_balance_sync_records_upstream_failure(
 
     assert response.status_code == 502, response.text
     assert response.json()["detail"]["code"] == "balance_sync_failed"
+    assert "access token" in response.json()["detail"]["message"]
     stored = await session.get(Provider, provider.id)
     assert stored is not None
     await session.refresh(stored)
     assert stored.balance_error is not None
     assert "401" in stored.balance_error
+    assert "access token" in stored.balance_error
     assert stored.last_balance_sync_at is not None
     assert stored.balance_amount is None
 
@@ -390,6 +392,16 @@ async def test_balance_detection_reports_when_no_upstream_responds(
     await session.flush()
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/user/self":
+            return httpx.Response(
+                401,
+                json={
+                    "code": "AUTH_UNAUTHORIZED",
+                    "message": "Unauthorized, invalid access token",
+                    "success": False,
+                },
+                request=request,
+            )
         return httpx.Response(404, json={"error": "not found"}, request=request)
 
     async with _api(session, balance_settings, admin, handler) as (client, _):
@@ -397,6 +409,11 @@ async def test_balance_detection_reports_when_no_upstream_responds(
 
     assert response.status_code == 502, response.text
     assert response.json()["detail"]["code"] == "balance_detection_failed"
+    message = response.json()["detail"]["message"]
+    assert "new_api: Upstream provider returned 401" in message
+    assert "invalid access token" in message
+    assert "deepseek: Upstream provider returned 404" in message
+    assert "access token" in message
 
 
 @pytest.mark.asyncio

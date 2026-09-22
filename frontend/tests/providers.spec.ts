@@ -1619,6 +1619,24 @@ describe('供应商上游余额查询', () => {
     wrapper.unmount()
   })
 
+  it('选择 new-api 时提示需要使用访问令牌', async () => {
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: balancedProviderFixture, submitting: false },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('只接受「访问令牌」')
+    expect(wrapper.find('[data-test="provider-balance-user-id"]').exists()).toBe(true)
+
+    await wrapper.get('[data-test="provider-balance-type"]').setValue('openrouter')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('只接受「访问令牌」')
+    expect(wrapper.find('[data-test="provider-balance-user-id"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('自定义余额接口缺少字段路径时阻止提交', async () => {
     const wrapper = mount(ProviderFormDrawer, {
       props: { modelValue: true, provider: balancedProviderFixture, submitting: false },

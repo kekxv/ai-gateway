@@ -1046,6 +1046,11 @@ function submitForm(): void {
           </div>
 
           <template v-if="balanceConfigured">
+            <p v-if="balanceQueryType === 'new_api'" class="form-help">
+              new-api / one-api 的 /api/user/self 只接受「访问令牌」，不能用 sk- 中转密钥：
+              请把上游控制台「个人设置」生成的访问令牌填入「覆盖查询密钥」；仅当上游校验
+              New-Api-User 时才需要填写用户 ID。
+            </p>
             <ElFormItem label="余额查询基础地址（可选）">
               <ElInput
                 v-model="balanceBaseUrl"

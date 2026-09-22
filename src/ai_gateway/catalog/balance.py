@@ -9,7 +9,7 @@ share the same parsing rules.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -226,8 +226,13 @@ async def detect_balance_types(
     client: AsyncHttpClient,
     settings: Settings,
     candidates: Sequence[BalanceQueryType] | None = None,
+    failures: MutableMapping[BalanceQueryType, BaseException] | None = None,
 ) -> list[BalanceResult]:
-    """Probe every built-in upstream type and return the ones that answered."""
+    """Probe every built-in upstream type and return the ones that answered.
+
+    ``failures`` optionally receives the rejection reason per probed type, so callers can tell
+    an authentication problem from an endpoint that is simply not a balance API.
+    """
 
     resolved: list[BalanceResult] = []
     for query_type in _detection_order(probe, candidates):
@@ -235,7 +240,9 @@ async def detect_balance_types(
             resolved.append(
                 await query_balance(probe, query_type, client=client, settings=settings)
             )
-        except (httpx.HTTPError, BalanceQueryError, BalanceConfigError, ValueError):
+        except (httpx.HTTPError, BalanceQueryError, BalanceConfigError, ValueError) as exc:
+            if failures is not None:
+                failures[query_type] = exc
             continue
     return resolved
 

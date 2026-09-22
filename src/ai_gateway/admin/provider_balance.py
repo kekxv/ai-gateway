@@ -179,7 +179,7 @@ async def sync_provider_balance(
     try:
         result = await query_balance(probe, query_type, client=client, settings=settings)
     except _QUERY_FAILURES as exc:
-        message = _balance_error_message(exc)
+        message = _balance_error_message(exc, query_type=query_type)
         logger.warning(
             "Provider balance query failed for provider_id=%d: %s: %s",
             provider_id,
@@ -221,7 +221,13 @@ async def detect_provider_balance(
     if release_connection_before_query:
         await session.commit()
     client = await _client_for(http_client_factory, record.provider, probe)
-    resolved = await detect_balance_types(probe, client=client, settings=settings)
+    failures: dict[BalanceQueryType, BaseException] = {}
+    resolved = await detect_balance_types(
+        probe,
+        client=client,
+        settings=settings,
+        failures=failures,
+    )
     candidates = [
         ProviderBalanceCandidate(
             query_type=item.query_type,
@@ -236,9 +242,7 @@ async def detect_provider_balance(
         logger.warning(
             "Provider balance detection found no upstream API for provider_id=%d", provider_id
         )
-        raise BalanceDetectionFailedError(
-            "No supported upstream balance API responded to the detection probes"
-        )
+        raise BalanceDetectionFailedError(_balance_detection_message(failures))
 
     applied: BalanceQueryType | None = None
     if len(resolved) == 1:
@@ -417,7 +421,11 @@ def raise_invalid_balance_config(exc: Exception) -> NoReturn:
     )
 
 
-def _balance_error_message(exc: httpx.HTTPError | ValueError | RuntimeError) -> str:
+def _balance_error_message(
+    exc: BaseException,
+    *,
+    query_type: BalanceQueryType | None = None,
+) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         response = exc.response
         status_label = f"{response.status_code} {response.reason_phrase}".strip()
@@ -425,12 +433,39 @@ def _balance_error_message(exc: httpx.HTTPError | ValueError | RuntimeError) -> 
         detail = _upstream_error_detail(response)
         if detail:
             message = f"{message}: {detail}"
+        hint = _balance_auth_hint(response.status_code, query_type)
+        if hint:
+            message = f"{message}. {hint}"
     else:
         detail = sanitize_log_event(exc).strip()
         message = f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
     if len(message) <= _MAX_UPSTREAM_ERROR_CHARS:
         return message
     return f"{message[: _MAX_UPSTREAM_ERROR_CHARS - 1]}…"
+
+
+def _balance_auth_hint(status_code: int, query_type: BalanceQueryType | None) -> str | None:
+    """Explain the upstream authentication model behind a rejected balance request."""
+
+    if status_code not in (401, 403) or query_type is not BalanceQueryType.NEW_API:
+        return None
+    return (
+        "new-api / one-api only accepts a user access token on /api/user/self, not the sk- "
+        "relay key: set the balance query API key override to a token generated in the "
+        "upstream console personal settings, and fill the new-api user id only when the "
+        "deployment requires the New-Api-User header"
+    )
+
+
+def _balance_detection_message(failures: Mapping[BalanceQueryType, BaseException]) -> str:
+    message = "No supported upstream balance API responded to the detection probes"
+    reasons = [
+        f"{query_type.value}: {_balance_error_message(exc, query_type=query_type)}"
+        for query_type, exc in failures.items()
+    ]
+    if not reasons:
+        return message
+    return truncate_balance_error(f"{message} ({'; '.join(reasons)})")
 
 
 def _upstream_error_detail(response: httpx.Response) -> str:

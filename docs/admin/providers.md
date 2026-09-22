@@ -12,7 +12,7 @@
 
 | 类型 | 请求 | 说明 |
 | --- | --- | --- |
-| new-api / one-api | `GET {host}/api/user/self` | 读取 `data.quota` 与 `data.used_quota`，默认按 500000 额度 = 1 美元换算；需要 `access_token` 时填写“覆盖查询密钥”，部分部署还需要“new-api 用户 ID”（`New-Api-User` 请求头） |
+| new-api / one-api | `GET {host}/api/user/self` | 读取 `data.quota` 与 `data.used_quota`，默认按 500000 额度 = 1 美元换算（上游改过 QuotaPerUnit 时填“余额除数”）；**只接受用户访问令牌**，见下方说明 |
 | DeepSeek 官方 | `GET {host}/user/balance` | 读取 `balance_infos` 与 `is_available`，可用“币种”选择列表中的某一币种，默认取第一条 |
 | OpenRouter | `GET {base}/api/v1/credits` | 余额 = `total_credits - total_usage` |
 | 自定义接口 | 管理员配置 | 字段路径使用点号访问嵌套字段，用 `[序号]` 访问数组元素，例如 `data.balance_infos[0].total_balance`；可用“余额除数”换算额度单位 |
@@ -22,6 +22,25 @@
 余额既可以直接在供应商卡片上点击“查余额”手动同步，也可以打开“自动同步余额”并设置“余额同步间隔（秒）”。后台调度按供应商自己的间隔执行，并在多个实例之间使用数据库锁避免重复查询。查询失败时保留上一次成功读取的余额，并把错误信息记录在供应商卡片的“余额查询失败”提示中，同时更新最后同步时间。
 
 切换上游类型会清空旧的余额快照（金额、币种、更新时间），把类型改为“不查询余额”还会一并清空余额配置。余额查询使用与模型同步相同的出站代理配置。对应的管理接口为 `POST /admin/providers/{id}/balance/sync` 和 `POST /admin/providers/{id}/balance/detect`。
+
+### new-api / one-api 返回 `401 AUTH_UNAUTHORIZED`
+
+`/api/user/self` 属于 new-api 的管理接口，只接受在**上游控制台「个人设置」生成的访问令牌**（Access Token）；`sk-` 开头的中转密钥只在 `/v1/*` 上有效，因此默认“复用供应商凭据”的余额查询会对这类供应商返回：
+
+```json
+{"code":"AUTH_UNAUTHORIZED","message":"Unauthorized, invalid access token","success":false}
+```
+
+修复方式：在供应商编辑面板的“覆盖查询密钥”中填写该访问令牌（留空表示继续复用供应商凭据）。“new-api 用户 ID”（`New-Api-User` 请求头）只在部分部署中强制校验，多数版本不填也能查询成功；若上游返回用户不匹配的错误再补充填写。
+
+可以先在服务器上用 curl 直接确认令牌类型是否正确（把 `$BASE` 换成上游域名，**不要带 `/v1`**）：
+
+```bash
+curl -sS "$BASE/api/user/self" -H "Authorization: Bearer $ACCESS_TOKEN" -H "New-Api-User: $USER_ID"
+```
+
+成功时返回 `data.quota`（剩余额度）与 `data.used_quota`（已用额度）；用中转密钥请求同一地址会得到上面那个 401。自动检测同样复用这套凭据，因此在填好访问令牌之前，“自动检测接口”无法识别 new-api 上游；检测全部失败时接口会在 502 消息里列出每个候选接口各自的失败原因。
+
 
 ## HTTP(S) 出站代理
 

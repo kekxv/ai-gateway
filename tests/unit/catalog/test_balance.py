@@ -256,14 +256,20 @@ async def test_detect_balance_types_returns_only_responding_upstreams() -> None:
             return httpx.Response(401, json={"error": "unauthorized"})
         return httpx.Response(404, json={"error": "not found"})
 
+    failures: dict[BalanceQueryType, BaseException] = {}
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         resolved = await detect_balance_types(
             _probe(base_url="https://newapi.example.com/v1"),
             client=client,
             settings=_settings(),
+            failures=failures,
         )
 
     assert [item.query_type for item in resolved] == [BalanceQueryType.NEW_API]
+    assert set(failures) == {BalanceQueryType.DEEPSEEK, BalanceQueryType.OPENROUTER}
+    rejected = failures[BalanceQueryType.DEEPSEEK]
+    assert isinstance(rejected, httpx.HTTPStatusError)
+    assert rejected.response.status_code == 401
 
     async def openrouter_first(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
