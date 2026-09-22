@@ -6,12 +6,13 @@ in the administration console. The portable JSON bundle has the fixed identifier
 
 ## What a bundle contains
 
-The bundle contains provider names and settings, provider protocols, canonical models, aliases,
-model prices and multipliers, and routes. References use stable names and protocol/base-URL pairs,
-not database IDs.
+The bundle contains provider names and settings, provider protocols, balance-query settings,
+canonical models, aliases, model prices and multipliers, and routes. References use stable names
+and protocol/base-URL pairs, not database IDs.
 
 It deliberately excludes database IDs; users and their passwords or TOTP configuration; API keys
-and their scopes; balances and ledger entries; request and audit logs; sessions; conversations;
+and their scopes; user account balances and billing ledger entries; the last upstream balance
+snapshot; request and audit logs; sessions; conversations;
 skills; tools; source channels; and route runtime/health state. It is a catalog backup, not a full
 database backup. Legacy channels are used only to select the provider/model graph and are never
 emitted in the bundle.
@@ -36,6 +37,11 @@ Import is transactional and merge-only:
   protocols, models, aliases, and routes omitted from the bundle are never deleted.
 - A `null` provider credential or protocol `extra_headers` does not overwrite an existing stored
   secret. For a newly created resource, a `null` secret means no secret is configured.
+- Balance-query settings (upstream type, custom JSON mapping, automatic-sync flag, and interval) are
+  included; the balance-query override secret and request headers are exported only with
+  `?include_secrets=true`. A redacted bundle keeps the stored secret and, when it does not change
+  the upstream type, the stored mapping as well. Changing the upstream type clears the stored
+  mapping and the last balance snapshot, matching the provider editing API.
 - Validation or a name/alias/route conflict rejects the whole bundle; no partial merge is retained.
 
 Treat any file produced with `include_secrets=true` as a credential. Store it only in approved

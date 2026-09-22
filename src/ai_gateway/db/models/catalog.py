@@ -24,7 +24,14 @@ from sqlalchemy import (
 from sqlalchemy.dialects.mysql import LONGBLOB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from ai_gateway.core.enums import ModelType, Protocol, RouteRuntimeState, RouteSource, enum_values
+from ai_gateway.core.enums import (
+    BalanceQueryType,
+    ModelType,
+    Protocol,
+    RouteRuntimeState,
+    RouteSource,
+    enum_values,
+)
 from ai_gateway.db.base import Base
 
 if TYPE_CHECKING:
@@ -62,6 +69,33 @@ class Provider(Base):
         server_default=text("1.00"),
         nullable=False,
     )
+    balance_query_type: Mapped[BalanceQueryType | None] = mapped_column(
+        Enum(BalanceQueryType, name="balance_query_type", values_callable=enum_values),
+        nullable=True,
+    )
+    balance_query_config_encrypted: Mapped[bytes | None] = mapped_column(
+        LONGBLOB,
+        nullable=True,
+    )
+    balance_auto_sync: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("0"),
+        nullable=False,
+    )
+    balance_sync_interval_seconds: Mapped[int] = mapped_column(
+        Integer,
+        default=3600,
+        server_default=text("3600"),
+        nullable=False,
+    )
+    balance_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    balance_currency: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    balance_used: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    balance_is_available: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_balance_sync_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    balance_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    balance_error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     protocols: Mapped[list[ProviderProtocol]] = relationship(
         back_populates="provider",

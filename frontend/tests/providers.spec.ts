@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ProviderResponse } from '@/api/types'
+import type { ProviderBalanceSnapshot, ProviderResponse } from '@/api/types'
 import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
 import ModelSyncDialog from '@/components/providers/ModelSyncDialog.vue'
 import { routes } from '@/router'
@@ -1468,6 +1468,292 @@ describe('供应商与协议管理', () => {
     expect(importRequests).toBe(0)
     expect(confirm).not.toHaveBeenCalled()
     expect((input.element as HTMLInputElement).value).toBe('')
+    wrapper.unmount()
+  })
+})
+
+const balancedSnapshot: ProviderBalanceSnapshot = {
+  query_type: 'new_api',
+  auto_sync: true,
+  sync_interval_seconds: 900,
+  config: {
+    base_url: null,
+    has_api_key: false,
+    user_id: '7',
+    has_headers: false,
+    path: null,
+    method: 'GET',
+    amount_path: null,
+    used_path: null,
+    available_path: null,
+    currency: null,
+    divisor: '500000',
+  },
+  amount: '12.50000000',
+  currency: 'USD',
+  used: '1.00000000',
+  is_available: null,
+  updated_at: '2026-09-22T10:00:00Z',
+  last_sync_at: '2026-09-22T10:00:00Z',
+  error: null,
+}
+
+const balancedProviderFixture: ProviderResponse = {
+  ...providerFixture,
+  id: 3,
+  name: 'NewAPI 主线路',
+  balance: balancedSnapshot,
+}
+
+describe('供应商上游余额查询', () => {
+  it('展示已配置的上游余额与同步状态', async () => {
+    const wrapper = await mountProviders([balancedProviderFixture])
+
+    expect(wrapper.get('[data-test="provider-balance-amount"]').text()).toContain('12.5 USD')
+    expect(wrapper.get('[data-test="provider-balance-config"]').text()).toContain('new-api')
+    expect(wrapper.get('[data-test="provider-balance-sync"]').text()).toContain('自动')
+    expect(wrapper.get('[data-test="provider-balance-updated"]').text()).not.toContain('从未同步')
+    wrapper.unmount()
+  })
+
+  it('未配置余额接口时禁用查余额按钮', async () => {
+    const wrapper = await mountProviders([providerFixture])
+
+    expect(wrapper.get('[data-test="provider-balance-amount"]').text()).toContain('—')
+    expect(wrapper.get('[data-test="provider-balance-config"]').text()).toContain('未配置')
+    expect(
+      wrapper.get('[data-test="sync-balance-1"]').attributes('disabled'),
+    ).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('展示余额查询失败原因', async () => {
+    const failing: ProviderResponse = {
+      ...balancedProviderFixture,
+      balance: {
+        ...balancedSnapshot,
+        amount: null,
+        error: 'Upstream provider returned 401 Unauthorized',
+      },
+    }
+    const wrapper = await mountProviders([failing])
+
+    expect(wrapper.get('[data-test="provider-balance-error"]').text()).toContain('401')
+    wrapper.unmount()
+  })
+
+  it('在卡片上手动同步余额并刷新展示', async () => {
+    let syncCalls = 0
+    server.use(
+      http.get('/admin/providers', () => HttpResponse.json([balancedProviderFixture])),
+      http.get('/admin/providers/3', () =>
+        HttpResponse.json({
+          ...balancedProviderFixture,
+          balance: { ...balancedSnapshot, amount: '9.00000000' },
+        }),
+      ),
+      http.post('/admin/providers/3/balance/sync', () => {
+        syncCalls += 1
+        return HttpResponse.json({
+          provider_id: 3,
+          query_type: 'new_api',
+          amount: '9.00000000',
+          currency: 'USD',
+          used: null,
+          is_available: null,
+          synced_at: '2026-09-22T11:00:00Z',
+        })
+      }),
+    )
+    const wrapper = await mountProvidersView()
+
+    await wrapper.get('[data-test="sync-balance-3"]').trigger('click')
+    await flushPromises()
+
+    expect(syncCalls).toBe(1)
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('9 USD')
+    expect(wrapper.get('[data-test="provider-balance-amount"]').text()).toContain('9 USD')
+    wrapper.unmount()
+  })
+
+  it('编辑时提交余额查询配置的变更', async () => {
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: balancedProviderFixture, submitting: false },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-balance-type"]').setValue('openrouter')
+    await wrapper.get('[data-test="provider-balance-api-key"]').setValue('or-key')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual({
+      balance_query_type: 'openrouter',
+      balance_auto_sync: true,
+      balance_sync_interval_seconds: 900,
+      balance_config: { api_key: 'or-key', user_id: '7', divisor: 500000 },
+    })
+    wrapper.unmount()
+  })
+
+  it('未改动余额配置时不提交余额字段', async () => {
+    const requests: unknown[] = []
+    server.use(
+      http.get('/admin/providers', () => HttpResponse.json([balancedProviderFixture])),
+      http.patch('/admin/providers/3', async ({ request }) => {
+        requests.push(await request.json())
+        return HttpResponse.json(balancedProviderFixture)
+      }),
+    )
+    const wrapper = await mountProvidersView()
+
+    await wrapper.get('[data-test="edit-provider-3"]').trigger('click')
+    await flushPromises()
+    const drawer = wrapper.getComponent(ProviderFormDrawer)
+    await drawer.get('[data-test="provider-name"]').setValue('NewAPI 备用线路')
+    await drawer.get('[data-test="provider-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(requests).toEqual([{ name: 'NewAPI 备用线路' }])
+    wrapper.unmount()
+  })
+
+  it('自定义余额接口缺少字段路径时阻止提交', async () => {
+    const wrapper = mount(ProviderFormDrawer, {
+      props: { modelValue: true, provider: balancedProviderFixture, submitting: false },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-test="provider-balance-type"]').setValue('custom')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+    await waitForFormErrors()
+
+    expect(wrapper.emitted('submit')).toBeUndefined()
+    expect(
+      wrapper.get('[data-validation="balance"] .el-form-item__error').text(),
+    ).toContain('自定义接口需要填写请求路径')
+
+    await wrapper.get('[data-test="provider-balance-path"]').setValue('/api/balance')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+    await waitForFormErrors()
+    expect(wrapper.emitted('submit')).toBeUndefined()
+    expect(
+      wrapper.get('[data-validation="balance"] .el-form-item__error').text(),
+    ).toContain('自定义接口需要填写余额字段路径')
+
+    await wrapper.get('[data-test="provider-balance-amount-path"]').setValue('data.quota')
+    await wrapper.get('[data-test="provider-submit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toMatchObject({
+      balance_query_type: 'custom',
+      balance_config: {
+        user_id: '7',
+        divisor: 500000,
+        path: '/api/balance',
+        method: 'GET',
+        amount_path: 'data.quota',
+      },
+    })
+    wrapper.unmount()
+  })
+
+  it('检测到唯一接口时自动选中，多个候选时提供选择', async () => {
+    const wrapper = mount(ProviderFormDrawer, {
+      props: {
+        modelValue: true,
+        provider: balancedProviderFixture,
+        submitting: false,
+        detection: {
+          provider_id: 3,
+          candidates: [
+            { query_type: 'deepseek', amount: '3.5', currency: 'USD', used: null, is_available: true },
+          ],
+          applied: 'deepseek',
+        },
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const select = wrapper.get<HTMLSelectElement>('[data-test="provider-balance-type"]')
+    expect(select.element.value).toBe('deepseek')
+    expect(wrapper.find('[data-test="provider-balance-candidates"]').exists()).toBe(false)
+
+    await wrapper.setProps({
+      detection: {
+        provider_id: 3,
+        candidates: [
+          { query_type: 'new_api', amount: '1', currency: 'USD', used: null, is_available: null },
+          { query_type: 'deepseek', amount: '2', currency: 'USD', used: null, is_available: null },
+        ],
+        applied: null,
+      },
+    })
+    await flushPromises()
+
+    const candidates = wrapper.get('[data-test="provider-balance-candidates"]')
+    expect(candidates.text()).toContain('new-api')
+    expect(candidates.text()).toContain('DeepSeek')
+    await candidates.get('[data-test="balance-candidate-deepseek"]').setValue()
+    expect(select.element.value).toBe('deepseek')
+    wrapper.unmount()
+  })
+
+  it('在编辑面板中自动检测余额接口并提示结果', async () => {
+    let detectCalls = 0
+    server.use(
+      http.get('/admin/providers', () => HttpResponse.json([providerFixture])),
+      http.get('/admin/providers/1', () => HttpResponse.json(providerFixture)),
+      http.post('/admin/providers/1/balance/detect', () => {
+        detectCalls += 1
+        return HttpResponse.json({
+          provider_id: 1,
+          candidates: [
+            { query_type: 'new_api', amount: '1', currency: 'USD', used: null, is_available: null },
+          ],
+          applied: 'new_api',
+        })
+      }),
+    )
+    const wrapper = await mountProviders()
+
+    await wrapper.get('[data-test="edit-provider-1"]').trigger('click')
+    await flushPromises()
+    const drawer = wrapper.getComponent(ProviderFormDrawer)
+    await drawer.get('[data-test="detect-balance"]').trigger('click')
+    await flushPromises()
+
+    expect(detectCalls).toBe(1)
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('new-api')
+    wrapper.unmount()
+  })
+
+  it('检测到多个余额接口时提示管理员选择', async () => {
+    server.use(
+      http.get('/admin/providers', () => HttpResponse.json([providerFixture])),
+      http.post('/admin/providers/1/balance/detect', () =>
+        HttpResponse.json({
+          provider_id: 1,
+          candidates: [
+            { query_type: 'new_api', amount: '1', currency: 'USD', used: null, is_available: null },
+            { query_type: 'deepseek', amount: '2', currency: 'USD', used: null, is_available: null },
+          ],
+          applied: null,
+        }),
+      ),
+    )
+    const wrapper = await mountProviders()
+
+    await wrapper.get('[data-test="edit-provider-1"]').trigger('click')
+    await flushPromises()
+    const drawer = wrapper.getComponent(ProviderFormDrawer)
+    await drawer.get('[data-test="detect-balance"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="provider-notice"]').text()).toContain('请选择')
+    expect(drawer.find('[data-test="provider-balance-candidates"]').exists()).toBe(true)
     wrapper.unmount()
   })
 })

@@ -8,7 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ai_gateway.admin.model_sync import sync_provider_models
-from ai_gateway.core.enums import ModelType, Protocol, RouteRuntimeState, RouteSource
+from ai_gateway.admin.provider_balance import stored_balance_mapping
+from ai_gateway.core.enums import (
+    BalanceQueryType,
+    ModelType,
+    Protocol,
+    RouteRuntimeState,
+    RouteSource,
+)
 from ai_gateway.core.security import decrypt_secret, encrypt_secret
 from ai_gateway.db.models import Model, ModelAlias, ModelRoute, Provider, ProviderProtocol
 from ai_gateway.transport.provider_proxy import (
@@ -104,6 +111,9 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
                 "model_sync_interval_seconds": 17,
                 "cost_multiplier": 1.25,
                 "public_multiplier": 1.75,
+                "balance_query_type": None,
+                "balance_auto_sync": False,
+                "balance_sync_interval_seconds": 3600,
                 "protocols": [
                     {
                         "protocol": "openai",
@@ -123,6 +133,9 @@ async def test_admin_exports_deterministic_redacted_catalog_bundle(
                 "model_sync_interval_seconds": 3600,
                 "cost_multiplier": 1.0,
                 "public_multiplier": 1.0,
+                "balance_query_type": None,
+                "balance_auto_sync": False,
+                "balance_sync_interval_seconds": 3600,
                 "protocols": [
                     {
                         "protocol": "claude",
@@ -242,6 +255,9 @@ async def test_admin_exports_catalog_secrets_only_when_explicitly_requested(
             "model_sync_interval_seconds": 3600,
             "cost_multiplier": 1.0,
             "public_multiplier": 1.0,
+            "balance_query_type": None,
+            "balance_auto_sync": False,
+            "balance_sync_interval_seconds": 3600,
             "protocols": [
                 {
                     "protocol": "openai",
@@ -791,3 +807,124 @@ async def test_admin_import_rejects_duplicate_aliases_for_one_model(
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "catalog_import_invalid"
+
+
+async def test_catalog_export_and_import_round_trip_balance_configuration(
+    admin_client: AsyncClient,
+    admin_settings,
+    session: AsyncSession,
+) -> None:
+    provider = Provider(
+        name="balance-provider",
+        credential_encrypted=encrypt_secret('{"api_key":"upstream"}', settings=admin_settings),
+        balance_query_type=BalanceQueryType.CUSTOM,
+        balance_query_config_encrypted=encrypt_secret(
+            '{"path":"/api/balance","amount_path":"data.quota","api_key":"balance-secret"}',
+            settings=admin_settings,
+        ),
+        balance_auto_sync=True,
+        balance_sync_interval_seconds=600,
+        balance_amount=Decimal("4.50000000"),
+        balance_currency="USD",
+        last_balance_sync_at=datetime(2026, 9, 22, 10, 0, 0),
+    )
+    session.add(provider)
+    await session.flush()
+
+    exported = await admin_client.get(
+        "/admin/configuration/export", params={"include_secrets": "true"}
+    )
+
+    assert exported.status_code == 200, exported.text
+    exported_provider = exported.json()["providers"][0]
+    assert exported_provider["balance_query_type"] == "custom"
+    assert exported_provider["balance_auto_sync"] is True
+    assert exported_provider["balance_sync_interval_seconds"] == 600
+    assert exported_provider["balance_config"]["api_key"] == "balance-secret"
+    assert "balance_amount" not in exported_provider
+
+    await session.delete(provider)
+    await session.flush()
+    imported = await admin_client.post(
+        "/admin/configuration/import",
+        content=exported.content,
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert imported.status_code == 200, imported.text
+    assert imported.json()["providers_created"] == 1
+    assert imported.json()["providers_updated"] == 0
+    restored = await session.scalar(select(Provider).where(Provider.name == "balance-provider"))
+    assert restored is not None
+    assert restored.balance_query_type is BalanceQueryType.CUSTOM
+    assert restored.balance_auto_sync is True
+    assert restored.balance_sync_interval_seconds == 600
+    assert stored_balance_mapping(restored, admin_settings)["api_key"] == "balance-secret"
+    assert restored.balance_amount is None
+    assert restored.last_balance_sync_at is None
+
+
+async def test_catalog_import_keeps_stored_balance_secrets_when_redacted(
+    admin_client: AsyncClient,
+    admin_settings,
+    session: AsyncSession,
+) -> None:
+    provider = Provider(
+        name="redacted-balance-provider",
+        credential_encrypted=encrypt_secret("{}", settings=admin_settings),
+        balance_query_type=BalanceQueryType.NEW_API,
+        balance_query_config_encrypted=encrypt_secret(
+            '{"api_key":"stored-balance-secret","user_id":"9"}',
+            settings=admin_settings,
+        ),
+    )
+    session.add(provider)
+    await session.flush()
+
+    exported = await admin_client.get("/admin/configuration/export")
+
+    assert exported.status_code == 200, exported.text
+    exported_provider = exported.json()["providers"][0]
+    assert "balance_config" not in exported_provider
+    bundle = exported.json()
+    bundle["providers"][0]["balance_auto_sync"] = True
+    imported = await admin_client.post("/admin/configuration/import", json=bundle)
+
+    assert imported.status_code == 200, imported.text
+    await session.refresh(provider)
+    assert provider.balance_auto_sync is True
+    mapping = stored_balance_mapping(provider, admin_settings)
+    assert mapping["api_key"] == "stored-balance-secret"
+    assert mapping["user_id"] == "9"
+
+
+async def test_catalog_import_rejects_incomplete_balance_configuration(
+    admin_client: AsyncClient,
+    admin_settings,
+    session: AsyncSession,
+) -> None:
+    provider = Provider(
+        name="incomplete-balance-provider",
+        credential_encrypted=encrypt_secret("{}", settings=admin_settings),
+    )
+    session.add(provider)
+    await session.flush()
+    bundle = {
+        "format": "ai-gateway.catalog",
+        "version": 1,
+        "providers": [
+            {
+                "name": "incomplete-balance-provider",
+                "model_sync_interval_seconds": 3600,
+                "balance_query_type": "custom",
+                "balance_config": {"path": "/api/balance"},
+                "protocols": [],
+            }
+        ],
+        "models": [],
+    }
+
+    rejected = await admin_client.post("/admin/configuration/import", json=bundle)
+
+    assert rejected.status_code == 422, rejected.json()
+    assert rejected.json()["detail"]["code"] == "catalog_import_invalid"

@@ -28,13 +28,16 @@ import { exportCatalog, importCatalog } from '@/api/configuration'
 import {
   createProvider,
   deleteProvider,
+  detectProviderBalance,
   getProvider,
   listProviders,
+  syncProviderBalance,
   syncProviderModels,
   updateProvider,
 } from '@/api/providers'
 import type {
   Protocol,
+  ProviderBalanceDetectionResult,
   ProviderCreate,
   ProviderResponse,
   ProviderUpdate,
@@ -44,9 +47,10 @@ import ResourceStatusGroup from '@/components/common/ResourceStatusGroup.vue'
 import ProviderFormDrawer from '@/components/providers/ProviderFormDrawer.vue'
 import ModelSyncDialog from '@/components/providers/ModelSyncDialog.vue'
 import ProviderCard from '@/components/providers/ProviderCard.vue'
+import { formatBalanceAmount } from '@/utils/format'
 
 type NoticeType = 'success' | 'warning' | 'error'
-type ProviderOperation = 'edit' | 'sync' | 'delete' | 'toggle'
+type ProviderOperation = 'edit' | 'sync' | 'balance' | 'delete' | 'toggle'
 
 interface ProviderSyncSession {
   token: symbol
@@ -70,6 +74,9 @@ const providerOperations = ref(new Map<number, ProviderOperation>())
 const nonDeletableIds = ref(new Set<number>())
 const deletedIds = new Set<number>()
 const syncSession = shallowRef<ProviderSyncSession | null>(null)
+const balanceDetecting = ref(false)
+const balanceDetection = shallowRef<ProviderBalanceDetectionResult | null>(null)
+let balanceDetectController: AbortController | undefined
 const syncDialogOpen = computed(() => syncSession.value !== null)
 const syncTargetProvider = computed(() => syncSession.value?.provider ?? null)
 const syncSubmitting = computed(() => syncSession.value?.submitting === true)
@@ -249,6 +256,7 @@ function openCreate(): void {
   if (submitting.value || drawerOpen.value) return
   drawerSessionGeneration += 1
   editingProvider.value = null
+  resetBalanceDetection()
   drawerOpen.value = true
 }
 
@@ -256,6 +264,7 @@ function openEdit(provider: ProviderResponse): void {
   if (submitting.value || drawerOpen.value || !beginProviderOperation(provider.id, 'edit')) return
   drawerSessionGeneration += 1
   editingProvider.value = provider
+  resetBalanceDetection()
   drawerOpen.value = true
 }
 
@@ -266,7 +275,90 @@ function setDrawerOpen(open: boolean): void {
   drawerSessionGeneration += 1
   drawerOpen.value = false
   editingProvider.value = null
+  resetBalanceDetection()
   if (providerId !== undefined) finishProviderOperation(providerId, 'edit')
+}
+
+function resetBalanceDetection(): void {
+  balanceDetectController?.abort()
+  balanceDetectController = undefined
+  balanceDetecting.value = false
+  balanceDetection.value = null
+}
+
+const balanceTypeLabels = {
+  new_api: 'new-api / one-api',
+  deepseek: 'DeepSeek 官方',
+  openrouter: 'OpenRouter',
+  custom: '自定义接口',
+} as const
+
+async function detectBalance(): Promise<void> {
+  const provider = editingProvider.value
+  if (provider === null || balanceDetecting.value) return
+  balanceDetectController?.abort()
+  const controller = new AbortController()
+  balanceDetectController = controller
+  balanceDetecting.value = true
+  balanceDetection.value = null
+  try {
+    const result = await detectProviderBalance(provider.id, controller.signal)
+    if (!isCurrentEditSession(controller, provider.id)) return
+    if (result.provider_id !== provider.id) {
+      throw new Error('余额接口检测响应供应商不匹配')
+    }
+    balanceDetection.value = result
+    if (result.applied === null) {
+      notice.value = {
+        type: 'warning',
+        text: '检测到多个可用的余额接口，请选择要使用的上游类型后保存。',
+      }
+      return
+    }
+    const refreshed = await getProvider(provider.id, controller.signal)
+    if (!isCurrentEditSession(controller, provider.id)) return
+    replaceProvider(refreshed)
+    notice.value = {
+      type: 'success',
+      text: `已识别上游余额接口：${balanceTypeLabels[result.applied]}`,
+    }
+  } catch (error: unknown) {
+    if (!isCurrentEditSession(controller, provider.id)) return
+    notice.value = { type: 'error', text: errorText(error, '余额接口检测失败') }
+  } finally {
+    if (balanceDetectController === controller) {
+      balanceDetectController = undefined
+      if (mounted) balanceDetecting.value = false
+    }
+  }
+}
+
+async function syncBalance(provider: ProviderResponse): Promise<void> {
+  if (!beginProviderOperation(provider.id, 'balance')) return
+  const controller = operationController()
+  try {
+    const result = await syncProviderBalance(provider.id, controller.signal)
+    if (!isCurrentProviderOperation(controller, provider.id, 'balance')) return
+    if (result.provider_id !== provider.id) throw new Error('余额同步响应供应商不匹配')
+    const refreshed = await getProvider(provider.id, controller.signal)
+    if (!isCurrentProviderOperation(controller, provider.id, 'balance')) return
+    if (refreshed.id !== provider.id) throw new Error('供应商刷新响应供应商不匹配')
+    replaceProvider(refreshed)
+    notice.value = {
+      type: 'success',
+      text: `供应商“${provider.name}”上游余额：${formatBalanceAmount(result.amount, result.currency)}`,
+    }
+  } catch (error: unknown) {
+    if (isCurrentProviderOperation(controller, provider.id, 'balance')) {
+      notice.value = { type: 'error', text: errorText(error, '余额同步失败') }
+      await load()
+    }
+  } finally {
+    operationControllers.delete(controller)
+    if (isCurrentProviderOperation(controller, provider.id, 'balance')) {
+      finishProviderOperation(provider.id, 'balance')
+    }
+  }
 }
 
 function replaceProvider(updated: ProviderResponse): void {
@@ -302,6 +394,10 @@ function isCurrentProviderOperation(
     !controller.signal.aborted &&
     providerOperations.value.get(providerId) === operation
   )
+}
+
+function isCurrentEditSession(controller: AbortController, providerId: number): boolean {
+  return mounted && !controller.signal.aborted && editingProvider.value?.id === providerId
 }
 
 function operationController(): AbortController {
@@ -524,6 +620,7 @@ onBeforeUnmount(() => {
   drawerSessionGeneration += 1
   requestController?.abort()
   saveController?.abort()
+  balanceDetectController?.abort()
   for (const controller of operationControllers) controller.abort()
   operationControllers.clear()
 })
@@ -631,6 +728,7 @@ onBeforeUnmount(() => {
               @edit="openEdit"
               @delete="removeProvider"
               @sync="openSyncDialog"
+              @balance="syncBalance"
               @toggle="toggleProvider"
             />
           </div>
@@ -653,6 +751,7 @@ onBeforeUnmount(() => {
               @edit="openEdit"
               @delete="removeProvider"
               @sync="openSyncDialog"
+              @balance="syncBalance"
               @toggle="toggleProvider"
             />
           </div>
@@ -669,8 +768,11 @@ onBeforeUnmount(() => {
       :model-value="drawerOpen"
       :provider="editingProvider"
       :submitting="submitting"
+      :detecting="balanceDetecting"
+      :detection="balanceDetection"
       @update:model-value="setDrawerOpen"
       @submit="saveProvider"
+      @detect="detectBalance"
     />
 
     <ModelSyncDialog

@@ -575,6 +575,24 @@ test('creates, verifies, and safely cleans up console records', async ({ page })
         'edit-provider-',
       )
 
+      // Balance queries reuse the provider credential. The provider points at a closed port,
+      // so detection and the manual refresh must both surface the upstream failure.
+      await providerCard.locator('[data-test^="edit-provider-"]').click()
+      await page.getByTestId('detect-balance').click()
+      await expect(page.getByTestId('provider-notice')).toContainText('余额接口检测失败')
+      await page.getByTestId('provider-balance-type').selectOption('custom')
+      await page.getByTestId('provider-balance-base-url').fill('http://127.0.0.1:9')
+      await page.getByTestId('provider-balance-path').fill('/api/balance')
+      await page.getByTestId('provider-balance-amount-path').fill('data.quota')
+      await page.getByTestId('provider-submit').click()
+      await expect(page.getByTestId('provider-notice')).toContainText('供应商设置已保存')
+      await expect(providerCard.getByTestId('provider-balance-config')).toContainText('自定义接口')
+
+      await providerCard.locator('[data-test^="sync-balance-"]').click()
+      await expect(page.getByTestId('provider-notice')).toContainText('余额同步失败')
+      await expect(providerCard.getByTestId('provider-balance-error')).toBeVisible()
+      await expect(providerCard.getByTestId('provider-balance-amount')).toContainText('—')
+
       await page.goto('models')
       await page.getByTestId('create-model').click()
       await page.getByTestId('model-canonical-name').fill(modelCanonicalName)

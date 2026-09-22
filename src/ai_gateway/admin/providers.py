@@ -10,8 +10,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ai_gateway.admin.audit import log_multiplier_change
+from ai_gateway.admin.provider_balance import (
+    balance_config_mapping,
+    balance_response,
+    encrypt_balance_mapping,
+    merge_balance_config,
+    raise_invalid_balance_config,
+    stored_balance_mapping,
+    validate_balance_mapping,
+)
 from ai_gateway.auth.dependencies import admin_user
 from ai_gateway.auth.service import raise_auth_error
+from ai_gateway.catalog.balance import BalanceConfigError
 from ai_gateway.catalog.schemas import (
     ProviderCreate,
     ProviderProtocolInput,
@@ -54,6 +64,13 @@ async def create_provider(
 ) -> ProviderResponse:
     _validate_protocol_payloads(payload.protocols, creating=True)
     _validate_proxy_protocols(payload.proxy, payload.protocols)
+    balance_config = (
+        balance_config_mapping(payload.balance_config) if payload.balance_config is not None else {}
+    )
+    try:
+        validate_balance_mapping(payload.balance_query_type, balance_config)
+    except BalanceConfigError as exc:
+        raise_invalid_balance_config(exc)
     provider = Provider(
         name=payload.name,
         credential_encrypted=_encrypt_json(payload.credential, settings),
@@ -67,6 +84,14 @@ async def create_provider(
         ),
         cost_multiplier=payload.cost_multiplier,
         public_multiplier=payload.public_multiplier,
+        balance_query_type=payload.balance_query_type,
+        balance_query_config_encrypted=encrypt_balance_mapping(balance_config, settings),
+        balance_auto_sync=payload.balance_auto_sync,
+        balance_sync_interval_seconds=(
+            payload.balance_sync_interval_seconds
+            if payload.balance_sync_interval_seconds is not None
+            else settings.balance_sync_interval_seconds
+        ),
         protocols=[_new_protocol(item, settings) for item in payload.protocols],
     )
     session.add(provider)
@@ -184,6 +209,7 @@ async def update_provider(
             new_value=payload.public_multiplier,
             field_name="public_multiplier",
         )
+    await _apply_balance_update(session, provider, payload, settings)
     try:
         await session.flush()
         response = _provider_response(provider, settings)
@@ -289,6 +315,67 @@ async def _replace_protocols(
     provider.protocols = selected
 
 
+async def _apply_balance_update(
+    session: AsyncSession,
+    provider: Provider,
+    payload: ProviderUpdate,
+    settings: Settings,
+) -> None:
+    type_provided = "balance_query_type" in payload.model_fields_set
+    config_provided = "balance_config" in payload.model_fields_set
+    if not type_provided and not config_provided:
+        if payload.balance_auto_sync is not None:
+            provider.balance_auto_sync = payload.balance_auto_sync
+        if payload.balance_sync_interval_seconds is not None:
+            provider.balance_sync_interval_seconds = payload.balance_sync_interval_seconds
+        return
+
+    target_type = payload.balance_query_type if type_provided else provider.balance_query_type
+    previous_type = provider.balance_query_type
+    if target_type is None:
+        # Clearing the upstream type resets the whole balance configuration.
+        balance_config: dict[str, object] = {}
+    elif payload.balance_config is not None:
+        current = stored_balance_mapping(provider, settings)
+        balance_config = merge_balance_config(current, payload.balance_config)
+    elif config_provided:
+        balance_config = {}
+    else:
+        balance_config = stored_balance_mapping(provider, settings)
+    try:
+        validate_balance_mapping(target_type, balance_config)
+    except BalanceConfigError as exc:
+        raise_invalid_balance_config(exc)
+
+    provider.balance_query_type = target_type
+    provider.balance_query_config_encrypted = encrypt_balance_mapping(balance_config, settings)
+    if target_type is None:
+        _clear_balance_state(provider)
+    elif type_provided and target_type is not previous_type:
+        # A different upstream answers differently: drop the stale snapshot.
+        _clear_balance_snapshot(provider)
+    if payload.balance_auto_sync is not None:
+        provider.balance_auto_sync = payload.balance_auto_sync
+    if payload.balance_sync_interval_seconds is not None:
+        provider.balance_sync_interval_seconds = payload.balance_sync_interval_seconds
+    await session.flush()
+
+
+def _clear_balance_state(provider: Provider) -> None:
+    _clear_balance_snapshot(provider)
+    provider.balance_error = None
+
+
+def _clear_balance_snapshot(provider: Provider) -> None:
+    provider.balance_amount = None
+    provider.balance_currency = None
+    provider.balance_used = None
+    provider.balance_is_available = None
+    provider.last_balance_sync_at = None
+    provider.balance_updated_at = None
+    provider.balance_error = None
+
+
 def _new_protocol(payload: ProviderProtocolInput, settings: Settings) -> ProviderProtocol:
     return ProviderProtocol(
         protocol=payload.protocol,
@@ -372,6 +459,7 @@ def _provider_response(provider: Provider, settings: Settings) -> ProviderRespon
         ],
         cost_multiplier=provider.cost_multiplier,
         public_multiplier=provider.public_multiplier,
+        balance=balance_response(provider, settings),
     )
 
 

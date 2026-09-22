@@ -22,6 +22,7 @@ from ai_gateway.admin.configuration import router as configuration_router
 from ai_gateway.admin.dashboard import router as dashboard_router
 from ai_gateway.admin.model_sync import router as model_sync_router
 from ai_gateway.admin.models import models_router, routes_router, user_models_router
+from ai_gateway.admin.provider_balance import router as provider_balance_router
 from ai_gateway.admin.providers import router as providers_router
 from ai_gateway.admin.request_logs import router as request_logs_router
 from ai_gateway.admin.settings import router as settings_router
@@ -33,6 +34,7 @@ from ai_gateway.auth.router import router as auth_router
 from ai_gateway.billing.recovery import BillingRecoveryScheduler
 from ai_gateway.billing.service import BillingService
 from ai_gateway.billing.usage import warm_tokenizer
+from ai_gateway.catalog.balance_scheduler import BalanceSyncScheduler
 from ai_gateway.catalog.scheduler import ModelSyncScheduler
 from ai_gateway.core.config import Settings, get_settings
 from ai_gateway.core.errors import (
@@ -63,7 +65,7 @@ from ai_gateway.transport.http import HttpClientFactory
 from ai_gateway.user.dashboard import router as user_dashboard_router
 from ai_gateway.user.request_logs import router as user_request_logs_router
 
-REQUIRED_MIGRATION_HEAD = "0024"
+REQUIRED_MIGRATION_HEAD = "0025"
 
 
 def validate_runtime_settings(settings: Settings) -> None:
@@ -174,6 +176,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 http_client_factory=http_client_factory,
                 settings=active_settings,
             )
+            balance_scheduler = BalanceSyncScheduler(
+                engine=engine,
+                session_factory=session_factory,
+                http_client_factory=http_client_factory,
+                settings=active_settings,
+            )
             app.state.settings = active_settings
             app.state.engine = engine
             app.state.session_factory = session_factory
@@ -196,11 +204,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.billing_service = billing_service
             app.state.http_client_factory = http_client_factory
             app.state.model_sync_scheduler = scheduler
+            app.state.balance_sync_scheduler = balance_scheduler
             app.state.billing_recovery_scheduler = recovery_scheduler
             app.state.audit_cleanup_scheduler = cleanup_scheduler
             scheduler_task = asyncio.create_task(
                 scheduler.run(),
                 name="provider-model-sync",
+            )
+            balance_task = asyncio.create_task(
+                balance_scheduler.run(),
+                name="provider-balance-sync",
             )
             recovery_task = asyncio.create_task(
                 recovery_scheduler.run(),
@@ -214,9 +227,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 yield
             finally:
                 scheduler.stop()
+                balance_scheduler.stop()
                 recovery_scheduler.stop()
                 cleanup_scheduler.stop()
                 await scheduler_task
+                await balance_task
                 await recovery_task
                 await cleanup_task
                 await http_client_factory.aclose()
@@ -280,6 +295,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(self_api_keys_router)
     app.include_router(providers_router)
     app.include_router(model_sync_router)
+    app.include_router(provider_balance_router)
     app.include_router(models_router)
     app.include_router(routes_router)
     app.include_router(user_models_router)

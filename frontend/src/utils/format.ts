@@ -101,3 +101,11 @@ export function formatMoneyCompact(value: string): string {
   if (num < 1_000_000) return `¥${(num / 1000).toFixed(2)}K`
   return `¥${(num / 1_000_000).toFixed(2)}M`
 }
+
+export function formatBalanceAmount(amount: string | null, currency: string | null): string {
+  if (amount === null) return '—'
+  const value = Number.parseFloat(amount)
+  if (Number.isNaN(value)) return currency === null ? amount : `${amount} ${currency}`
+  const rendered = value.toFixed(4).replace(/\.?0+$/, '')
+  return currency === null ? rendered : `${rendered} ${currency}`
+}

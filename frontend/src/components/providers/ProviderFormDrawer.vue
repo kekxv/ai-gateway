@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { Delete, Plus } from '@element-plus/icons-vue'
+import { Delete, MagicStick, Plus } from '@element-plus/icons-vue'
 import {
   ElButton,
   ElDrawer,
@@ -21,8 +21,12 @@ import 'element-plus/theme-chalk/el-overlay.css'
 import 'element-plus/theme-chalk/el-switch.css'
 
 import type {
+  BalanceQueryType,
   JsonObject,
   Protocol,
+  ProviderBalanceCandidate,
+  ProviderBalanceConfigInput,
+  ProviderBalanceDetectionResult,
   ProviderCreate,
   ProviderProxyInput,
   ProviderProtocolInput,
@@ -47,16 +51,20 @@ type AuthScheme = 'protocol-default' | 'bearer' | 'apikey' | 'none'
 type AuthHeader = 'protocol-default' | 'authorization' | 'x-api-key' | 'custom'
 type ProxyMode = 'inherit' | 'direct' | 'custom'
 type ProxyAuthType = 'none' | 'basic' | 'headers'
+type BalanceTypeOption = BalanceQueryType | 'none'
 
 const props = defineProps<{
   modelValue: boolean
   provider: ProviderResponse | null
   submitting: boolean
+  detecting?: boolean
+  detection?: ProviderBalanceDetectionResult | null
 }>()
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   submit: [payload: ProviderCreate | ProviderUpdate]
+  detect: []
 }>()
 
 const name = ref('')
@@ -76,12 +84,30 @@ const autoLoadModels = ref(false)
 const syncInterval = ref<number | null>(3600)
 const costMultiplier = ref(1.0)
 const publicMultiplier = ref(1.0)
+const balanceQueryType = ref<BalanceTypeOption>('none')
+const balanceAutoSync = ref(false)
+const balanceSyncInterval = ref<number | null>(3600)
+const balanceBaseUrl = ref('')
+const balanceApiKey = ref('')
+const balanceUserId = ref('')
+const balancePath = ref('')
+const balanceMethod = ref<'GET' | 'POST'>('GET')
+const balanceAmountPath = ref('')
+const balanceUsedPath = ref('')
+const balanceAvailablePath = ref('')
+const balanceCurrency = ref('')
+const balanceDivisor = ref<number | null>(null)
+const balanceHeadersText = ref('')
+const balanceCandidates = ref<ProviderBalanceCandidate[]>([])
 const protocols = ref<ProtocolRow[]>([])
 const nameError = ref('')
 const advancedCredentialError = ref('')
 const authHeaderError = ref('')
 const proxyError = ref('')
 const syncIntervalError = ref('')
+const balanceError = ref('')
+const balanceIntervalError = ref('')
+const balanceHeadersError = ref('')
 const formContent = ref<HTMLElement | null>(null)
 let nextProtocolKey = 1
 
@@ -90,6 +116,20 @@ const drawerTitle = computed(() => (editing.value ? '编辑供应商' : '新建�
 const showCustomHeaderInput = computed(
   () => authScheme.value !== 'none' && authHeader.value === 'custom',
 )
+const balanceConfigured = computed(() => balanceQueryType.value !== 'none')
+const balanceSecretConfigured = computed(
+  () => props.provider?.balance?.config.has_api_key === true,
+)
+const balanceHeadersConfigured = computed(
+  () => props.provider?.balance?.config.has_headers === true,
+)
+
+const balanceTypeLabels: Readonly<Record<BalanceQueryType, string>> = {
+  new_api: 'new-api / one-api',
+  deepseek: 'DeepSeek 官方',
+  openrouter: 'OpenRouter',
+  custom: '自定义接口',
+}
 
 const validAuthHeaderName = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 const disallowedAuthHeaders = new Set([
@@ -143,6 +183,23 @@ function resetForm(): void {
   publicMultiplier.value = typeof provider?.public_multiplier === 'string'
     ? parseFloat(provider.public_multiplier)
     : (provider?.public_multiplier ?? 1.0)
+  const balance = provider?.balance ?? null
+  balanceQueryType.value = balance?.query_type ?? 'none'
+  balanceAutoSync.value = balance?.auto_sync ?? false
+  balanceSyncInterval.value = balance?.sync_interval_seconds ?? 3600
+  balanceBaseUrl.value = balance?.config.base_url ?? ''
+  balanceApiKey.value = ''
+  balanceUserId.value = balance?.config.user_id ?? ''
+  balancePath.value = balance?.config.path ?? ''
+  balanceMethod.value = balance?.config.method === 'POST' ? 'POST' : 'GET'
+  balanceAmountPath.value = balance?.config.amount_path ?? ''
+  balanceUsedPath.value = balance?.config.used_path ?? ''
+  balanceAvailablePath.value = balance?.config.available_path ?? ''
+  balanceCurrency.value = balance?.config.currency ?? ''
+  balanceDivisor.value =
+    balance?.config.divisor == null ? null : Number.parseFloat(balance.config.divisor)
+  balanceHeadersText.value = ''
+  balanceCandidates.value = []
   protocols.value =
     provider === null
       ? [newProtocolRow()]
@@ -163,6 +220,9 @@ function resetForm(): void {
   authHeaderError.value = ''
   proxyError.value = ''
   syncIntervalError.value = ''
+  balanceError.value = ''
+  balanceIntervalError.value = ''
+  balanceHeadersError.value = ''
 }
 
 function clearSensitiveState(): void {
@@ -171,6 +231,8 @@ function clearSensitiveState(): void {
   proxyUsername.value = ''
   proxyPassword.value = ''
   proxyHeadersText.value = ''
+  balanceApiKey.value = ''
+  balanceHeadersText.value = ''
   for (const row of protocols.value) row.extraHeadersText = ''
 }
 
@@ -181,6 +243,19 @@ watch(
     else clearSensitiveState()
   },
   { immediate: true, flush: 'sync' },
+)
+
+watch(
+  () => props.detection,
+  (detection) => {
+    if (detection === null || detection === undefined) {
+      balanceCandidates.value = []
+      return
+    }
+    balanceCandidates.value = detection.candidates
+    if (detection.applied !== null) balanceQueryType.value = detection.applied
+  },
+  { immediate: true },
 )
 
 onBeforeUnmount(clearSensitiveState)
@@ -348,10 +423,105 @@ function buildProxy(protocolPayload: ProviderProtocolInput[]): ProviderProxyInpu
   return { mode: 'custom', url, auth: { type: 'headers', headers } }
 }
 
+function parseBalanceHeaders(): Record<string, string> | undefined {
+  if (balanceHeadersText.value.trim() === '') return undefined
+  try {
+    const value: unknown = JSON.parse(balanceHeadersText.value)
+    if (!isJsonObject(value) || Object.keys(value).length === 0) {
+      balanceHeadersError.value = '必须是字符串键值的 JSON 对象'
+      return undefined
+    }
+    const headers: Record<string, string> = {}
+    for (const [name, headerValue] of Object.entries(value)) {
+      if (typeof headerValue !== 'string') {
+        balanceHeadersError.value = '余额查询请求头的值必须是字符串'
+        return undefined
+      }
+      headers[name] = headerValue
+    }
+    return headers
+  } catch {
+    balanceHeadersError.value = 'JSON 格式不正确'
+    return undefined
+  }
+}
+
+function buildBalanceConfig(): ProviderBalanceConfigInput | null | undefined {
+  balanceError.value = ''
+  balanceHeadersError.value = ''
+  if (!balanceConfigured.value) return null
+  const config: ProviderBalanceConfigInput = {}
+  if (balanceBaseUrl.value.trim() !== '') config.base_url = balanceBaseUrl.value.trim()
+  if (balanceApiKey.value.trim() !== '') config.api_key = balanceApiKey.value.trim()
+  if (balanceUserId.value.trim() !== '') config.user_id = balanceUserId.value.trim()
+  if (balanceCurrency.value.trim() !== '') config.currency = balanceCurrency.value.trim()
+  if (balanceDivisor.value !== null) {
+    if (!Number.isFinite(balanceDivisor.value) || balanceDivisor.value <= 0) {
+      balanceError.value = '余额除数必须大于 0'
+      return undefined
+    }
+    config.divisor = balanceDivisor.value
+  }
+  if (balanceQueryType.value === 'custom') {
+    if (balancePath.value.trim() === '') {
+      balanceError.value = '自定义接口需要填写请求路径'
+      return undefined
+    }
+    if (balanceAmountPath.value.trim() === '') {
+      balanceError.value = '自定义接口需要填写余额字段路径'
+      return undefined
+    }
+    config.path = balancePath.value.trim()
+    config.method = balanceMethod.value
+    config.amount_path = balanceAmountPath.value.trim()
+    if (balanceUsedPath.value.trim() !== '') config.used_path = balanceUsedPath.value.trim()
+    if (balanceAvailablePath.value.trim() !== '') {
+      config.available_path = balanceAvailablePath.value.trim()
+    }
+  }
+  const headers = parseBalanceHeaders()
+  if (balanceHeadersError.value !== '') return undefined
+  if (headers !== undefined) config.headers = headers
+  return config
+}
+
+function balanceIntervalSeconds(): number {
+  return balanceSyncInterval.value ?? 3600
+}
+
+function nextBalanceType(): BalanceQueryType | null {
+  return balanceConfigured.value && balanceQueryType.value !== 'none' ? balanceQueryType.value : null
+}
+
+function balanceSectionChanged(): boolean {
+  const snapshot = props.provider?.balance
+  const nextType = nextBalanceType()
+  if (snapshot === undefined) return nextType !== null
+  if (nextType !== snapshot.query_type) return true
+  if (nextType === null) return false
+  if (balanceAutoSync.value !== snapshot.auto_sync) return true
+  if (balanceIntervalSeconds() !== snapshot.sync_interval_seconds) return true
+  const storedDivisor =
+    snapshot.config.divisor === null ? null : Number.parseFloat(snapshot.config.divisor)
+  if ((balanceBaseUrl.value.trim() || null) !== snapshot.config.base_url) return true
+  if ((balanceUserId.value.trim() || null) !== snapshot.config.user_id) return true
+  if ((balanceCurrency.value.trim() || null) !== snapshot.config.currency) return true
+  if ((balanceDivisor.value ?? null) !== storedDivisor) return true
+  if (balanceApiKey.value.trim() !== '') return true
+  if (balanceHeadersText.value.trim() !== '') return true
+  if (nextType === 'custom') {
+    if (balancePath.value.trim() !== (snapshot.config.path ?? '')) return true
+    if (balanceMethod.value !== snapshot.config.method) return true
+    if (balanceAmountPath.value.trim() !== (snapshot.config.amount_path ?? '')) return true
+    if ((balanceUsedPath.value.trim() || null) !== snapshot.config.used_path) return true
+    if ((balanceAvailablePath.value.trim() || null) !== snapshot.config.available_path) return true
+  }
+  return false
+}
+
 function addProtocol(): void {
   protocols.value.push(newProtocolRow())
 }
-
 function removeProtocol(index: number): void {
   protocols.value.splice(index, 1)
 }
@@ -442,22 +612,37 @@ function submitForm(): void {
   authHeaderError.value = ''
   proxyError.value = ''
   syncIntervalError.value = ''
+  balanceError.value = ''
+  balanceIntervalError.value = ''
+  balanceHeadersError.value = ''
   if (name.value.trim() === '') nameError.value = '请输入供应商名称'
   const interval = syncInterval.value
   if (typeof interval !== 'number' || !Number.isInteger(interval) || interval < 1) {
     syncIntervalError.value = '请输入大于等于 1 的整数'
   }
+  const balanceInterval = balanceSyncInterval.value
+  if (
+    balanceConfigured.value &&
+    (typeof balanceInterval !== 'number' || !Number.isInteger(balanceInterval) || balanceInterval < 1)
+  ) {
+    balanceIntervalError.value = '请输入大于等于 1 的整数'
+  }
 
   const protocolPayload = buildProtocols()
   const credential = buildCredential()
   const proxy = protocolPayload === undefined ? undefined : buildProxy(protocolPayload)
+  const balanceConfig = buildBalanceConfig()
   if (
     nameError.value !== '' ||
     advancedCredentialError.value !== '' ||
     authHeaderError.value !== '' ||
     proxyError.value !== '' ||
     syncIntervalError.value !== '' ||
-    protocolPayload === undefined
+    balanceError.value !== '' ||
+    balanceIntervalError.value !== '' ||
+    balanceHeadersError.value !== '' ||
+    protocolPayload === undefined ||
+    balanceConfig === undefined
   ) {
     let selector = '[data-validation="name"] input'
     if (nameError.value === '' && syncIntervalError.value !== '') {
@@ -478,7 +663,30 @@ function submitForm(): void {
     } else if (
       nameError.value === '' &&
       syncIntervalError.value === '' &&
-      advancedCredentialError.value === ''
+      advancedCredentialError.value === '' &&
+      authHeaderError.value === '' &&
+      (balanceError.value !== '' || balanceIntervalError.value !== '')
+    ) {
+      selector =
+        balanceError.value !== ''
+          ? '[data-validation="balance"] input'
+          : '[data-validation="balance-interval"] input'
+    } else if (
+      nameError.value === '' &&
+      syncIntervalError.value === '' &&
+      advancedCredentialError.value === '' &&
+      authHeaderError.value === '' &&
+      balanceError.value === '' &&
+      balanceIntervalError.value === '' &&
+      balanceHeadersError.value !== ''
+    ) {
+      selector = '[data-validation="balance-headers"] textarea'
+    } else if (
+      nameError.value === '' &&
+      syncIntervalError.value === '' &&
+      advancedCredentialError.value === '' &&
+      balanceError.value === '' &&
+      balanceIntervalError.value === ''
     ) {
       const invalidIndex = protocols.value.findIndex(
         (row) => row.baseUrlError !== '' || row.extraHeadersError !== '',
@@ -494,6 +702,9 @@ function submitForm(): void {
   }
   if (interval === null) return
 
+  const balanceType = nextBalanceType()
+  const balanceIntervalValue = balanceIntervalSeconds()
+
   if (!editing.value) {
     const payload: ProviderCreate = {
       name: name.value.trim(),
@@ -506,6 +717,12 @@ function submitForm(): void {
     }
     if (credential !== undefined) payload.credential = credential
     if (proxy !== undefined && proxy !== null) payload.proxy = proxy
+    if (balanceType !== null) {
+      payload.balance_query_type = balanceType
+      payload.balance_auto_sync = balanceAutoSync.value
+      payload.balance_sync_interval_seconds = balanceIntervalValue
+      if (balanceConfig !== null) payload.balance_config = balanceConfig
+    }
     emit('submit', payload)
     return
   }
@@ -535,6 +752,12 @@ function submitForm(): void {
     : provider.public_multiplier
   if (publicMultiplier.value !== providerPublicMultiplier) {
     payload.public_multiplier = publicMultiplier.value
+  }
+  if (balanceSectionChanged()) {
+    payload.balance_query_type = balanceType
+    payload.balance_auto_sync = balanceType === null ? false : balanceAutoSync.value
+    payload.balance_sync_interval_seconds = balanceIntervalValue
+    if (balanceConfig !== null) payload.balance_config = balanceConfig
   }
   emit('submit', payload)
 }
@@ -750,6 +973,203 @@ function submitForm(): void {
           <p v-else class="form-help">沿用服务端全局 HTTP_PROXY、HTTPS_PROXY 与 NO_PROXY。</p>
         </div>
 
+        <div class="credential-section balance-section">
+          <div class="balance-heading">
+            <h3 class="credential-section__title">上游余额查询</h3>
+            <ElButton
+              data-test="detect-balance"
+              size="small"
+              plain
+              :loading="detecting === true"
+              :disabled="submitting || !editing"
+              :title="editing ? undefined : '保存供应商后即可自动检测接口'"
+              @click="emit('detect')"
+            >
+              <ElIcon><MagicStick /></ElIcon>
+              自动检测接口
+            </ElButton>
+          </div>
+          <p v-if="!editing" class="form-help">
+            保存供应商后可使用“自动检测接口”识别上游类型。
+          </p>
+          <div class="credential-options">
+            <ElFormItem label="上游类型" :error="balanceError" data-validation="balance">
+              <select v-model="balanceQueryType" data-test="provider-balance-type">
+                <option value="none">不查询余额</option>
+                <option value="new_api">new-api / one-api</option>
+                <option value="deepseek">DeepSeek 官方</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="custom">自定义接口</option>
+              </select>
+            </ElFormItem>
+            <ElFormItem label="自动同步余额">
+              <ElSwitch
+                v-model="balanceAutoSync"
+                data-test="provider-balance-auto-sync"
+                :disabled="!balanceConfigured"
+              />
+            </ElFormItem>
+            <ElFormItem
+              data-validation="balance-interval"
+              label="余额同步间隔（秒）"
+              :error="balanceIntervalError"
+            >
+              <ElInputNumber
+                v-model="balanceSyncInterval"
+                data-test="provider-balance-interval"
+                :min="1"
+                :step="60"
+                :disabled="!balanceConfigured"
+                controls-position="right"
+              />
+            </ElFormItem>
+          </div>
+
+          <div
+            v-if="balanceCandidates.length > 1"
+            class="balance-candidates"
+            data-test="provider-balance-candidates"
+          >
+            <p class="form-help">检测到多个可用接口，请选择要使用的上游类型：</p>
+            <label v-for="candidate in balanceCandidates" :key="candidate.query_type">
+              <input
+                v-model="balanceQueryType"
+                type="radio"
+                :value="candidate.query_type"
+                :data-test="`balance-candidate-${candidate.query_type}`"
+              />
+              <span>
+                {{ balanceTypeLabels[candidate.query_type] }} · 余额
+                {{ candidate.amount }} {{ candidate.currency }}
+              </span>
+            </label>
+          </div>
+
+          <template v-if="balanceConfigured">
+            <ElFormItem label="余额查询基础地址（可选）">
+              <ElInput
+                v-model="balanceBaseUrl"
+                data-test="provider-balance-base-url"
+                spellcheck="false"
+                placeholder="留空则使用该供应商的协议基础地址"
+              />
+            </ElFormItem>
+            <div class="credential-options">
+              <ElFormItem
+                :label="
+                  balanceSecretConfigured
+                    ? '覆盖查询密钥（留空则保持原值）'
+                    : '覆盖查询密钥（可选）'
+                "
+              >
+                <ElInput
+                  v-model="balanceApiKey"
+                  data-test="provider-balance-api-key"
+                  type="password"
+                  show-password
+                  autocomplete="new-password"
+                  spellcheck="false"
+                  placeholder="new-api 的 access token 等"
+                />
+              </ElFormItem>
+              <ElFormItem v-if="balanceQueryType === 'new_api'" label="new-api 用户 ID">
+                <ElInput
+                  v-model="balanceUserId"
+                  data-test="provider-balance-user-id"
+                  spellcheck="false"
+                  placeholder="New-Api-User 请求头"
+                />
+              </ElFormItem>
+            </div>
+
+            <template v-if="balanceQueryType === 'custom'">
+              <div class="credential-options">
+                <ElFormItem label="请求方法">
+                  <select v-model="balanceMethod" data-test="provider-balance-method">
+                    <option value="GET">GET</option>
+                    <option value="POST">POST</option>
+                  </select>
+                </ElFormItem>
+                <ElFormItem label="请求路径">
+                  <ElInput
+                    v-model="balancePath"
+                    data-test="provider-balance-path"
+                    spellcheck="false"
+                    placeholder="/api/balance"
+                  />
+                </ElFormItem>
+              </div>
+              <ElFormItem label="余额字段路径">
+                <ElInput
+                  v-model="balanceAmountPath"
+                  data-test="provider-balance-amount-path"
+                  spellcheck="false"
+                  placeholder="data.balance_infos[0].total_balance"
+                />
+                <p class="form-help">使用点号访问嵌套字段，用 [序号] 访问数组元素。</p>
+              </ElFormItem>
+              <div class="credential-options">
+                <ElFormItem label="已用额度字段路径（可选）">
+                  <ElInput
+                    v-model="balanceUsedPath"
+                    data-test="provider-balance-used-path"
+                    spellcheck="false"
+                    placeholder="data.used_quota"
+                  />
+                </ElFormItem>
+                <ElFormItem label="可用状态字段路径（可选）">
+                  <ElInput
+                    v-model="balanceAvailablePath"
+                    data-test="provider-balance-available-path"
+                    spellcheck="false"
+                    placeholder="is_available"
+                  />
+                </ElFormItem>
+              </div>
+            </template>
+
+            <div class="credential-options">
+              <ElFormItem label="币种（可选）">
+                <ElInput
+                  v-model="balanceCurrency"
+                  data-test="provider-balance-currency"
+                  spellcheck="false"
+                  placeholder="USD"
+                />
+              </ElFormItem>
+              <ElFormItem label="余额除数（可选）">
+                <ElInputNumber
+                  v-model="balanceDivisor"
+                  data-test="provider-balance-divisor"
+                  :min="0.00000001"
+                  :step="1"
+                  :precision="8"
+                  :controls="false"
+                />
+              </ElFormItem>
+            </div>
+
+            <ElFormItem
+              data-validation="balance-headers"
+              :label="
+                balanceHeadersConfigured
+                  ? '额外请求头 JSON（留空则保持原值）'
+                  : '额外请求头 JSON（可选）'
+              "
+              :error="balanceHeadersError"
+            >
+              <ElInput
+                v-model="balanceHeadersText"
+                data-test="provider-balance-headers"
+                type="textarea"
+                :rows="3"
+                spellcheck="false"
+                placeholder='例如：{"X-Tenant":"team-a"}'
+              />
+            </ElFormItem>
+          </template>
+        </div>
+
         <div class="switch-row">
           <label>
             <span>启用供应商</span>
@@ -913,6 +1333,34 @@ function submitForm(): void {
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--gateway-text);
+}
+
+.balance-heading {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.balance-heading .credential-section__title {
+  margin-bottom: 0;
+}
+
+.balance-candidates {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  background: #fff;
+  border: 1px solid var(--gateway-border);
+  border-radius: 8px;
+}
+
+.balance-candidates label {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.85rem;
 }
 
 .switch-row {

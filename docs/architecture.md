@@ -101,6 +101,7 @@ There is intentionally no transaction spanning a provider network call.
 | Route success/failure | Separate atomic `UPDATE`; failure count/open timestamp transitions are database expressions |
 | Half-open claim | Conditional atomic update lets only one replica claim an expired open route |
 | Scheduled model sync | MySQL `GET_LOCK('model-sync:<provider_id>', 0)` elects one replica; catalog changes commit together |
+| Scheduled balance sync | MySQL `GET_LOCK('balance-sync:<provider_id>', 0)` elects one replica; the balance snapshot and last error commit together |
 
 These boundaries let a replica fail between stages without holding database locks across slow
 provider I/O. Idempotency keys and the recovery scheduler reconcile abandoned reservations.

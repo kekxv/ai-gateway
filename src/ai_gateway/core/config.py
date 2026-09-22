@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     route_cooldown_seconds: int = Field(default=60, ge=1)
     route_affinity_ttl_seconds: int = Field(default=3600, ge=60)
     model_sync_interval_seconds: int = Field(default=3600, ge=1)
+    balance_sync_interval_seconds: int = Field(default=3600, ge=1)
     audit_body_limit_bytes: int = 1_048_576
     billing_default_max_output_tokens: int = Field(default=4096, ge=1)
     billing_recovery_interval_seconds: int = Field(default=60, ge=1)

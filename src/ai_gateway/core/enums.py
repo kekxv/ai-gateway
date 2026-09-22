@@ -34,6 +34,13 @@ class RouteSource(StrEnum):
     DISCOVERED = "discovered"
 
 
+class BalanceQueryType(StrEnum):
+    NEW_API = "new_api"
+    DEEPSEEK = "deepseek"
+    OPENROUTER = "openrouter"
+    CUSTOM = "custom"
+
+
 class LedgerKind(StrEnum):
     RESERVATION = "reservation"
     RESERVATION_RELEASE = "reservation_release"

@@ -285,6 +285,74 @@ export interface ProviderProxySummary {
   has_auth: boolean
 }
 
+export type BalanceQueryType = 'new_api' | 'deepseek' | 'openrouter' | 'custom'
+
+export interface ProviderBalanceConfigInput {
+  base_url?: string | null
+  api_key?: string | null
+  user_id?: string | null
+  headers?: Record<string, string> | null
+  path?: string | null
+  method?: 'GET' | 'POST'
+  amount_path?: string | null
+  used_path?: string | null
+  available_path?: string | null
+  currency?: string | null
+  divisor?: number | null
+}
+
+export interface ProviderBalanceConfigResponse {
+  base_url: string | null
+  has_api_key: boolean
+  user_id: string | null
+  has_headers: boolean
+  path: string | null
+  method: string
+  amount_path: string | null
+  used_path: string | null
+  available_path: string | null
+  currency: string | null
+  divisor: string | null
+}
+
+export interface ProviderBalanceSnapshot {
+  query_type: BalanceQueryType | null
+  auto_sync: boolean
+  sync_interval_seconds: number
+  config: ProviderBalanceConfigResponse
+  amount: string | null
+  currency: string | null
+  used: string | null
+  is_available: boolean | null
+  updated_at: string | null
+  last_sync_at: string | null
+  error: string | null
+}
+
+export interface ProviderBalanceSyncResult {
+  provider_id: number
+  query_type: BalanceQueryType
+  amount: string
+  currency: string
+  used: string | null
+  is_available: boolean | null
+  synced_at: string
+}
+
+export interface ProviderBalanceCandidate {
+  query_type: BalanceQueryType
+  amount: string
+  currency: string
+  used: string | null
+  is_available: boolean | null
+}
+
+export interface ProviderBalanceDetectionResult {
+  provider_id: number
+  candidates: ProviderBalanceCandidate[]
+  applied: BalanceQueryType | null
+}
+
 export interface ProviderCreate {
   name: string
   credential?: JsonObject
@@ -295,6 +363,10 @@ export interface ProviderCreate {
   protocols?: ProviderProtocolInput[]
   cost_multiplier?: number
   public_multiplier?: number
+  balance_query_type?: BalanceQueryType | null
+  balance_config?: ProviderBalanceConfigInput | null
+  balance_auto_sync?: boolean
+  balance_sync_interval_seconds?: number | null
 }
 
 export interface ProviderUpdate {
@@ -307,6 +379,10 @@ export interface ProviderUpdate {
   protocols?: ProviderProtocolInput[] | null
   cost_multiplier?: number | null
   public_multiplier?: number | null
+  balance_query_type?: BalanceQueryType | null
+  balance_config?: ProviderBalanceConfigInput | null
+  balance_auto_sync?: boolean | null
+  balance_sync_interval_seconds?: number | null
 }
 
 export interface ProviderProtocolResponse {
@@ -331,6 +407,7 @@ export interface ProviderResponse {
   protocols: ProviderProtocolResponse[]
   cost_multiplier: number | string
   public_multiplier: number | string
+  balance?: ProviderBalanceSnapshot
 }
 
 export interface ModelSyncResult {

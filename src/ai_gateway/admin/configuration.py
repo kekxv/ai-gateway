@@ -13,8 +13,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ai_gateway.admin.provider_balance import (
+    balance_config_from_mapping,
+    encrypt_balance_mapping,
+    stored_balance_mapping,
+    validate_balance_mapping,
+)
 from ai_gateway.auth.dependencies import admin_user
 from ai_gateway.auth.service import raise_auth_error
+from ai_gateway.catalog.balance import BalanceConfigError
 from ai_gateway.catalog.schemas import (
     BaseUrl,
     CatalogName,
@@ -22,6 +29,7 @@ from ai_gateway.catalog.schemas import (
     ModelTimePriceRuleInput,
     Price,
     PriceMultiplier,
+    ProviderBalanceConfigInput,
     ProviderCredentialObject,
     RoutingStrategy,
     WebsocketUrl,
@@ -30,7 +38,13 @@ from ai_gateway.catalog.schemas import (
     normalized_model_types,
 )
 from ai_gateway.core.config import Settings, get_settings
-from ai_gateway.core.enums import ModelType, Protocol, RouteRuntimeState, RouteSource
+from ai_gateway.core.enums import (
+    BalanceQueryType,
+    ModelType,
+    Protocol,
+    RouteRuntimeState,
+    RouteSource,
+)
 from ai_gateway.core.security import decrypt_secret, encrypt_secret
 from ai_gateway.db.models import (
     Model,
@@ -84,6 +98,13 @@ class CatalogProvider(BaseModel):
     model_sync_interval_seconds: int = Field(ge=1)
     cost_multiplier: PriceMultiplier = Decimal("1.00")
     public_multiplier: PriceMultiplier = Decimal("1.00")
+    balance_query_type: BalanceQueryType | None = None
+    balance_config: ProviderBalanceConfigInput | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    balance_auto_sync: bool = False
+    balance_sync_interval_seconds: int | None = Field(default=None, ge=1)
     protocols: list[CatalogProtocol] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -285,6 +306,16 @@ async def _validate_import_bundle(session: AsyncSession, bundle: CatalogBundle) 
             _raise_catalog_import_validation(
                 "Proxy authentication is not compatible with WebSocket endpoints"
             )
+    for provider in bundle.providers:
+        if provider.balance_query_type is None and provider.balance_config is None:
+            continue
+        try:
+            validate_balance_mapping(
+                provider.balance_query_type,
+                _balance_payload_mapping(provider.balance_config),
+            )
+        except (BalanceConfigError, ValueError):
+            _raise_catalog_import_validation("Provider balance query configuration is incomplete")
     for model in bundle.models:
         route_keys: set[str] = set()
         for route in model.routes:
@@ -343,6 +374,7 @@ async def _merge_catalog_bundle(
         provider.model_sync_interval_seconds = provider_payload.model_sync_interval_seconds
         provider.cost_multiplier = provider_payload.cost_multiplier
         provider.public_multiplier = provider_payload.public_multiplier
+        _merge_catalog_balance(provider, provider_payload, settings)
         known_protocols = {(item.protocol, item.base_url): item for item in provider.protocols}
         for protocol_payload in provider_payload.protocols:
             key = (protocol_payload.protocol, protocol_payload.base_url)
@@ -534,6 +566,72 @@ def _encrypt_json(value: object, settings: Settings) -> bytes:
     )
 
 
+def _catalog_balance_config(
+    provider: Provider,
+    settings: Settings,
+    include_secrets: bool,
+) -> ProviderBalanceConfigInput | None:
+    if not include_secrets or provider.balance_query_config_encrypted is None:
+        return None
+    mapping = stored_balance_mapping(provider, settings)
+    if not mapping:
+        return None
+    return ProviderBalanceConfigInput.model_validate(mapping)
+
+
+def _balance_payload_mapping(config: ProviderBalanceConfigInput | None) -> dict[str, object]:
+    if config is None:
+        return {}
+    return balance_config_from_mapping(
+        config.model_dump(exclude_unset=True, mode="json")
+    ).to_mapping()
+
+
+def _clear_catalog_balance_snapshot(provider: Provider) -> None:
+    provider.balance_amount = None
+    provider.balance_currency = None
+    provider.balance_used = None
+    provider.balance_is_available = None
+    provider.balance_updated_at = None
+    provider.last_balance_sync_at = None
+    provider.balance_error = None
+
+
+def _merge_catalog_balance(
+    provider: Provider,
+    payload: CatalogProvider,
+    settings: Settings,
+) -> None:
+    """Apply bundle balance settings, keeping stored secrets a redacted export omits."""
+
+    type_provided = "balance_query_type" in payload.model_fields_set
+    previous_type = provider.balance_query_type
+    if type_provided:
+        provider.balance_query_type = payload.balance_query_type
+    if payload.balance_config is not None:
+        provider.balance_query_config_encrypted = encrypt_balance_mapping(
+            _balance_payload_mapping(payload.balance_config),
+            settings,
+        )
+    elif type_provided and payload.balance_query_type != previous_type:
+        provider.balance_query_config_encrypted = None
+    if type_provided and payload.balance_query_type != previous_type:
+        _clear_catalog_balance_snapshot(provider)
+    provider.balance_auto_sync = payload.balance_auto_sync
+    if payload.balance_sync_interval_seconds is not None:
+        provider.balance_sync_interval_seconds = payload.balance_sync_interval_seconds
+    elif "balance_sync_interval_seconds" in payload.model_fields_set:
+        provider.balance_sync_interval_seconds = settings.balance_sync_interval_seconds
+    current = provider.balance_query_type
+    if current is None:
+        return
+    stored = stored_balance_mapping(provider, settings)
+    try:
+        validate_balance_mapping(current, stored)
+    except (BalanceConfigError, ValueError):
+        _raise_catalog_import_validation("Provider balance query configuration is incomplete")
+
+
 def _raise_catalog_import_validation(message: str) -> None:
     raise_auth_error(
         status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -572,6 +670,10 @@ def _catalog_provider(
         model_sync_interval_seconds=provider.model_sync_interval_seconds,
         cost_multiplier=provider.cost_multiplier,
         public_multiplier=provider.public_multiplier,
+        balance_query_type=provider.balance_query_type,
+        balance_config=_catalog_balance_config(provider, settings, include_secrets),
+        balance_auto_sync=provider.balance_auto_sync,
+        balance_sync_interval_seconds=provider.balance_sync_interval_seconds,
         protocols=[
             CatalogProtocol(
                 protocol=protocol.protocol,

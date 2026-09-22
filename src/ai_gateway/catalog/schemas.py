@@ -17,7 +17,13 @@ from pydantic import (
 
 from ai_gateway.catalog.credentials import validate_provider_credential
 from ai_gateway.core.datetime import UtcDatetime
-from ai_gateway.core.enums import ModelType, Protocol, RouteRuntimeState, RouteSource
+from ai_gateway.core.enums import (
+    BalanceQueryType,
+    ModelType,
+    Protocol,
+    RouteRuntimeState,
+    RouteSource,
+)
 from ai_gateway.core.limits import MODEL_SELECTOR_MAX_LENGTH
 from ai_gateway.transport.provider_proxy import (
     ProviderProxyConfig,
@@ -48,6 +54,13 @@ PriceMultiplier = Annotated[
     Decimal, Field(ge=Decimal("0.10"), le=Decimal("10.00"), max_digits=20, decimal_places=8)
 ]
 RoutingStrategy = Literal["weighted_random"]
+BalancePath = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=512)]
+BalanceText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
+BalanceSecret = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)
+]
+BalanceDivisor = Annotated[Decimal, Field(gt=0, max_digits=30, decimal_places=8)]
+BalanceHeaders = dict[str, str]
 
 
 def normalized_model_types(values: list[ModelType]) -> list[ModelType]:
@@ -92,6 +105,10 @@ class ProviderCreate(BaseModel):
     protocols: list[ProviderProtocolInput] = Field(default_factory=list)
     cost_multiplier: PriceMultiplier = Decimal("1.00")
     public_multiplier: PriceMultiplier = Decimal("1.00")
+    balance_query_type: BalanceQueryType | None = None
+    balance_config: ProviderBalanceConfigInput | None = None
+    balance_auto_sync: bool = False
+    balance_sync_interval_seconds: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="before")
     @classmethod
@@ -111,6 +128,10 @@ class ProviderUpdate(BaseModel):
     protocols: list[ProviderProtocolInput] | None = None
     cost_multiplier: PriceMultiplier | None = None
     public_multiplier: PriceMultiplier | None = None
+    balance_query_type: BalanceQueryType | None = None
+    balance_config: ProviderBalanceConfigInput | None = None
+    balance_auto_sync: bool | None = None
+    balance_sync_interval_seconds: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="before")
     @classmethod
@@ -128,6 +149,76 @@ class ProviderProtocolResponse(BaseModel):
     enabled: bool
 
 
+class ProviderBalanceConfigInput(BaseModel):
+    """Optional overrides for reading the upstream account balance."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: BaseUrl | None = None
+    api_key: BalanceSecret | None = None
+    user_id: BalanceText | None = None
+    headers: BalanceHeaders | None = None
+    path: BalancePath | None = None
+    method: Literal["GET", "POST"] = "GET"
+    amount_path: BalancePath | None = None
+    used_path: BalancePath | None = None
+    available_path: BalancePath | None = None
+    currency: BalanceText | None = None
+    divisor: BalanceDivisor | None = None
+
+
+class ProviderBalanceConfigResponse(BaseModel):
+    base_url: str | None = None
+    has_api_key: bool = False
+    user_id: str | None = None
+    has_headers: bool = False
+    path: str | None = None
+    method: str = "GET"
+    amount_path: str | None = None
+    used_path: str | None = None
+    available_path: str | None = None
+    currency: str | None = None
+    divisor: Decimal | None = None
+
+
+class ProviderBalanceResponse(BaseModel):
+    query_type: BalanceQueryType | None = None
+    auto_sync: bool = False
+    sync_interval_seconds: int = 3600
+    config: ProviderBalanceConfigResponse = Field(default_factory=ProviderBalanceConfigResponse)
+    amount: Decimal | None = None
+    currency: str | None = None
+    used: Decimal | None = None
+    is_available: bool | None = None
+    updated_at: UtcDatetime | None = None
+    last_sync_at: UtcDatetime | None = None
+    error: str | None = None
+
+
+class ProviderBalanceSyncResult(BaseModel):
+    provider_id: int
+    query_type: BalanceQueryType
+    amount: Decimal
+    currency: str
+    used: Decimal | None = None
+    is_available: bool | None = None
+    synced_at: datetime
+
+
+class ProviderBalanceCandidate(BaseModel):
+    query_type: BalanceQueryType
+    amount: Decimal
+    currency: str
+    used: Decimal | None = None
+    is_available: bool | None = None
+
+
+class ProviderBalanceDetectionResult(BaseModel):
+    provider_id: int
+    candidates: list[ProviderBalanceCandidate]
+    applied: BalanceQueryType | None = None
+
+
 class ProviderResponse(BaseModel):
     id: int
     name: str
@@ -142,6 +233,7 @@ class ProviderResponse(BaseModel):
     protocols: list[ProviderProtocolResponse]
     cost_multiplier: Decimal
     public_multiplier: Decimal
+    balance: ProviderBalanceResponse = Field(default_factory=ProviderBalanceResponse)
 
 
 class ModelAliasInput(BaseModel):

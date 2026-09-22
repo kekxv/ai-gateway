@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { Edit, Delete, Refresh, SwitchButton } from '@element-plus/icons-vue'
+import { computed } from 'vue'
+import { Edit, Delete, Refresh, SwitchButton, Wallet } from '@element-plus/icons-vue'
 import { ElButton, ElIcon, ElTag } from 'element-plus'
-import type { Protocol, ProviderResponse } from '@/api/types'
+import type { BalanceQueryType, Protocol, ProviderResponse } from '@/api/types'
 import StatusTag from '@/components/common/StatusTag.vue'
+import { formatBalanceAmount } from '@/utils/format'
 
-defineProps<{
+const props = defineProps<{
   provider: ProviderResponse
   loading?: boolean
   nonDeletable?: boolean
@@ -14,6 +16,7 @@ const emit = defineEmits<{
   edit: [provider: ProviderResponse]
   delete: [provider: ProviderResponse]
   sync: [provider: ProviderResponse]
+  balance: [provider: ProviderResponse]
   toggle: [provider: ProviderResponse]
 }>()
 
@@ -22,6 +25,23 @@ const protocolLabels: Readonly<Record<Protocol, string>> = {
   claude: 'Claude',
   gemini: 'Gemini',
 }
+
+const balanceTypeLabels: Readonly<Record<BalanceQueryType, string>> = {
+  new_api: 'new-api / one-api',
+  deepseek: 'DeepSeek',
+  openrouter: 'OpenRouter',
+  custom: '自定义接口',
+}
+
+const balance = computed(() => props.provider.balance ?? null)
+const balanceConfigured = computed(() => balance.value?.query_type != null)
+const balanceTypeLabel = computed(() =>
+  balance.value?.query_type == null ? '未配置' : balanceTypeLabels[balance.value.query_type],
+)
+const balanceAmount = computed(() =>
+  formatBalanceAmount(balance.value?.amount ?? null, balance.value?.currency ?? null),
+)
+const balanceError = computed(() => balance.value?.error ?? null)
 
 function formatSyncTime(value: string | null): string {
   if (value === null) return '从未同步'
@@ -82,6 +102,17 @@ function formatMultiplier(value: number | string): string {
       </ElButton>
       <ElButton
         size="small"
+        :data-test="`sync-balance-${String(provider.id)}`"
+        :loading="loading"
+        :disabled="loading || !balanceConfigured"
+        :title="balanceConfigured ? undefined : '请先在编辑面板中配置或检测余额接口'"
+        @click="emit('balance', provider)"
+      >
+        <ElIcon><Wallet /></ElIcon>
+        查余额
+      </ElButton>
+      <ElButton
+        size="small"
         :data-test="`edit-provider-${String(provider.id)}`"
         :disabled="loading"
         @click="emit('edit', provider)"
@@ -139,7 +170,40 @@ function formatMultiplier(value: number | string): string {
           <span class="label">公开倍率：</span>
           <ElTag type="warning" size="small">{{ formatMultiplier(provider.public_multiplier) }}x</ElTag>
         </div>
+        <div class="info-row" data-test="provider-balance-amount">
+          <span class="label">上游余额：</span>
+          <span class="value">{{ balanceAmount }}</span>
+        </div>
+        <div class="info-row" data-test="provider-balance-config">
+          <span class="label">余额接口：</span>
+          <span class="value">{{ balanceTypeLabel }}</span>
+        </div>
+        <div class="info-row" data-test="provider-balance-sync">
+          <span class="label">余额同步：</span>
+          <span class="value">
+            {{
+              balance?.query_type == null
+                ? '未启用'
+                : balance.auto_sync
+                  ? `自动 · ${formatInterval(balance.sync_interval_seconds)}`
+                  : '手动'
+            }}
+          </span>
+        </div>
+        <div class="info-row" data-test="provider-balance-updated">
+          <span class="label">余额更新：</span>
+          <span class="value">{{ formatSyncTime(balance?.updated_at ?? null) }}</span>
+        </div>
       </div>
+
+      <p
+        v-if="balanceError !== null"
+        class="balance-error"
+        data-test="provider-balance-error"
+        role="status"
+      >
+        余额查询失败：{{ balanceError }}
+      </p>
 
       <div v-if="provider.protocols.length > 0" class="protocols-section">
         <div class="section-title">协议配置</div>
@@ -272,6 +336,17 @@ function formatMultiplier(value: number | string): string {
 .protocols-section {
   border-top: 1px solid var(--gateway-border);
   padding-top: 0.875rem;
+}
+
+.balance-error {
+  margin: 0;
+  padding: 0.5rem 0.625rem;
+  border-radius: 8px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
 }
 
 .section-title {
