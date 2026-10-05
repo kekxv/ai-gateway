@@ -101,6 +101,7 @@ const protocolLabels: Readonly<Record<Protocol, string>> = {
   openai: 'OpenAI',
   claude: 'Claude',
   gemini: 'Gemini',
+  systemone: 'System One / Jev',
 }
 
 const filteredProviders = computed(() => {

@@ -51,6 +51,7 @@ Lean AI Gateway 是一个专注于多 AI 提供商的网关，支持 OpenAI、Cl
 | Gemini Stream Generate Content | `/v1beta/models/{model}:streamGenerateContent` | SSE |
 | Gemini 模型目录 | `/v1beta/models` | HTTP |
 | Gemini Live | `/v1beta/live` | WebSocket |
+| TypeSafe System One（Jev） | `/v1/systemone` | HTTP |
 | 管理控制台 | `/console/` | 浏览器 SPA |
 | OpenAPI 文档 | `/docs`、`/redoc`、`/openapi.json` | HTTP |
 
@@ -316,6 +317,29 @@ export MODEL_ALIAS='friendly-chat'
 别名在入站时被接受，并在向提供商发起请求或 WebSocket 握手之前被重写为所选的 `ModelRoute.upstream_model`。
 
 ## OpenAI 兼容的 HTTP 和 SSE
+
+## TypeSafe System One（Jev）
+
+网关支持 TypeSafe 的 `POST /v1/systemone` 接口，可直接使用官方 SDK。请求体包含
+`state`、`model` 和 `questions`；问题类型支持 `noul`、`choice`、`score`，响应会原样返回
+`answers` 与 `usage`。网关会按 `systemone` 协议选择路由，并使用 Bearer 凭据访问上游。
+
+将 TypeSafe SDK 的 base URL 指向网关根地址即可，SDK 会自动追加 `/v1/systemone` 和
+`/v1/models`：
+
+```python
+from typesafe_sdk import Choice, Noul, TypeSafeClient
+
+with TypeSafeClient(base_url="https://gateway.example") as client:
+    result = client.system_one(
+        state={"ticket": "payout failed"},
+        model="jev-latest",
+        questions={
+            "urgent": Noul(instructions="Is this urgent?"),
+            "team": Choice(instructions="Which team owns this?", criteria={"billing": None, "technical": None}),
+        },
+    )
+```
 
 非流式：
 

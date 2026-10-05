@@ -1263,6 +1263,7 @@ function submitForm(): void {
                 <option value="openai">OpenAI 兼容协议</option>
                 <option value="claude">Claude 兼容协议</option>
                 <option value="gemini">Gemini 兼容协议</option>
+                <option value="systemone">System One（Jev）</option>
               </select>
             </ElFormItem>
             <ElFormItem label="启用此协议">

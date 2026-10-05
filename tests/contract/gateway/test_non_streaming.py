@@ -49,6 +49,9 @@ from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate
 RAW_KEY = "sk-gw-contract-key-123456789"
 
 
+CHAT_PROTOCOLS = tuple(protocol for protocol in Protocol if protocol is not Protocol.SYSTEMONE)
+
+
 @dataclass
 class FakeBilling:
     reservation: BalanceReservation = BalanceReservation(
@@ -468,8 +471,8 @@ async def test_claude_count_tokens_authenticates_before_parsing(session: AsyncSe
     assert response.json()["error"]["type"] == "invalid_api_key"
 
 
-@pytest.mark.parametrize("inbound", list(Protocol))
-@pytest.mark.parametrize("outbound", list(Protocol))
+@pytest.mark.parametrize("inbound", CHAT_PROTOCOLS)
+@pytest.mark.parametrize("outbound", CHAT_PROTOCOLS)
 async def test_all_protocol_pairs_bind_alias_to_selected_upstream_model(
     session: AsyncSession,
     inbound: Protocol,
@@ -925,7 +928,7 @@ async def test_openai_compatible_credentialless_route_sends_normal_upstream_requ
     assert RAW_KEY not in str(seen[0].headers)
 
 
-@pytest.mark.parametrize("protocol", list(Protocol))
+@pytest.mark.parametrize("protocol", CHAT_PROTOCOLS)
 async def test_same_protocol_preserves_vendor_json_and_response_bytes(
     session: AsyncSession,
     protocol: Protocol,
@@ -1984,7 +1987,7 @@ def test_model_not_found_retains_stable_gateway_code() -> None:
     assert ModelNotFound("missing").code == "model_not_found"
 
 
-@pytest.mark.parametrize("protocol", list(Protocol))
+@pytest.mark.parametrize("protocol", CHAT_PROTOCOLS)
 @pytest.mark.parametrize(
     ("error", "expected_status", "expected_code"),
     [

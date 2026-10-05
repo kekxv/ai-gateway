@@ -5,6 +5,7 @@ class Protocol(StrEnum):
     OPENAI = "openai"
     CLAUDE = "claude"
     GEMINI = "gemini"
+    SYSTEMONE = "systemone"
 
 
 class ModelType(StrEnum):

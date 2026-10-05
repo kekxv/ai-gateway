@@ -18,6 +18,8 @@ from ai_gateway.protocols.types import (
     ToolResultPart,
 )
 
+CHAT_PROTOCOLS = tuple(protocol for protocol in Protocol if protocol is not Protocol.SYSTEMONE)
+
 
 def _request(message: CanonicalMessage) -> CanonicalRequest:
     return CanonicalRequest(
@@ -35,7 +37,7 @@ def _request(message: CanonicalMessage) -> CanonicalRequest:
     )
 
 
-@pytest.mark.parametrize("protocol", tuple(Protocol))
+@pytest.mark.parametrize("protocol", CHAT_PROTOCOLS)
 @pytest.mark.parametrize("bad_stream", ["false", 0, 1, [], {}])
 def test_stream_requires_a_real_boolean(protocol, bad_stream, load_fixture) -> None:
     payload = load_fixture(protocol.value, "request.json")
@@ -219,7 +221,7 @@ def test_singular_canonical_responses_reject_multiple_native_candidates(load_fix
         get_adapter("gemini").decode_response(gemini)
 
 
-@pytest.mark.parametrize("protocol", tuple(Protocol))
+@pytest.mark.parametrize("protocol", CHAT_PROTOCOLS)
 def test_native_and_canonical_response_roles_must_be_assistant(protocol, load_fixture) -> None:
     adapter = get_adapter(protocol)
     payload = load_fixture(protocol.value, "response.json")
@@ -238,7 +240,7 @@ def test_native_and_canonical_response_roles_must_be_assistant(protocol, load_fi
         adapter.encode_response(invalid)
 
 
-@pytest.mark.parametrize("protocol", tuple(Protocol))
+@pytest.mark.parametrize("protocol", CHAT_PROTOCOLS)
 def test_error_finish_reason_is_never_encoded_as_success(protocol, load_fixture) -> None:
     adapter = get_adapter(protocol)
     response = adapter.decode_response(load_fixture(protocol.value, "response.json"))
@@ -249,7 +251,7 @@ def test_error_finish_reason_is_never_encoded_as_success(protocol, load_fixture)
         adapter.encode_stream_event(StreamEvent(type="message_end", finish_reason="error"))
 
 
-@pytest.mark.parametrize("protocol", tuple(Protocol))
+@pytest.mark.parametrize("protocol", CHAT_PROTOCOLS)
 def test_native_system_surfaces_reject_non_text_content(protocol) -> None:
     if protocol is Protocol.OPENAI:
         payload = {
@@ -286,7 +288,7 @@ def test_native_system_surfaces_reject_non_text_content(protocol) -> None:
         get_adapter(protocol).decode_request(payload)
 
 
-@pytest.mark.parametrize("protocol", tuple(Protocol))
+@pytest.mark.parametrize("protocol", CHAT_PROTOCOLS)
 def test_canonical_system_rejects_non_text_content(protocol) -> None:
     request = replace(
         _request(CanonicalMessage("user", (TextPart("hi"),))),
@@ -311,7 +313,7 @@ def test_openai_rejects_unsupported_string_tool_choice(choice: str) -> None:
         get_adapter("openai").encode_request(request)
 
 
-@pytest.mark.parametrize("protocol", tuple(Protocol))
+@pytest.mark.parametrize("protocol", CHAT_PROTOCOLS)
 @pytest.mark.parametrize("bad_tokens", [True, False, -1])
 def test_usage_token_counts_are_nonnegative_integers(protocol, bad_tokens, load_fixture) -> None:
     payload = load_fixture(protocol.value, "response.json")
@@ -326,7 +328,7 @@ def test_usage_token_counts_are_nonnegative_integers(protocol, bad_tokens, load_
         get_adapter(protocol).decode_response(payload)
 
 
-@pytest.mark.parametrize("protocol", tuple(Protocol))
+@pytest.mark.parametrize("protocol", CHAT_PROTOCOLS)
 def test_canonical_usage_token_counts_are_validated(protocol, load_fixture) -> None:
     adapter = get_adapter(protocol)
     response = replace(
@@ -348,7 +350,7 @@ def test_canonical_usage_token_counts_are_validated(protocol, load_fixture) -> N
         CanonicalUsage(1, 2, cache_write_tokens=-1),
     ],
 )
-@pytest.mark.parametrize("protocol", tuple(Protocol))
+@pytest.mark.parametrize("protocol", CHAT_PROTOCOLS)
 def test_canonical_cache_usage_token_counts_are_validated(
     protocol: Protocol,
     usage: CanonicalUsage,

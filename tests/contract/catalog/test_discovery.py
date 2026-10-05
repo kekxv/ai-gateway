@@ -9,7 +9,7 @@ import orjson
 import pytest
 from cryptography.fernet import Fernet
 
-from ai_gateway.catalog.discovery import discover_models
+from ai_gateway.catalog.discovery import _page_models, discover_models
 from ai_gateway.core.config import Settings
 from ai_gateway.core.enums import Protocol
 from ai_gateway.core.security import encrypt_secret
@@ -58,6 +58,13 @@ def _route(
     )
 
 
+def test_systemone_model_discovery_reads_models_name_shape() -> None:
+    assert _page_models(
+        Protocol.SYSTEMONE,
+        {"models": [{"name": "jev-latest"}, {"name": "jev-1.13.0"}]},
+    ) == ["jev-latest", "jev-1.13.0"]
+
+
 @pytest.mark.parametrize(
     ("protocol", "expected_headers"),
     [
@@ -67,6 +74,7 @@ def _route(
             {"x-api-key": "provider-secret", "anthropic-version": "2023-06-01"},
         ),
         (Protocol.GEMINI, {"x-goog-api-key": "provider-secret"}),
+        (Protocol.SYSTEMONE, {"authorization": "Bearer provider-secret"}),
     ],
 )
 def test_build_upstream_request_replaces_inbound_auth_for_each_protocol(

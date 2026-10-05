@@ -33,6 +33,8 @@ from ai_gateway.protocols.types import CanonicalUsage, StreamEvent
 from ai_gateway.routing.types import NoRouteAvailable, RouteCandidate
 from ai_gateway.transport.sse import GatewayContext, SSEDecoder, SSEEvent, stream_gateway_response
 
+CHAT_PROTOCOLS = tuple(protocol for protocol in Protocol if protocol is not Protocol.SYSTEMONE)
+
 RAW_KEY = "sk-gw-stream-key-123456789"
 
 
@@ -412,8 +414,8 @@ def _decode_output(protocol: Protocol, wire: bytes) -> tuple[StreamEvent, ...]:
     return tuple(events)
 
 
-@pytest.mark.parametrize("source", list(Protocol))
-@pytest.mark.parametrize("target", list(Protocol))
+@pytest.mark.parametrize("source", CHAT_PROTOCOLS)
+@pytest.mark.parametrize("target", CHAT_PROTOCOLS)
 async def test_all_nine_stream_pairs_convert_incrementally(
     source: Protocol,
     target: Protocol,
@@ -976,7 +978,7 @@ async def test_incomplete_cross_protocol_eof_after_prefetch_records_failure(
     assert audit.failed is not None
 
 
-@pytest.mark.parametrize("protocol", list(Protocol))
+@pytest.mark.parametrize("protocol", CHAT_PROTOCOLS)
 async def test_same_protocol_truncated_eof_records_upstream_failure(
     session: AsyncSession,
     protocol: Protocol,
@@ -984,7 +986,7 @@ async def test_same_protocol_truncated_eof_records_upstream_failure(
     settings = _settings()
     model = await _catalog(session)
     alias = model.aliases[0].alias
-    route = _route(model.id, 100 + list(Protocol).index(protocol), "truncated", settings, protocol)
+    route = _route(model.id, 100 + CHAT_PROTOCOLS.index(protocol), "truncated", settings, protocol)
     complete_frames = _source_frames(protocol)
     stream = ChunkStream(complete_frames[:-1])
 

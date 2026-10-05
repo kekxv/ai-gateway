@@ -1,4 +1,4 @@
-export type Protocol = 'openai' | 'claude' | 'gemini'
+export type Protocol = 'openai' | 'claude' | 'gemini' | 'systemone'
 export type UserRole = 'admin' | 'user'
 export type RequestStatus = 'started' | 'completed' | 'failed' | 'client_disconnected'
 export type RouteRuntimeState = 'closed' | 'open' | 'half_open'

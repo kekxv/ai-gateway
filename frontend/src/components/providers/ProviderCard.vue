@@ -25,6 +25,7 @@ const protocolLabels: Readonly<Record<Protocol, string>> = {
   openai: 'OpenAI',
   claude: 'Claude',
   gemini: 'Gemini',
+  systemone: 'System One / Jev',
 }
 
 const balanceTypeLabels: Readonly<Record<BalanceQueryType, string>> = {
@@ -43,6 +44,27 @@ const balanceAmount = computed(() =>
   formatBalanceAmount(balance.value?.amount ?? null, balance.value?.currency ?? null),
 )
 const balanceError = computed(() => balance.value?.error ?? null)
+
+const providerHomeUrl = computed(() => {
+  const protocol = props.provider.protocols.find((item) => item.enabled) ?? props.provider.protocols[0]
+  if (protocol === undefined) return null
+  try {
+    const url = new URL(protocol.base_url)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+    // Provider credentials belong in the encrypted credential field, but strip
+    // them defensively before putting a configured URL into an external link.
+    url.username = ''
+    url.password = ''
+    url.pathname = url.pathname
+      .replace(/\/(?:v1beta|v1|anthropic)\/?$/i, '')
+      .replace(/\/$/, '')
+    url.search = ''
+    url.hash = ''
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return null
+  }
+})
 
 function formatSyncTime(value: string | null): string {
   if (value === null) return '从未同步'
@@ -76,6 +98,17 @@ function formatMultiplier(value: number | string): string {
       <div class="provider-info">
         <h3 class="provider-name">{{ provider.name }}</h3>
         <StatusTag :status="provider.enabled ? 'enabled' : 'disabled'" />
+        <a
+          v-if="providerHomeUrl !== null"
+          class="provider-home-link"
+          :href="providerHomeUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          :data-test="`provider-home-${String(provider.id)}`"
+          :title="`打开 ${provider.name} 首页`"
+        >
+          首页
+        </a>
       </div>
     </div>
     <div class="card-actions">

@@ -54,13 +54,18 @@ async def list_models(request: Request, session: Session) -> Response:
             )
         else:
             # Default to OpenAI format
-            models = await _list_selectable_models(session, principal, Protocol.OPENAI)
-            return JSONResponse(
-                content={
-                    "object": "list",
-                    "data": [_openai_model(model) for model in models],
-                }
-            )
+            openai_models = await _list_selectable_models(session, principal, Protocol.OPENAI)
+            systemone_models = await _list_selectable_models(session, principal, Protocol.SYSTEMONE)
+            content: dict[str, Any] = {
+                "object": "list",
+                "data": [_openai_model(model) for model in openai_models],
+            }
+            # TypeSafe's official SDK reads this collection from the same
+            # `/v1/models` resource. Both collections are filtered by the
+            # authenticated API key's provider/model scope above.
+            if systemone_models:
+                content["models"] = [_systemone_model(model) for model in systemone_models]
+            return JSONResponse(content=content)
     except Exception as exc:
         # Determine which error format to use
         is_claude_request = bool(request.headers.get("anthropic-version"))
@@ -105,9 +110,20 @@ async def get_openai_model(model_id: str, request: Request, session: Session) ->
             (item for item in models if _selector_key(item.selectable_id) == requested_key),
             None,
         )
+        if model is not None:
+            return JSONResponse(content=_openai_model(model))
+        systemone_models = await _list_selectable_models(session, principal, Protocol.SYSTEMONE)
+        model = next(
+            (
+                item
+                for item in systemone_models
+                if _selector_key(item.selectable_id) == requested_key
+            ),
+            None,
+        )
         if model is None:
             raise ModelNotFound(model_id)
-        return JSONResponse(content=_openai_model(model))
+        return JSONResponse(content=_systemone_model(model))
     except Exception as exc:
         return native_error_response(Protocol.OPENAI, exc)
 
@@ -237,4 +253,12 @@ def _claude_model(model: SelectableModel) -> dict[str, Any]:
         "display_name": model.display_name,
         # Placeholder; gateway doesn't track creation time per model.
         "created_at": "2024-01-01T00:00:00Z",
+    }
+
+
+def _systemone_model(model: SelectableModel) -> dict[str, Any]:
+    return {
+        "name": model.selectable_id,
+        "description": model.display_name,
+        "release_date": "2026-09-15",
     }

@@ -180,6 +180,16 @@ describe('供应商与协议管理', () => {
     wrapper.unmount()
   })
 
+  it('在供应商标题提供安全的首页跳转链接并去掉 API 路径', async () => {
+    const wrapper = await mountProviders()
+
+    const link = wrapper.get('[data-test="provider-home-1"]')
+    expect(link.attributes('href')).toBe('https://api.openai.com')
+    expect(link.attributes('target')).toBe('_blank')
+    expect(link.attributes('rel')).toBe('noopener noreferrer')
+    wrapper.unmount()
+  })
+
   it('将启用与停用供应商分区并显示各自数量', async () => {
     const disabledProvider = { ...geminiFixture, enabled: false }
     const wrapper = await mountProviders([providerFixture, disabledProvider])

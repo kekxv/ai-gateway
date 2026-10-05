@@ -28,6 +28,7 @@ _PROTOCOL_FALLBACK_ORDER = {
     Protocol.OPENAI: 0,
     Protocol.CLAUDE: 1,
     Protocol.GEMINI: 2,
+    Protocol.SYSTEMONE: 3,
 }
 
 

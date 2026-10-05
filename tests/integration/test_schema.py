@@ -279,7 +279,7 @@ async def test_mysql_reflection_preserves_security_and_decimal_column_types(
 
 
 def test_schema_exposes_required_enums() -> None:
-    assert {item.value for item in Protocol} == {"openai", "claude", "gemini"}
+    assert {item.value for item in Protocol} == {"openai", "claude", "gemini", "systemone"}
     assert {item.value for item in ApiKeyScope} == {
         "all",
         "providers",

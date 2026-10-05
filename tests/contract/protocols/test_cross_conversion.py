@@ -22,7 +22,9 @@ from ai_gateway.protocols.types import (
     ToolResultPart,
 )
 
-PROTOCOLS = tuple(Protocol)
+CHAT_PROTOCOLS = tuple(protocol for protocol in Protocol if protocol is not Protocol.SYSTEMONE)
+
+PROTOCOLS = CHAT_PROTOCOLS
 
 
 def expected_request() -> CanonicalRequest:

@@ -74,6 +74,7 @@ class ProviderCredential:
             Protocol.OPENAI: ("authorization", "Bearer"),
             Protocol.CLAUDE: ("x-api-key", "ApiKey"),
             Protocol.GEMINI: ("x-goog-api-key", "ApiKey"),
+            Protocol.SYSTEMONE: ("authorization", "Bearer"),
         }
         try:
             default_header, default_scheme = defaults[protocol]

@@ -1702,6 +1702,13 @@ def upstream_url(
         return urlunsplit(
             (parsed_base.scheme, parsed_base.netloc, path, parsed_base.query, parsed_base.fragment)
         )
+    if selected is Protocol.SYSTEMONE:
+        path = (
+            f"{base_path}/systemone" if base_path.endswith("/v1") else f"{base_path}/v1/systemone"
+        )
+        return urlunsplit(
+            (parsed_base.scheme, parsed_base.netloc, path, parsed_base.query, parsed_base.fragment)
+        )
     encoded_model = quote(upstream_model.removeprefix("models/"), safe="")
     prefix = base_path if base_path.endswith("/v1beta") else f"{base_path}/v1beta"
     method = "streamGenerateContent?alt=sse" if stream else "generateContent"
@@ -2447,7 +2454,7 @@ def _public_error_code(exc: BaseException) -> str:
 def native_error_response(protocol: Protocol, exc: BaseException) -> JSONResponse:
     status_code, code, message, include_request_id = _native_error_detail(exc)
     request_id = current_request_id() or ""
-    if protocol is Protocol.OPENAI:
+    if protocol in {Protocol.OPENAI, Protocol.SYSTEMONE}:
         error_type = (
             "authentication_error"
             if code == "invalid_api_key"

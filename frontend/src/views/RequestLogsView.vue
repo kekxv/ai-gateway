@@ -110,6 +110,7 @@ const protocolLabels: Readonly<Record<Protocol, string>> = {
   openai: 'OpenAI',
   claude: 'Claude',
   gemini: 'Gemini',
+  systemone: 'System One / Jev',
 }
 
 function statusTagType(status: RequestStatus): 'success' | 'danger' | 'info' {

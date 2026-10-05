@@ -107,6 +107,8 @@ def discovery_url(provider_protocol: DiscoverableProtocol) -> str:
         return f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
     if protocol is Protocol.GEMINI:
         return f"{base}/models" if base.endswith("/v1beta") else f"{base}/v1beta/models"
+    if protocol is Protocol.SYSTEMONE:
+        return f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
     raise ValueError("Unsupported provider protocol")
 
 
@@ -121,11 +123,11 @@ def _json_object(response: httpx.Response) -> dict[str, Any]:
 
 
 def _page_models(protocol: Protocol, page: Mapping[str, Any]) -> list[str]:
-    collection_name = "models" if protocol is Protocol.GEMINI else "data"
+    collection_name = "models" if protocol in {Protocol.GEMINI, Protocol.SYSTEMONE} else "data"
     raw_models = page.get(collection_name)
     if not isinstance(raw_models, list):
         raise ValueError("Provider discovery response is missing its model list")
-    field_name = "name" if protocol is Protocol.GEMINI else "id"
+    field_name = "name" if protocol in {Protocol.GEMINI, Protocol.SYSTEMONE} else "id"
     models: list[str] = []
     for raw_model in raw_models:
         if not isinstance(raw_model, Mapping):

@@ -108,6 +108,14 @@ def extract_provider_usage(
                 "usage.cache_creation_input_tokens",
             ),
         )
+    if selected_protocol is Protocol.SYSTEMONE:
+        usage = _mapping(payload.get("usage"))
+        if usage is None or "input_tokens" not in usage:
+            return None
+        return CanonicalUsage(
+            input_tokens=nonnegative_int(usage["input_tokens"], "usage.input_tokens"),
+            output_tokens=nonnegative_int(usage.get("output_tokens", 0), "usage.output_tokens"),
+        )
 
     usage = _mapping(payload.get("usageMetadata"))
     if usage is None:

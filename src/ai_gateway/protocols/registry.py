@@ -5,11 +5,13 @@ from ai_gateway.protocols.base import ProtocolAdapter
 from ai_gateway.protocols.claude import ClaudeAdapter
 from ai_gateway.protocols.gemini import GeminiAdapter
 from ai_gateway.protocols.openai import OpenAIAdapter
+from ai_gateway.protocols.systemone import SystemOneAdapter
 
 _ADAPTERS: dict[Protocol, ProtocolAdapter] = {
     Protocol.OPENAI: OpenAIAdapter(),
     Protocol.CLAUDE: ClaudeAdapter(),
     Protocol.GEMINI: GeminiAdapter(),
+    Protocol.SYSTEMONE: SystemOneAdapter(),
 }
 
 

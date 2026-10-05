@@ -24,6 +24,8 @@ from ai_gateway.protocols.types import (
     ToolResultPart,
 )
 
+CHAT_PROTOCOLS = tuple(protocol for protocol in Protocol if protocol is not Protocol.SYSTEMONE)
+
 
 def test_openai_golden_request_decodes_all_contract_fields(load_fixture) -> None:
     canonical = OpenAIAdapter().decode_request(load_fixture("openai", "request.json"))
@@ -179,7 +181,7 @@ def test_same_protocol_passthrough_rewrites_only_selected_upstream_model(load_fi
     assert after == before
 
 
-@pytest.mark.parametrize("protocol", tuple(Protocol))
+@pytest.mark.parametrize("protocol", CHAT_PROTOCOLS)
 def test_same_protocol_passthrough_forwards_sse_bytes_exactly(protocol, load_bytes) -> None:
     raw = load_bytes(protocol.value, "stream.sse")
     assert rewrite_passthrough_sse(raw) is raw
