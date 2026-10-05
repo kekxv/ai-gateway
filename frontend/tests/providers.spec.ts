@@ -38,6 +38,7 @@ async function waitForFormErrors(): Promise<void> {
 const providerFixture: ProviderResponse = {
   id: 1,
   name: 'OpenAI 主线路',
+  homepage_url: 'https://openai.com',
   has_credential: true,
   proxy: { mode: 'inherit', url: null, auth_type: null, has_auth: false },
   enabled: true,
@@ -181,12 +182,18 @@ describe('供应商与协议管理', () => {
   })
 
   it('在供应商标题提供安全的首页跳转链接并去掉 API 路径', async () => {
-    const wrapper = await mountProviders()
+    const wrapper = await mountProviders([{ ...providerFixture, homepage_url: 'https://openai.com' }])
 
     const link = wrapper.get('[data-test="provider-home-1"]')
-    expect(link.attributes('href')).toBe('https://api.openai.com')
+    expect(link.attributes('href')).toBe('https://openai.com')
     expect(link.attributes('target')).toBe('_blank')
     expect(link.attributes('rel')).toBe('noopener noreferrer')
+    wrapper.unmount()
+  })
+
+  it('未配置供应商首页时不渲染首页入口', async () => {
+    const wrapper = await mountProviders([{ ...providerFixture, homepage_url: null }])
+    expect(wrapper.find('[data-test="provider-home-1"]').exists()).toBe(false)
     wrapper.unmount()
   })
 

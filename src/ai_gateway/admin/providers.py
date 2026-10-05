@@ -73,6 +73,7 @@ async def create_provider(
         raise_invalid_balance_config(exc)
     provider = Provider(
         name=payload.name,
+        homepage_url=payload.homepage_url,
         credential_encrypted=_encrypt_json(payload.credential, settings),
         proxy_config_encrypted=encrypt_provider_proxy(payload.proxy, settings=settings),
         enabled=payload.enabled,
@@ -164,6 +165,8 @@ async def update_provider(
     _validate_proxy_protocols(active_proxy, active_protocols)
     if payload.name is not None:
         provider.name = payload.name
+    if "homepage_url" in payload.model_fields_set:
+        provider.homepage_url = payload.homepage_url
     if "credential" in payload.model_fields_set:
         if payload.credential is None:
             raise_auth_error(
@@ -434,6 +437,7 @@ def _provider_response(provider: Provider, settings: Settings) -> ProviderRespon
     return ProviderResponse(
         id=provider.id,
         name=provider.name,
+        homepage_url=provider.homepage_url,
         has_credential=orjson.loads(
             decrypt_secret(provider.credential_encrypted, settings=settings)
         )

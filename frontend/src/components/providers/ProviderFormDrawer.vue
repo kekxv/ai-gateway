@@ -70,6 +70,7 @@ const emit = defineEmits<{
 }>()
 
 const name = ref('')
+const homepageUrl = ref('')
 const apiKey = ref('')
 const advancedCredentialText = ref('')
 const authScheme = ref<AuthScheme>('protocol-default')
@@ -167,6 +168,7 @@ function newProtocolRow(): ProtocolRow {
 function resetForm(): void {
   const provider = props.provider
   name.value = provider?.name ?? ''
+  homepageUrl.value = provider?.homepage_url ?? ''
   apiKey.value = ''
   advancedCredentialText.value = ''
   authScheme.value = 'protocol-default'
@@ -731,6 +733,7 @@ function submitForm(): void {
       cost_multiplier: costMultiplier.value,
       public_multiplier: publicMultiplier.value,
     }
+    if (homepageUrl.value.trim() !== '') payload.homepage_url = homepageUrl.value.trim()
     if (credential !== undefined) payload.credential = credential
     if (proxy !== undefined && proxy !== null) payload.proxy = proxy
     if (balanceType !== null) {
@@ -747,6 +750,9 @@ function submitForm(): void {
   if (provider === null) return
   const payload: ProviderUpdate = {}
   if (name.value.trim() !== provider.name) payload.name = name.value.trim()
+  if ((homepageUrl.value.trim() || null) !== provider.homepage_url) {
+    payload.homepage_url = homepageUrl.value.trim() || null
+  }
   if (credential !== undefined) payload.credential = credential
   if (proxy !== undefined) payload.proxy = proxy
   if (enabled.value !== provider.enabled) payload.enabled = enabled.value
@@ -803,6 +809,15 @@ function submitForm(): void {
         <div class="form-grid">
           <ElFormItem data-validation="name" label="供应商名称" :error="nameError">
             <ElInput v-model="name" data-test="provider-name" maxlength="255" />
+          </ElFormItem>
+          <ElFormItem label="供应商首页（可选）" data-test="homepage-url-field">
+            <ElInput
+              v-model="homepageUrl"
+              data-test="provider-homepage-url"
+              type="url"
+              placeholder="https://example.com"
+              maxlength="512"
+            />
           </ElFormItem>
           <ElFormItem
             data-test="sync-interval-field"

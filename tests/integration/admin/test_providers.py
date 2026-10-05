@@ -97,3 +97,27 @@ async def test_provider_dual_multiplier_comprehensive_flow(
     provider_in_list = next(p for p in providers if p["id"] == provider_id)
     assert provider_in_list["cost_multiplier"] == "10.00"
     assert provider_in_list["public_multiplier"] == "2.00"
+
+
+@pytest.mark.asyncio
+async def test_provider_homepage_url_is_explicitly_configured_and_returned(
+    admin_client: AsyncClient,
+) -> None:
+    response = await admin_client.post(
+        "/admin/providers",
+        json={
+            "name": "homepage-provider",
+            "homepage_url": "https://vendor.example.com/",
+            "credential": {},
+            "protocols": [],
+        },
+    )
+    assert response.status_code == 201
+    provider = response.json()
+    assert provider["homepage_url"] == "https://vendor.example.com/"
+
+    updated = await admin_client.patch(
+        f"/admin/providers/{provider['id']}", json={"homepage_url": None}
+    )
+    assert updated.status_code == 200
+    assert updated.json()["homepage_url"] is None

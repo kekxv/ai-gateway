@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, time
 from decimal import Decimal
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import (
     AfterValidator,
@@ -42,6 +43,22 @@ CatalogName = Annotated[
 BaseUrl = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=512),
+]
+
+
+def validate_homepage_url(value: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+        raise ValueError("homepage_url must be an HTTP(S) URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("homepage_url must not contain credentials")
+    return value
+
+
+HomepageUrl = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=512),
+    AfterValidator(validate_homepage_url),
 ]
 WebsocketUrl = Annotated[
     str,
@@ -97,6 +114,7 @@ class ProviderCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: CatalogName
+    homepage_url: HomepageUrl | None = None
     credential: ProviderCredentialObject = Field(default_factory=dict)
     proxy: ProviderProxyConfig = Field(default_factory=ProviderProxyInherit, discriminator="mode")
     enabled: bool = True
@@ -120,6 +138,7 @@ class ProviderUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: CatalogName | None = None
+    homepage_url: HomepageUrl | None = None
     credential: ProviderCredentialObject | None = None
     proxy: ProviderProxyConfig | None = Field(default=None, discriminator="mode")
     enabled: bool | None = None
@@ -298,6 +317,7 @@ class ProviderBalanceDetectionResult(BaseModel):
 class ProviderResponse(BaseModel):
     id: int
     name: str
+    homepage_url: str | None = None
     has_credential: bool
     proxy: ProviderProxySummary = Field(
         default_factory=lambda: ProviderProxySummary(mode="inherit")

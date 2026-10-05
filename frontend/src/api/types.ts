@@ -376,6 +376,7 @@ export interface ProviderBalanceDetectionResult {
 
 export interface ProviderCreate {
   name: string
+  homepage_url?: string | null
   credential?: JsonObject
   proxy?: ProviderProxyInput | null
   enabled?: boolean
@@ -392,6 +393,7 @@ export interface ProviderCreate {
 
 export interface ProviderUpdate {
   name?: string | null
+  homepage_url?: string | null
   credential?: JsonObject | null
   proxy?: ProviderProxyInput | null
   enabled?: boolean | null
@@ -419,6 +421,7 @@ export interface ProviderProtocolResponse {
 export interface ProviderResponse {
   id: number
   name: string
+  homepage_url?: string | null
   has_credential: boolean
   proxy: ProviderProxySummary
   enabled: boolean

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Edit, Delete, PriceTag, Refresh, SwitchButton, Wallet } from '@element-plus/icons-vue'
+import { Delete, Edit, Link, PriceTag, Refresh, SwitchButton, Wallet } from '@element-plus/icons-vue'
 import { ElButton, ElIcon, ElTag } from 'element-plus'
 import type { BalanceQueryType, Protocol, ProviderResponse } from '@/api/types'
 import StatusTag from '@/components/common/StatusTag.vue'
@@ -46,20 +46,13 @@ const balanceAmount = computed(() =>
 const balanceError = computed(() => balance.value?.error ?? null)
 
 const providerHomeUrl = computed(() => {
-  const protocol = props.provider.protocols.find((item) => item.enabled) ?? props.provider.protocols[0]
-  if (protocol === undefined) return null
   try {
-    const url = new URL(protocol.base_url)
+    const homepageUrl = props.provider.homepage_url
+    if (homepageUrl === undefined || homepageUrl === null || homepageUrl === '') return null
+    const url = new URL(homepageUrl)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
-    // Provider credentials belong in the encrypted credential field, but strip
-    // them defensively before putting a configured URL into an external link.
     url.username = ''
     url.password = ''
-    url.pathname = url.pathname
-      .replace(/\/(?:v1beta|v1|anthropic)\/?$/i, '')
-      .replace(/\/$/, '')
-    url.search = ''
-    url.hash = ''
     return url.toString().replace(/\/$/, '')
   } catch {
     return null
@@ -107,7 +100,7 @@ function formatMultiplier(value: number | string): string {
           :data-test="`provider-home-${String(provider.id)}`"
           :title="`打开 ${provider.name} 首页`"
         >
-          首页
+          <ElIcon :size="18"><Link /></ElIcon>
         </a>
       </div>
     </div>
@@ -314,6 +307,17 @@ function formatMultiplier(value: number | string): string {
   gap: 0.5rem;
   flex: 1;
   min-width: 0;
+}
+
+.provider-home-link {
+  display: inline-flex;
+  align-items: center;
+  color: #94a7c3;
+  transition: color 0.2s;
+}
+
+.provider-home-link:hover {
+  color: var(--gateway-brand);
 }
 
 .provider-name {
