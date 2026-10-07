@@ -200,6 +200,79 @@ wire_api = "responses"
     })
   })
 
+  it.each([true, false])('Claude 序列化显式思考开关 %s 和强度', (enabled) => {
+    const config = JSON.parse(buildClientConfig('claude', {
+      ...input, claudeThinking: { enabled, effort: 'high' },
+    }).content) as Record<string, unknown>
+    expect(config).toMatchObject({ alwaysThinkingEnabled: enabled, effortLevel: 'high' })
+  })
+
+  it('Codex 分别设置主模型和子代理的推理强度', () => {
+    const config = buildClientConfig('codex', {
+      ...input, codexReasoning: { effort: 'xhigh', subagentEffort: 'low' },
+    }).content
+    expect(config).toContain('model_reasoning_effort = "xhigh"\n')
+    expect(config).toContain('[agents]\ndefault_subagent_model = "gateway-model"\ndefault_subagent_reasoning_effort = "low"')
+    expect(config.indexOf('model_reasoning_effort')).toBeLessThan(config.indexOf('[agents]'))
+  })
+
+  it('OpenCode 为全部角色所用模型写入推理选项', () => {
+    const config = JSON.parse(buildClientConfig('opencode', {
+      ...input, openCodeModels: { plan: 'planner' }, openCodeReasoningEffort: 'high',
+    }).content) as { provider: { gateway: { models: Record<string, unknown> } } }
+    expect(config.provider.gateway.models).toEqual({
+      'gateway-model': { name: 'gateway-model', options: { reasoningEffort: 'high' } },
+      planner: { name: 'planner', options: { reasoningEffort: 'high' } },
+    })
+  })
+
+  it('Pi 保留关闭的思考能力且不为未配置模型添加该字段', () => {
+    const config = JSON.parse(buildClientConfig('pi', {
+      ...input, piModels: [{ id: 'disabled', reasoning: false }, { id: 'unset' }],
+    }).content) as { providers: { gateway: { models: Array<Record<string, unknown>> } } }
+    expect(config.providers.gateway.models[0]).toMatchObject({ reasoning: false })
+    expect(config.providers.gateway.models[1]).not.toHaveProperty('reasoning')
+  })
+
+  it.each([true, false])('Codex 显式切换思考模式 %s，覆盖主模型与子代理强度', (enabled) => {
+    const file = buildClientConfig('codex', {
+      ...input, thinkingEnabled: enabled, codexReasoning: { effort: 'high', subagentEffort: 'low' },
+    })
+    expect(file.content).toContain(`model_reasoning_effort = "${enabled ? 'high' : 'none'}"`)
+    expect(file.content).toContain(`default_subagent_reasoning_effort = "${enabled ? 'low' : 'none'}"`)
+  })
+
+  it.each([true, false])('OpenCode 显式切换思考模式 %s', (enabled) => {
+    const config = JSON.parse(buildClientConfig('opencode', {
+      ...input, thinkingEnabled: enabled,
+    }).content) as { provider: { gateway: { models: Record<string, { options: { reasoningEffort: string } }> } } }
+    expect(config.provider.gateway.models['gateway-model']?.options.reasoningEffort).toBe(enabled ? 'medium' : 'none')
+  })
+
+  it.each([true, false])('Pi 通过独立 settings.json 设置思考模式 %s，保留模型能力', (enabled) => {
+    const file = buildClientConfig('pi', {
+      ...input, thinkingEnabled: enabled, piModels: [{ id: 'gateway-model', reasoning: true }],
+    })
+    expect(JSON.parse(file.content)).toMatchObject({ providers: { gateway: { models: [{ reasoning: true }] } } })
+    expect(file.additionalFiles).toEqual([{
+      filename: 'settings.json', location: '~/.pi/agent/settings.json',
+      content: JSON.stringify({
+        defaultThinkingLevel: enabled ? 'medium' : 'off',
+        modelThinkingLevels: { 'gateway/gateway-model': enabled ? 'medium' : 'off' },
+      }, null, 2) + '\n',
+    }])
+  })
+
+  it('Pi 开启思考时为未声明能力的模型补齐能力标记，并保留明确不支持的模型', () => {
+    const config = JSON.parse(buildClientConfig('pi', {
+      ...input, thinkingEnabled: true,
+      piModels: [{ id: 'unknown' }, { id: 'unsupported', reasoning: false }],
+    }).content) as { providers: { gateway: { models: Array<Record<string, unknown>> } } }
+    expect(config.providers.gateway.models).toMatchObject([
+      { id: 'unknown', reasoning: true }, { id: 'unsupported', reasoning: false },
+    ])
+  })
+
   it('拒绝缺失的 API key、网关地址或模型 ID', () => {
     expect(() => buildClientConfig('pi', { ...input, apiKey: ' ' })).toThrow('API key')
     expect(() => buildClientConfig('pi', { ...input, baseUrl: '' })).toThrow('base URL')

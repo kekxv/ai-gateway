@@ -3,6 +3,25 @@ import { describe, expect, it } from 'vitest'
 import { buildDeepSeekHarnessFiles } from '@/lib/deepseekHarness'
 
 describe('DeepSeek Harness configuration serializer', () => {
+  it('writes the selected thinking effort under the default model', () => {
+    const files = buildDeepSeekHarnessFiles({
+      providerId: 'gateway', displayName: 'Gateway', baseUrl: 'https://gateway.example/v1',
+      apiKeyEnv: 'GATEWAY_API_KEY', apiKey: 'sk-gw-test', defaultModel: 'chat',
+      reasoningEffort: 'high',
+      models: [{ canonical_name: 'chat', enabled: true }],
+    })
+    expect(files.settingsYaml).toContain('agent-default-model:\n  provider: gateway\n  model: chat\n  reasoningEffort: high\n')
+  })
+
+  it.each([true, false])('explicitly switches thinking %s and overrides disabled effort', (enabled) => {
+    const files = buildDeepSeekHarnessFiles({
+      providerId: 'gateway', displayName: 'Gateway', baseUrl: 'https://gateway.example/v1',
+      apiKeyEnv: 'GATEWAY_API_KEY', apiKey: 'sk-gw-test', defaultModel: 'chat',
+      thinkingEnabled: enabled, reasoningEffort: 'high', models: [{ canonical_name: 'chat', enabled: true }],
+    })
+    expect(files.settingsYaml).toContain(enabled ? 'reasoningEffort: high' : 'reasoningEffort: "off"')
+  })
+
   it('exports every selected supported input modality', () => {
     const files = buildDeepSeekHarnessFiles({
       providerId: 'gateway',

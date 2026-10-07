@@ -15,6 +15,8 @@ export interface DeepSeekHarnessOptions {
   apiKey: string
   api?: 'openai-responses' | 'openai-completions'
   defaultModel: string
+  thinkingEnabled?: boolean
+  reasoningEffort?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   models: DeepSeekHarnessModel[]
 }
 
@@ -45,6 +47,11 @@ export function buildDeepSeekHarnessFiles(options: DeepSeekHarnessOptions): Deep
       return 0
     })
   const api = options.api ?? 'openai-responses'
+  const effort = options.thinkingEnabled === false
+    ? 'off'
+    : options.thinkingEnabled === true && (options.reasoningEffort === undefined || options.reasoningEffort === 'off')
+      ? 'medium'
+      : options.reasoningEffort
 
   const credentialsYaml = `${quoteYamlScalar(options.apiKeyEnv)}: ${JSON.stringify(options.apiKey)}\n`
   const modelYaml = models.map((model) => [
@@ -68,6 +75,9 @@ export function buildDeepSeekHarnessFiles(options: DeepSeekHarnessOptions): Deep
     'agent-default-model:',
     `  provider: ${quoteYamlScalar(options.providerId)}`,
     `  model: ${quoteYamlScalar(options.defaultModel)}`,
+    ...(effort === undefined ? [] : [
+      `  reasoningEffort: ${quoteYamlScalar(effort)}`,
+    ]),
     '',
   ].join('\n')
 

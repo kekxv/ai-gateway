@@ -16,14 +16,20 @@ import {
   type OpenCodeModelSelection,
   type PiModelSelection,
   type PiApi,
+  type ClaudeThinkingEffort,
+  type CodexReasoningEffort,
+  type OpenCodeReasoningEffort,
 } from '@/utils/clientConfig'
 import { listAvailableModels } from '@/api/models'
-import { buildDeepSeekHarnessFiles, type DeepSeekHarnessModel } from '@/lib/deepseekHarness'
+import { buildDeepSeekHarnessFiles, type DeepSeekHarnessModel, type DeepSeekHarnessOptions } from '@/lib/deepseekHarness'
 import type { ModelResponse, ModelType } from '@/api/types'
 
 type DialogTarget = ClientConfigTarget | 'deepseek-harness'
 type LoadedModel = Pick<DeepSeekHarnessModel, 'model_types' | 'model_type'> & {
   id: string
+  reasoning?: boolean
+  contextWindow?: number
+  maxTokens?: number
   inputPricePerMillion?: number
   outputPricePerMillion?: number
   cacheReadPricePerMillion?: number
@@ -65,6 +71,17 @@ const openCodeModels = ref<OpenCodeModelSelection>({
 const piModelIds = ref<string[]>([])
 const piApi = ref<PiApi>('openai-completions')
 const harnessDefaultModel = ref('')
+const claudeThinking = ref<'unset' | 'true' | 'false'>('unset')
+const thinkingMode = ref<'unset' | 'true' | 'false'>('unset')
+const claudeEffort = ref<ClaudeThinkingEffort>('medium')
+const codexEffort = ref<CodexReasoningEffort | ''>('')
+const codexSubagentEffort = ref<CodexReasoningEffort | ''>('')
+const openCodeEffort = ref<OpenCodeReasoningEffort | ''>('')
+const harnessEffort = ref<NonNullable<DeepSeekHarnessOptions['reasoningEffort']> | ''>('')
+const piReasoningOverrides = ref<Record<string, 'unset' | 'true' | 'false'>>({})
+const codexEfforts: CodexReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+const openCodeEfforts: OpenCodeReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+const harnessEfforts: NonNullable<DeepSeekHarnessOptions['reasoningEffort']>[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 const availableModels = ref<LoadedModel[]>([])
 const availableModelIds = computed(() => availableModels.value.map((model) => model.id))
 const loadingModels = ref(false)
@@ -110,6 +127,8 @@ const harnessFiles = computed(() => {
     apiKeyEnv: 'AI_GATEWAY_API_KEY',
     apiKey: effectiveApiKey.value,
     defaultModel: harnessDefaultModel.value,
+    ...(thinkingMode.value === 'unset' ? {} : { thinkingEnabled: thinkingMode.value === 'true' }),
+    ...(harnessEffort.value === '' ? {} : { reasoningEffort: harnessEffort.value }),
     models: availableModels.value.map((model) => ({
       canonical_name: model.id,
       enabled: true,
@@ -135,14 +154,35 @@ const configuration = computed<ClientConfigFile | null>(() => {
     apiKey: effectiveApiKey.value,
     baseUrl: baseUrl.value,
     modelId,
-    ...(isClaude.value ? { claudeModels: claudeModels.value } : {}),
-    ...(isCodex.value ? { codexModels: codexModels.value } : {}),
-    ...(isOpenCode.value ? { openCodeModels: openCodeModels.value } : {}),
+    ...(!isClaude.value && thinkingMode.value !== 'unset' ? { thinkingEnabled: thinkingMode.value === 'true' } : {}),
+    ...(isClaude.value ? {
+      claudeModels: claudeModels.value,
+      claudeThinking: {
+        effort: claudeEffort.value,
+        ...(claudeThinking.value === 'unset' ? {} : { enabled: claudeThinking.value === 'true' }),
+      },
+    } : {}),
+    ...(isCodex.value ? {
+      codexModels: codexModels.value,
+      codexReasoning: {
+        ...(codexEffort.value === '' ? {} : { effort: codexEffort.value }),
+        ...(codexSubagentEffort.value === '' ? {} : { subagentEffort: codexSubagentEffort.value }),
+      },
+    } : {}),
+    ...(isOpenCode.value ? {
+      openCodeModels: openCodeModels.value,
+      ...(openCodeEffort.value === '' ? {} : { openCodeReasoningEffort: openCodeEffort.value }),
+    } : {}),
     ...(isPi.value ? {
       piModels: piModelIds.value.map((id): PiModelSelection => {
         const model = availableModels.value.find((candidate) => candidate.id === id)
+        const override = piReasoningOverrides.value[id]
+        const reasoning = override === undefined || override === 'unset' ? model?.reasoning : override === 'true'
         return {
           id,
+          ...(reasoning === undefined ? {} : { reasoning }),
+          ...(model?.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+          ...(model?.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
           ...(model?.model_types === undefined ? {} : { modelTypes: model.model_types }),
           ...(model?.inputPricePerMillion === undefined ? {} : { inputPricePerMillion: model.inputPricePerMillion }),
           ...(model?.outputPricePerMillion === undefined ? {} : { outputPricePerMillion: model.outputPricePerMillion }),
@@ -180,6 +220,14 @@ function resetResolvedModels(): void {
   piModelIds.value = []
   piApi.value = 'openai-completions'
   harnessDefaultModel.value = ''
+  claudeThinking.value = 'unset'
+  thinkingMode.value = 'unset'
+  claudeEffort.value = 'medium'
+  codexEffort.value = ''
+  codexSubagentEffort.value = ''
+  openCodeEffort.value = ''
+  harnessEffort.value = ''
+  piReasoningOverrides.value = {}
   modelLoadError.value = ''
 }
 
@@ -334,6 +382,9 @@ function download(): void {
       downloadFile('settings.yaml', harnessFiles.value.settingsYaml, 'text/yaml;charset=utf-8')
     } else if (configuration.value !== null) {
       downloadFile(configuration.value.filename, configuration.value.content, 'text/plain;charset=utf-8')
+      for (const file of configuration.value.additionalFiles ?? []) {
+        downloadFile(file.filename, file.content, 'application/json;charset=utf-8')
+      }
     } else {
       return
     }
@@ -543,6 +594,71 @@ function download(): void {
         </select>
         <p class="model-selection-description">Pi 会将选中的模型写入配置，之后可在客户端中切换。</p>
       </template>
+      <div class="thinking-settings">
+        <template v-if="!isClaude">
+          <label class="field-label" for="client-config-thinking">思考模式</label>
+          <select id="client-config-thinking" v-model="thinkingMode" data-test="client-config-thinking">
+            <option value="unset">客户端默认</option>
+            <option value="true">开启</option>
+            <option value="false">关闭</option>
+          </select>
+        </template>
+        <template v-if="isClaude">
+          <label class="field-label" for="client-config-claude-thinking">思考模式</label>
+          <select id="client-config-claude-thinking" v-model="claudeThinking" data-test="client-config-claude-thinking">
+            <option value="unset">客户端默认</option>
+            <option value="true">开启</option>
+            <option value="false">关闭</option>
+          </select>
+          <label class="field-label" for="client-config-claude-effort">思考强度</label>
+          <select id="client-config-claude-effort" v-model="claudeEffort" data-test="client-config-claude-effort" :disabled="claudeThinking === 'false'">
+            <option v-for="effort in ['low', 'medium', 'high', 'xhigh']" :key="effort" :value="effort">{{ effort }}</option>
+          </select>
+        </template>
+        <template v-else-if="isCodex">
+          <label class="field-label" for="client-config-codex-effort">主模型推理强度</label>
+          <select id="client-config-codex-effort" v-model="codexEffort" data-test="client-config-codex-effort" :disabled="thinkingMode === 'false'">
+            <option value="">客户端默认</option>
+            <option v-for="effort in codexEfforts" :key="effort" :value="effort">{{ effort }}</option>
+          </select>
+          <label class="field-label" for="client-config-codex-subagent-effort">子代理推理强度</label>
+          <select id="client-config-codex-subagent-effort" v-model="codexSubagentEffort" data-test="client-config-codex-subagent-effort" :disabled="thinkingMode === 'false'">
+            <option value="">客户端默认</option>
+            <option v-for="effort in codexEfforts" :key="effort" :value="effort">{{ effort }}</option>
+          </select>
+        </template>
+        <template v-else-if="isOpenCode">
+          <label class="field-label" for="client-config-opencode-effort">模型推理强度</label>
+          <select id="client-config-opencode-effort" v-model="openCodeEffort" data-test="client-config-opencode-effort" :disabled="thinkingMode === 'false'">
+            <option value="">客户端默认</option>
+            <option v-for="effort in openCodeEfforts" :key="effort" :value="effort">{{ effort }}</option>
+          </select>
+        </template>
+        <template v-else-if="isHarness">
+          <label class="field-label" for="client-config-harness-effort">默认模型思考强度</label>
+          <select id="client-config-harness-effort" v-model="harnessEffort" data-test="client-config-harness-effort" :disabled="thinkingMode === 'false'">
+            <option value="">客户端默认</option>
+            <option v-for="effort in harnessEfforts" :key="effort" :value="effort">{{ effort }}</option>
+          </select>
+        </template>
+        <template v-else>
+          <label v-for="(modelId, index) in piModelIds" :key="modelId" class="field-label" :for="`client-config-pi-reasoning-${index}`">
+            {{ modelId }} 思考能力
+            <select
+              :id="`client-config-pi-reasoning-${index}`"
+              :value="piReasoningOverrides[modelId] ?? 'unset'"
+              :data-test="`client-config-pi-reasoning-${index}`"
+              @change="piReasoningOverrides[modelId] = ($event.target as HTMLSelectElement).value as 'unset' | 'true' | 'false'"
+            >
+              <option value="unset">沿用模型配置</option>
+              <option value="true">支持思考</option>
+              <option value="false">不支持思考</option>
+            </select>
+          </label>
+          <p v-if="piModelIds.length > 0" class="model-selection-description">模型能力写入 models.json，思考模式开关写入 settings.json。开启思考需要模型支持；明确不支持思考的模型会保留原有能力配置。</p>
+        </template>
+        <p v-if="!isPi" class="model-selection-description">可用的思考强度取决于所选模型和客户端版本。</p>
+      </div>
     </section>
 
     <template v-if="harnessFiles">
@@ -563,6 +679,10 @@ function download(): void {
         保存位置：<code>{{ configuration.location }}</code>
       </p>
       <pre class="config-preview" data-test="client-config-preview">{{ configuration.content }}</pre>
+      <template v-for="file in configuration.additionalFiles ?? []" :key="file.location">
+        <p class="config-location">保存位置：<code>{{ file.location }}</code></p>
+        <pre class="config-preview" data-test="client-config-additional-preview">{{ file.content }}</pre>
+      </template>
     </template>
     <p v-else class="empty-preview">选择模型并输入接口密钥后预览配置文件。</p>
 

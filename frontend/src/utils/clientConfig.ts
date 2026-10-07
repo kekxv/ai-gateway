@@ -4,15 +4,22 @@ export interface ClientConfigInput {
   apiKey: string
   baseUrl: string
   modelId: string
+  thinkingEnabled?: boolean
   claudeModels?: Partial<ClaudeModelSelection>
   codexModels?: Partial<CodexModelSelection>
   openCodeModels?: Partial<OpenCodeModelSelection>
   piModelIds?: string[]
   piModels?: PiModelSelection[]
   piApi?: PiApi
+  claudeThinking?: { enabled?: boolean; effort?: ClaudeThinkingEffort }
+  codexReasoning?: { effort?: CodexReasoningEffort; subagentEffort?: CodexReasoningEffort }
+  openCodeReasoningEffort?: OpenCodeReasoningEffort
 }
 
 export type PiApi = 'openai-completions' | 'openai-responses'
+export type ClaudeThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh'
+export type CodexReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
+export type OpenCodeReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export interface PiModelSelection {
   id: string
@@ -68,6 +75,13 @@ export interface ClientConfigFile {
   filename: string
   location: string
   content: string
+  additionalFiles?: ClientConfigFile[]
+}
+
+function thinkingEffort<T extends string>(enabled: boolean | undefined, effort: T | undefined, off: T, fallback: T): T | undefined {
+  if (enabled === false) return off
+  if (enabled === true && (effort === undefined || effort === off)) return fallback
+  return effort
 }
 
 function required(value: string, label: string): string {
@@ -124,6 +138,7 @@ export function buildClientConfig(
 
   if (target === 'claude') {
     const claudeModels = input.claudeModels
+    const thinkingEnabled = input.thinkingEnabled ?? input.claudeThinking?.enabled
     return {
       filename: 'settings.json',
       location: '~/.claude/settings.json',
@@ -138,7 +153,10 @@ export function buildClientConfig(
           ANTHROPIC_DEFAULT_HAIKU_MODEL: selectedModel(claudeModels?.haiku, modelId),
           CLAUDE_CODE_SUBAGENT_MODEL: selectedModel(claudeModels?.subagent, modelId),
         },
-        effortLevel: 'medium',
+        ...(thinkingEnabled === undefined ? {} : {
+          alwaysThinkingEnabled: thinkingEnabled,
+        }),
+        effortLevel: input.claudeThinking?.effort ?? 'medium',
         skipWorkflowUsageWarning: true,
         theme: 'light-daltonized',
         hasCompletedOnboarding: true,
@@ -151,16 +169,18 @@ export function buildClientConfig(
     const primary = selectedModel(codexModels?.primary, modelId)
     const review = selectedModel(codexModels?.review, modelId)
     const subagent = selectedModel(codexModels?.subagent, modelId)
+    const effort = thinkingEffort(input.thinkingEnabled, input.codexReasoning?.effort, 'none', 'medium')
+    const subagentEffort = thinkingEffort(input.thinkingEnabled, input.codexReasoning?.subagentEffort, 'none', 'medium')
     return {
       filename: 'config.toml',
       location: '~/.codex/config.toml',
       content: `model = "${tomlString(primary)}"
 review_model = "${tomlString(review)}"
 model_provider = "gateway"
-
+${effort === undefined ? '' : `model_reasoning_effort = "${tomlString(effort)}"\n`}
 [agents]
 default_subagent_model = "${tomlString(subagent)}"
-
+${subagentEffort === undefined ? '' : `default_subagent_reasoning_effort = "${tomlString(subagentEffort)}"\n`}
 [model_providers.gateway]
 name = "AI Gateway"
 base_url = "${tomlString(openAiBaseUrl)}"
@@ -176,8 +196,14 @@ wire_api = "responses"
     const plan = selectedModel(openCodeModels?.plan, modelId)
     const build = selectedModel(openCodeModels?.build, modelId)
     const review = selectedModel(openCodeModels?.review, modelId)
+    const effort = thinkingEffort(input.thinkingEnabled, input.openCodeReasoningEffort, 'none', 'medium')
     const models = Object.fromEntries(
-      [...new Set([primary, plan, build, review])].map((id) => [id, { name: id }]),
+      [...new Set([primary, plan, build, review])].map((id) => [id, {
+        name: id,
+        ...(effort === undefined ? {} : {
+          options: { reasoningEffort: effort },
+        }),
+      }]),
     )
     return {
       filename: 'opencode.json',
@@ -211,19 +237,33 @@ wire_api = "responses"
   const selectedPiModels = (input.piModels ?? input.piModelIds?.map((id) => ({ id })) ?? [])
     .map((model) => ({ ...model, id: model.id.trim() }))
     .filter((model) => model.id !== '')
-  const piModels = [...new Map(selectedPiModels.map((model) => [model.id, model])).values()]
+  const piModels: PiModelSelection[] = [...new Map(selectedPiModels.map((model) => [model.id, model])).values()]
   if (piModels.length === 0) piModels.push({ id: modelId })
   const piApi = input.piApi ?? 'openai-completions'
   return {
     filename: 'models.json',
     location: '~/.pi/agent/models.json',
+    ...(input.thinkingEnabled === undefined ? {} : {
+      additionalFiles: [{
+        filename: 'settings.json',
+        location: '~/.pi/agent/settings.json',
+        content: `${JSON.stringify({
+          defaultThinkingLevel: input.thinkingEnabled ? 'medium' : 'off',
+          modelThinkingLevels: Object.fromEntries(piModels.map((model) => [
+            `gateway/${model.id}`, input.thinkingEnabled ? 'medium' : 'off',
+          ])),
+        }, null, 2)}\n`,
+      }],
+    }),
     content: `${JSON.stringify({
       providers: {
         gateway: {
           baseUrl: openAiBaseUrl,
           api: piApi,
           apiKey,
-          models: piModels.map(piModelConfig),
+          models: piModels.map((model) => piModelConfig(input.thinkingEnabled === true
+            ? { ...model, reasoning: model.reasoning ?? true }
+            : model)),
         },
       },
     }, null, 2)}\n`,

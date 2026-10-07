@@ -138,11 +138,14 @@ describe('客户端配置对话框', () => {
     })
   })
 
-  it('为 Pi 选择多个可切换模型', async () => {
+  it.each([true, false])('为 Pi 选择多个模型并保留目录中的思考能力 %s', async (reasoning) => {
     vi.mocked(listAvailableModels).mockResolvedValue([{
       id: 1,
       canonical_name: 'pi-fast',
       display_name: 'Pi Fast',
+      pi_reasoning: reasoning,
+      pi_context_window: 64000,
+      pi_max_tokens: 4096,
       model_types: ['text'],
       model_type: 'text',
       input_price_per_million: '2',
@@ -180,6 +183,7 @@ describe('客户端配置对话框', () => {
           models: [
             {
               id: 'pi-fast', name: 'pi-fast', input: ['text'],
+              reasoning, contextWindow: 64000, maxTokens: 4096,
               cost: { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 2.5 },
             },
             { id: 'pi-deep', name: 'pi-deep' },
@@ -187,6 +191,89 @@ describe('客户端配置对话框', () => {
         },
       },
     })
+  })
+
+  it.each([
+    { target: 'claude', roles: ['primary', 'opus', 'sonnet', 'haiku', 'subagent'], control: 'claude-effort', value: 'high', expected: '"effortLevel": "high"' },
+    { target: 'codex', roles: ['primary', 'review', 'subagent'], control: 'codex-effort', value: 'xhigh', expected: 'model_reasoning_effort = "xhigh"' },
+    { target: 'opencode', roles: ['primary', 'plan', 'build', 'review'], control: 'opencode-effort', value: 'high', expected: '"reasoningEffort": "high"' },
+    { target: 'deepseek-harness', roles: ['model'], control: 'harness-effort', value: 'high', expected: 'reasoningEffort: high' },
+  ])('通过对话框为 $target 配置思考强度', async ({ target, roles, control, value, expected }) => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ data: [{ id: 'model-a' }] })))))
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('[data-test="client-config-key"]').setValue('sk-gw-test')
+    await wrapper.get(`[data-test="client-config-target-${target}"]`).trigger('click')
+    await wrapper.get('[data-test="client-config-verify"]').trigger('click')
+    await flushPromises()
+    for (const role of roles) await wrapper.get(`[data-test="client-config-${target}-${role}"]`).setValue('model-a')
+    await wrapper.get(`[data-test="client-config-${control}"]`).setValue(value)
+    const preview = target === 'deepseek-harness' ? 'client-config-harness-settings' : 'client-config-preview'
+    expect(wrapper.get(`[data-test="${preview}"]`).text()).toContain(expected)
+    if (target === 'claude') {
+      await wrapper.get('[data-test="client-config-claude-thinking"]').setValue('false')
+      expect(JSON.parse(wrapper.get(`[data-test="${preview}"]`).text())).toMatchObject({ alwaysThinkingEnabled: false })
+    }
+    if (target === 'codex') {
+      await wrapper.get('[data-test="client-config-codex-subagent-effort"]').setValue('low')
+      expect(wrapper.get(`[data-test="${preview}"]`).text()).toContain('default_subagent_reasoning_effort = "low"')
+    }
+    await wrapper.get('[data-test="client-config-key"]').setValue('sk-gw-another-key')
+    await wrapper.get('[data-test="client-config-verify"]').trigger('click')
+    await flushPromises()
+    for (const role of roles) await wrapper.get(`[data-test="client-config-${target}-${role}"]`).setValue('model-a')
+    expect(wrapper.get(`[data-test="${preview}"]`).text()).not.toContain(expected)
+    if (target === 'claude') {
+      expect(JSON.parse(wrapper.get(`[data-test="${preview}"]`).text())).toMatchObject({ effortLevel: 'medium' })
+      expect(JSON.parse(wrapper.get(`[data-test="${preview}"]`).text())).not.toHaveProperty('alwaysThinkingEnabled')
+    }
+    if (target === 'codex') {
+      expect(wrapper.get(`[data-test="${preview}"]`).text()).not.toContain('default_subagent_reasoning_effort')
+    }
+  })
+
+  it('Pi 可以显式启用或关闭所选模型的思考能力，并恢复未配置状态', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ data: [{ id: 'model-a' }] })))))
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('[data-test="client-config-key"]').setValue('sk-gw-test')
+    await wrapper.get('[data-test="client-config-target-pi"]').trigger('click')
+    await wrapper.get('[data-test="client-config-verify"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="client-config-pi-models"]').setValue(['model-a'])
+    for (const value of ['true', 'false', 'unset']) {
+      await wrapper.get('[data-test="client-config-pi-reasoning-0"]').setValue(value)
+      const config = JSON.parse(wrapper.get('[data-test="client-config-preview"]').text()) as {
+        providers: { gateway: { models: Array<Record<string, unknown>> } }
+      }
+      const model = config.providers.gateway.models[0]
+      if (value === 'unset') expect(model).not.toHaveProperty('reasoning')
+      else expect(model).toMatchObject({ reasoning: value === 'true' })
+    }
+  })
+
+  it.each([
+    { target: 'codex', roles: ['primary', 'review', 'subagent'], on: 'model_reasoning_effort = "medium"', off: 'model_reasoning_effort = "none"' },
+    { target: 'opencode', roles: ['primary', 'plan', 'build', 'review'], on: '"reasoningEffort": "medium"', off: '"reasoningEffort": "none"' },
+    { target: 'deepseek-harness', roles: ['model'], on: 'reasoningEffort: medium', off: 'reasoningEffort: "off"' },
+    { target: 'pi', roles: ['models'], on: '"defaultThinkingLevel": "medium"', off: '"defaultThinkingLevel": "off"' },
+  ])('$target 配置生成提供明确的开启与关闭选项', async ({ target, roles, on, off }) => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ data: [{ id: 'model-a' }] })))))
+    const wrapper = mountDialog()
+    await flushPromises()
+    await wrapper.get('[data-test="client-config-key"]').setValue('sk-gw-test')
+    await wrapper.get(`[data-test="client-config-target-${target}"]`).trigger('click')
+    await wrapper.get('[data-test="client-config-verify"]').trigger('click')
+    await flushPromises()
+    for (const role of roles) await wrapper.get(`[data-test="client-config-${target}-${role}"]`).setValue(target === 'pi' ? ['model-a'] : 'model-a')
+    const preview = target === 'deepseek-harness' ? 'client-config-harness-settings' : target === 'pi' ? 'client-config-additional-preview' : 'client-config-preview'
+    await wrapper.get('[data-test="client-config-thinking"]').setValue('true')
+    expect(wrapper.get(`[data-test="${preview}"]`).text()).toContain(on)
+    await wrapper.get('[data-test="client-config-thinking"]').setValue('false')
+    expect(wrapper.get(`[data-test="${preview}"]`).text()).toContain(off)
+    await wrapper.get('[data-test="client-config-thinking"]').setValue('unset')
+    if (target === 'pi') expect(wrapper.find(`[data-test="${preview}"]`).exists()).toBe(false)
+    else expect(wrapper.get(`[data-test="${preview}"]`).text()).not.toContain(off)
   })
 
   it('允许 Pi 选择 OpenAI Responses API', async () => {
@@ -331,16 +418,20 @@ describe('客户端配置对话框', () => {
     expect(wrapper.get<HTMLInputElement>('[data-test="client-config-key"]').element.value).toBe('')
   })
 
-  it('下载 Pi 的 models.json，并在关闭时清除输入密钥', async () => {
+  it.each(['unset', 'true', 'false'])('下载 Pi 模式 %s 对应配置，并在关闭时清除输入密钥', async (mode) => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: [{ id: 'pi-key-scoped' }],
     }), { status: 200 }))
     vi.stubGlobal('fetch', fetch)
-    const createObjectUrl = vi.fn(() => 'blob:client-config')
+    const blobs: Blob[] = []
+    const createObjectUrl = vi.fn((blob: Blob) => { blobs.push(blob); return 'blob:client-config' })
     const revokeObjectUrl = vi.fn()
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectUrl })
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectUrl })
-    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    const downloadedFiles: string[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloadedFiles.push(this.download)
+    })
     const wrapper = mountDialog()
     await flushPromises()
     await wrapper.get('[data-test="client-config-key"]').setValue('sk-gw-real-secret')
@@ -348,11 +439,28 @@ describe('客户端配置对话框', () => {
     await wrapper.get('[data-test="client-config-verify"]').trigger('click')
     await flushPromises()
     await wrapper.get('[data-test="client-config-pi-models"]').setValue(['pi-key-scoped'])
+    await wrapper.get('[data-test="client-config-thinking"]').setValue(mode)
     await wrapper.get('[data-test="client-config-download"]').trigger('click')
     await flushPromises()
 
-    expect(createObjectUrl).toHaveBeenCalledOnce()
-    expect(click).toHaveBeenCalledOnce()
+    expect(downloadedFiles).toEqual(mode === 'unset' ? ['models.json'] : ['models.json', 'settings.json'])
+    if (mode !== 'unset') {
+      const settingsBlob = blobs[1]
+      if (settingsBlob === undefined) throw new Error('settings.json was not downloaded')
+      const content = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          if (typeof reader.result === 'string') resolve(reader.result)
+          else reject(new Error('Downloaded settings are not text'))
+        }
+        reader.onerror = () => { reject(new Error('Cannot read downloaded settings')) }
+        reader.readAsText(settingsBlob)
+      })
+      expect(JSON.parse(content)).toEqual({
+        defaultThinkingLevel: mode === 'true' ? 'medium' : 'off',
+        modelThinkingLevels: { 'gateway/pi-key-scoped': mode === 'true' ? 'medium' : 'off' },
+      })
+    }
     expect(document.querySelector('a[download="models.json"]')).toBeNull()
     expect(revokeObjectUrl).toHaveBeenCalledWith('blob:client-config')
 
