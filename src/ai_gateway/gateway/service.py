@@ -302,7 +302,12 @@ class GatewayService:
     async def count_claude_tokens(self, request: Request) -> GatewayOutput:
         principal = await authenticate_api_key(extract_api_key(request), self._session)
         raw_body = await request.body()
-        payload, requested_model = _request_payload(raw_body, Protocol.CLAUDE, None)
+        payload, requested_model = _request_payload(
+            raw_body,
+            Protocol.CLAUDE,
+            None,
+            content_encoding=request.headers.get("content-encoding"),
+        )
         _ensure_model_selector_length(requested_model)
         resolved = await CatalogRepository(self._session).resolve_model(requested_model)
         router = self._router_factory(self._session)
@@ -340,6 +345,7 @@ class GatewayService:
             inbound_protocol,
             path_model,
             content_type=content_type,
+            content_encoding=request.headers.get("content-encoding"),
         )
         if force_stream:
             payload["stream"] = True
@@ -1756,7 +1762,10 @@ def _request_payload(
     path_model: str | None,
     *,
     content_type: str | None = None,
+    content_encoding: str | None = None,
 ) -> tuple[dict[str, Any], str]:
+    if content_encoding is not None and content_encoding.strip().lower() not in {"", "identity"}:
+        raise InvalidRequestError("Compressed request bodies (Content-Encoding) are not supported")
     if (
         protocol is Protocol.OPENAI
         and content_type is not None

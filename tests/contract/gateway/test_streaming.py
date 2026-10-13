@@ -7,6 +7,7 @@ from hashlib import sha256
 from typing import Any
 from uuid import UUID, uuid4
 
+import brotli
 import httpx
 import orjson
 import pytest
@@ -417,7 +418,7 @@ def _decode_output(protocol: Protocol, wire: bytes) -> tuple[StreamEvent, ...]:
 
 @pytest.mark.parametrize("source", CHAT_PROTOCOLS)
 @pytest.mark.parametrize("target", CHAT_PROTOCOLS)
-@pytest.mark.parametrize("encoding", ["identity", "zstd"])
+@pytest.mark.parametrize("encoding", ["identity", "zstd", "br"])
 async def test_all_nine_stream_pairs_convert_incrementally(
     source: Protocol,
     target: Protocol,
@@ -427,6 +428,8 @@ async def test_all_nine_stream_pairs_convert_incrementally(
     compressed = (
         zstandard.ZstdCompressor().compress(upstream_wire) if encoding == "zstd" else upstream_wire
     )
+    if encoding == "br":
+        compressed = brotli.compress(upstream_wire)
     stream = ChunkStream(_odd_chunks(compressed))
     response = httpx.Response(200, stream=stream, headers={"content-encoding": encoding})
     context = GatewayContext(

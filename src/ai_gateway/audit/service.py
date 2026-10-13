@@ -236,7 +236,7 @@ class AuditService:
             response_detail_gzip = None
             if headers or body is not None or response_metadata:
                 response_detail_gzip = gzip_json(
-                    _detail(headers=headers, body=body, metadata=response_metadata),
+                    _response_detail(headers=headers, body=body, metadata=response_metadata),
                     limit_bytes=self._body_limit_bytes,
                 )
             async with self._session_factory() as session:
@@ -271,6 +271,22 @@ class AuditService:
                 await session.commit()
         except Exception as exc:
             _log_write_failure("finish", request_id, exc, status=status)
+
+
+def _response_detail(
+    *,
+    headers: Mapping[str, str],
+    body: Any | None,
+    metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    # Response bodies are decoded, converted, redacted, or truncated before
+    # storage; upstream wire encoding and lengths no longer describe them.
+    normalized_headers = {
+        name: value
+        for name, value in headers.items()
+        if name.lower() not in {"content-encoding", "content-length", "transfer-encoding"}
+    }
+    return _detail(headers=normalized_headers, body=body, metadata=metadata)
 
 
 def _detail(

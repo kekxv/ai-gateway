@@ -41,20 +41,32 @@ class SSEEvent:
 class SSEDecoder:
     """Incrementally split arbitrary HTTP byte chunks into complete SSE frames."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_frame_bytes: int = 1_048_576) -> None:
+        if max_frame_bytes < 1:
+            raise ValueError("SSE frame size limit must be positive")
+        self._max_frame_bytes = max_frame_bytes
         self._buffer = bytearray()
         self._first_frame = True
 
     def feed(self, chunk: bytes) -> list[SSEEvent]:
-        self._buffer.extend(chunk)
         events: list[SSEEvent] = []
-        while (frame_end := self._frame_end()) is not None:
-            raw = bytes(self._buffer[:frame_end])
-            del self._buffer[:frame_end]
-            event = self._decode_frame(raw)
-            if event is not None:
-                events.append(event)
-            self._first_frame = False
+        offset = 0
+        while offset < len(chunk):
+            # Never retain an entire oversized HTTP chunk in the frame buffer.
+            take = min(len(chunk) - offset, self._max_frame_bytes + 1 - len(self._buffer))
+            self._buffer.extend(chunk[offset : offset + take])
+            offset += take
+            while (frame_end := self._frame_end()) is not None:
+                if frame_end > self._max_frame_bytes:
+                    raise IncompleteStreamError("The upstream SSE frame exceeded its size limit")
+                raw = bytes(self._buffer[:frame_end])
+                del self._buffer[:frame_end]
+                event = self._decode_frame(raw)
+                if event is not None:
+                    events.append(event)
+                self._first_frame = False
+            if len(self._buffer) > self._max_frame_bytes:
+                raise IncompleteStreamError("The upstream SSE frame exceeded its size limit")
         return events
 
     def finish(self) -> list[SSEEvent]:
@@ -423,6 +435,20 @@ async def stream_gateway_response(
         return tuple(frames)
 
     try:
+        encodings = upstream.headers.get_list("content-encoding", split_commas=True)
+        if any(
+            value.strip().lower() not in {"", "identity", "gzip", "deflate", "br", "zstd"}
+            for value in encodings
+        ):
+            raise IncompleteStreamError(
+                "The upstream response used an unsupported content encoding"
+            )
+        content_type = upstream.headers.get("content-type")
+        if (
+            content_type is not None
+            and content_type.split(";", 1)[0].strip().lower() != "text/event-stream"
+        ):
+            raise IncompleteStreamError("The upstream stream returned an invalid content type")
         async for chunk in upstream.aiter_bytes():
             native_events = parser.feed(chunk)
             # For Responses API, we can't pass through even for same-protocol

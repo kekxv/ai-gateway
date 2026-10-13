@@ -172,13 +172,18 @@ def test_build_upstream_request_negotiates_gateway_supported_encodings(
     inbound_encoding: str | None,
 ) -> None:
     request = build_upstream_request(
-        _route(Protocol.OPENAI, settings, extra_headers={"Accept-Encoding": "unknown"}),
+        _route(
+            Protocol.OPENAI,
+            settings,
+            extra_headers={"Accept-Encoding": "unknown", "Content-Encoding": "gzip"},
+        ),
         {"Accept-Encoding": inbound_encoding} if inbound_encoding else {},
         b"{}",
         settings=settings,
     )
 
-    assert request.headers["accept-encoding"] == "gzip, deflate, zstd"
+    assert request.headers["accept-encoding"] == "gzip, deflate, br, zstd"
+    assert "content-encoding" not in request.headers
 
 
 def test_build_upstream_request_forwards_deepseek_harness_identity_headers(

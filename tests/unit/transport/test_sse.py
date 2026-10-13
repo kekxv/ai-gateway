@@ -5,7 +5,21 @@ import pytest
 
 from ai_gateway.core.enums import Protocol
 from ai_gateway.protocols.types import CanonicalUsage
-from ai_gateway.transport.sse import GatewayContext, SSEDecoder, SSEEvent
+from ai_gateway.transport.sse import GatewayContext, IncompleteStreamError, SSEDecoder, SSEEvent
+
+
+def test_unterminated_sse_frame_has_a_size_limit() -> None:
+    decoder = SSEDecoder(max_frame_bytes=32)
+    assert decoder.feed(b"data: " + b"x" * 26) == []
+    with pytest.raises(IncompleteStreamError, match="frame.*limit"):
+        decoder.feed(b"x")
+
+
+def test_size_limit_applies_to_each_frame_not_the_whole_chunk() -> None:
+    decoder = SSEDecoder(max_frame_bytes=16)
+    assert len(decoder.feed(b"data: ok\n\n" * 10)) == 10
+    with pytest.raises(IncompleteStreamError, match="frame.*limit"):
+        decoder.feed(b"data: " + b"x" * 20 + b"\n\n")
 
 
 def test_decodes_lf_and_crlf_frames_and_preserves_raw_bytes() -> None:

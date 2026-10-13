@@ -111,7 +111,9 @@ def build_upstream_headers(
     headers.update(configured_headers)
     # Negotiate only encodings the gateway can decode, independently of the
     # downstream client's or provider configuration's compression preferences.
-    headers["accept-encoding"] = "gzip, deflate, zstd"
+    headers["accept-encoding"] = "gzip, deflate, br, zstd"
+    # The gateway sends a rewritten, uncompressed body.
+    headers.pop("content-encoding", None)
     return headers
 
 

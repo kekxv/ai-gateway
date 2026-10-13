@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from ai_gateway.core.enums import Protocol
-from ai_gateway.transport.sse import GatewayContext, stream_gateway_response
+from ai_gateway.transport.sse import GatewayContext, IncompleteStreamError, stream_gateway_response
 
 
 class FragmentedStream(httpx.AsyncByteStream):
@@ -72,3 +72,53 @@ async def test_zstd_sse_is_decoded_before_passthrough(
     assert output == wire.encode()
     assert context.terminal_done_observed
     assert context.audit_preview == wire.encode()
+
+
+async def test_brotli_sse_is_decoded_before_passthrough() -> None:
+    compressed = bytes.fromhex(
+        "1b410000c46ce72fb47bc1e7d23adf8d6837f224c199156cc08143c4d1601b8d304c"
+        "e404b3c2ef0c599425cb0be549b1874adebd3df1f5f9b759150570e563af1900"
+    )
+    response = httpx.Response(
+        200, headers={"content-encoding": "br"}, stream=FragmentedStream(compressed)
+    )
+    context = GatewayContext(Protocol.OPENAI, Protocol.OPENAI)
+
+    output = b"".join([chunk async for chunk in stream_gateway_response(context, response)])
+
+    assert output == (
+        'data: {"choices":[{"delta":{"content":"你好"}}]}\n\ndata: [DONE]\n\n'.encode()
+    )
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"content-encoding": "compress"},
+        {"content-encoding": "gzip, unknown"},
+        {"content-type": "text/html"},
+        {"content-type": "application/json"},
+    ],
+)
+async def test_invalid_stream_headers_fail_before_any_bytes_are_forwarded(
+    headers: dict[str, str],
+) -> None:
+    response = httpx.Response(200, headers=headers, stream=FragmentedStream(b"invalid body"))
+    iterator = stream_gateway_response(GatewayContext(Protocol.OPENAI, Protocol.OPENAI), response)
+
+    with pytest.raises(IncompleteStreamError, match="encoding|content type"):
+        await anext(iterator)
+    assert response.is_closed
+
+
+async def test_oversized_sse_frame_is_rejected_and_response_is_closed() -> None:
+    response = httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream; charset=utf-8"},
+        stream=httpx.ByteStream(b"data: " + b"x" * 1_048_576),
+    )
+    iterator = stream_gateway_response(GatewayContext(Protocol.OPENAI, Protocol.OPENAI), response)
+
+    with pytest.raises(IncompleteStreamError, match="frame.*limit"):
+        await anext(iterator)
+    assert response.is_closed
