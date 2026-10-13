@@ -425,9 +425,7 @@ async def test_all_nine_stream_pairs_convert_incrementally(
 ) -> None:
     upstream_wire = b"".join(_source_frames(source))
     compressed = (
-        zstandard.ZstdCompressor().compress(upstream_wire)
-        if encoding == "zstd"
-        else upstream_wire
+        zstandard.ZstdCompressor().compress(upstream_wire) if encoding == "zstd" else upstream_wire
     )
     stream = ChunkStream(_odd_chunks(compressed))
     response = httpx.Response(200, stream=stream, headers={"content-encoding": encoding})
