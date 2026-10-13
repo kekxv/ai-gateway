@@ -18,6 +18,7 @@ dependencies = [
     "tiktoken",
     "uvicorn[standard]",
     "websockets",
+    "zstandard>=0.25.0",
 ]
 
 [dependency-groups]

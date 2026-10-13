@@ -166,6 +166,21 @@ def test_build_upstream_request_strips_hop_headers_and_merges_configured_headers
     assert request.url.host == "provider.example"
 
 
+@pytest.mark.parametrize("inbound_encoding", [None, "gzip, deflate, br, zstd", "unknown"])
+def test_build_upstream_request_negotiates_gateway_supported_encodings(
+    settings: Settings,
+    inbound_encoding: str | None,
+) -> None:
+    request = build_upstream_request(
+        _route(Protocol.OPENAI, settings, extra_headers={"Accept-Encoding": "unknown"}),
+        {"Accept-Encoding": inbound_encoding} if inbound_encoding else {},
+        b"{}",
+        settings=settings,
+    )
+
+    assert request.headers["accept-encoding"] == "gzip, deflate, zstd"
+
+
 def test_build_upstream_request_forwards_deepseek_harness_identity_headers(
     settings: Settings,
 ) -> None:

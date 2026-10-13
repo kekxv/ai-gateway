@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 import httpx
 import orjson
 import pytest
+import zstandard
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -416,13 +417,20 @@ def _decode_output(protocol: Protocol, wire: bytes) -> tuple[StreamEvent, ...]:
 
 @pytest.mark.parametrize("source", CHAT_PROTOCOLS)
 @pytest.mark.parametrize("target", CHAT_PROTOCOLS)
+@pytest.mark.parametrize("encoding", ["identity", "zstd"])
 async def test_all_nine_stream_pairs_convert_incrementally(
     source: Protocol,
     target: Protocol,
+    encoding: str,
 ) -> None:
     upstream_wire = b"".join(_source_frames(source))
-    stream = ChunkStream(_odd_chunks(upstream_wire))
-    response = httpx.Response(200, stream=stream)
+    compressed = (
+        zstandard.ZstdCompressor().compress(upstream_wire)
+        if encoding == "zstd"
+        else upstream_wire
+    )
+    stream = ChunkStream(_odd_chunks(compressed))
+    response = httpx.Response(200, stream=stream, headers={"content-encoding": encoding})
     context = GatewayContext(
         source_protocol=source,
         target_protocol=target,

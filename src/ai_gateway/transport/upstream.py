@@ -109,6 +109,9 @@ def build_upstream_headers(
     headers = httpx.Headers(_sanitize_inbound_headers(inbound_headers, configured_headers))
     headers.update(ProviderCredential.from_mapping(credentials).auth_headers(route.protocol))
     headers.update(configured_headers)
+    # Negotiate only encodings the gateway can decode, independently of the
+    # downstream client's or provider configuration's compression preferences.
+    headers["accept-encoding"] = "gzip, deflate, zstd"
     return headers
 
 
